@@ -125,7 +125,7 @@ elif lemonade_external and ods_mode == "lemonade":
     elif existing(["docker-compose.base.yml"]):
         resolved = ["docker-compose.base.yml"]
         primary = "docker-compose.base.yml"
-elif ods_mode == "cloud" or tier == "CLOUD":
+elif ods_mode in ("cloud", "mesh") or tier == "CLOUD":
     if existing(["docker-compose.base.yml", "docker-compose.cloud.yml"]):
         resolved = ["docker-compose.base.yml", "docker-compose.cloud.yml"]
         primary = "docker-compose.cloud.yml"

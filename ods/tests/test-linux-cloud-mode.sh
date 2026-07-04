@@ -45,6 +45,19 @@ contains "$flags" "extensions/services/litellm/compose.yaml" "cloud mode include
 rejects "$flags" "docker-compose.cpu.yml" "cloud mode does not include CPU llama-server overlay"
 rejects "$flags" "compose.local.yaml" "cloud mode does not include local dependency overlays"
 
+mesh_flags="$(ODS_PYTHON_CMD="$PY" ./scripts/resolve-compose-stack.sh \
+    --script-dir "$ROOT_DIR" \
+    --tier CLOUD \
+    --gpu-backend cpu \
+    --gpu-count 0 \
+    --ods-mode mesh)"
+mesh_flags="${mesh_flags//\\//}"
+
+contains "$mesh_flags" "docker-compose.base.yml" "mesh mode keeps base stack"
+contains "$mesh_flags" "docker-compose.cloud.yml" "mesh mode layers cloud overlay"
+rejects "$mesh_flags" "docker-compose.cpu.yml" "mesh mode does not include CPU llama-server overlay"
+rejects "$mesh_flags" "compose.local.yaml" "mesh mode does not include local dependency overlays"
+
 lemonade_flags="$(LEMONADE_EXTERNAL=true AMD_INFERENCE_RUNTIME=lemonade AMD_INFERENCE_MANAGED=false ODS_PYTHON_CMD="$PY" ./scripts/resolve-compose-stack.sh \
     --script-dir "$ROOT_DIR" \
     --tier CLOUD \

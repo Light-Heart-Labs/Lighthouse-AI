@@ -988,18 +988,18 @@ def _collect_inference_contract():
     expected_owner = "external" if external_inference else "ods"
     expected_gateway = (
         "litellm"
-        if external_inference or ods_mode == "lemonade" or gpu_backend == "amd"
+        if external_inference or ods_mode in ("lemonade", "mesh") or gpu_backend == "amd"
         else "llama-server"
     )
 
     issues = []
-    if ods_mode not in {"local", "cloud", "hybrid", "lemonade"}:
+    if ods_mode not in {"local", "cloud", "hybrid", "lemonade", "mesh"}:
         issues.append(
             _inference_issue(
                 "ODS-RUNTIME-MODE-UNKNOWN",
                 "blocker",
                 ".env",
-                f"ODS_MODE={ods_mode!r} is not one of local/cloud/hybrid/lemonade.",
+                f"ODS_MODE={ods_mode!r} is not one of local/cloud/hybrid/lemonade/mesh.",
             )
         )
 
@@ -1159,7 +1159,7 @@ def _collect_inference_contract():
             "If this is not an AMD/Lemonade install, set LLM_API_URL back to http://llama-server:8080.",
         ],
         "ODS-RUNTIME-MODE-UNKNOWN": [
-            "Set ODS_MODE to local, cloud, hybrid, or lemonade.",
+            "Set ODS_MODE to local, cloud, hybrid, lemonade, or mesh.",
         ],
     }
     for issue in issues:
