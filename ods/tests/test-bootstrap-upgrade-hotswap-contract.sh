@@ -70,6 +70,28 @@ grep -qF 'No such container' <<<"$compose_retry_block" \
     || fail "llama-server recreate must retry Docker's missing-container race"
 pass "llama-server recreate retries transient compose races"
 
+promote_env_block="$(function_block promote_full_model_env | grep -v '^[[:space:]]*#')"
+for expected in \
+    'write_env_value GGUF_FILE "$FULL_GGUF_FILE"' \
+    'write_env_value LLM_MODEL "$FULL_LLM_MODEL"' \
+    'write_env_value MAX_CONTEXT "$FULL_MAX_CONTEXT"' \
+    'write_env_value CTX_SIZE "$FULL_MAX_CONTEXT"' \
+    'full_model_env_matches' \
+    'log_model_env_state'
+do
+    grep -qF "$expected" <<<"$promote_env_block" \
+        || fail "full-model .env promotion must strictly persist ${expected}"
+done
+pass "full-model .env promotion is strict and self-diagnosing"
+
+grep -qF 'promote_full_model_env "initial full-model promotion"' <<<"$active_code" \
+    || fail "bootstrap upgrade must strictly promote .env before mutating runtime config"
+grep -qF 'promote_full_model_env "pre-compose full-model promotion"' <<<"$active_code" \
+    || fail "Docker hot-swap must reassert full-model .env immediately before compose recreate"
+grep -qF 'promote_full_model_env "stale llama-server command repair"' <<<"$active_code" \
+    || fail "stale llama-server command recovery must re-promote .env before its bounded retry"
+pass "Docker hot-swap reasserts full-model .env before and during stale-command recovery"
+
 if grep -qE '\brestart[[:space:]]+(llama-server|ods-llama-server)\b' <<<"$active_code"; then
     fail "llama-server hot-swap must not use restart; recreate is required so updated env lands"
 fi
@@ -99,6 +121,17 @@ if grep -qE '\b(stop|rm)[[:space:]]+ods-llama-server\b' <<<"$missing_flags_block
 fi
 pass "missing .compose-flags fallback is non-destructive"
 
+cleanup_refresh_block="$(function_block refresh_lemonade_after_bootstrap_cleanup | grep -v '^[[:space:]]*#')"
+grep -qF 'declare -p COMPOSE_ARGS' <<<"$cleanup_refresh_block" \
+    || fail "Lemonade cleanup refresh must reuse the live compose args before requiring .compose-flags"
+grep -qF 'compose_args=("${COMPOSE_ARGS[@]}")' <<<"$cleanup_refresh_block" \
+    || fail "Lemonade cleanup refresh must copy the active compose stack"
+assert_in_order "$cleanup_refresh_block" "Lemonade cleanup refresh compose args" \
+    'declare -p COMPOSE_ARGS' \
+    '[[ -f "$INSTALL_DIR/.compose-flags" ]]' \
+    'up -d --force-recreate --no-deps llama-server'
+pass "Lemonade cleanup refresh reuses active compose args before .compose-flags fallback"
+
 openclaw_recreate_block="$(awk '
     /Recreating OpenClaw to pick up model change/ { in_block=1 }
     in_block { print }
@@ -122,6 +155,45 @@ grep -qF 'Resolve-ODSLemonadeModelId' <<<"$active_code" \
 grep -qF 'write_env_value LEMONADE_MODEL "$model_id"' <<<"$active_code" \
     || fail "Windows Lemonade hot-swap must persist the verified full-model ID"
 pass "Windows Lemonade hot-swap restarts native inference and persists the verified model ID"
+
+restart_windows_lemonade_block="$(function_block restart_windows_lemonade_with_full_model | grep -v '^[[:space:]]*#')"
+grep -qF 'ODS_LEMONADE_RESTART_PS_TIMEOUT' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade restart helper must be bounded by a timeout"
+grep -qF 'lemonade-bootstrap-restart.$(date +%Y%m%d-%H%M%S).$$.log' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade restart helper output must go to a file, not a command-substitution pipe"
+grep -qF '>"$ps_output_file" 2>&1' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade restart helper must not capture PowerShell through an inherited stdout pipe"
+grep -qF 'tail -c 12000 "$ps_output_file"' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade restart diagnostics must be read back from the bounded log file"
+grep -qF 'resolve_live_windows_lemonade_model_id "$lemonade_port" "$target_gguf"' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade timeout/no-output fallback must resolve the live full-model ID"
+grep -qF 'PowerShell restart helper did not finish cleanly, but Lemonade live state matches' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade timeout fallback must only continue after live-state proof"
+grep -qF 'Resolved native Windows Lemonade model ID from live state' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade no-output fallback must require live-state proof"
+grep -qF 'curl -sf --max-time 240 -X POST' <<<"$restart_windows_lemonade_block" \
+    || fail "Windows Lemonade live-state fallback must still prove chat completion"
+pass "Windows Lemonade restart cannot leave a half-promoted route after helper timeout"
+
+assert_in_order "$restart_windows_lemonade_block" "Windows Lemonade context propagation" \
+    'target_context="$(read_env_value CTX_SIZE)"' \
+    'ODS_WIN_CONTEXT_SIZE=$target_context' \
+    '$null = [int]::TryParse([string]$env:ODS_WIN_CONTEXT_SIZE, [ref]$contextSize)' \
+    'ContextSize = $contextSize' \
+    'verify_windows_lemonade_loaded_context "$lemonade_port" "$model_id" "$target_gguf" "$target_context"' \
+    'write_env_value LEMONADE_MODEL "$model_id"'
+pass "Windows Lemonade restart propagates and verifies the promoted context before commit"
+
+verify_context_block="$(function_block verify_windows_lemonade_loaded_context | grep -v '^[[:space:]]*#')"
+grep -qF 'all_models_loaded' <<<"$verify_context_block" \
+    || fail "Windows Lemonade loaded-context verifier must inspect health all_models_loaded"
+grep -qF 'recipe_options' <<<"$verify_context_block" \
+    || fail "Windows Lemonade loaded-context verifier must inspect recipe_options"
+grep -qF 'ctx_size' <<<"$verify_context_block" \
+    || fail "Windows Lemonade loaded-context verifier must inspect ctx_size"
+grep -qF '$actualContext -lt $expectedContext' <<<"$verify_context_block" \
+    || fail "Windows Lemonade loaded-context verifier must reject undersized contexts"
+pass "Windows Lemonade loaded-context verifier rejects stale bootstrap contexts"
 
 grep -qF 'patch_hermes_model_after_swap' <<<"$active_code" \
     || fail "Windows Lemonade hot-swap must patch Hermes off the bootstrap model"
@@ -298,7 +370,13 @@ grep -qF 'read_env_value HERMES_LLM_BASE_URL' <<<"$perplexica_update_block" \
     || fail "Lemonade Perplexica updates must use the working LiteLLM route"
 grep -qF 'read_env_value LEMONADE_MODEL' <<<"$perplexica_update_block" \
     || fail "Perplexica post-swap update must use the exact Lemonade model ID"
-pass "Perplexica post-swap update uses runnable Python and the exact LiteLLM model route"
+grep -qF 'read_env_value ODS_MODEL_SWITCHBOARD' <<<"$perplexica_update_block" \
+    || fail "Perplexica post-swap update must branch on switchboard mode"
+grep -qF '_px_model="ods/current"' <<<"$perplexica_update_block" \
+    || fail "Switchboard Perplexica updates must keep the stable model alias"
+grep -qF '_px_base_url="http://litellm:4000/v1"' <<<"$perplexica_update_block" \
+    || fail "Switchboard Perplexica updates must route through LiteLLM"
+pass "Perplexica post-swap update uses runnable Python and the exact LiteLLM/switchboard model route"
 
 grep -qF 'HOT_SWAP_VERIFIED=true' <<<"$active_code" \
     || fail "hot-swap must record when the full model is verified serving"
@@ -356,6 +434,15 @@ docker_timeout_block="$(awk '
     in_block { print }
     in_block && /exit 1/ { exit }
 ' "$TARGET" | grep -v '^[[:space:]]*#')"
+grep -qF 'ODS_BOOTSTRAP_HEALTH_ATTEMPTS' <<<"$active_code" \
+    || fail "Docker hot-swap health wait must expose a bounded attempt override"
+grep -qF 'ODS_BOOTSTRAP_CONTAINER_FAILURE_GRACE_ATTEMPTS' <<<"$active_code" \
+    || fail "Docker hot-swap must expose a bounded failed-container grace override"
+grep -qF 'is_windows_bash' <<<"$active_code" \
+    || fail "Docker hot-swap restart grace must account for slower Windows Docker Desktop transitions"
+grep -qF 'continuing within restart grace' <<<"$active_code" \
+    || fail "Docker hot-swap must tolerate transient failed/restarting container states before rollback"
+pass "Docker hot-swap restart grace is bounded and visible"
 grep -qF 'write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES"' <<<"$docker_timeout_block" \
     || fail "Docker hot-swap timeout must mark bootstrap status failed with real byte counts"
 grep -qF 'exit 1' <<<"$docker_timeout_block" \

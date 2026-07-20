@@ -147,6 +147,45 @@ get_compose_flags() {
     echo "$flags"
 }
 
+compose_pull_with_retry() {
+    local flags="$1"
+    local log_file
+    log_file="$(mktemp)"
+    local max_attempts="${ODS_COMPOSE_PULL_RETRY_ATTEMPTS:-3}"
+    if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || (( max_attempts < 1 )); then
+        max_attempts=3
+    fi
+
+    local attempt=1 rc=0
+    while :; do
+        : > "$log_file"
+        rc=0
+        # shellcheck disable=SC2086
+        docker compose $flags pull --ignore-buildable >"$log_file" 2>&1 || rc=$?
+        if (( rc == 0 )); then
+            rm -f "$log_file"
+            return 0
+        fi
+
+        if (( attempt >= max_attempts )) || ! grep -Eiq 'context deadline exceeded|i/o timeout|TLS handshake timeout|connection reset by peer|connection timed out|temporary failure|network is unreachable|net/http: request canceled|unexpected EOF|failed to authorize: failed to fetch' "$log_file"; then
+            ai_err "docker compose pull failed (exit code: ${rc})"
+            tail -40 "$log_file" >&2 || true
+            rm -f "$log_file"
+            return "$rc"
+        fi
+
+        local delay
+        case "$attempt" in
+            1) delay="${ODS_COMPOSE_PULL_RETRY_DELAY_1:-5}" ;;
+            2) delay="${ODS_COMPOSE_PULL_RETRY_DELAY_2:-15}" ;;
+            *) delay="${ODS_COMPOSE_PULL_RETRY_DELAY_N:-30}" ;;
+        esac
+        ai_warn "Docker registry pull hit a transient network error; retrying (${attempt}/$((max_attempts - 1)))."
+        sleep "$delay"
+        attempt=$((attempt + 1))
+    done
+}
+
 read_ods_env() {
     local env_file="${INSTALL_DIR}/.env"
     if [[ ! -f "$env_file" ]]; then
@@ -175,6 +214,143 @@ read_ods_env() {
             export "ENV_${key}=${val}"
         fi
     done < "$env_file"
+}
+
+macos_bootstrap_status() {
+    local status_file="${INSTALL_DIR}/data/bootstrap-status.json"
+    [[ -f "$status_file" ]] || return 0
+    grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$status_file" \
+        | sed -n '1p' \
+        | sed 's/.*"status"[[:space:]]*:[[:space:]]*"//' \
+        | sed 's/"//' \
+        || true
+}
+
+macos_wait_for_bootstrap_compose_safe() {
+    local action="${1:-service operation}"
+    local status_file="${INSTALL_DIR}/data/bootstrap-status.json"
+    [[ -f "$status_file" ]] || return 0
+
+    local max_wait="${ODS_MACOS_BOOTSTRAP_COMPOSE_WAIT_SECONDS:-900}"
+    local interval="${ODS_MACOS_BOOTSTRAP_COMPOSE_WAIT_INTERVAL:-5}"
+    if ! [[ "$max_wait" =~ ^[0-9]+$ ]] || (( max_wait < 0 )); then
+        max_wait=900
+    fi
+    if ! [[ "$interval" =~ ^[0-9]+$ ]] || (( interval < 1 )); then
+        interval=5
+    fi
+
+    local waited=0 announced=false status=""
+    while true; do
+        status="$(macos_bootstrap_status)"
+        case "$status" in
+            starting|verifying|swapping)
+                if [[ "$announced" == "false" ]]; then
+                    ai "Model upgrade is ${status}; waiting before ${action} touches llama-server..."
+                    announced=true
+                fi
+                if (( waited >= max_wait )); then
+                    ai_warn "Model upgrade is still ${status} after ${max_wait}s; refusing to run ${action} against an active hot-swap."
+                    return 1
+                fi
+                sleep "$interval"
+                waited=$(( waited + interval ))
+                ;;
+            *)
+                if [[ "$announced" == "true" ]]; then
+                    ai "Model upgrade is ${status:-idle}; continuing with ${action}."
+                fi
+                return 0
+                ;;
+        esac
+    done
+}
+
+macos_launch_detached_bootstrap_upgrade() {
+    local upgrade_script="$1"
+    shift
+    local pid_file="${INSTALL_DIR}/data/bootstrap-upgrade.pid"
+    local log_file="${INSTALL_DIR}/logs/model-upgrade.log"
+    local python_cmd="${PYTHON_CMD:-/usr/bin/python3}"
+    local bash_cmd="${BASH:-bash}"
+    [[ -x "$python_cmd" ]] || python_cmd="$(command -v python3 || command -v python || true)"
+    [[ -n "$python_cmd" ]] || {
+        ai_warn "Python is unavailable; cannot launch background model-upgrade retry."
+        return 1
+    }
+    if command -v cygpath >/dev/null 2>&1; then
+        bash_cmd="$(cygpath -w "$bash_cmd" 2>/dev/null || printf '%s' "$bash_cmd")"
+    fi
+
+    BOOTSTRAP_BASH="$bash_cmd" "$python_cmd" - "$pid_file" "$log_file" "$upgrade_script" "$@" <<'BOOTSTRAP_LAUNCH_PY'
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+pid_path = Path(sys.argv[1])
+log_path = Path(sys.argv[2])
+script = sys.argv[3]
+script_args = sys.argv[4:]
+if not script_args:
+    raise SystemExit("bootstrap launcher requires the install directory")
+bash_exe = os.environ.get("BOOTSTRAP_BASH") or os.environ.get("BASH") or "bash"
+log_path.parent.mkdir(parents=True, exist_ok=True)
+pid_path.parent.mkdir(parents=True, exist_ok=True)
+with log_path.open("ab", buffering=0) as log_handle:
+    proc = subprocess.Popen(
+        [bash_exe, script, *script_args],
+        cwd=script_args[0],
+        stdin=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        close_fds=True,
+        start_new_session=True,
+    )
+tmp = pid_path.with_name(f"{pid_path.name}.{os.getpid()}.tmp")
+tmp.write_text(f"{proc.pid}\n", encoding="ascii")
+os.chmod(tmp, 0o600)
+os.replace(tmp, pid_path)
+BOOTSTRAP_LAUNCH_PY
+}
+
+macos_maybe_resume_bootstrap_upgrade() {
+    local status_file="${INSTALL_DIR}/data/bootstrap-status.json"
+    local args_file="${INSTALL_DIR}/data/bootstrap-upgrade.args"
+    local upgrade_script="${INSTALL_DIR}/scripts/bootstrap-upgrade.sh"
+    [[ -f "$status_file" && -f "$args_file" && -f "$upgrade_script" ]] || return 0
+
+    local bs_status
+    bs_status="$(macos_bootstrap_status)"
+    [[ "$bs_status" == "failed" ]] || return 0
+
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[/]bootstrap-upgrade[.]sh.*${INSTALL_DIR}" >/dev/null 2>&1; then
+        ai "Model upgrade retry is already running."
+        return 0
+    fi
+
+    local full_gguf_file full_gguf_url full_gguf_sha256 full_llm_model full_max_context bootstrap_gguf_file
+    full_gguf_file="$(sed -n '1p' "$args_file")"
+    full_gguf_url="$(sed -n '2p' "$args_file")"
+    full_gguf_sha256="$(sed -n '3p' "$args_file")"
+    full_llm_model="$(sed -n '4p' "$args_file")"
+    full_max_context="$(sed -n '5p' "$args_file")"
+    bootstrap_gguf_file="$(sed -n '6p' "$args_file")"
+
+    if [[ -z "$full_gguf_file" || -z "$full_gguf_url" || -z "$full_llm_model" || -z "$full_max_context" || -z "$bootstrap_gguf_file" ]]; then
+        ai_warn "Bootstrap model upgrade failed previously, but retry metadata is incomplete."
+        return 0
+    fi
+
+    if macos_launch_detached_bootstrap_upgrade "$upgrade_script" \
+        "$INSTALL_DIR" "$full_gguf_file" "$full_gguf_url" \
+        "$full_gguf_sha256" "$full_llm_model" "$full_max_context" \
+        "$bootstrap_gguf_file"; then
+        ai "Model upgrade failed previously; retrying in background (${full_llm_model})."
+        ai "Check progress: tail -f ${INSTALL_DIR}/logs/model-upgrade.log"
+    else
+        ai_warn "Could not relaunch the failed background model upgrade."
+    fi
 }
 
 resolve_cli_llm_route() {
@@ -548,6 +724,7 @@ cmd_start() {
 
     # Start native llama-server first
     if [[ -z "$service" ]] && [[ -x "$LLAMA_SERVER_BIN" ]]; then
+        macos_wait_for_bootstrap_compose_safe "start" || return 1
         start_native_llama
     fi
 
@@ -555,6 +732,7 @@ cmd_start() {
     flags=$(get_compose_flags)
 
     if [[ "$service" == "llama-server" || "$service" == "llama" ]]; then
+        macos_wait_for_bootstrap_compose_safe "start" || return 1
         start_native_llama
     elif [[ -n "$service" ]]; then
         ai "Starting ${service}..."
@@ -566,6 +744,10 @@ cmd_start() {
         # shellcheck disable=SC2086
         docker compose $flags up -d
         ai_ok "All services started"
+    fi
+
+    if [[ -z "$service" || "$service" == "llama-server" || "$service" == "llama" ]]; then
+        macos_maybe_resume_bootstrap_upgrade || true
     fi
 }
 
@@ -608,6 +790,7 @@ cmd_restart() {
     flags=$(get_compose_flags)
 
     if [[ "$service" == "llama-server" || "$service" == "llama" ]]; then
+        macos_wait_for_bootstrap_compose_safe "restart" || return 1
         stop_native_llama
         start_native_llama
     elif [[ -n "$service" ]]; then
@@ -618,6 +801,7 @@ cmd_restart() {
     else
         # Restart native llama-server
         if [[ -f "$LLAMA_SERVER_PID_FILE" ]] || [[ -x "$LLAMA_SERVER_BIN" ]]; then
+            macos_wait_for_bootstrap_compose_safe "restart" || return 1
             stop_native_llama
             start_native_llama
         fi
@@ -626,6 +810,10 @@ cmd_restart() {
         # shellcheck disable=SC2086
         docker compose $flags up -d
         ai_ok "All services restarted"
+    fi
+
+    if [[ -z "$service" || "$service" == "llama-server" || "$service" == "llama" ]]; then
+        macos_maybe_resume_bootstrap_upgrade || true
     fi
 }
 
@@ -759,13 +947,13 @@ cmd_update() {
     flags=$(get_compose_flags)
 
     ai "Pulling latest images..."
-    # shellcheck disable=SC2086
-    docker compose $flags pull
+    compose_pull_with_retry "$flags"
 
     ai "Recreating containers..."
     # shellcheck disable=SC2086
     docker compose $flags up -d --force-recreate
     ai_ok "Update complete"
+    macos_maybe_resume_bootstrap_upgrade || true
 
     sleep 5
     cmd_status

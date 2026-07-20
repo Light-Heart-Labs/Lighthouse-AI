@@ -336,6 +336,24 @@ def test_update_dry_run_with_env_and_version(test_client, tmp_path, monkeypatch)
     assert "SOME_OTHER_KEY" not in data["env_keys"]
 
 
+def test_update_dry_run_parses_quoted_ods_version(test_client, tmp_path, monkeypatch):
+    """A quoted ODS_VERSION must not leak its quotes into the semver compare."""
+    import routers.updates as updates_mod
+
+    install_dir = tmp_path / "ods"
+    install_dir.mkdir()
+    (install_dir / ".env").write_text('ODS_VERSION="1.3.0"\n')
+
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(install_dir))
+
+    with patch("routers.updates.httpx.AsyncClient.get",
+               side_effect=httpx.ConnectError("mocked network failure")):
+        resp = test_client.get("/api/update/dry-run", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["current_version"] == "1.3.0"
+
+
 def test_update_dry_run_version_from_version_file(test_client, tmp_path, monkeypatch):
     """GET /api/update/dry-run falls back to .version file when .env has no ODS_VERSION."""
     import routers.updates as updates_mod

@@ -43,8 +43,78 @@ def model_provider_by_id(settings: dict[str, object], provider_id: str) -> dict[
 def test_all_surfaces_render() -> None:
     payload = run_renderer("--surface", "all")
     surfaces = {item["surface"] for item in payload["files"]}
-    assert surfaces == {"env", "opencode", "litellm-lemonade", "perplexica", "hermes"}
+    assert surfaces == {
+        "env", "opencode", "litellm-lemonade", "perplexica", "hermes",
+        "model-router-endpoints",
+    }
     assert payload["mode"] == "dry-run"
+
+
+def test_switchboard_surface_gated_on_enabled_mode() -> None:
+    observed = run_renderer("--surface", "all", "--switchboard-mode", "observe")
+    assert "litellm-switchboard" not in {i["surface"] for i in observed["files"]}
+    enabled = run_renderer("--surface", "all", "--switchboard-mode", "enabled")
+    surfaces = {i["surface"] for i in enabled["files"]}
+    assert "litellm-switchboard" in surfaces
+    switchboard = next(i for i in enabled["files"] if i["surface"] == "litellm-switchboard")
+    assert "model_name: ods/current" in switchboard["content"]
+    assert "model_name: local" in switchboard["content"]
+    assert "model_name: default" in switchboard["content"]
+    assert 'model_name: "*"' in switchboard["content"]
+    assert "api_base: http://model-router:9099/v1" in switchboard["content"]
+    assert switchboard["content"].count("http://model-router:9099/v1") == 4
+
+
+def test_enabled_env_exports_switchboard_webui_gateway() -> None:
+    payload = run_renderer(
+        "--surface",
+        "env",
+        "--switchboard-mode",
+        "enabled",
+        "--litellm-key",
+        "sk-test-litellm",
+    )
+    content = file_by_surface(payload, "env")["content"]
+    assert "ODS_MODEL_SWITCHBOARD=enabled" in content
+    assert "OPEN_WEBUI_LLM_BASE_URL=http://litellm:4000" in content
+    assert "OPEN_WEBUI_LLM_API_KEY=sk-test-litellm" in content
+
+
+def test_enabled_perplexica_uses_stable_alias() -> None:
+    payload = run_renderer(
+        "--surface",
+        "perplexica",
+        "--switchboard-mode",
+        "enabled",
+        "--ods-mode",
+        "lemonade",
+        "--gpu-backend",
+        "amd",
+        "--gguf-file",
+        "Concrete.gguf",
+        "--litellm-key",
+        "sk-test-litellm",
+    )
+    content = json.loads(file_by_surface(payload, "perplexica")["content"])
+    openai_provider = model_provider_by_id(content, "openai")
+    assert content["preferences"]["defaultChatModel"] == "ods/current"
+    assert openai_provider["config"]["baseURL"] == "http://litellm:4000/v1"
+    assert openai_provider["config"]["apiKey"] == "sk-test-litellm"
+    assert openai_provider["chatModels"][0]["key"] == "ods/current"
+
+
+def test_router_endpoints_strip_trailing_v1() -> None:
+    payload = run_renderer(
+        "--surface", "model-router-endpoints",
+        "--llm-base-url", "http://llama-server:8080/v1",
+        "--gpu-backend", "amd",
+        "--lemonade-api-base", "http://lemonade:8000/api/v1",
+    )
+    import json as _json
+    content = _json.loads(payload["files"][0]["content"])
+    by_id = {e["id"]: e["baseUrl"] for e in content["endpoints"]}
+    assert by_id["llama-server-default"] == "http://llama-server:8080"
+    assert by_id["lemonade-default"] == "http://lemonade:8000/api"
 
 
 def test_lemonade_disables_thinking_and_uses_extra_alias() -> None:
@@ -326,6 +396,9 @@ def test_hipfire_explicit_flags_ignore_env() -> None:
 def main() -> int:
     tests = [
         test_all_surfaces_render,
+        test_switchboard_surface_gated_on_enabled_mode,
+        test_enabled_env_exports_switchboard_webui_gateway,
+        test_enabled_perplexica_uses_stable_alias,
         test_lemonade_disables_thinking_and_uses_extra_alias,
         test_external_lemonade_uses_supplied_model_and_api_base,
         test_exact_lemonade_id_propagates_to_every_runtime_surface,

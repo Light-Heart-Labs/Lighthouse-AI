@@ -169,6 +169,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 8c. The bootstrap-to-full Lemonade promotion must carry the promoted context
+#     into Lemonade's runtime config and prove the loaded model picked it up.
+#     Otherwise Windows can announce the full model while still serving the old
+#     bootstrap/default context until a later restart.
+# ---------------------------------------------------------------------------
+if grep -q 'target_context="$(read_env_value CTX_SIZE)"' <<<"$restart_block" \
+   && grep -q 'ODS_WIN_CONTEXT_SIZE=$target_context' <<<"$restart_block" \
+   && grep -qF '$null = [int]::TryParse([string]$env:ODS_WIN_CONTEXT_SIZE, [ref]$contextSize)' <<<"$restart_block" \
+   && grep -q 'ContextSize = $contextSize' <<<"$restart_block" \
+   && grep -q 'verify_windows_lemonade_loaded_context "$lemonade_port" "$model_id" "$target_gguf" "$target_context"' <<<"$restart_block"; then
+    pass "Windows Lemonade swap propagates and proves the promoted context"
+else
+    fail "Windows Lemonade swap must propagate and prove the promoted context before commit"
+fi
+
+# ---------------------------------------------------------------------------
 # 9. Post-swap Hermes patching must not depend on Python being callable from
 #    Git Bash, and it must verify the YAML before returning success.
 # ---------------------------------------------------------------------------

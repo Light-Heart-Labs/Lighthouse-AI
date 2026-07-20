@@ -98,6 +98,12 @@
       "value": "rocm/dev-ubuntu-24.04:7.2"
     },
     {
+      "id": "model-router.python",
+      "type": "image",
+      "path": "extensions/services/model-router/Dockerfile",
+      "value": "python:3.11-slim"
+    },
+    {
       "id": "ods-proxy.caddy",
       "type": "image",
       "path": "extensions/services/ods-proxy/compose.yaml",

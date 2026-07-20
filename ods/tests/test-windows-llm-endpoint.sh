@@ -23,7 +23,7 @@ $repo = $env:ODS_TEST_ROOT
 . (Join-Path $repo "installers\windows\lib\env-generator.ps1")
 
 $script:LEMONADE_PORT = "8080"
-$script:LEMONADE_HEALTH_URL = "http://localhost:8080/api/v1/health"
+$script:LEMONADE_HEALTH_URL = "http://127.0.0.1:8080/api/v1/health"
 
 function Assert-EndpointValue {
     param(
@@ -129,7 +129,7 @@ $amdLemonade = @{
 Assert-ResolvedEndpoint -Label "AMD Lemonade endpoint" `
     -EnvMap $amdLemonade -GpuBackend "amd" -NativeBackend "lemonade" -UseLemonade `
     -ExpectedBackend "lemonade" `
-    -ExpectedHealthUrl "http://localhost:8080/api/v1/health" `
+    -ExpectedHealthUrl "http://127.0.0.1:8080/api/v1/health" `
     -ExpectedChatUrl "http://localhost:8080/api/v1/chat/completions"
 
 function Write-AIWarn { param([string]$Message) }

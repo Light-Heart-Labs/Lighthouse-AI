@@ -365,7 +365,7 @@ wait_for_healthy() {
     local attempt=0
     local delay=10
     local health_log
-    health_log=$(mktemp /tmp/ods-health-XXXXXX.log)
+    health_log=$(mktemp "${TMPDIR:-/tmp}/ods-health-XXXXXX.log")
 
     log_info "Waiting for services (timeout: ${HEALTH_TIMEOUT}s)..."
 

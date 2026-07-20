@@ -52,6 +52,14 @@ grep -qF 'com.ods.full-model-download' "$installer" \
     || fail "macOS installer must unload legacy full-model-download LaunchAgent"
 pass "macOS installer clears legacy native llama LaunchAgents"
 
+grep -qF 'lsof -a -p "$pid" -d cwd -Fn' "$installer" \
+    || fail "macOS installer must inspect cwd for relative native llama-server launches"
+grep -qF './bin/llama-server*|bin/llama-server*' "$installer" \
+    || fail "macOS installer must treat relative install-dir llama-server processes as owned"
+grep -qF '"$process_cwd" == "$INSTALL_DIR"' "$installer" \
+    || fail "macOS installer must reap owned relative-path native llama processes"
+pass "macOS installer reaps owned relative-path native llama processes"
+
 bridge="$ROOT_DIR/bin/ods-macos-llm-bridge.py"
 bridge_manager="$ROOT_DIR/installers/macos/lib/bridge-manager.sh"
 env_generator="$ROOT_DIR/installers/macos/lib/env-generator.sh"
@@ -62,6 +70,10 @@ grep -qF 'ODS_MACOS_LLM_BRIDGE_ENABLED=${macos_llm_bridge_enabled}' "$env_genera
     || fail "macOS env generator must enable the private LLM bridge for Colima"
 grep -qF 'ODS_NATIVE_LLAMA_PORT=${native_llama_port}' "$env_generator" \
     || fail "macOS env generator must persist the native loopback LLM port"
+grep -qF 'LLM_BACKEND=llama-server' "$env_generator" \
+    || fail "macOS env generator must declare the native llama-server backend"
+grep -qF 'upsert_env_value "${INSTALL_DIR}/.env" "LLM_BACKEND" "llama-server"' "$installer" \
+    || fail "macOS local reruns must heal the native llama-server backend marker"
 grep -qF 'ODS_MACOS_HOST_GATEWAY=${macos_host_gateway}' "$env_generator" \
     || fail "macOS env generator must persist the private Colima host gateway"
 grep -qF 'ODS_MACOS_VM_IP=${macos_vm_ip}' "$env_generator" \

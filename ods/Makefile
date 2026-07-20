@@ -37,6 +37,9 @@ test: ## Run unit and contract tests
 	@bash tests/test-linux-host-agent-stop.sh
 	@bash tests/test-preflight-dashboard-port.sh
 	@echo ""
+	@echo "=== ods-doctor rootless subordinate IDs ==="
+	@bash tests/test-ods-doctor-rootless-subid.sh
+	@echo ""
 	@echo "=== AMD/Lemonade contracts ==="
 	@bash tests/contracts/test-amd-lemonade-contracts.sh
 	@bash tests/test-litellm-amd-auth-enforced.sh
@@ -101,6 +104,9 @@ test: ## Run unit and contract tests
 	@echo "=== macOS uninstall LaunchAgent cleanup ==="
 	@bash tests/test-macos-uninstall-launchagents.sh
 	@echo ""
+	@echo "=== token-spy session manager active-id extraction ==="
+	@bash tests/test-token-spy-session-manager.sh
+	@echo ""
 	@echo "=== fleet-multi-distro keep-going on docker pull failure ==="
 	@bash tests/test-fleet-multi-distro-keep-going.sh
 	@echo ""
@@ -112,6 +118,9 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== CLI user-extension dependency resolution ==="
 	@bash tests/test-cli-user-extension-deps.sh
+	@echo ""
+	@echo "=== session cleanup lifecycle ==="
+	@bash tests/test-session-cleanup.sh
 
 bats: ## Run BATS unit tests for shell libraries
 	@echo "=== BATS unit tests ==="

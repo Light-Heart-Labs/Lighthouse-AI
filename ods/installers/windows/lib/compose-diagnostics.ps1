@@ -16,6 +16,23 @@ function Get-ODSComposeEnvFileArgs {
     return @()
 }
 
+function Initialize-ODSComposeDockerClientConfig {
+    param([string]$InstallDir)
+
+    $dockerConfigDir = Join-Path (Join-Path $InstallDir "data") "docker-client-public"
+    if (-not (Test-Path $dockerConfigDir)) {
+        New-Item -ItemType Directory -Path $dockerConfigDir -Force | Out-Null
+    }
+
+    $dockerConfigPath = Join-Path $dockerConfigDir "config.json"
+    if (-not (Test-Path $dockerConfigPath)) {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($dockerConfigPath, "{`n  `"auths`": {}`n}`n", $utf8NoBom)
+    }
+
+    return $dockerConfigDir
+}
+
 function Invoke-ODSDockerCompose {
     <#
     .SYNOPSIS
@@ -32,14 +49,27 @@ function Invoke-ODSDockerCompose {
     )
     Push-Location $InstallDir
     try {
+        $dockerConfigDir = Initialize-ODSComposeDockerClientConfig -InstallDir $InstallDir
+        $dockerClientArgs = @("--config", $dockerConfigDir)
+        $hadDockerConfig = Test-Path Env:DOCKER_CONFIG
+        $previousDockerConfig = $env:DOCKER_CONFIG
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = 'SilentlyContinue'
-        & docker compose @ComposeFlags @ComposeArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $env:DOCKER_CONFIG = $dockerConfigDir
+        & docker @dockerClientArgs compose @ComposeFlags @ComposeArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
         $exitCode = $LASTEXITCODE
         $ErrorActionPreference = $prevEAP
         return $exitCode
     }
     finally {
+        if ($hadDockerConfig) {
+            $env:DOCKER_CONFIG = $previousDockerConfig
+        } else {
+            Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue
+        }
+        if ($null -ne $prevEAP) {
+            $ErrorActionPreference = $prevEAP
+        }
         Pop-Location
     }
 }

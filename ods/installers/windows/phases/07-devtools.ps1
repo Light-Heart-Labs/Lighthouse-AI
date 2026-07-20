@@ -298,6 +298,33 @@ function Install-ODSHostAgentPython {
     return (Resolve-ODSHostAgentPython)
 }
 
+function Invoke-ODSNativeQuiet {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [string]$LogPath = ""
+    )
+
+    $prevEAP = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        # PowerShell 5.1 can promote expected native stderr to a terminating
+        # NativeCommandError when the installer runs with Stop semantics.
+        $ErrorActionPreference = "SilentlyContinue"
+        if ([string]::IsNullOrWhiteSpace($LogPath)) {
+            & $FilePath @Arguments 2>&1 | Out-Null
+        } else {
+            & $FilePath @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append | Out-Null
+        }
+        if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
+    } catch {
+        $exitCode = 1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    return $exitCode
+}
+
 # ── ODS Host Agent (extension lifecycle management) ────────────────────────
 $_agentScript = Join-Path (Join-Path $installDir "bin") "ods-host-agent.py"
 if (Test-Path $_agentScript) {
@@ -305,6 +332,19 @@ if (Test-Path $_agentScript) {
     if (-not $_python3) { $_python3 = Install-ODSHostAgentPython }
 
     if ($_python3) {
+        $_checkArgs = @($_python3.PrefixArgs) + @("-c", "import huggingface_hub, hf_xet")
+        $_checkExit = Invoke-ODSNativeQuiet -FilePath $_python3.FilePath -Arguments $_checkArgs
+        if ($_checkExit -ne 0) {
+            Write-AI "Installing ODS host-agent model downloader dependencies..."
+            $_installArgs = @($_python3.PrefixArgs) + @("-m", "pip", "install", "--user", "-q", "huggingface_hub[hf_xet]>=0.27")
+            $_installExit = Invoke-ODSNativeQuiet -FilePath $_python3.FilePath -Arguments $_installArgs -LogPath $script:LOG_FILE
+            if ($_installExit -eq 0) {
+                Write-AISuccess "ODS host-agent Hugging Face downloader ready"
+            } else {
+                Write-AIWarn "Could not install huggingface_hub[hf_xet]; model manager downloads may fail on Xet-backed Hugging Face models."
+            }
+        }
+
         # Kill existing agent on reinstall (matches Linux force-restart pattern)
         if (Test-Path $script:ODS_AGENT_PID_FILE) {
             $_oldPid = $null
@@ -353,7 +393,7 @@ Start-Process -FilePath $_pythonLiteral -ArgumentList `$agentArgs -WorkingDirect
         $taskSettings = New-ScheduledTaskSettingsSet `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-        $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+        $taskPrincipal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
 
         $taskError = $null
         try {

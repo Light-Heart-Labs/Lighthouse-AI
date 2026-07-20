@@ -9,6 +9,7 @@ ENV_MODE="false"
 SKIP_BROKEN="false"
 GPU_COUNT="1"
 ODS_MODE="${ODS_MODE:-local}"
+SKIP_GPU_OVERLAYS="${ODS_SKIP_GPU_OVERLAYS:-${ODS_SKIP_GPU_OVERLAYS_FOR:-}}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             ODS_MODE="${2:-$ODS_MODE}"
             shift 2
             ;;
+        --skip-gpu-overlays|--skip-gpu-overlays-for)
+            SKIP_GPU_OVERLAYS="${2:-$SKIP_GPU_OVERLAYS}"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -68,7 +73,7 @@ if ! "$PYTHON_CMD" -c 'import yaml' >/dev/null 2>&1; then
     exit 2
 fi
 
-"$PYTHON_CMD" - "$SCRIPT_DIR" "$TIER" "$GPU_BACKEND" "$PROFILE_OVERLAYS" "$ENV_MODE" "$SKIP_BROKEN" "$GPU_COUNT" "$ODS_MODE" <<'PY'
+"$PYTHON_CMD" - "$SCRIPT_DIR" "$TIER" "$GPU_BACKEND" "$PROFILE_OVERLAYS" "$ENV_MODE" "$SKIP_BROKEN" "$GPU_COUNT" "$ODS_MODE" "$SKIP_GPU_OVERLAYS" <<'PY'
 import os
 import pathlib
 import platform
@@ -83,6 +88,11 @@ env_mode = (sys.argv[5] or "false").lower() == "true"
 skip_broken = (sys.argv[6] or "false").lower() == "true"
 gpu_count = int(sys.argv[7] or "1")
 ods_mode = (sys.argv[8] or os.environ.get("ODS_MODE", "local")).lower()
+skip_gpu_overlays = {
+    x.strip().lower()
+    for x in (sys.argv[9] or os.environ.get("ODS_SKIP_GPU_OVERLAYS", "")).split(",")
+    if x.strip()
+}
 lemonade_external = (
     os.environ.get("LEMONADE_EXTERNAL", "").lower() in {"1", "true", "yes", "on"}
     or (
@@ -549,7 +559,7 @@ if ext_dir.exists():
                     continue
             # GPU-specific overlay (filesystem discovery — not in manifest)
             gpu_overlay = service_dir / f"compose.{gpu_backend}.yaml"
-            if gpu_overlay.exists():
+            if service_dir.name.lower() not in skip_gpu_overlays and gpu_overlay.exists():
                 resolved.append(str(gpu_overlay.relative_to(script_dir)))
 
             # Mode-specific overlay — depends_on for local/hybrid mode only.
@@ -648,7 +658,7 @@ if user_ext_dir.exists():
                 resolved.append(str(compose_path.relative_to(script_dir)))
                 # GPU-specific overlay (filesystem discovery — not in manifest)
                 gpu_overlay = service_dir / f"compose.{gpu_backend}.yaml"
-                if gpu_overlay.exists():
+                if service_dir.name.lower() not in skip_gpu_overlays and gpu_overlay.exists():
                     # Fixed filename so traversal isn't possible, but the same
                     # security checks apply to the overlay's content.
                     ok, warnings = _scan_user_compose_content(gpu_overlay)

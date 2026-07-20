@@ -114,6 +114,33 @@ class TestHostAgentShutdown:
         assert "shutdown" in calls
 
 
+class TestProgressWrites:
+
+    def test_write_progress_retries_windows_replace_race(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        real_replace = os.replace
+        calls = []
+
+        def flaky_replace(src, dst):
+            calls.append((src, dst))
+            if len(calls) == 1:
+                raise PermissionError("[WinError 5] Access is denied")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(_mod.os, "replace", flaky_replace)
+
+        _mod._write_progress("aider", "pulling", "Downloading image...")
+
+        progress = tmp_path / "extension-progress" / "aider.json"
+        assert len(calls) == 2
+        assert progress.exists()
+        payload = json.loads(progress.read_text(encoding="utf-8"))
+        assert payload["service_id"] == "aider"
+        assert payload["status"] == "pulling"
+        assert payload["phase_label"] == "Downloading image..."
+
+
 class TestResolveAgentBindAddr:
 
     def test_explicit_bind_wins(self):
@@ -329,6 +356,7 @@ class TestResolveComposeFlags:
         git_bash = r"C:\Program Files\Git\bin\bash.exe"
         monkeypatch.setattr(_mod, "_find_usable_bash", lambda: git_bash)
         monkeypatch.setattr(_mod, "_ensure_windows_resolver_pyyaml", lambda python_cmd: None)
+        monkeypatch.setattr(_mod, "_windows_whisper_cuda_supported", lambda _env: True)
 
         calls = []
 
@@ -403,6 +431,50 @@ class TestResolveComposeFlags:
         cmd = calls[0][0]
         assert cmd[cmd.index("--ods-mode") + 1] == expected_mode
         assert cmd[cmd.index("--gpu-count") + 1] == "1"
+
+    def test_windows_resolver_skips_whisper_overlay_for_cpu_fallback(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir = tmp_path / "ods"
+        scripts_dir = install_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (install_dir / ".env").write_text(
+            "ODS_MODE=local\nGPU_BACKEND=nvidia\nWHISPER_ACCELERATION=cpu\n",
+            encoding="utf-8",
+        )
+        (scripts_dir / "resolve-compose-stack.sh").write_text(
+            "#!/usr/bin/env bash\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "TIER", "1")
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "nvidia")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "_find_usable_bash", lambda: r"C:\Program Files\Git\bin\bash.exe")
+        monkeypatch.setattr(_mod, "_ensure_windows_resolver_pyyaml", lambda _python: None)
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout="-f docker-compose.base.yml -f extensions/services/whisper/compose.yaml\n",
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert resolve_compose_flags() == [
+            "-f", "docker-compose.base.yml",
+            "-f", "extensions/services/whisper/compose.yaml",
+        ]
+        cmd = calls[0][0]
+        assert cmd[cmd.index("--skip-gpu-overlays") + 1] == "whisper"
 
     def test_windows_installs_pyyaml_for_resolver_python(self, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
@@ -719,6 +791,12 @@ class TestValidateCoreRecreateIds:
     def test_accepts_hermes_core_recreate_services(self, monkeypatch, service_id):
         monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {service_id})
         ok, error = validate_core_recreate_ids([service_id])
+        assert ok is True
+        assert error == ""
+
+    def test_accepts_model_router_core_recreate_service(self, monkeypatch):
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"model-router"})
+        ok, error = validate_core_recreate_ids(["model-router"])
         assert ok is True
         assert error == ""
 
@@ -1260,7 +1338,7 @@ class TestSyncExtensionConfigWire:
             thread.join(timeout=2)
 
     @staticmethod
-    def _post(port, sid, *, key="wire-test-secret"):
+    def _post(port, sid, *, key="wire-test-secret", preserve_existing=False):
         """Direct HTTP POST to /v1/extension/sync_config so callers can
         assert on the raw status code (the dashboard-api helper masks
         4xx as a generic False, which is too coarse for these tests)."""
@@ -1270,7 +1348,10 @@ class TestSyncExtensionConfigWire:
         url = f"http://127.0.0.1:{port}/v1/extension/sync_config"
         req = urllib.request.Request(
             url,
-            data=_json.dumps({"service_id": sid}).encode(),
+            data=_json.dumps({
+                "service_id": sid,
+                "preserve_existing": preserve_existing,
+            }).encode(),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {key}",
@@ -1286,6 +1367,80 @@ class TestSyncExtensionConfigWire:
             except ValueError:
                 body = {}
             return exc.code, body
+
+    def test_preserve_existing_only_adds_missing_config(
+        self, tmp_path, monkeypatch,
+    ):
+        import threading
+        from http.server import HTTPServer
+
+        install_dir = tmp_path / "install"
+        user_root = install_dir / "data" / "user-extensions"
+        install_dir.mkdir()
+        user_root.mkdir(parents=True)
+        self._make_extension(user_root, "fakesvc")
+        source = user_root / "fakesvc" / "config" / "fakesvc"
+        (source / "new.yaml").write_text("new: default\n", encoding="utf-8")
+        target = install_dir / "config" / "fakesvc"
+        target.mkdir(parents=True)
+        (target / "settings.yaml").write_text("server: customized\n", encoding="utf-8")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", user_root)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", tmp_path / "builtin-empty")
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, _body = self._post(port, "fakesvc", preserve_existing=True)
+            assert status == 200
+            assert _body.get("preserve_existing") is True
+            assert (target / "settings.yaml").read_text(encoding="utf-8") == "server: customized\n"
+            assert (target / "new.yaml").read_text(encoding="utf-8") == "new: default\n"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_rejects_existing_symlink_in_config_target(
+        self, tmp_path, monkeypatch,
+    ):
+        if os.name == "nt" and not can_create_symlinks(tmp_path):
+            pytest.skip("Windows symlink creation requires Developer Mode or administrator privileges")
+        import threading
+        from http.server import HTTPServer
+
+        install_dir = tmp_path / "install"
+        user_root = install_dir / "data" / "user-extensions"
+        install_dir.mkdir()
+        user_root.mkdir(parents=True)
+        self._make_extension(user_root, "fakesvc")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = install_dir / "config" / "fakesvc"
+        target.mkdir(parents=True)
+        (target / "linked").symlink_to(outside, target_is_directory=True)
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", user_root)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", tmp_path / "builtin-empty")
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = self._post(port, "fakesvc", preserve_existing=True)
+            assert status == 400
+            assert "target symlink" in body.get("error", "")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_rejects_symlink_in_config_tree(self, tmp_path, monkeypatch):
         """Symlinks (file or directory, top-level or nested) must be rejected
@@ -2588,6 +2743,15 @@ class TestModelActivationModeAndMacosBridge:
         def fake_run(cmd, **_kwargs):
             if cmd and cmd[0] == "curl":
                 events.append(("validate-runtime", cmd[-1]))
+                if str(cmd[-1]).endswith("/props"):
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({
+                            "default_generation_settings": {"n_ctx": 4096},
+                        }),
+                        stderr="",
+                    )
                 return subprocess.CompletedProcess(
                     cmd,
                     0,
@@ -2653,8 +2817,13 @@ class TestModelActivationModeAndMacosBridge:
         assert len(calls) == 1
         cmd, kwargs = calls[0]
         assert cmd[:2] == ["/bin/bash", "-c"]
-        assert cmd[-2:] == [str(install_dir), str(env_path)]
-        assert 'source "$install_dir/lib/bridge-manager.sh"' in cmd[2]
+        assert cmd[-4:] == [
+            str(install_dir),
+            str(env_path),
+            str(lib_dir / "constants.sh"),
+            str(lib_dir / "bridge-manager.sh"),
+        ]
+        assert 'source "$bridge_manager_file"' in cmd[2]
         assert 'macos_configure_llm_bridge_from_env "$env_file" "$install_dir"' in cmd[2]
         assert 'cp -p "$target_file" "$tmp_file"' in cmd[2]
         assert kwargs == {
@@ -2663,6 +2832,35 @@ class TestModelActivationModeAndMacosBridge:
             "timeout": 45,
             "check": False,
         }
+
+    def test_bridge_adapter_falls_back_to_source_macos_lib(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "install"
+        source_lib_dir = install_dir / "installers" / "macos" / "lib"
+        source_lib_dir.mkdir(parents=True)
+        env_path = install_dir / ".env"
+        env_path.write_text("ODS_MODE=local\nBIND_ADDRESS=127.0.0.1\n", encoding="utf-8")
+        (source_lib_dir / "constants.sh").write_text("# constants\n", encoding="utf-8")
+        (source_lib_dir / "bridge-manager.sh").write_text("# manager\n", encoding="utf-8")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_find_usable_bash", lambda: "/bin/bash")
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        _mod._configure_macos_llm_bridge(env_path)
+
+        assert len(calls) == 1
+        cmd, _kwargs = calls[0]
+        assert cmd[-4:] == [
+            str(install_dir),
+            str(env_path),
+            str(source_lib_dir / "constants.sh"),
+            str(source_lib_dir / "bridge-manager.sh"),
+        ]
 
     def test_missing_bridge_manager_fails_before_listener_shutdown(
         self,
@@ -2690,6 +2888,89 @@ class TestModelActivationModeAndMacosBridge:
                 tmp_path / "llama.log",
                 tmp_path / "llama.pid",
             )
+
+
+class TestModelActivationLemonadePersistence:
+
+    def test_activation_never_persists_blank_lemonade_model_during_restore(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir = tmp_path / "install"
+        models_dir = install_dir / "data" / "models"
+        config_dir = install_dir / "config"
+        (config_dir / "llama-server").mkdir(parents=True)
+        (config_dir / "litellm").mkdir(parents=True)
+        models_dir.mkdir(parents=True)
+        env_path = install_dir / ".env"
+        env_path.write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=amd\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "LEMONADE_MODEL=extra.old-model.gguf\n"
+            "OLLAMA_PORT=11434\n"
+            "MAX_CONTEXT=32768\n"
+            "CTX_SIZE=32768\n",
+            encoding="utf-8",
+        )
+        payload = b"new model"
+        (models_dir / "new-model.gguf").write_bytes(payload)
+        (config_dir / "model-library.json").write_text(
+            json.dumps({
+                "models": [{
+                    "id": "target-model",
+                    "gguf_file": "new-model.gguf",
+                    "gguf_url": "https://example.test/new-model.gguf",
+                    "gguf_sha256": hashlib.sha256(payload).hexdigest(),
+                    "llm_model_name": "new-model",
+                    "context_length": 65536,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        observed_envs = []
+
+        def fake_compose_restart(_env):
+            observed_envs.append(_mod.load_env(env_path).copy())
+            raise RuntimeError("stop after env write")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_lemonade_model_id",
+            lambda _env, gguf_file, **_kwargs: f"extra.{gguf_file}",
+        )
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", fake_compose_restart
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_capture_hermes_live_config",
+            lambda *_args, **_kwargs: {"exists": False},
+        )
+        monkeypatch.setattr(
+            _mod, "_remove_hermes_live_config", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            _mod, "_capture_perplexica_config", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_capture_container_state",
+            lambda _name: {"exists": False, "running": False},
+        )
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert observed_envs
+        pending_env = observed_envs[0]
+        assert pending_env["GGUF_FILE"] == "new-model.gguf"
+        assert pending_env["LEMONADE_MODEL"] == "extra.new-model.gguf"
 
 
 class TestModelActivationRuntimeIdentity:
@@ -4295,6 +4576,10 @@ class TestModelDownloadFileIntegrity:
                 self.returncode = 0
                 return 0
 
+            def communicate(self, timeout=None):
+                self.wait(timeout=timeout)
+                return "", ""
+
             def kill(self):
                 self.returncode = -9
 
@@ -4383,6 +4668,199 @@ class TestModelDownloadFileIntegrity:
         status = json.loads((install_dir / "data" / "model-download-status.json").read_text(encoding="utf-8"))
         assert status["status"] == "failed"
         assert "missing or empty" in status["error"]
+
+    def test_curl_failure_status_includes_stderr(self, tmp_path, monkeypatch):
+        install_dir = self._setup_env(tmp_path, monkeypatch)
+
+        class FailingProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.returncode = None
+
+            def communicate(self, timeout=None):
+                self.returncode = 22
+                return "", "curl: (22) The requested URL returned error: 403"
+
+            def wait(self, timeout=None):
+                self.returncode = 22
+                return 22
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", FailingProc)
+
+        handler = _FakeHandler(self._body())
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["status"] == "started"
+        _mod._model_download_thread.join(timeout=2)
+        assert not _mod._model_download_thread.is_alive()
+        status = json.loads((install_dir / "data" / "model-download-status.json").read_text(encoding="utf-8"))
+        assert status["status"] == "failed"
+        assert "curl exited with code 22" in status["error"]
+        assert "requested URL returned error: 403" in status["error"]
+
+    def test_huggingface_resolve_download_falls_back_to_hub_client(self, tmp_path, monkeypatch):
+        payload = b"downloaded through hf hub"
+        model = {
+            "gguf_file": "hf-model.gguf",
+            "gguf_url": "https://huggingface.co/org/model-GGUF/resolve/main/subdir/hf-model.gguf",
+            "gguf_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            library_models=[model],
+            expected_payload=payload,
+        )
+        calls = []
+
+        class FallbackProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.cmd = cmd
+                self.returncode = None
+                calls.append(cmd)
+
+            def communicate(self, timeout=None):
+                if self.cmd and self.cmd[0] == "curl":
+                    self.returncode = 22
+                    return "", "curl: (22) The requested URL returned error: 403"
+                dest = Path(self.cmd[6])
+                dest.write_bytes(payload)
+                self.returncode = 0
+                return "", ""
+
+            def wait(self, timeout=None):
+                return self.returncode if self.returncode is not None else 0
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", FallbackProc)
+
+        handler = _FakeHandler(json.dumps({
+            "gguf_file": model["gguf_file"],
+            "gguf_url": model["gguf_url"],
+        }).encode("utf-8"))
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["status"] == "started"
+        _mod._model_download_thread.join(timeout=2)
+        assert not _mod._model_download_thread.is_alive()
+        assert (install_dir / "data" / "models" / "hf-model.gguf").read_bytes() == payload
+        assert any(cmd and cmd[0] == "curl" for cmd in calls)
+        assert any(cmd and cmd[0] == sys.executable for cmd in calls)
+        status = json.loads((install_dir / "data" / "model-download-status.json").read_text(encoding="utf-8"))
+        assert status["status"] == "complete"
+
+    def test_huggingface_fallback_reports_active_status(self, tmp_path, monkeypatch):
+        payload = b"downloaded through hf hub"
+        model = {
+            "gguf_file": "hf-model.gguf",
+            "gguf_url": "https://huggingface.co/org/model-GGUF/resolve/main/subdir/hf-model.gguf",
+            "gguf_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            library_models=[model],
+            expected_payload=payload,
+        )
+        monkeypatch.delenv("HF_HUB_ETAG_TIMEOUT", raising=False)
+        monkeypatch.delenv("HF_HUB_DOWNLOAD_TIMEOUT", raising=False)
+        child_envs = []
+        status_path = install_dir / "data" / "model-download-status.json"
+        part_tmp = install_dir / "data" / "models" / "hf-model.gguf.part"
+
+        class HubProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.cmd = cmd
+                self.returncode = None
+                child_envs.append(kwargs.get("env", {}))
+
+            def communicate(self, timeout=None):
+                deadline = time.time() + 2
+                while time.time() < deadline and not status_path.exists():
+                    time.sleep(0.01)
+                dest = Path(self.cmd[6])
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(payload)
+                self.returncode = 0
+                return "", ""
+
+            def wait(self, timeout=None):
+                return self.returncode if self.returncode is not None else 0
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", HubProc)
+
+        ok, error = _mod._download_huggingface_artifact(
+            model["gguf_url"],
+            part_tmp,
+            self._NoCancel(),
+            status_path=status_path,
+            status_label=model["gguf_file"],
+            part_total=len(payload),
+            status_error="Retry 1/3: curl exited with code 35",
+        )
+
+        assert ok is True
+        assert error == ""
+        assert child_envs[0]["HF_HUB_ETAG_TIMEOUT"] == "30"
+        assert child_envs[0]["HF_HUB_DOWNLOAD_TIMEOUT"] == "30"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert status["status"] == "downloading"
+        assert status["model"] == "hf-model.gguf"
+        assert status["bytesTotal"] == len(payload)
+        assert "curl exited with code 35" in status["error"]
+        assert "Hugging Face Hub fallback active" in status["error"]
+
+    def test_huggingface_fallback_timeout_is_bounded(self, tmp_path, monkeypatch):
+        model = {
+            "gguf_file": "hf-model.gguf",
+            "gguf_url": "https://huggingface.co/org/model-GGUF/resolve/main/subdir/hf-model.gguf",
+            "gguf_sha256": hashlib.sha256(b"payload").hexdigest(),
+        }
+        install_dir = self._setup_env(tmp_path, monkeypatch, library_models=[model])
+        monkeypatch.setenv("ODS_HF_HUB_FALLBACK_TIMEOUT_SECONDS", "1")
+        part_tmp = install_dir / "data" / "models" / "hf-model.gguf.part"
+        timeouts = []
+
+        class HangingHubProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.cmd = cmd
+                self.returncode = None
+                self.killed = False
+
+            def communicate(self, timeout=None):
+                timeouts.append(timeout)
+                if self.killed:
+                    self.returncode = -9
+                    return "", ""
+                raise subprocess.TimeoutExpired(self.cmd, timeout)
+
+            def wait(self, timeout=None):
+                return self.returncode if self.returncode is not None else -9
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", HangingHubProc)
+
+        ok, error = _mod._download_huggingface_artifact(
+            model["gguf_url"],
+            part_tmp,
+            self._NoCancel(),
+        )
+
+        assert ok is False
+        assert timeouts[0] == 30
+        assert "Hugging Face Hub fallback timed out after 30s" in error
 
     def test_split_download_skips_existing_non_empty_parts(self, tmp_path, monkeypatch):
         parts = [
@@ -4658,6 +5136,10 @@ class TestModelDownloadFileIntegrity:
                     cancel_event.set()
                     self.returncode = -9
                 return self.returncode
+
+            def communicate(self, timeout=None):
+                self.wait(timeout=timeout)
+                return "", ""
 
             def kill(self):
                 self.returncode = -9

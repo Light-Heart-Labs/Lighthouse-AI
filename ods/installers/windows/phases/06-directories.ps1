@@ -12,6 +12,7 @@
 #   $selectedTier, $tierConfig -- from phase 02
 #   $gpuInfo                   -- from phase 02
 #   $llamaServerImage          -- from phase 02
+#   $whisperCudaSupported      -- from phase 02
 #   $enableOpenClaw            -- from phase 03
 #   $openClawConfig            -- from phase 03
 #
@@ -90,6 +91,7 @@ $_expectedRegularFiles = @(
     ".env",
     ".env.example",
     ".env.schema.json",
+    "config\llama-server\models.ini",
     "config\litellm\local.yaml",
     "config\litellm\lemonade.yaml",
     "data\.extensions-lock",
@@ -296,7 +298,9 @@ $envResult = New-ODSEnv `
     -AmdInferenceManaged $_amdInferenceManaged `
     -LemonadeServerImage $_lemonadeServerImage `
     -SystemRamGB    $systemRamGB `
+    -WhisperCudaEnabled $whisperCudaSupported `
     -EnableLangfuse $enableLangfuse `
+    -SwitchboardMode $env:ODS_MODEL_SWITCHBOARD `
     -EnableLan      $lanFlag
 Write-AISuccess "Generated .env with secure secrets"
 

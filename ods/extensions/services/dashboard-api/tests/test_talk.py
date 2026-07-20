@@ -41,6 +41,54 @@ def test_talk_status_requires_session(talk_client, monkeypatch):
     assert data["capabilities"]["live_mic_requires_secure_context"] is True
 
 
+def test_talk_status_disables_text_chat_for_incompatible_active_model(talk_client, monkeypatch):
+    async def fake_state(service_id):
+        return {"configured": True, "status": "healthy", "id": service_id}
+
+    monkeypatch.setattr("routers.talk._service_state", fake_state)
+    monkeypatch.setattr("routers.talk._active_model_app_compatibility", lambda: {
+        "agentViability": {
+            "status": "not_agent_viable",
+            "reason": "Phi direct chat works, but agent validation failed.",
+        },
+        "hermesTalk": {
+            "status": "unsupported_until_revalidated",
+            "reason": "Phi direct chat works, but ODS Talk is not revalidated.",
+        },
+    })
+
+    resp = talk_client.get("/api/talk/status")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["capabilities"]["text_chat"] is False
+    assert data["reason"] == "Phi direct chat works, but agent validation failed."
+
+
+def test_talk_message_rejects_incompatible_model_before_hermes(talk_client, monkeypatch):
+    calls = []
+
+    async def fake_submit(session_key, text):
+        calls.append((session_key, text))
+        return None
+
+    monkeypatch.setattr("hermes_bridge.submit_prompt", fake_submit)
+    monkeypatch.setattr("routers.talk._active_model_app_compatibility", lambda: {
+        "agentViability": {
+            "status": "not_agent_viable",
+            "reason": "Active model is not agent ready.",
+        },
+        "hermesTalk": {
+            "status": "unsupported_until_revalidated",
+            "reason": "Active model is not Talk ready.",
+        },
+    })
+
+    resp = talk_client.post("/api/talk/message", json={"text": "hello"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Active model is not agent ready."
+    assert calls == []
+
+
 def test_talk_message_routes_through_hermes_bridge(talk_client, monkeypatch):
     from hermes_bridge import HermesReply
 

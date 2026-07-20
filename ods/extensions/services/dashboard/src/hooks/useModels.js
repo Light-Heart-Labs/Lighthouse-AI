@@ -36,7 +36,7 @@ function getMockModels() {
       fitsCurrentVram: true
     },
     {
-      id: 'Qwen/Qwen2.5-32B-Instruct-AWQ',
+      id: 'Qwen/Qwen2.5-Coder-32B-Instruct-AWQ',
       name: 'Qwen2.5 Coder 32B AWQ',
       size: '15.7 GB',
       sizeGb: 15.7,
@@ -70,6 +70,8 @@ function getMockModels() {
 
 const MOCK_GPU = { vramTotal: 16, vramUsed: 13.2, vramFree: 2.8 }
 const MOCK_CURRENT_MODEL = 'Qwen/Qwen2.5-32B-Instruct-AWQ'
+const MOCK_MODES = { odsMode: 'local', configuredMode: 'local' }
+const DEFAULT_HERMES_MIN_CONTEXT = 65536
 const DEFAULT_POLL_MS = 30000
 const PENDING_MODEL_ACTION_POLL_MS = 2000
 const MODELS_FETCH_TIMEOUT_MS = 30000
@@ -81,8 +83,8 @@ const MODEL_ACTIVATION_TIMEOUT_MS = 610000
 const ODS_MODES = new Set(['local', 'cloud', 'hybrid', 'lemonade'])
 const LOCAL_MODEL_MODES = new Set(['local', 'hybrid', 'lemonade'])
 
-// Named export for dev-only mocking (explicit opt-in via VITE_USE_MOCK_DATA)
-export { getMockModels }
+// Named exports for dev-only mocking (explicit opt-in via VITE_USE_MOCK_DATA)
+export { getMockModels, MOCK_MODES }
 
 async function responseJson(response) {
   try {
@@ -141,9 +143,10 @@ export function useModels() {
   const [gpu, setGpu] = useState(USE_MOCK_DATA ? MOCK_GPU : null)
   const [currentModel, setCurrentModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
   const [configuredModel, setConfiguredModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
-  const [odsMode, setOdsMode] = useState('unknown')
-  const [configuredMode, setConfiguredMode] = useState('unknown')
+  const [odsMode, setOdsMode] = useState(USE_MOCK_DATA ? MOCK_MODES.odsMode : 'unknown')
+  const [configuredMode, setConfiguredMode] = useState(USE_MOCK_DATA ? MOCK_MODES.configuredMode : 'unknown')
   const [recommendationAlternatives, setRecommendationAlternatives] = useState([])
+  const [hermesMinimumContext, setHermesMinimumContext] = useState(DEFAULT_HERMES_MIN_CONTEXT)
   const [loading, setLoading] = useState(USE_MOCK_DATA ? false : true)
   const [fetchError, setFetchError] = useState(null)
   const [mutationError, setMutationError] = useState(null)
@@ -219,6 +222,7 @@ export function useModels() {
       setOdsMode(effectiveMode)
       setConfiguredMode(normalizeOdsMode(data.configuredMode ?? data.odsMode))
       setRecommendationAlternatives(data.recommendationAlternatives ?? [])
+      setHermesMinimumContext(Number(data.hermesMinimumContext || DEFAULT_HERMES_MIN_CONTEXT))
       setFetchError(null)
       reconcilePendingActions(data.models)
       return data
@@ -380,8 +384,6 @@ export function useModels() {
   }
 
   const deleteModel = async (modelId) => {
-    if (!confirm(`Delete ${modelId}? This cannot be undone.`)) return
-
     setMutationError(null)
     const action = startAction(modelId, 'delete')
     try {
@@ -435,6 +437,7 @@ export function useModels() {
     canActivateModels: activationModeError === null,
     activationModeError,
     recommendationAlternatives,
+    hermesMinimumContext,
     loading,
     error,
     actionLoading,

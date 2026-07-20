@@ -328,6 +328,22 @@ if [[ -f "$INSTALL_DIR/bin/ods-host-agent.py" ]]; then
                 ai_warn "  Set INSTALL_USER=<non-root user> before re-running install if this is unintentional."
             fi
 
+            if ! "$AGENT_PYTHON" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+                ai "Installing ODS host-agent model downloader dependencies..."
+                if ods_ensure_python_pip "$AGENT_PYTHON" "ODS host-agent" && {
+                    sudo -u "$_agent_user" env HOME="$HOME" \
+                        "$AGENT_PYTHON" -m pip install --user -q "huggingface_hub[hf_xet]>=0.27" \
+                        2>&1 | tee -a "$LOG_FILE" >/dev/null || \
+                    sudo -u "$_agent_user" env HOME="$HOME" \
+                        "$AGENT_PYTHON" -m pip install --user --break-system-packages -q "huggingface_hub[hf_xet]>=0.27" \
+                        2>&1 | tee -a "$LOG_FILE" >/dev/null
+                }; then
+                    ai_ok "ODS host-agent Hugging Face downloader ready"
+                else
+                    ai_warn "Could not install huggingface_hub[hf_xet]; model manager downloads may fail on Xet-backed Hugging Face models."
+                fi
+            fi
+
             if [[ -f "$INSTALL_DIR/scripts/systemd/ods-host-agent.service" ]]; then
                 svc_tmp="$(mktemp "${TMPDIR:-/tmp}/ods-host-agent.service.XXXXXX")" || svc_tmp=""
                 if [[ -z "$svc_tmp" ]]; then

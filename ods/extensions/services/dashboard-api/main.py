@@ -51,6 +51,7 @@ from helpers import (
     get_llama_metrics, get_loaded_model, get_llama_context_size,
     _get_httpx_client,
 )
+from context_policy import HERMES_MIN_CONTEXT, HERMES_TARGET_CONTEXT
 from host_agent_client import (
     AgentHTTPError,
     AgentProtocolError,
@@ -61,7 +62,8 @@ from host_agent_client import (
 from agent_monitor import collect_metrics
 from routers import (
     workflows, features, setup, updates, agents, privacy, extensions,
-    gpu as gpu_router, resources, voice, models as models_router, templates,
+    gpu as gpu_router, resources, voice, models as models_router, model_state as model_state_router,
+    model_routes as model_routes_router, templates,
     auth as auth_router,
     magic_link,
     oauth_passthrough,
@@ -509,11 +511,6 @@ def _serialize_model(model_info) -> Optional[dict]:
         "name": model_info.name,
         "contextLength": model_info.context_length,
     }
-
-
-HERMES_MIN_CONTEXT = 65536
-HERMES_TARGET_CONTEXT = 131072
-
 
 
 def _build_model_readiness_payload(
@@ -1036,6 +1033,9 @@ app.include_router(extensions.router)
 app.include_router(gpu_router.router)
 app.include_router(resources.router)
 app.include_router(voice.router)
+# Static switchboard state route registers before the dynamic model-ID routes.
+app.include_router(model_state_router.router)
+app.include_router(model_routes_router.router)
 app.include_router(models_router.router)
 app.include_router(templates.router)
 app.include_router(auth_router.router)

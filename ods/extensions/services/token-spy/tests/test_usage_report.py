@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
-from datetime import datetime, timedelta, timezone
+
+import pytest
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -158,3 +160,59 @@ def test_query_summary_respects_hours_window(tmp_path, monkeypatch):
 
     agents = {r["agent"] for r in db.query_summary(hours=1)}
     assert agents == {"recent"}
+
+
+class TestReportRangeCap:
+    """/api/report builds one bucket per day in the requested span.
+
+    Without a cap a single request materializes the whole span: 0001-01-01
+    to 9999-12-30 is 3,652,058 buckets and ~215MB of date strings before any
+    row is read. The endpoint only catches ValueError, and the end-of-range
+    arithmetic raises OverflowError on date.max, which escaped as a 500.
+    """
+
+    def test_rejects_a_span_past_the_cap(self, tmp_path, monkeypatch):
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="366 days"):
+            db._parse_report_dates("0001-01-01", "9999-12-30")
+
+    def test_date_max_raises_value_error_not_overflow(self, tmp_path, monkeypatch):
+        """OverflowError is not a ValueError, so it used to escape as a 500."""
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        with pytest.raises(ValueError):
+            db._parse_report_dates("0001-01-01", "9999-12-31")
+
+    def test_accepts_a_normal_year(self, tmp_path, monkeypatch):
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        start_day, end_day, exclusive = db._parse_report_dates(
+            "2026-01-01", "2026-12-31"
+        )
+        assert (end_day - start_day).days == 364
+        assert exclusive == date(2027, 1, 1)
+
+    def test_reversed_range_still_rejected(self, tmp_path, monkeypatch):
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="on or after"):
+            db._parse_report_dates("2026-06-01", "2026-01-01")
+
+    def test_postgres_backend_shares_the_cap(self):
+        """Both backends serve the same endpoint and need the same bound.
+
+        db_postgres imports psycopg2 at module scope, which is absent
+        wherever Postgres is not the configured backend, so this asserts the
+        parity on the source rather than importing it.
+        """
+        pg = (TOKEN_SPY_DIR / "db_postgres.py").read_text(encoding="utf-8")
+        sqlite = (TOKEN_SPY_DIR / "db.py").read_text(encoding="utf-8")
+        for text, name in ((pg, "db_postgres.py"), (sqlite, "db.py")):
+            assert "MAX_REPORT_RANGE_DAYS = 366" in text, name
+            assert "(end_day - start_day).days >= MAX_REPORT_RANGE_DAYS" in text, name
+
+
+class TestShortSpanAtDateMax:
+    def test_short_span_at_date_max_raises_value_error(self, tmp_path, monkeypatch):
+        """An in-cap span ending at date.max must reject cleanly, not
+        overflow in the exclusive-end arithmetic and escape as a 500."""
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="out of range"):
+            db._parse_report_dates("9999-12-01", "9999-12-31")

@@ -8,7 +8,6 @@ import {
   HardDrive,
   Library,
   Loader2,
-  MoreVertical,
   Play,
   RefreshCw,
   Search,
@@ -68,6 +67,7 @@ export default function Models() {
     canActivateModels,
     activationModeError,
     recommendationAlternatives,
+    hermesMinimumContext,
     loading,
     error,
     actionLoading,
@@ -83,13 +83,13 @@ export default function Models() {
   const [downloadStarting, setDownloadStarting] = useState(null)
   const [downloadAwaitingStatus, setDownloadAwaitingStatus] = useState(false)
   const [downloadStartFailure, setDownloadStartFailure] = useState(null)
-  const [openMenuId, setOpenMenuId] = useState(null)
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [compatibilityFilter, setCompatibilityFilter] = useState('all')
   const [speedFilter, setSpeedFilter] = useState('any')
   const [contextFloor, setContextFloor] = useState(0)
+  const [deleteConfirmModel, setDeleteConfirmModel] = useState(null)
   const libraryRef = useRef(null)
 
   useEffect(() => {
@@ -132,21 +132,6 @@ export default function Models() {
   }, [downloadAwaitingStatus, downloadProgress.refresh, downloadStarting])
 
   useEffect(() => {
-    const closeMenu = (event) => {
-      if (!event.target.closest('[data-model-menu]')) setOpenMenuId(null)
-    }
-    const onEscape = (event) => {
-      if (event.key === 'Escape') setOpenMenuId(null)
-    }
-    document.addEventListener('mousedown', closeMenu)
-    document.addEventListener('keydown', onEscape)
-    return () => {
-      document.removeEventListener('mousedown', closeMenu)
-      document.removeEventListener('keydown', onEscape)
-    }
-  }, [])
-
-  useEffect(() => {
     setPage(1)
   }, [models.length])
 
@@ -156,7 +141,10 @@ export default function Models() {
       || null
   }, [currentModel, models])
 
-  const categoryOptions = useMemo(() => buildCategoryOptions(models), [models])
+  const categoryOptions = useMemo(
+    () => buildCategoryOptions(models, hermesMinimumContext),
+    [hermesMinimumContext, models]
+  )
   const maxContext = useMemo(
     () => Math.max(0, ...models.map(model => Number(model.contextLength || 0))),
     [models]
@@ -170,13 +158,13 @@ export default function Models() {
     return models.filter(model => {
       const memory = getMemoryMeta(model, gpu)
       if (search && !matchesModelSearch(model, search)) return false
-      if (categoryFilter !== 'all' && !getModelCategoryIds(model).includes(categoryFilter)) return false
+      if (categoryFilter !== 'all' && !getModelCategoryIds(model, hermesMinimumContext).includes(categoryFilter)) return false
       if (!matchesCompatibilityFilter(model, memory, compatibilityFilter)) return false
-      if (!matchesSpeedFilter(model, speedFilter)) return false
+      if (!matchesSpeedFilter(model, speedFilter, hermesMinimumContext)) return false
       if (contextFloor > 0 && Number(model.contextLength || 0) < contextFloor) return false
       return true
     })
-  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, models, query, speedFilter])
+  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, hermesMinimumContext, models, query, speedFilter])
 
   const pageCount = Math.max(1, Math.ceil(filteredModels.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount)
@@ -207,6 +195,13 @@ export default function Models() {
     }
   }
 
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmModel?.id) return
+    const modelId = deleteConfirmModel.id
+    setDeleteConfirmModel(null)
+    await deleteModel(modelId)
+  }
+
   const pendingModelActions = actionLoadingModels ?? (actionLoading ? [actionLoading] : [])
   const visibleDownloadProgress = downloadProgress.progress || (downloadStartFailure && {
     status: 'error',
@@ -217,7 +212,7 @@ export default function Models() {
 
   if (loading) {
     return (
-      <div className="p-6 sm:p-8">
+      <div className="p-3 sm:p-6 lg:p-8">
         <div className="animate-pulse">
           <div className="mb-6 flex items-center justify-between">
             <div>
@@ -234,7 +229,7 @@ export default function Models() {
   }
 
   return (
-    <div className="p-6 sm:p-8">
+    <div className="p-3 sm:p-6 lg:p-8">
       <header className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-theme-text">Models</h1>
@@ -354,11 +349,10 @@ export default function Models() {
           style={TECH_PANEL_STYLE}
         >
           <div className="min-w-full overflow-x-auto">
-            <div className="min-w-[1020px]">
-              <div className="grid grid-cols-[minmax(280px,1.7fr)_130px_36px_90px_130px_150px_110px_150px] gap-5 border-b border-white/[0.055] px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/55">
+            <div className="lg:min-w-[1034px]">
+              <div className="hidden grid-cols-[minmax(250px,1.7fr)_144px_70px_110px_120px_90px_130px] gap-5 border-b border-white/[0.055] px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/55 lg:grid">
                 <span>Model</span>
-                <span>Action</span>
-                <span />
+                <span>Actions</span>
                 <span>Size</span>
                 <span>VRAM</span>
                 <span>Speed</span>
@@ -375,18 +369,18 @@ export default function Models() {
                       model={model}
                       gpu={gpu}
                       canActivateModels={canActivateModels}
+                      activationModeError={activationModeError}
+                      hermesMinimumContext={hermesMinimumContext}
                       isCurrentModel={model.id === currentModel}
                       isLoading={pendingModelActions.includes(model.id)}
                       loadBusy={pendingModelActions.length > 0}
                       activationBusy={Boolean(activationLoading)}
                       downloadBusy={downloadProgress.isDownloading || !!downloadStarting}
                       downloadStarting={downloadStarting === model.id}
-                      menuOpen={openMenuId === rowId}
-                      onToggleMenu={() => setOpenMenuId(current => current === rowId ? null : rowId)}
                       onDownload={() => handleDownload(model.id)}
                       onLoad={() => loadModel(model.id)}
                       onBenchmark={() => benchmarkModel(model.id)}
-                      onDelete={() => deleteModel(model.id)}
+                      onDelete={() => setDeleteConfirmModel(model)}
                     />
                   )
                 })}
@@ -408,6 +402,14 @@ export default function Models() {
           </div>
         </section>
       </div>
+
+      {deleteConfirmModel && (
+        <DeleteModelDialog
+          model={deleteConfirmModel}
+          onCancel={() => setDeleteConfirmModel(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
     </div>
   )
 }
@@ -625,14 +627,14 @@ function ModelTableRow({
   model,
   gpu,
   canActivateModels,
+  activationModeError,
+  hermesMinimumContext,
   isCurrentModel,
   isLoading,
   loadBusy,
   activationBusy,
   downloadBusy,
   downloadStarting,
-  menuOpen,
-  onToggleMenu,
   onDownload,
   onLoad,
   onBenchmark,
@@ -641,15 +643,24 @@ function ModelTableRow({
   const isLoaded = model.status === 'loaded' || isCurrentModel
   const isDownloaded = model.status === 'downloaded'
   const memory = getMemoryMeta(model, gpu)
-  const compatibility = getCompatibilityMeta(model, memory)
+  const compatibility = getCompatibilityMeta(model, memory, hermesMinimumContext)
   const speed = getSpeedDisplay(model)
-  const tags = getModelTags(model)
+  const tags = getModelTags(model, hermesMinimumContext)
   const iconTone = getIconTone(model, compatibility)
   const performanceBadge = getPerformanceBadge(model)
+  const runDisabledReason = getRunDisabledReason({
+    model,
+    gpu,
+    canActivateModels,
+    activationModeError,
+    hermesMinimumContext,
+    loadBusy,
+    activationBusy,
+  })
 
   return (
-    <div className="grid grid-cols-[minmax(280px,1.7fr)_130px_36px_90px_130px_150px_110px_150px] gap-5 px-5 py-3.5 transition-colors hover:bg-white/[0.025]">
-      <div className="min-w-0">
+    <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(250px,1.7fr)_144px_70px_110px_120px_90px_130px] lg:gap-5 lg:px-5 lg:py-3.5">
+      <div className="col-span-2 min-w-0 sm:col-span-1 lg:col-span-1">
         <div className="flex min-w-0 items-start gap-3">
           <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${iconTone.border} ${iconTone.bg}`}>
             <Box size={17} className={iconTone.text} />
@@ -670,67 +681,38 @@ function ModelTableRow({
         </div>
       </div>
 
-      <div className="self-center">
+      <div className="col-span-2 flex items-center gap-2 self-start sm:col-span-1 sm:justify-end lg:col-span-1 lg:self-center lg:justify-start">
         <PrimaryAction
           model={model}
-          canActivateModels={canActivateModels}
           isLoaded={isLoaded}
           isDownloaded={isDownloaded}
           isLoading={isLoading}
-          loadBusy={loadBusy}
           activationBusy={activationBusy}
           downloadBusy={downloadBusy}
           downloadStarting={downloadStarting}
+          runDisabledReason={runDisabledReason}
+          hermesMinimumContext={hermesMinimumContext}
           onDownload={onDownload}
           onLoad={onLoad}
           onBenchmark={onBenchmark}
         />
+        <DeleteAction
+          model={model}
+          isLoaded={isLoaded}
+          isDownloaded={isDownloaded}
+          isLoading={isLoading}
+          activationBusy={activationBusy}
+          onDelete={onDelete}
+        />
       </div>
 
-      <div className="relative flex items-center justify-end self-center" data-model-menu>
-        <button
-          type="button"
-          onClick={onToggleMenu}
-          disabled={isLoading || activationBusy}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-theme-text-muted transition-colors hover:bg-white/[0.05] hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-35"
-          title="Model actions"
-        >
-          <MoreVertical size={15} />
-        </button>
-        {menuOpen && !isLoading && !activationBusy && (
-          <div className="absolute left-0 top-9 z-30 w-44 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101018] py-1 shadow-2xl">
-            {isLoaded && (
-              <MenuButton onClick={onBenchmark} icon={RefreshCw}>Benchmark</MenuButton>
-            )}
-            {isDownloaded && !isLoaded && (
-              canActivateModels ? (
-                <MenuButton
-                  onClick={onLoad}
-                  icon={Play}
-                  disabled={!model.fitsVram || loadBusy}
-                >
-                  Run model
-                </MenuButton>
-              ) : (
-                <MenuLink to="/settings" icon={AlertCircle}>Review runtime mode</MenuLink>
-              )
-            )}
-            {model.status === 'available' && (
-              <MenuButton onClick={onDownload} icon={Download} disabled={downloadBusy}>Download</MenuButton>
-            )}
-            {isDownloaded && !isLoaded && (
-              <MenuButton onClick={onDelete} icon={Trash2} danger>Delete file</MenuButton>
-            )}
-            {!isLoaded && !isDownloaded && model.status !== 'available' && (
-              <div className="px-3 py-2 text-xs text-theme-text-muted">No local action</div>
-            )}
-          </div>
-        )}
+      <div className="self-center font-mono text-xs text-theme-text-secondary">
+        <MobileMetricLabel>Size</MobileMetricLabel>
+        {model.size || '--'}
       </div>
-
-      <div className="self-center font-mono text-xs text-theme-text-secondary">{model.size || '--'}</div>
 
       <div className="self-center">
+        <MobileMetricLabel>VRAM</MobileMetricLabel>
         <div className="mb-2 flex items-center justify-between gap-2 font-mono text-xs text-theme-text-secondary">
           <span>{memory.value}</span>
           <span className="text-[10px] text-theme-text-muted">{memory.percentLabel}</span>
@@ -744,13 +726,18 @@ function ModelTableRow({
       </div>
 
       <div className="self-center">
+        <MobileMetricLabel>Speed</MobileMetricLabel>
         <div className="mb-1.5 font-mono text-xs text-theme-text-secondary">{speed.label}</div>
         <ModelSpeedVisual model={model} speed={speed} />
       </div>
 
-      <div className="self-center font-mono text-xs text-theme-text-secondary">{formatContext(model.contextLength)}</div>
+      <div className="self-center font-mono text-xs text-theme-text-secondary">
+        <MobileMetricLabel>Context</MobileMetricLabel>
+        {formatContext(model.contextLength)}
+      </div>
 
-      <div className="self-center">
+      <div className="col-span-2 self-center lg:col-span-1">
+        <MobileMetricLabel>Compatibility</MobileMetricLabel>
         <Badge tone={compatibility.tone}>{compatibility.label}</Badge>
         <p className="mt-1 text-[10px] text-theme-text-muted">{compatibility.detail}</p>
       </div>
@@ -760,14 +747,14 @@ function ModelTableRow({
 
 function PrimaryAction({
   model,
-  canActivateModels,
   isLoaded,
   isDownloaded,
   isLoading,
-  loadBusy,
   activationBusy,
   downloadBusy,
   downloadStarting,
+  runDisabledReason,
+  hermesMinimumContext,
   onDownload,
   onLoad,
   onBenchmark,
@@ -797,32 +784,26 @@ function PrimaryAction({
   }
 
   if (isDownloaded) {
-    if (!canActivateModels) {
-      return (
-        <Link
-          to="/settings"
-          className="inline-flex h-8 min-w-24 items-center justify-center gap-2 rounded-md border border-amber-300/20 bg-amber-500/10 px-3 text-xs font-semibold text-amber-100 transition-colors hover:border-amber-200/40"
-        >
-          <AlertCircle size={13} />
-          Review mode
-        </Link>
-      )
-    }
-    const runDisabled = !model.fitsVram || loadBusy || activationBusy
+    const runDisabled = Boolean(runDisabledReason)
+    const directChatBlocked = isOpenAiChatBlocked(getOpenAiChatCompatibility(model))
+    const buttonLabel = directChatBlocked ? 'Chat Unsupported' : 'Run'
     return (
-      <button
-        type="button"
-        onClick={onLoad}
-        disabled={runDisabled}
-        className={`inline-flex h-8 min-w-24 items-center justify-center gap-2 rounded-md px-3 text-xs font-semibold transition-colors ${
-          !runDisabled
-            ? 'bg-theme-accent text-white shadow-[0_0_18px_rgba(168,85,247,0.32)] hover:bg-theme-accent-hover'
-            : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
-        }`}
-      >
-        <Play size={13} />
-        Run
-      </button>
+      <span className="inline-flex" title={runDisabledReason || `Run ${model.name}`}>
+        <button
+          type="button"
+          onClick={onLoad}
+          disabled={runDisabled}
+          title={runDisabledReason || `Run ${model.name}`}
+          className={`inline-flex h-8 min-w-24 items-center justify-center gap-2 rounded-md px-3 text-xs font-semibold transition-colors ${
+            !runDisabled
+              ? 'bg-theme-accent text-white shadow-[0_0_18px_rgba(168,85,247,0.32)] hover:bg-theme-accent-hover'
+              : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
+          }`}
+        >
+          {directChatBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
+          {buttonLabel}
+        </button>
+      </span>
     )
   }
 
@@ -850,6 +831,88 @@ function PrimaryAction({
       Download
     </button>
   )
+}
+
+function DeleteAction({ model, isLoaded, isDownloaded, isLoading, activationBusy, onDelete }) {
+  if (!isLoaded && !isDownloaded) return null
+
+  const disabledReason = isLoaded
+    ? 'The active model cannot be deleted. Run another model first.'
+    : isLoading
+      ? 'Wait for the current model action to finish before deleting it.'
+      : activationBusy
+        ? 'Wait for the current model swap to finish before deleting another model.'
+        : null
+  const title = disabledReason || `Delete ${model.name} from this device`
+
+  return (
+    <span className="inline-flex" title={title}>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={Boolean(disabledReason)}
+        aria-label={isLoaded ? `Delete ${model.name} unavailable` : `Delete ${model.name}`}
+        title={title}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
+          disabledReason
+            ? 'cursor-not-allowed border-white/[0.07] bg-black/20 text-theme-text-muted/45'
+            : 'border-red-400/20 bg-red-500/[0.07] text-red-300 hover:border-red-300/40 hover:bg-red-500/15'
+        }`}
+      >
+        <Trash2 size={14} />
+      </button>
+    </span>
+  )
+}
+
+function DeleteModelDialog({ model, onCancel, onConfirm }) {
+  const titleId = `delete-model-${model.id || 'model'}`
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-md rounded-xl border border-red-300/20 bg-[#08080d] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-300/20 bg-red-500/10 text-red-300">
+            <Trash2 size={17} />
+          </div>
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-sm font-semibold text-theme-text">
+              Delete {model.name}?
+            </h2>
+            <p className="mt-2 text-sm leading-5 text-theme-text-muted">
+              The model file will be removed from this device. Download it again from the library if you need it later.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-white/[0.08] bg-black/20 px-3 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-red-300/30 bg-red-500/15 px-3 text-xs font-semibold text-red-200 transition-colors hover:border-red-200/50 hover:bg-red-500/25"
+          >
+            Delete model
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MobileMetricLabel({ children }) {
+  return <span className="mb-1.5 block text-[9px] font-semibold uppercase text-theme-text-muted/60 lg:hidden">{children}</span>
 }
 
 function DownloadProgressBar({ progress, helpers, onRetry }) {
@@ -976,35 +1039,33 @@ function Pagination({ page, pageCount, onChange }) {
   )
 }
 
-function MenuButton({ icon: Icon, children, onClick, disabled, danger, title }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
-        danger
-          ? 'text-red-300 hover:bg-red-500/10'
-          : 'text-theme-text-secondary hover:bg-white/[0.045] hover:text-theme-text'
-      }`}
-    >
-      <Icon size={13} />
-      {children}
-    </button>
-  )
-}
-
-function MenuLink({ icon: Icon, children, to }) {
-  return (
-    <Link
-      to={to}
-      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-amber-100 transition-colors hover:bg-amber-500/10"
-    >
-      <Icon size={13} />
-      {children}
-    </Link>
-  )
+function getRunDisabledReason({
+  model,
+  gpu,
+  canActivateModels,
+  activationModeError,
+  hermesMinimumContext,
+  loadBusy,
+  activationBusy,
+}) {
+  if (!canActivateModels) {
+    return activationModeError || 'The local model runtime is unavailable. Review runtime settings before running this model.'
+  }
+  const openAiChat = getOpenAiChatCompatibility(model)
+  if (isOpenAiChatBlocked(openAiChat)) {
+    return openAiChat.reason || 'This model is not currently validated for direct local chat.'
+  }
+  if (model.fitsVram !== true) {
+    const required = Number(model.estimatedRequired || model.vramRequired || 0)
+    const total = Number(gpu?.vramTotal || 0)
+    if (required > 0 && total > 0) {
+      return `Requires ${formatNumber(required)} GB VRAM; the detected GPU has ${formatNumber(total)} GB total.`
+    }
+    return 'This model does not fit the detected GPU memory.'
+  }
+  if (activationBusy) return 'Wait for the current model swap to finish.'
+  if (loadBusy) return 'Another model action is in progress.'
+  return null
 }
 
 function formatModeLabel(mode) {
@@ -1061,7 +1122,7 @@ function Badge({ children, tone = 'neutral', subdued = false }) {
   )
 }
 
-function buildCategoryOptions(models) {
+function buildCategoryOptions(models, hermesMinimumContext) {
   const definitions = [
     { id: 'chat', label: 'Chat / LLM' },
     { id: 'code', label: 'Code' },
@@ -1072,7 +1133,7 @@ function buildCategoryOptions(models) {
   ]
   const counts = Object.fromEntries(definitions.map(definition => [definition.id, 0]))
   models.forEach(model => {
-    getModelCategoryIds(model).forEach(category => {
+    getModelCategoryIds(model, hermesMinimumContext).forEach(category => {
       counts[category] = (counts[category] || 0) + 1
     })
   })
@@ -1084,7 +1145,7 @@ function buildCategoryOptions(models) {
   ]
 }
 
-function getModelCategoryIds(model) {
+function getModelCategoryIds(model, hermesMinimumContext) {
   const categories = new Set()
   const text = [
     model?.id,
@@ -1105,7 +1166,8 @@ function getModelCategoryIds(model) {
   ) {
     categories.add('reasoning')
   }
-  if (Number(model?.contextLength || 0) >= 64000 || text.includes('long context')) {
+  const minimumContext = Number(hermesMinimumContext || 0)
+  if ((minimumContext > 0 && Number(model?.contextLength || 0) >= minimumContext) || text.includes('long context')) {
     categories.add('long-context')
   }
   if (
@@ -1142,14 +1204,18 @@ function matchesCompatibilityFilter(model, memory, filter) {
   return true
 }
 
-function matchesSpeedFilter(model, filter) {
+function matchesSpeedFilter(model, filter, hermesMinimumContext) {
   if (filter === 'any') return true
   const speed = getSpeedDisplay(model).value || 0
   if (filter === 'fast') return speed >= 45
   if (filter === 'balanced') return speed >= 15 && speed < 45
   if (filter === 'quality') {
     const text = `${model?.name || ''} ${model?.specialty || ''} ${model?.description || ''}`.toLowerCase()
-    return text.includes('quality') || text.includes('flagship') || text.includes('top-tier') || Number(model?.contextLength || 0) >= 64000
+    const minimumContext = Number(hermesMinimumContext || 0)
+    return text.includes('quality') ||
+      text.includes('flagship') ||
+      text.includes('top-tier') ||
+      (minimumContext > 0 && Number(model?.contextLength || 0) >= minimumContext)
   }
   return true
 }
@@ -1206,7 +1272,7 @@ function getMemoryMeta(model, gpu) {
   }
 }
 
-function getCompatibilityMeta(model, memory) {
+function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
   if (!model?.fitsVram) {
     const nearLimit = memory.total > 0 && memory.required <= memory.total * 1.08
     return {
@@ -1215,11 +1281,120 @@ function getCompatibilityMeta(model, memory) {
       tone: nearLimit ? 'amber' : 'red',
     }
   }
+  const openAiChat = getOpenAiChatCompatibility(model)
+  if (isOpenAiChatBlocked(openAiChat)) {
+    return {
+      label: 'Unavailable',
+      detail: 'Chat blocked',
+      tone: 'red',
+    }
+  }
+  const agentViability = getAgentViabilityCompatibility(model)
+  if (isAgentViabilityBlocked(agentViability)) {
+    return {
+      label: 'Direct chat only',
+      detail: 'Agent blocked',
+      tone: 'amber',
+    }
+  }
+  const appBlock = getBlockedAppCompatibility(model)
+  if (appBlock) {
+    return {
+      label: 'App limited',
+      detail: `${formatCompatibilityAppName(appBlock.key)} blocked`,
+      tone: 'amber',
+    }
+  }
+  const contextLength = Number(model?.contextLength || 0)
+  const minimumContext = Number(hermesMinimumContext || 0)
+  if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
+    return {
+      label: 'Direct chat only',
+      detail: `Needs ${formatContext(minimumContext)}`,
+      tone: 'amber',
+    }
+  }
+  const talkCompatibility = getHermesTalkCompatibility(model)
+  if (isHermesTalkVerified(talkCompatibility)) {
+    return { label: 'Talk ready', detail: model.recommended || model.status === 'loaded' ? 'Best' : 'Verified', tone: 'green' }
+  }
   if (model.recommended || model.status === 'loaded') {
     return { label: model.fitLabel || 'Fits GPU', detail: 'Best', tone: 'green' }
   }
   if (memory.percent > 82) return { label: model.fitLabel || 'Fits GPU', detail: 'Good', tone: 'green' }
   return { label: model.fitLabel || 'Fits GPU', detail: memory.percent < 45 ? 'Excellent' : 'Good', tone: 'green' }
+}
+
+function getHermesTalkCompatibility(model) {
+  return model?.appCompatibility?.hermesTalk || null
+}
+
+function getOpenAiChatCompatibility(model) {
+  return model?.appCompatibility?.openaiChat || null
+}
+
+function getAgentViabilityCompatibility(model) {
+  return model?.appCompatibility?.agentViability || getHermesTalkCompatibility(model)
+}
+
+function getBlockedAppCompatibility(model) {
+  const compatibility = model?.appCompatibility || {}
+  for (const [key, entry] of Object.entries(compatibility)) {
+    if (CORE_MODEL_COMPATIBILITY_KEYS.has(key)) continue
+    if (isAgentViabilityBlocked(entry) || isOpenAiChatBlocked(entry)) return { key, entry }
+  }
+  return null
+}
+
+function formatCompatibilityAppName(key) {
+  const known = {
+    litellm: 'LiteLLM',
+    openWebui: 'Open WebUI',
+    opencode: 'OpenCode',
+    openclaw: 'OpenClaw',
+    perplexica: 'Perplexica',
+    privacyShield: 'Privacy Shield',
+    tokenSpy: 'Token Spy',
+  }
+  if (known[key]) return known[key]
+  return String(key || 'App')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, value => value.toUpperCase())
+}
+
+function isOpenAiChatBlocked(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return BLOCKING_MODEL_COMPATIBILITY_STATUSES.includes(status)
+}
+
+function isAgentViabilityBlocked(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return ['not_agent_viable', ...BLOCKING_MODEL_COMPATIBILITY_STATUSES].includes(status)
+}
+
+const BLOCKING_MODEL_COMPATIBILITY_STATUSES = [
+  'blocked',
+  'incompatible',
+  'not_recommended',
+  'not_supported',
+  'unsupported',
+  'unsupported_until_revalidated',
+]
+
+const CORE_MODEL_COMPATIBILITY_KEYS = new Set([
+  'agentViability',
+  'hermesTalk',
+  'openaiChat',
+])
+
+function isHermesTalkBlocked(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return BLOCKING_MODEL_COMPATIBILITY_STATUSES.includes(status)
+}
+
+function isHermesTalkVerified(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return ['supported', 'verified'].includes(status)
 }
 
 function getSpeedDisplay(model) {
@@ -1268,7 +1443,7 @@ function buildSpeedProfilePoints(model, speed) {
   })
 }
 
-function getModelTags(model) {
+function getModelTags(model, hermesMinimumContext) {
   const tags = []
   const name = `${model?.name || ''} ${model?.specialty || ''}`.toLowerCase()
   const add = (tag) => {
@@ -1276,7 +1451,8 @@ function getModelTags(model) {
   }
   if (name.includes('code') || name.includes('coder')) add('Code')
   if (name.includes('reason') || name.includes('deepseek')) add('Reasoning')
-  if ((model?.contextLength || 0) >= 64000) add('Long Context')
+  const minimumContext = Number(hermesMinimumContext || 0)
+  if (minimumContext > 0 && (model?.contextLength || 0) >= minimumContext) add('Long Context')
   add(model?.specialty || 'General')
   add('Chat')
   return tags.slice(0, 3)
@@ -1284,6 +1460,7 @@ function getModelTags(model) {
 
 function getIconTone(model, compatibility) {
   if (!model?.fitsVram) return { border: 'border-orange-400/35', bg: 'bg-orange-500/10', text: 'text-orange-400' }
+  if (compatibility.tone === 'amber') return { border: 'border-amber-400/35', bg: 'bg-amber-500/10', text: 'text-amber-300' }
   if (compatibility.detail === 'Best') return { border: 'border-theme-accent/35', bg: 'bg-theme-accent/10', text: 'text-theme-accent' }
   return { border: 'border-emerald-400/30', bg: 'bg-emerald-500/10', text: 'text-emerald-400' }
 }

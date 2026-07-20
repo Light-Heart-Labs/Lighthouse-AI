@@ -22,18 +22,38 @@ _phase11_build_local_images() {
     local -a failed_build_services=()
     local build_count=0 build_total=${#build_services[@]}
     local svc build_pid build_failed resolved_image
+    local attempt max_attempts retry_delay build_log label
+
+    max_attempts="${ODS_DOCKER_BUILD_MAX_ATTEMPTS:-3}"
+    [[ "$max_attempts" =~ ^[0-9]+$ ]] || max_attempts=3
+    (( max_attempts < 1 )) && max_attempts=1
+    retry_delay="${ODS_DOCKER_BUILD_RETRY_DELAY_SECONDS:-5}"
+    [[ "$retry_delay" =~ ^[0-9]+$ ]] || retry_delay=5
 
     for svc in "${build_services[@]}"; do
         build_count=$((build_count + 1))
-        $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" build --no-cache "$svc" >> "$LOG_FILE" 2>&1 &
-        build_pid=$!
-        build_failed=false
-        spin_task "$build_pid" "[$build_count/$build_total] Building $svc" || build_failed=true
+        build_log="${LOG_FILE}.${svc}.build.log"
+        : > "$build_log"
+        build_failed=true
 
-        # Cross-check that a successful build produced a tagged image. An
-        # image left by an earlier install never overrides a non-zero build.
-        resolved_image=$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --format json 2>/dev/null \
-            | python3 -c "
+        for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            {
+                echo ""
+                echo "===== $svc build attempt $attempt/$max_attempts at $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+            } >> "$build_log"
+
+            $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" build --no-cache "$svc" >> "$build_log" 2>&1 &
+            build_pid=$!
+            build_failed=false
+            label="[$build_count/$build_total] Building $svc"
+            (( max_attempts > 1 )) && label="$label (attempt $attempt/$max_attempts)"
+            spin_task "$build_pid" "$label" || build_failed=true
+
+            # Cross-check that a successful build produced a tagged image. An
+            # image left by an earlier install never overrides a non-zero build.
+            if ! $build_failed; then
+                resolved_image=$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --format json 2>/dev/null \
+                    | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -47,12 +67,31 @@ try:
 except Exception:
     pass
 " 2>/dev/null || echo "")
-        if [[ -n "$resolved_image" ]] && ! $DOCKER_CMD image inspect "$resolved_image" &>/dev/null; then
-            build_failed=true
-        fi
+                if [[ -n "$resolved_image" ]] && ! $DOCKER_CMD image inspect "$resolved_image" &>/dev/null; then
+                    build_failed=true
+                    echo "Built image '$resolved_image' was not found after build attempt $attempt." >> "$build_log"
+                fi
+            fi
+
+            if ! $build_failed; then
+                break
+            fi
+
+            printf "\r  ${AMB}⚠${NC} %-60s\n" "$svc build failed (attempt $attempt/$max_attempts)"
+            if (( attempt < max_attempts )); then
+                ai_warn "$svc build failed; retrying in ${retry_delay}s (attempt $((attempt + 1))/$max_attempts)..."
+                sleep "$retry_delay"
+            fi
+        done
 
         if $build_failed; then
             printf "\r  ${AMB}⚠${NC} %-60s\n" "$svc build failed or image missing"
+            {
+                echo ""
+                echo "===== $svc build log tail ($build_log) ====="
+                tail -n 120 "$build_log" 2>/dev/null || true
+            } >> "$LOG_FILE"
+            ai "Build log: $build_log"
             failed_build_services+=("$svc")
         else
             printf "\r  ${BGRN}✓${NC} %-60s\n" "$svc built"
@@ -64,6 +103,103 @@ except Exception:
         ai "Refusing to start an image left by an earlier install. Fix the build error and rerun the installer."
         return 1
     fi
+}
+
+_phase11_download_hf_artifact() {
+    local url="$1" destination="$2" log_file="$3"
+    local helper="$INSTALL_DIR/scripts/download-hf-artifact.py"
+    local python_cmd="${ODS_PYTHON_CMD:-}"
+
+    case "$url" in
+        https://huggingface.co/*|https://www.huggingface.co/*|https://hf.co/*) ;;
+        *) return 2 ;;
+    esac
+
+    [[ -f "$helper" ]] || return 2
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    fi
+    [[ -n "$python_cmd" ]] || return 2
+
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        if ods_ensure_python_pip "$python_cmd" "Hugging Face downloader"; then
+            ods_python_pip_install_user "$python_cmd" "$log_file" "huggingface_hub[hf_xet]>=0.27" || true
+        fi
+    fi
+
+    "$python_cmd" "$helper" "$url" "$destination" >> "$log_file" 2>&1
+}
+
+_phase11_prefetch_embeddings_model() {
+    [[ "${ENABLE_EMBEDDINGS:-${ENABLE_RAG:-false}}" == "true" ]] || return 0
+    [[ "${ODS_EMBEDDINGS_PREFETCH:-true}" == "false" ]] && {
+        ai_warn "Skipping embeddings model prefetch because ODS_EMBEDDINGS_PREFETCH=false."
+        return 0
+    }
+
+    local helper="$INSTALL_DIR/scripts/download-hf-snapshot.py"
+    local model="${EMBEDDING_MODEL:-}"
+    local revision="${EMBEDDING_MODEL_REVISION:-}"
+    local cache_dir="$INSTALL_DIR/data/embeddings"
+    local python_cmd="${ODS_PYTHON_CMD:-${_python_cmd:-}}"
+    local prefetch_pid
+
+    if [[ -z "$model" ]] && declare -f _phase11_env_get >/dev/null 2>&1; then
+        model="$(_phase11_env_get EMBEDDING_MODEL "BAAI/bge-base-en-v1.5")"
+    fi
+    model="${model:-BAAI/bge-base-en-v1.5}"
+
+    [[ -f "$helper" ]] || {
+        ai_bad "Embeddings snapshot helper missing: $helper"
+        return 1
+    }
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    fi
+    [[ -n "$python_cmd" ]] || {
+        ai_bad "Python is required to prefetch the embeddings model for RAG."
+        return 1
+    }
+
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        if ods_ensure_python_pip "$python_cmd" "Embeddings Hugging Face downloader"; then
+            ods_python_pip_install_user "$python_cmd" "$LOG_FILE" "huggingface_hub[hf_xet]>=0.27" || true
+        fi
+    fi
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        ai_bad "Could not install huggingface_hub[hf_xet] for embeddings prefetch."
+        ai "Install it manually and re-run:"
+        ai "  $python_cmd -m pip install --user 'huggingface_hub[hf_xet]>=0.27'"
+        return 1
+    fi
+
+    mkdir -p "$cache_dir"
+    ai "Caching embeddings model for RAG: $model"
+    if [[ -n "$revision" ]]; then
+        "$python_cmd" "$helper" "$model" "$cache_dir" --revision "$revision" >> "$LOG_FILE" 2>&1 &
+    else
+        "$python_cmd" "$helper" "$model" "$cache_dir" >> "$LOG_FILE" 2>&1 &
+    fi
+    prefetch_pid=$!
+    if spin_task "$prefetch_pid" "Caching embeddings model"; then
+        ai_ok "Embeddings model cached for TEI"
+        return 0
+    fi
+
+    ai_bad "Embeddings model prefetch failed."
+    ai "Log file: $LOG_FILE"
+    return 1
+}
+
+_phase11_model_file_valid() {
+    local path="$1" expected_sha="${2:-}" actual_hash
+    [[ -s "$path" ]] || return 1
+    if [[ -n "$expected_sha" ]]; then
+        command -v sha256sum >/dev/null 2>&1 || return 1
+        actual_hash="$(sha256sum "$path" 2>/dev/null | awk '{print $1}')"
+        [[ -n "$actual_hash" && "$actual_hash" == "$expected_sha" ]] || return 1
+    fi
+    return 0
 }
 
 ods_progress 75 "services" "Starting services"
@@ -473,7 +609,7 @@ else
         # Swap to bootstrap model for the foreground download
         GGUF_FILE="$BOOTSTRAP_GGUF_FILE"
         GGUF_URL="$BOOTSTRAP_GGUF_URL"
-        GGUF_SHA256=""  # No SHA256 for Tier 0 model
+        GGUF_SHA256="${BOOTSTRAP_GGUF_SHA256:-}"
         LLM_MODEL="$BOOTSTRAP_LLM_MODEL"
         MAX_CONTEXT="$BOOTSTRAP_MAX_CONTEXT"
         ai "Fast-start mode: downloading bootstrap model (~1.5GB) for instant chat."
@@ -545,10 +681,24 @@ else
                         rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
                         printf "\r  ${AMB}⚠${NC} %-60s\n" "Download claimed to succeed but $GGUF_FILE is missing/empty"
                     fi
+                elif _phase11_download_hf_artifact "$GGUF_URL" "$GGUF_DIR/$GGUF_FILE.part" "$INSTALL_DIR/logs/model-download.log"; then
+                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                        printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
+                        _dl_success=true
+                        break
+                    else
+                        rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
+                        printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
+                    fi
                 fi
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"
                 sleep 3
             done
+
+            if [[ "$_dl_success" != "true" ]] && _phase11_model_file_valid "$GGUF_DIR/$GGUF_FILE" "$GGUF_SHA256"; then
+                printf "\r  ${BGRN}✓${NC} %-60s\n" "Model present after download retries: $GGUF_FILE"
+                _dl_success=true
+            fi
 
             if [[ "$_dl_success" != "true" ]]; then
                 printf "\r  ${RED}✗${NC} %-60s\n" "Download failed after 3 attempts: $GGUF_FILE"
@@ -861,6 +1011,10 @@ MODELS_INI_EOF
     fi
     ai_ok "Compose configuration valid"
 
+    if ! _phase11_prefetch_embeddings_model; then
+        exit 1
+    fi
+
     # Launch containers
     ods_progress 81 "services" "Launching containers"
     echo ""
@@ -871,7 +1025,7 @@ MODELS_INI_EOF
     compose_ok=false
     # Build local images individually so every failure is reported before the
     # installer refuses to launch any potentially stale image.
-    _candidate_build_services=(dashboard dashboard-api ape token-spy privacy-shield)
+    _candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
     [[ "$ENABLE_COMFYUI" == "true" ]] && _candidate_build_services+=(comfyui)
     [[ "$GPU_BACKEND" == "amd" ]] && _candidate_build_services+=(llama-server)
     if ! _enabled_compose_services="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --services 2>>"$LOG_FILE")"; then

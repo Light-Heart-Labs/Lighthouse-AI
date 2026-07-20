@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from models import GPUInfo
+from models import BootstrapStatus, GPUInfo
 
 
 def test_fetch_loaded_model_uses_configured_llm_url(monkeypatch):
@@ -137,7 +137,118 @@ def test_agent_activation_conflict_preserves_target(monkeypatch):
     assert exc_info.value.detail == payload
 
 
-def test_fetch_loaded_model_falls_back_to_models_when_lemonade_health_empty(monkeypatch):
+def test_agent_activation_waits_for_download_lifecycle_teardown(monkeypatch):
+    import routers.models as models_router
+
+    calls = 0
+    conflict_payload = {
+        "error": "Cannot activate a model while model_download is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "model_download",
+        "activeModelId": None,
+    }
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise models_router.AgentHTTPError(
+                409,
+                conflict_payload["error"],
+                json.dumps(conflict_payload),
+            )
+        return {"status": "started"}
+
+    monkeypatch.setattr(models_router, "request_agent_json", request)
+    monkeypatch.setattr(models_router.time, "sleep", lambda _seconds: None)
+
+    assert models_router._call_agent_model(
+        "/v1/model/activate",
+        {"model_id": "qwen3.5-35b-a3b-q4"},
+        timeout=600,
+        retry_download_busy_seconds=1.0,
+    ) == {"status": "started"}
+    assert calls == 3
+
+
+def test_agent_activation_waits_past_old_download_teardown_bound(monkeypatch):
+    import routers.models as models_router
+
+    calls = 0
+    current_time = {"value": 0.0}
+    conflict_payload = {
+        "error": "Cannot activate a model while model_download is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "model_download",
+        "activeModelId": None,
+    }
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 5:
+            raise models_router.AgentHTTPError(
+                409,
+                conflict_payload["error"],
+                json.dumps(conflict_payload),
+            )
+        return {"status": "started"}
+
+    def sleep(_seconds):
+        current_time["value"] += 10.0
+
+    monkeypatch.setattr(models_router, "request_agent_json", request)
+    monkeypatch.setattr(models_router.time, "monotonic", lambda: current_time["value"])
+    monkeypatch.setattr(models_router.time, "sleep", sleep)
+
+    assert models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS >= 120.0
+    assert models_router._call_agent_model(
+        "/v1/model/activate",
+        {"model_id": "qwen3.5-122b-a10b-q4"},
+        timeout=600,
+        retry_download_busy_seconds=models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
+    ) == {"status": "started"}
+    assert calls == 5
+    assert current_time["value"] > 30.0
+
+
+def test_agent_activation_does_not_retry_unrelated_lifecycle_conflict(monkeypatch):
+    import routers.models as models_router
+
+    calls = 0
+    conflict_payload = {
+        "error": "Another model activation is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "model_activation",
+        "activeModelId": "phi4-mini-q4",
+    }
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise models_router.AgentHTTPError(
+            409,
+            conflict_payload["error"],
+            json.dumps(conflict_payload),
+        )
+
+    monkeypatch.setattr(models_router, "request_agent_json", request)
+    monkeypatch.setattr(models_router.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(models_router.HTTPException) as exc_info:
+        models_router._call_agent_model(
+            "/v1/model/activate",
+            {"model_id": "qwen3.5-35b-a3b-q4"},
+            timeout=600,
+            retry_download_busy_seconds=1.0,
+        )
+
+    assert calls == 1
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == conflict_payload
+
+
+def test_fetch_loaded_model_does_not_infer_lemonade_loaded_when_health_null(monkeypatch):
     import routers.models as models_router
 
     seen_urls: list[str] = []
@@ -179,14 +290,13 @@ def test_fetch_loaded_model_falls_back_to_models_when_lemonade_health_empty(monk
     finally:
         loop.close()
 
-    assert result == "extra.Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    assert result is None
     assert seen_urls == [
         "http://host.docker.internal:8080/api/v1/health",
-        "http://host.docker.internal:8080/api/v1/models",
     ]
 
 
-def test_fetch_loaded_model_prefers_configured_lemonade_gguf_over_catalog_first(
+def test_fetch_loaded_model_does_not_prefer_configured_lemonade_gguf_when_health_null(
     monkeypatch,
     tmp_path,
 ):
@@ -249,10 +359,9 @@ def test_fetch_loaded_model_prefers_configured_lemonade_gguf_over_catalog_first(
     finally:
         loop.close()
 
-    assert result == "extra.Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    assert result is None
     assert seen_urls == [
         "http://host.docker.internal:8080/api/v1/health",
-        "http://host.docker.internal:8080/api/v1/models",
     ]
 
 
@@ -288,6 +397,64 @@ def test_already_active_model_uses_env_file_before_stale_process_env(
 
     assert already_active is True
     assert loaded_model == "extra.Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+
+
+def test_load_model_noops_lemonade_active_identity_without_chat_probe(
+    test_client,
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [{
+        "id": "qwen3.6-35b-a3b-ud-q4",
+        "name": "Qwen 3.6 35B-A3B UD",
+        "gguf_file": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "size_mb": 21616,
+        "vram_required_gb": 24,
+        "context_length": 131072,
+        "quantization": "Q4_K_M",
+        "specialty": "Quality",
+        "description": "Large active Lemonade model.",
+        "llm_model_name": "qwen3.6-35b-a3b",
+    }])
+    (data_dir / "models" / "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf").write_text(
+        "model",
+        encoding="utf-8",
+    )
+    (install_dir / ".env").write_text(
+        "ODS_MODE=local\n"
+        "LLM_BACKEND=lemonade\n"
+        "LLM_MODEL=qwen3.6-35b-a3b\n"
+        "GGUF_FILE=Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(models_router, "LLM_BACKEND", "lemonade")
+    monkeypatch.setattr(
+        models_router,
+        "_fetch_loaded_model_sync",
+        lambda: "Qwen3.6-35B-A3B-UD-Q4_K_M",
+    )
+
+    def fail_backend_probe(_loaded):
+        raise AssertionError("already-active Lemonade load should not run a chat readiness probe")
+
+    def fail_agent_call(*_args, **_kwargs):
+        raise AssertionError("already-active Lemonade load should not call host-agent activate")
+
+    monkeypatch.setattr(models_router, "_loaded_model_backend_ready_sync", fail_backend_probe)
+    monkeypatch.setattr(models_router, "_call_agent_model", fail_agent_call)
+
+    resp = test_client.post(
+        "/api/models/qwen3.6-35b-a3b-ud-q4/load",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "already_active",
+        "model_id": "qwen3.6-35b-a3b-ud-q4",
+        "loadedModel": "Qwen3.6-35B-A3B-UD-Q4_K_M",
+    }
 
 
 def test_get_gpu_vram_returns_none_on_nvml_error(monkeypatch):
@@ -467,6 +634,215 @@ def test_api_models_returns_full_catalog_without_fake_tokens(test_client, monkey
     assert payload["models"][0]["performance"]["source"] == "benchmark_required"
 
 
+def test_download_model_rejects_while_bootstrap_upgrade_active(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "gguf_url": "https://example.test/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "tokens_per_sec_estimate": 130,
+            "llm_model_name": "phi-4-mini",
+        },
+    ])
+    monkeypatch.setattr(
+        models_router,
+        "get_bootstrap_status",
+        lambda: BootstrapStatus(
+            active=True,
+            model_name="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            percent=8.5,
+        ),
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bootstrap-busy download reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/phi4-mini-q4/download",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade",
+        "activeTarget": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "requestedModelId": "phi4-mini-q4",
+    }
+
+
+def test_load_model_rejects_while_bootstrap_upgrade_active(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "qwen3.5-9b-q4",
+            "name": "Qwen 3.5 9B",
+            "gguf_file": "Qwen3.5-9B-Q4_K_M.gguf",
+            "size_mb": 5760,
+            "vram_required_gb": 8,
+            "context_length": 32768,
+            "quantization": "Q4_K_M",
+            "specialty": "General",
+            "description": "Balanced default.",
+            "llm_model_name": "qwen3.5-9b",
+        },
+    ])
+    (data_dir / "models" / "Qwen3.5-9B-Q4_K_M.gguf").write_text("model", encoding="utf-8")
+    monkeypatch.setattr(models_router, "_already_active_model", lambda *_args: (False, None))
+    monkeypatch.setattr(
+        models_router,
+        "get_bootstrap_status",
+        lambda: BootstrapStatus(
+            active=True,
+            model_name="Qwen3.5-9B-Q4_K_M.gguf",
+            percent=100.0,
+        ),
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bootstrap-busy load reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/qwen3.5-9b-q4/load",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade",
+        "activeTarget": "Qwen3.5-9B-Q4_K_M.gguf",
+        "requestedModelId": "qwen3.5-9b-q4",
+    }
+
+
+def test_download_model_rejects_while_bootstrap_upgrade_retry_pending(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "gguf_url": "https://example.test/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "tokens_per_sec_estimate": 130,
+            "llm_model_name": "phi-4-mini",
+        },
+    ])
+    (data_dir / "bootstrap-status.json").write_text(
+        json.dumps({
+            "status": "failed",
+            "model": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            "eta": "Download failed after 6 attempts; partial file preserved for resume.",
+        }),
+        encoding="utf-8",
+    )
+    (data_dir / "bootstrap-upgrade.args").write_text(
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\nhttps://example.test/full.gguf\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(models_router, "get_bootstrap_status", lambda: BootstrapStatus(active=False))
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retry-pending bootstrap download reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/phi4-mini-q4/download",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is pending retry",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade_retry_pending",
+        "activeTarget": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "requestedModelId": "phi4-mini-q4",
+    }
+
+
+def test_download_model_rejects_stale_active_bootstrap_upgrade_as_retry_pending(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "gguf_url": "https://example.test/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "tokens_per_sec_estimate": 130,
+            "llm_model_name": "phi-4-mini",
+        },
+    ])
+    monkeypatch.setattr(models_router, "_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", 60)
+    (data_dir / "bootstrap-status.json").write_text(
+        json.dumps({
+            "status": "downloading",
+            "model": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+            "bytesDownloaded": 143274063,
+        }),
+        encoding="utf-8",
+    )
+    (data_dir / "bootstrap-upgrade.args").write_text(
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\nhttps://example.test/full.gguf\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale bootstrap download reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/phi4-mini-q4/download",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is pending retry",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade_retry_pending",
+        "activeTarget": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "requestedModelId": "phi4-mini-q4",
+    }
+
+
 def test_api_models_falls_back_to_loaded_model_probe(test_client, monkeypatch, tmp_path):
     models_router, install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
     _write_model_library(install_dir, [{
@@ -630,7 +1006,7 @@ def test_load_model_delegates_when_live_backend_reports_different_model(test_cli
     monkeypatch.setattr(
         models_router,
         "_call_agent_model",
-        lambda path, body, timeout=30: {"status": "activated", "path": path, "body": body, "timeout": timeout},
+        lambda path, body, timeout=30, **_kwargs: {"status": "activated", "path": path, "body": body, "timeout": timeout},
     )
 
     resp = test_client.post("/api/models/qwen3.5-9b-q4/load", headers=test_client.auth_headers)
@@ -642,6 +1018,44 @@ def test_load_model_delegates_when_live_backend_reports_different_model(test_cli
         "body": {"model_id": "qwen3.5-9b-q4"},
         "timeout": 2700,
     }
+
+
+def test_load_model_uses_observed_download_teardown_grace(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [{
+        "id": "qwen3.5-35b-a3b-q4",
+        "name": "Qwen 3.5 35B-A3B",
+        "gguf_file": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        "size_mb": 21500,
+        "vram_required_gb": 24,
+        "context_length": 131072,
+        "quantization": "Q4_K_M",
+        "specialty": "Quality",
+        "description": "High-context model.",
+        "llm_model_name": "qwen3.5-35b-a3b",
+    }])
+    (data_dir / "models" / "Qwen3.5-35B-A3B-Q4_K_M.gguf").write_text("model", encoding="utf-8")
+    (install_dir / ".env").write_text("ODS_MODE=local\n", encoding="utf-8")
+
+    captured = {}
+
+    def agent_call(path, body, timeout=30, **kwargs):
+        captured.update({"path": path, "body": body, "timeout": timeout, **kwargs})
+        return {"status": "activated"}
+
+    monkeypatch.setattr(models_router, "_fetch_loaded_model_sync", lambda: "phi4-mini-q4")
+    monkeypatch.setattr(models_router, "_call_agent_model", agent_call)
+
+    resp = test_client.post("/api/models/qwen3.5-35b-a3b-q4/load", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    assert captured == {
+        "path": "/v1/model/activate",
+        "body": {"model_id": "qwen3.5-35b-a3b-q4"},
+        "timeout": 2700,
+        "retry_download_busy_seconds": models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
+    }
+    assert captured["retry_download_busy_seconds"] >= 120.0
 
 
 def test_load_model_delegates_when_loaded_backend_is_not_ready(test_client, monkeypatch, tmp_path):
@@ -670,7 +1084,7 @@ def test_load_model_delegates_when_loaded_backend_is_not_ready(test_client, monk
     monkeypatch.setattr(
         models_router,
         "_call_agent_model",
-        lambda path, body, timeout=30: {"status": "activated", "path": path, "body": body, "timeout": timeout},
+        lambda path, body, timeout=30, **_kwargs: {"status": "activated", "path": path, "body": body, "timeout": timeout},
     )
 
     resp = test_client.post("/api/models/qwen3.5-9b-q4/load", headers=test_client.auth_headers)
@@ -698,7 +1112,7 @@ def test_load_model_delegates_local_gguf_without_catalog_entry(test_client, monk
     monkeypatch.setattr(
         models_router,
         "_call_agent_model",
-        lambda path, body, timeout=30: {"status": "activated", "path": path, "body": body, "timeout": timeout},
+        lambda path, body, timeout=30, **_kwargs: {"status": "activated", "path": path, "body": body, "timeout": timeout},
     )
 
     resp = test_client.post(
@@ -745,6 +1159,7 @@ def test_download_status_prefers_host_agent_normalized_status(test_client, monke
         lambda: {
             "status": "failed",
             "model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "updatedAt": "2999-01-01T00:00:00+00:00",
             "error": "Model download is not running; previous download was interrupted.",
         },
     )
@@ -754,6 +1169,131 @@ def test_download_status_prefers_host_agent_normalized_status(test_client, monke
     assert resp.status_code == 200
     assert resp.json()["status"] == "failed"
     assert "not running" in resp.json()["error"]
+
+
+def test_download_status_surfaces_stale_bootstrap_upgrade(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_get_agent_model_status", lambda: None)
+    monkeypatch.setattr(models_router, "_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", 60)
+    (data_dir / "bootstrap-status.json").write_text(
+        json.dumps({
+            "status": "downloading",
+            "model": "Qwen3.5-9B-Q4_K_M.gguf",
+            "percent": 3.0,
+            "bytesDownloaded": 143274063,
+            "bytesTotal": 0,
+            "speedBytesPerSec": 202069,
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "failed"
+    assert payload["active"] is False
+    assert payload["isDownloading"] is False
+    assert payload["bootstrapStale"] is True
+    assert payload["model"] == "Qwen3.5-9B-Q4_K_M.gguf"
+    assert payload["bytesDownloaded"] == 143274063
+    assert "appears stalled" in payload["error"]
+
+
+def test_download_status_ignores_stale_terminal_agent_status(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        models_router,
+        "_get_agent_model_status",
+        lambda: {
+            "status": "failed",
+            "model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+            "error": "Retry 1/3: curl exited with code -15",
+        },
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "idle"
+    assert payload["active"] is False
+    assert payload["isDownloading"] is False
+    assert payload["lastTerminalStatus"]["status"] == "failed"
+    assert "curl exited" in payload["lastTerminalStatus"]["error"]
+
+
+def test_download_status_treats_cancelled_agent_status_as_idle(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        models_router,
+        "_get_agent_model_status",
+        lambda: {
+            "status": "cancelled",
+            "model": "Qwen3-30B-A3B-Q4_K_M.gguf",
+            "updatedAt": "2999-01-01T00:00:00+00:00",
+            "error": "Download cancelled by user",
+        },
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "idle"
+    assert payload["active"] is False
+    assert payload["isDownloading"] is False
+    assert payload["lastTerminalStatus"]["status"] == "cancelled"
+    assert payload["lastTerminalStatus"]["model"] == "Qwen3-30B-A3B-Q4_K_M.gguf"
+
+
+def test_download_status_ignores_stale_terminal_status_file(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_get_agent_model_status", lambda: None)
+    status_path = data_dir / "model-download-status.json"
+    status_path.write_text(
+        json.dumps({
+            "status": "failed",
+            "model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+            "error": "previous download is incomplete or corrupt",
+        }),
+        encoding="utf-8",
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "idle"
+    assert payload["lastTerminalStatus"]["model"] == "Phi-4-mini-instruct-Q4_K_M.gguf"
+
+
+def test_download_status_treats_cancelled_status_file_as_idle(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_get_agent_model_status", lambda: None)
+    status_path = data_dir / "model-download-status.json"
+    status_path.write_text(
+        json.dumps({
+            "status": "canceled",
+            "model": "Qwen3-30B-A3B-Q4_K_M.gguf",
+            "updatedAt": "2999-01-01T00:00:00+00:00",
+            "error": "Download canceled by user",
+        }),
+        encoding="utf-8",
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "idle"
+    assert payload["active"] is False
+    assert payload["isDownloading"] is False
+    assert payload["lastTerminalStatus"]["status"] == "canceled"
+    assert payload["lastTerminalStatus"]["model"] == "Qwen3-30B-A3B-Q4_K_M.gguf"
 
 
 def test_load_model_resolves_local_gguf_by_stem_with_mixed_case_extension(
@@ -767,7 +1307,7 @@ def test_load_model_resolves_local_gguf_by_stem_with_mixed_case_extension(
     monkeypatch.setattr(
         models_router,
         "_call_agent_model",
-        lambda path, body, timeout=30: {"status": "activated", "path": path, "body": body, "timeout": timeout},
+        lambda path, body, timeout=30, **_kwargs: {"status": "activated", "path": path, "body": body, "timeout": timeout},
     )
 
     resp = test_client.post(
@@ -804,7 +1344,7 @@ def test_local_gguf_ui_id_loads_and_deletes_spaced_filename(test_client, monkeyp
     gguf.write_text("model", encoding="utf-8")
     calls = []
 
-    def agent_call(path, body, timeout=30):
+    def agent_call(path, body, timeout=30, **_kwargs):
         calls.append((path, body, timeout))
         return {"status": "ok"}
 

@@ -17,6 +17,22 @@ From there you can:
 - Load a manually copied single-file GGUF discovered in `data/models/`.
 - Delete a downloaded catalog model.
 
+The expected user flow is a six-verb chain:
+
+1. Discover a viable model in the catalog.
+2. Download it.
+3. Load it.
+4. Use it through every enabled LLM app.
+5. Restore the original model when validating a temporary swap.
+6. Delete the temporary model when cleanup is part of the workflow.
+
+The Models page should keep compatibility gates visible before a user commits
+to a load. Agent viability gates are especially important: if an enabled agent
+declares a context floor such as `65536`, models below that floor should be
+shown as gated or warned before the swap. Badges should distinguish downloaded,
+loaded, swap-safe, not-swap-safe, gated, and probe-failed states so a model
+cannot look ready while an enabled app is known to be incompatible.
+
 When a catalog model is loaded, ODS updates the active GGUF settings
 and restarts the local inference service so OpenAI-compatible clients use the
 new model. After the switch settles, verify it from the host:
@@ -29,8 +45,9 @@ curl http://localhost:11434/v1/models
 On macOS native Metal and Windows native/Lemonade installs, use
 `http://localhost:8080/v1/models` unless you changed the port.
 
-Dashboard activation and `ods model swap <tier>` use the same authenticated
-host-agent transaction. The transaction updates `.env`, `models.ini`, the
+Dashboard activation, Unix `ods model swap <tier>`, and Windows
+`.\ods.ps1 model swap <tier>` use the same authenticated host-agent transaction.
+The transaction updates `.env`, `models.ini`, the
 native or container inference runtime, LiteLLM, Hermes, OpenClaw, OpenCode, and
 Perplexica when those consumers are installed. It verifies the new runtime and
 downstream routes before reporting success. A late failure restores the prior
@@ -50,6 +67,12 @@ tier, artifact integrity, Lemonade identity, and runtime-profile fields as
 read-only; use Model Manager instead. Use the manual procedure below only for
 recovery or unsupported custom models, and verify every affected consumer
 afterward.
+
+New or updated LLM apps should avoid direct model coupling. The swap-safe
+extension contract is documented in
+[SWAP-SAFE-EXTENSIONS.md](SWAP-SAFE-EXTENSIONS.md): route through
+`http://litellm:4000/v1`, use model `ods/current`, and declare `service.llm`
+when the app needs a context floor, dynamic refresh, or post-swap probe.
 
 ## Where Models Live
 
@@ -236,6 +259,20 @@ From inside a Docker container, the inference endpoint is:
 http://llama-server:8080/v1
 ```
 
+For release or harness validation, do not stop at server identity. A valid
+model-management pass proves the full verb chain for the selected tier:
+
+- release tier: a six-model matrix per host, with download, load, app use,
+  restore, and cleanup evidence for each planned target;
+- smoke tier: one complete verb chain through one planned test model;
+- app probes: every enabled LLM consumer discovered from manifests or known
+  routing config is probed after the swap;
+- Open WebUI: an auth wall, missing admin credential, or HTTP 401 is not a
+  passing probe. Provision an admin/API credential for the lane, or mark the
+  probe red/deferred with the reason visible in the report;
+- agent gates: context and capability floors for Hermes-style agents remain
+  visible before selection and are rechecked after load.
+
 ## Troubleshooting
 
 ### The download finished, but the model is not visible
@@ -294,7 +331,5 @@ For AMD/Lemonade, use `extra.<GGUF_FILE>`.
 - Custom GGUF import from a local file or arbitrary URL is not yet a first-class
   Dashboard workflow.
 - `ods model swap` switches ODS tiers, not arbitrary GGUF files.
-- Windows `ods.ps1 model swap` parity is tracked separately; use the Dashboard
-  Models page for transactional activation on Windows until that command lands.
 - `scripts/upgrade-model.sh` is a legacy helper for model-directory layouts and
   should not be used as the primary GGUF switch path on current installs.
