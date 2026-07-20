@@ -24,6 +24,14 @@ hipfire config set host 0.0.0.0                                    >/dev/null
 hipfire config set port "${HIPFIRE_PORT_INTERNAL}"                 >/dev/null
 hipfire config set idle_timeout "${HIPFIRE_IDLE_TIMEOUT:-0}"       >/dev/null
 
+# Context and generation caps. max_seq is the KV capacity allocated at model
+# load — the served model's native window is the sensible ceiling. Reasoning
+# tokens count against max_tokens, so a raised thinking_budget preset only
+# takes effect if max_tokens exceeds the preset's token value.
+hipfire config set max_seq "${HIPFIRE_MAX_SEQ:-32768}"                >/dev/null
+hipfire config set max_tokens "${HIPFIRE_MAX_TOKENS:-4096}"           >/dev/null
+hipfire config set thinking_budget "${HIPFIRE_THINKING_BUDGET:-med}"  >/dev/null
+
 if [ -n "${HIPFIRE_MODEL:-}" ]; then
     hipfire config set default_model "${HIPFIRE_MODEL}" >/dev/null
     # Models live on the mounted volume; only pull if it isn't already there.
