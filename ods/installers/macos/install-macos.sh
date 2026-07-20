@@ -499,6 +499,8 @@ _macos_collect_process_descendants() {
 }
 
 _macos_cancel_detached_bootstrap_upgrade() {
+    local cancel_reason="${1:-cloud_mode}"
+    local action_label="${2:-cloud transition}"
     local status_file="${INSTALL_DIR}/data/bootstrap-status.json"
     local args_file="${INSTALL_DIR}/data/bootstrap-upgrade.args"
     local pid_file="${INSTALL_DIR}/data/bootstrap-upgrade.pid"
@@ -538,7 +540,7 @@ _macos_cancel_detached_bootstrap_upgrade() {
     [[ "${#pids[@]}" -gt 0 ]] && should_mark_cancelled=true
 
     if [[ "${#pids[@]}" -gt 0 ]]; then
-        ai "Stopping ${#pids[@]} install-owned background model upgrade process(es) before cloud transition..."
+        ai "Stopping ${#pids[@]} install-owned background model upgrade process(es) before ${action_label}..."
         for pid in "${pids[@]}"; do
             pgid="$(ps -ww -p "$pid" -o pgid= 2>/dev/null | tr -d '[:space:]' || true)"
             if [[ "$pgid" == "$pid" ]]; then
@@ -595,7 +597,7 @@ _macos_cancel_detached_bootstrap_upgrade() {
         fi
 
         if $alive; then
-            ai_err "Could not stop the complete install-owned background upgrade tree; refusing to rewrite cloud configuration."
+            ai_err "Could not stop the complete install-owned background upgrade tree; refusing to continue ${action_label}."
             return 1
         fi
     fi
@@ -605,17 +607,17 @@ _macos_cancel_detached_bootstrap_upgrade() {
         return 1
     }
     if [[ "$should_mark_cancelled" == "true" ]]; then
-        local status_tmp="${status_file}.cloud-transition.$$"
+        local status_tmp="${status_file}.${cancel_reason}.$$"
         local cancelled_at
         cancelled_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         mkdir -p "$(dirname "$status_file")"
-        if ! printf '{"status":"cancelled","reason":"cloud_mode","updatedAt":"%s"}\n' "$cancelled_at" > "$status_tmp" \
+        if ! printf '{"status":"cancelled","reason":"%s","updatedAt":"%s"}\n' "$cancel_reason" "$cancelled_at" > "$status_tmp" \
            || ! mv "$status_tmp" "$status_file"; then
             rm -f "$status_tmp" 2>/dev/null || true
-            ai_err "Could not mark the background model upgrade cancelled for cloud mode."
+            ai_err "Could not mark the background model upgrade cancelled for ${action_label}."
             return 1
         fi
-        ai_ok "Background model upgrade disabled for cloud mode"
+        ai_ok "Background model upgrade disabled for ${action_label}"
     fi
 }
 
@@ -625,9 +627,13 @@ _macos_launch_detached_bootstrap_upgrade() {
     local pid_file="${INSTALL_DIR}/data/bootstrap-upgrade.pid"
     local log_file="${INSTALL_DIR}/logs/model-upgrade.log"
     local python_cmd="${PYTHON_CMD:-/usr/bin/python3}"
+    local bash_cmd="${BASH:-bash}"
     [[ -x "$python_cmd" ]] || python_cmd="/usr/bin/python3"
+    if command -v cygpath >/dev/null 2>&1; then
+        bash_cmd="$(cygpath -w "$bash_cmd" 2>/dev/null || printf '%s' "$bash_cmd")"
+    fi
 
-    "$python_cmd" - "$pid_file" "$log_file" "$upgrade_script" "$@" <<'BOOTSTRAP_LAUNCH_PY'
+    BOOTSTRAP_BASH="$bash_cmd" "$python_cmd" - "$pid_file" "$log_file" "$upgrade_script" "$@" <<'BOOTSTRAP_LAUNCH_PY'
 import os
 import subprocess
 import sys
@@ -639,11 +645,12 @@ script = sys.argv[3]
 script_args = sys.argv[4:]
 if not script_args:
     raise SystemExit("bootstrap launcher requires the install directory")
+bash_exe = os.environ.get("BOOTSTRAP_BASH") or os.environ.get("BASH") or "bash"
 log_path.parent.mkdir(parents=True, exist_ok=True)
 pid_path.parent.mkdir(parents=True, exist_ok=True)
 with log_path.open("ab", buffering=0) as log_handle:
     proc = subprocess.Popen(
-        ["bash", script, *script_args],
+        [bash_exe, script, *script_args],
         cwd=script_args[0],
         stdin=subprocess.DEVNULL,
         stdout=log_handle,
@@ -658,13 +665,54 @@ os.replace(tmp, pid_path)
 BOOTSTRAP_LAUNCH_PY
 }
 
+_macos_persist_bootstrap_upgrade_args() {
+    local full_gguf_file="$1"
+    local full_gguf_url="$2"
+    local full_gguf_sha256="$3"
+    local full_llm_model="$4"
+    local full_max_context="$5"
+    local bootstrap_gguf_file="${6:-Qwen3.5-2B-Q4_K_M.gguf}"
+    local args_file="${INSTALL_DIR}/data/bootstrap-upgrade.args"
+
+    mkdir -p "${INSTALL_DIR}/data"
+    {
+        printf '%s\n' "$full_gguf_file"
+        printf '%s\n' "$full_gguf_url"
+        printf '%s\n' "$full_gguf_sha256"
+        printf '%s\n' "$full_llm_model"
+        printf '%s\n' "$full_max_context"
+        printf '%s\n' "$bootstrap_gguf_file"
+    } > "${args_file}.tmp" && mv "${args_file}.tmp" "$args_file" || {
+        rm -f "${args_file}.tmp" 2>/dev/null || true
+        ai_warn "Could not persist bootstrap-upgrade retry metadata"
+        return 1
+    }
+    chmod 600 "$args_file" 2>/dev/null || true
+}
+
+_macos_native_llama_cwd_is_owned() {
+    local process_cwd="$1" home_dir="${HOME:-}"
+    [[ -n "$process_cwd" ]] || return 1
+    [[ "$process_cwd" == "$INSTALL_DIR" ]] && return 0
+    return 1
+}
+
 _macos_native_llama_pid_is_owned() {
-    local pid="$1" command_line process_name
+    local pid="$1" command_line process_name process_cwd
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
     process_name="$(ps -ww -p "$pid" -o comm= 2>/dev/null || true)"
     command_line="$(ps -ww -p "$pid" -o command= 2>/dev/null || true)"
     [[ "${process_name##*/}" == "llama-server" ]] || return 1
-    [[ -n "${LLAMA_SERVER_BIN:-}" && "$command_line" == *"$LLAMA_SERVER_BIN"* ]]
+    if [[ -n "${LLAMA_SERVER_BIN:-}" && "$command_line" == *"$LLAMA_SERVER_BIN"* ]]; then
+        return 0
+    fi
+    case "$command_line" in
+        ./bin/llama-server*|bin/llama-server*)
+            process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+            _macos_native_llama_cwd_is_owned "$process_cwd"
+            ;;
+        *) return 1 ;;
+    esac
 }
 
 _macos_stop_install_owned_native_llama() {
@@ -1595,9 +1643,13 @@ else
     _macos_sync_builtin_compose_states
 
     # A detached bootstrap worker can rewrite GGUF_FILE/LLM_MODEL after its
-    # download finishes. Stop and disable it before cloud mode touches .env so
-    # the cloud values below are the final authoritative state.
-    if $CLOUD_MODE && ! _macos_cancel_detached_bootstrap_upgrade; then
+    # download finishes. Stop and disable it before cloud mode or a forced
+    # fresh install touches .env so the values below are authoritative.
+    if $CLOUD_MODE; then
+        if ! _macos_cancel_detached_bootstrap_upgrade "cloud_mode" "cloud transition"; then
+            exit 1
+        fi
+    elif $FORCE && ! _macos_cancel_detached_bootstrap_upgrade "fresh_install" "fresh install"; then
         exit 1
     fi
 
@@ -1655,6 +1707,7 @@ else
         upsert_env_value "${INSTALL_DIR}/.env" "CTX_SIZE" "$MAX_CONTEXT"
     else
         upsert_env_value "${INSTALL_DIR}/.env" "ODS_MODE" "local"
+        upsert_env_value "${INSTALL_DIR}/.env" "LLM_BACKEND" "llama-server"
         upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_API_KEY" "sk-ods-hermes-local"
         if [[ "$_previous_ods_mode" == "cloud" ]]; then
             upsert_env_value "${INSTALL_DIR}/.env" "LLM_MODEL" "$LLM_MODEL"
@@ -1762,7 +1815,7 @@ else
 
         GGUF_FILE="$BOOTSTRAP_GGUF_FILE"
         GGUF_URL="$BOOTSTRAP_GGUF_URL"
-        GGUF_SHA256=""
+        GGUF_SHA256="${BOOTSTRAP_GGUF_SHA256:-}"
         LLM_MODEL="$BOOTSTRAP_LLM_MODEL"
         MAX_CONTEXT="$BOOTSTRAP_MAX_CONTEXT"
         ai "Fast-start mode: downloading bootstrap model (~1.5GB) for instant chat."
@@ -2324,7 +2377,7 @@ for service in (data.get("services") or {}).values():
     # surface unrelated Dockerfile failures and make a healthy selected stack
     # look broken.
     ai "Rebuilding local-built images..."
-    _macos_candidate_build_services=(dashboard dashboard-api ape token-spy privacy-shield)
+    _macos_candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
     if ! _macos_enabled_services="$(docker compose "${COMPOSE_FLAGS[@]}" config --services 2>>"$ODS_LOG_FILE")"; then
         ai_err "Could not resolve macOS compose services for local image rebuilds."
         ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --services"
@@ -2535,9 +2588,18 @@ for service in (data.get("services") or {}).values():
         _upgrade_script="$INSTALL_DIR/scripts/bootstrap-upgrade.sh"
 
         if [[ -x "$_upgrade_script" ]] || [[ -f "$_upgrade_script" ]]; then
-            if ! _macos_launch_detached_bootstrap_upgrade "$_upgrade_script" \
-                "$INSTALL_DIR" "$FULL_GGUF_FILE" "$FULL_GGUF_URL" \
-                "$FULL_GGUF_SHA256" "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT"; then
+            _macos_persist_bootstrap_upgrade_args \
+                "$FULL_GGUF_FILE" "$FULL_GGUF_URL" "$FULL_GGUF_SHA256" \
+                "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT" "$BOOTSTRAP_GGUF_FILE" || true
+            # Start the long-lived downloader from a child shell after closing
+            # inherited non-stdio FDs, matching the Linux installer contract.
+            if ! (
+                _close_inherited_fds_for_daemon
+                _macos_launch_detached_bootstrap_upgrade "$_upgrade_script" \
+                    "$INSTALL_DIR" "$FULL_GGUF_FILE" "$FULL_GGUF_URL" \
+                    "$FULL_GGUF_SHA256" "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT" \
+                    "$BOOTSTRAP_GGUF_FILE"
+            ); then
                 ai_err "Could not launch the isolated background model upgrade."
                 exit 1
             fi
@@ -2662,6 +2724,14 @@ if [[ -f "${INSTALL_DIR}/bin/ods-host-agent.py" ]] && [[ -n "$AGENT_PYTHON" ]]; 
     _agent_probe_host="$(macos_bind_probe_host "$_agent_native_bind")"
     if ! command -v docker >/dev/null 2>&1; then
         ai_warn "docker not found on PATH at install time — host agent will fail to start until Docker Desktop is launched and 'docker' resolves on your shell PATH"
+    fi
+    if ! "$AGENT_PYTHON" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        ai "Installing ODS host-agent model downloader dependencies..."
+        if "$AGENT_PYTHON" -m pip install --user -q "huggingface_hub[hf_xet]>=0.27" 2>&1 | tee -a "$ODS_LOG_FILE" >/dev/null; then
+            ai_ok "ODS host-agent Hugging Face downloader ready"
+        else
+            ai_warn "Could not install huggingface_hub[hf_xet]; model manager downloads may fail on Xet-backed Hugging Face models."
+        fi
     fi
     cat > "$ODS_AGENT_PLIST" <<AGENT_PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -2893,7 +2963,45 @@ if [[ "$ENABLE_VOICE" == "true" ]]; then
     # macOS reassigns Whisper to 9100 if port 9000 is in use (AirPlay Receiver).
     WHISPER_PORT_RESOLVED="${WHISPER_PORT:-9000}"
     WHISPER_URL="http://127.0.0.1:${WHISPER_PORT_RESOLVED}"
-    STT_RECOVERY_CMD="curl --max-time 1800 -X POST ${WHISPER_URL}/v1/models/${STT_MODEL_ENCODED}"
+    STT_MODEL_URL="${WHISPER_URL}/v1/models/${STT_MODEL_ENCODED}"
+    STT_TRIGGER_TIMEOUT_SECONDS="${ODS_STT_TRIGGER_TIMEOUT_SECONDS:-30}"
+    STT_CACHE_WAIT_SECONDS="${ODS_STT_CACHE_WAIT_SECONDS:-900}"
+    [[ "$STT_TRIGGER_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || STT_TRIGGER_TIMEOUT_SECONDS=30
+    [[ "$STT_CACHE_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || STT_CACHE_WAIT_SECONDS=900
+    STT_RECOVERY_CMD="curl --max-time ${STT_TRIGGER_TIMEOUT_SECONDS} -X POST ${STT_MODEL_URL}"
+
+    _macos_stt_model_cached() {
+        local _url="$1"
+        curl -sf --max-time 10 "$_url" &>/dev/null
+    }
+
+    _trigger_macos_stt_model_download() {
+        local _url="$1"
+        local _rc=0
+
+        # Speaches can keep downloading after the request is accepted. Keep the
+        # client bounded, then use the cache endpoint as the strict source of truth.
+        curl -sS --fail --max-time "${STT_TRIGGER_TIMEOUT_SECONDS}" -X POST "$_url" \
+            >> "$ODS_LOG_FILE" 2>&1 || _rc=$?
+        if [[ "$_rc" -eq 0 || "$_rc" -eq 28 ]]; then
+            return 0
+        fi
+        ai_warn "STT model download trigger returned curl exit ${_rc}; verifying cache before failing."
+        return 1
+    }
+
+    _wait_macos_stt_model_cached() {
+        local _url="$1"
+        local _deadline=$((SECONDS + STT_CACHE_WAIT_SECONDS))
+
+        while (( SECONDS < _deadline )); do
+            if _macos_stt_model_cached "$_url"; then
+                return 0
+            fi
+            sleep 5
+        done
+        _macos_stt_model_cached "$_url"
+    }
 
     # Step 1: wait briefly for the models API to be ready (max 15s).
     _stt_api_ready=false
@@ -2909,21 +3017,15 @@ if [[ "$ENABLE_VOICE" == "true" ]]; then
         ai_warn "STT models API not ready -- download manually:"
         echo "    $STT_RECOVERY_CMD"
     # Step 2: skip if already cached.
-    elif curl -sf --max-time 10 "${WHISPER_URL}/v1/models/${STT_MODEL_ENCODED}" &>/dev/null; then
+    elif _macos_stt_model_cached "$STT_MODEL_URL"; then
         ai_ok "STT model already cached (${STT_MODEL})"
     else
         # Step 3: POST to trigger download.
-        # max-time 600s (10 min): bounded retry budget so a stuck
-        # huggingface_hub.snapshot_download (well-known on slow links and
-        # under bufferbloat) can't consume the entire install timeout. The
-        # next step verifies cache state via GET and prints the recovery
-        # command if the timeout was hit before completion.
         ai "Downloading STT model (${STT_MODEL})..."
-        curl -s --max-time 600 -X POST "${WHISPER_URL}/v1/models/${STT_MODEL_ENCODED}" \
-            >> "$ODS_LOG_FILE" 2>&1 || true
+        _trigger_macos_stt_model_download "$STT_MODEL_URL" || true
 
         # Step 4: verify the model is actually cached.
-        if curl -sf --max-time 10 "${WHISPER_URL}/v1/models/${STT_MODEL_ENCODED}" &>/dev/null; then
+        if _wait_macos_stt_model_cached "$STT_MODEL_URL"; then
             ai_ok "STT model cached (${STT_MODEL})"
         else
             ai_warn "STT model download failed -- run manually:"

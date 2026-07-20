@@ -214,6 +214,16 @@ def load_extension_manifests(
                 service_id = service.get("id")
                 if not service_id:
                     raise ValueError("service.id is required")
+                compose_file = str(service.get("compose_file") or "").strip()
+                if service.get("type") == "docker" and compose_file:
+                    compose_path = ext_dir / compose_file
+                    if not compose_path.exists():
+                        logger.debug(
+                            "Skipping docker service %s because %s is not installed",
+                            service_id,
+                            compose_path,
+                        )
+                        continue
                 supported = service.get("gpu_backends", ["amd", "nvidia", "apple"])
                 if gpu_backend == "apple":
                     if service.get("type") == "host-systemd":
@@ -391,7 +401,7 @@ def _load_core_service_ids() -> frozenset:
             pass
     # Fallback to hardcoded list
     return frozenset({
-        "dashboard-api", "dashboard", "llama-server", "open-webui",
+        "dashboard-api", "dashboard", "llama-server", "model-router", "open-webui",
         "litellm", "langfuse", "hermes", "hermes-proxy", "n8n", "openclaw", "opencode",
         "perplexica", "searxng", "qdrant", "tts", "whisper",
         "embeddings", "token-spy", "comfyui", "ape", "privacy-shield",
@@ -402,7 +412,9 @@ CORE_SERVICE_IDS = _load_core_service_ids()
 
 # Always-on services defined in docker-compose.base.yml — never manageable via API.
 # Distinct from CORE_SERVICE_IDS (the full built-in service allowlist).
-ALWAYS_ON_SERVICES: frozenset = frozenset({"llama-server", "open-webui", "dashboard", "dashboard-api"})
+ALWAYS_ON_SERVICES: frozenset = frozenset({
+    "llama-server", "model-router", "open-webui", "dashboard", "dashboard-api",
+})
 
 
 def load_extension_catalog() -> list[dict]:

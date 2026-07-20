@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from gguf_inspector import inspect_gguf
+from context_policy import HERMES_MIN_CONTEXT, HERMES_TARGET_CONTEXT
 from helpers import get_model_performance_samples, get_recorded_model_performance
 from models import GPUInfo
 
@@ -28,6 +29,7 @@ _DEFAULT_RECOMMENDATION_POLICY = "catalog-fit-pre-download"
 _VRAM_FIT_TOLERANCE_GB = 0.25
 _MODEL_SELECTOR_POLICY = "context-aware-largest-capable-general-v1"
 _RUNTIME_MODEL_PREFIXES = ("extra.", "user.")
+_AGENT_MIN_LOCAL_TOKENS_PER_SEC = 2.0
 
 
 def normalize_key(value: Any) -> str:
@@ -101,6 +103,15 @@ def read_env_file_value(key: str, install_dir: str | Path) -> str:
     except OSError:
         pass
     return ""
+
+
+def read_persisted_env_value(key: str, install_dir: str | Path) -> str:
+    """Read mutable install config from .env before the container environment."""
+    env_path = Path(install_dir) / ".env"
+    file_value = read_env_file_value(key, install_dir)
+    if file_value or env_path.exists():
+        return file_value
+    return os.environ.get(key, "").strip().strip("\"'")
 
 
 def model_files_dir(data_dir: str | Path) -> Path:
@@ -187,11 +198,160 @@ def normalize_catalog_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
         "active_params_b": raw.get("active_params_b"),
         "tokens_per_sec_estimate": raw.get("tokens_per_sec_estimate"),
         "runtime_profiles": raw.get("runtime_profiles") if isinstance(raw.get("runtime_profiles"), list) else [],
+        "app_compatibility": raw.get("app_compatibility") if isinstance(raw.get("app_compatibility"), dict) else {},
         "aliases": sorted(aliases),
     }
     if raw.get("decode_read_mb"):
         model["decode_read_mb"] = raw["decode_read_mb"]
     return model
+
+
+def _app_compatibility_entry(raw: Any, default_label: str) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        status = str(raw.get("status") or "unknown").strip() or "unknown"
+        label = str(raw.get("label") or default_label).strip() or default_label
+        reason = str(raw.get("reason") or "").strip()
+        evidence = str(raw.get("evidence") or "").strip()
+    elif isinstance(raw, str) and raw.strip():
+        status = raw.strip()
+        label = default_label
+        reason = ""
+        evidence = ""
+    else:
+        status = "unknown"
+        label = default_label
+        reason = ""
+        evidence = ""
+
+    payload = {
+        "status": normalize_key(status).replace("-", "_") or "unknown",
+        "label": label,
+        "reason": reason,
+    }
+    if evidence:
+        payload["evidence"] = evidence
+    return payload
+
+
+def _app_compatibility_payload_key(key: Any) -> str:
+    raw = normalize_key(str(key or ""))
+    if not raw:
+        return ""
+    aliases = {
+        "agent_viability": "agentViability",
+        "hermes_talk": "hermesTalk",
+        "openai_chat": "openaiChat",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    parts = [part for part in raw.split("_") if part]
+    if not parts:
+        return ""
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def _app_compatibility_default_label(key: Any) -> str:
+    parts = [part for part in normalize_key(str(key or "")).split("_") if part]
+    if not parts:
+        return "App compatibility untested"
+    acronyms = {"api": "API", "llm": "LLM", "ui": "UI"}
+    label = " ".join(acronyms.get(part, part[:1].upper() + part[1:]) for part in parts)
+    return f"{label} untested"
+
+
+def _exact_performance_agent_block(performance: Optional[dict[str, Any]]) -> dict[str, Any] | None:
+    if not isinstance(performance, dict):
+        return None
+    if performance.get("source") not in {"measured_local", "published_exact"}:
+        return None
+    try:
+        tokens_per_sec = float(performance.get("tokensPerSec") or 0)
+    except (TypeError, ValueError):
+        return None
+    if tokens_per_sec <= 0 or tokens_per_sec >= _AGENT_MIN_LOCAL_TOKENS_PER_SEC:
+        return None
+
+    return {
+        "tokensPerSec": round(tokens_per_sec, 1),
+        "reason": (
+            f"Local measured throughput is {tokens_per_sec:.1f} tok/s, below the "
+            f"{_AGENT_MIN_LOCAL_TOKENS_PER_SEC:.1f} tok/s floor for ODS Talk and "
+            "agent-required workflows on this machine."
+        ),
+    }
+
+
+def model_app_compatibility(
+    model: dict[str, Any],
+    performance: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    raw = model.get("app_compatibility") if isinstance(model.get("app_compatibility"), dict) else {}
+    hermes_talk = _app_compatibility_entry(raw.get("hermes_talk"), "ODS Talk untested")
+    compatibility = {
+        "openaiChat": _app_compatibility_entry(raw.get("openai_chat"), "Direct chat untested"),
+        "hermesTalk": hermes_talk,
+        "agentViability": _agent_viability_entry(raw.get("agent_viability"), hermes_talk),
+    }
+    for raw_key, raw_value in raw.items():
+        payload_key = _app_compatibility_payload_key(raw_key)
+        if not payload_key or payload_key in compatibility:
+            continue
+        compatibility[payload_key] = _app_compatibility_entry(
+            raw_value,
+            _app_compatibility_default_label(raw_key),
+        )
+    exact_speed_block = _exact_performance_agent_block(performance)
+    if exact_speed_block:
+        compatibility["hermesTalk"] = {
+            "status": "unsupported_until_revalidated",
+            "label": "Too slow for ODS Talk",
+            "reason": exact_speed_block["reason"],
+        }
+        compatibility["agentViability"] = {
+            "status": "not_agent_viable",
+            "label": "Too slow for agents",
+            "reason": exact_speed_block["reason"],
+        }
+    return compatibility
+
+
+def _agent_viability_entry(raw: Any, hermes_talk: dict[str, Any]) -> dict[str, Any]:
+    if raw:
+        return _app_compatibility_entry(raw, "Agent viability untested")
+
+    hermes_status = str((hermes_talk or {}).get("status") or "unknown").strip().lower()
+    hermes_reason = str((hermes_talk or {}).get("reason") or "").strip()
+    hermes_evidence = str((hermes_talk or {}).get("evidence") or "").strip()
+    if hermes_status in {
+        "blocked",
+        "incompatible",
+        "not_recommended",
+        "not_supported",
+        "unsupported",
+        "unsupported_until_revalidated",
+    }:
+        payload = {
+            "status": "not_agent_viable",
+            "label": "Agent viability blocked",
+            "reason": hermes_reason or "This model is not currently viable for agent-required ODS workflows.",
+        }
+        if hermes_evidence:
+            payload["evidence"] = hermes_evidence
+        return payload
+    if hermes_status in {"supported", "verified"}:
+        payload = {
+            "status": "agent_viable",
+            "label": "Agent viable",
+            "reason": hermes_reason,
+        }
+        if hermes_evidence:
+            payload["evidence"] = hermes_evidence
+        return payload
+    return {
+        "status": "unknown",
+        "label": "Agent viability untested",
+        "reason": "",
+    }
 
 
 def load_model_catalog(install_dir: str | Path) -> list[dict[str, Any]]:
@@ -651,17 +811,17 @@ def build_sample_signature(model: dict[str, Any], gpu_info: Optional[GPUInfo],
 
 
 def _recommendation_from_env(install_dir: str | Path) -> dict[str, Any]:
-    recommended_context = read_env_value("MODEL_RECOMMENDED_CONTEXT", install_dir)
+    recommended_context = read_persisted_env_value("MODEL_RECOMMENDED_CONTEXT", install_dir)
     return {
-        "source": read_env_value("MODEL_RECOMMENDATION_SOURCE", install_dir) or "installer_configured",
-        "confidence": read_env_value("MODEL_RECOMMENDATION_CONFIDENCE", install_dir) or "medium",
-        "reason": read_env_value("MODEL_RECOMMENDATION_REASON", install_dir) or "",
-        "performanceSource": read_env_value("MODEL_PERFORMANCE_SOURCE", install_dir) or "benchmark_required",
-        "performanceLabel": read_env_value("MODEL_PERFORMANCE_LABEL", install_dir) or "Benchmark after first launch",
-        "model": read_env_value("MODEL_RECOMMENDED_MODEL", install_dir) or read_env_value("LLM_MODEL", install_dir) or None,
-        "gguf": read_env_value("MODEL_RECOMMENDED_GGUF", install_dir) or read_env_value("GGUF_FILE", install_dir) or None,
+        "source": read_persisted_env_value("MODEL_RECOMMENDATION_SOURCE", install_dir) or "installer_configured",
+        "confidence": read_persisted_env_value("MODEL_RECOMMENDATION_CONFIDENCE", install_dir) or "medium",
+        "reason": read_persisted_env_value("MODEL_RECOMMENDATION_REASON", install_dir) or "",
+        "performanceSource": read_persisted_env_value("MODEL_PERFORMANCE_SOURCE", install_dir) or "benchmark_required",
+        "performanceLabel": read_persisted_env_value("MODEL_PERFORMANCE_LABEL", install_dir) or "Benchmark after first launch",
+        "model": read_persisted_env_value("MODEL_RECOMMENDED_MODEL", install_dir) or read_persisted_env_value("LLM_MODEL", install_dir) or None,
+        "gguf": read_persisted_env_value("MODEL_RECOMMENDED_GGUF", install_dir) or read_persisted_env_value("GGUF_FILE", install_dir) or None,
         "contextLength": int(recommended_context) if str(recommended_context).isdigit() else None,
-        "selectionPolicy": read_env_value("MODEL_RECOMMENDATION_POLICY", install_dir) or _DEFAULT_RECOMMENDATION_POLICY,
+        "selectionPolicy": read_persisted_env_value("MODEL_RECOMMENDATION_POLICY", install_dir) or _DEFAULT_RECOMMENDATION_POLICY,
     }
 
 
@@ -978,8 +1138,14 @@ def build_models_payload(gpu_info: Optional[GPUInfo], loaded_model: Optional[str
         metadata = inspect_gguf(path) if path else {"exists": False, "readable": False, "quantization": model.get("quantization", "unknown")}
         runtime_profile = _matching_runtime_profile(model, gpu_info, install_ram_gb or None)
         profile_context = _effective_context_length(model, runtime_profile)
-        recommended_context = recommendation.get("contextLength") if is_configured else None
-        actual_context = context_length if is_loaded and context_length else recommended_context or profile_context or model.get("context_length")
+        configured_context = recommendation.get("contextLength") if is_configured else None
+        actual_context = (
+            context_length
+            if is_loaded and context_length
+            else configured_context
+            or profile_context
+            or model.get("context_length")
+        )
         vram_required = float(model["vram_required_gb"])
         selector_required = _effective_required_memory_gb({**model, "context_length": actual_context}, runtime_profile)
         if gpu_info:
@@ -1043,6 +1209,7 @@ def build_models_payload(gpu_info: Optional[GPUInfo], loaded_model: Optional[str
                 "expertCount": metadata.get("expert_count"),
                 "expertUsedCount": metadata.get("expert_used_count"),
             },
+            "appCompatibility": model_app_compatibility(model, perf),
             "status": "loaded" if is_loaded else status_if_not_loaded,
             "recommended": is_recommended,
             "configured": is_configured,
@@ -1105,6 +1272,8 @@ def build_models_payload(gpu_info: Optional[GPUInfo], loaded_model: Optional[str
         "currentModel": current_model_id,
         "loadedModel": loaded_model,
         "configuredModel": configured_model_id,
+        "hermesMinimumContext": HERMES_MIN_CONTEXT,
+        "hermesTargetContext": HERMES_TARGET_CONTEXT,
         "recommendationPolicy": recommendation.get("selectionPolicy") or _DEFAULT_RECOMMENDATION_POLICY,
         "recommendationAlternatives": [
             _recommendation_alternative(model, gpu_info)

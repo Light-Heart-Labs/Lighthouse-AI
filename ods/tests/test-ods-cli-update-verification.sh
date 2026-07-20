@@ -20,6 +20,7 @@ tmp_dir="$(mktemp -d)"
 install_dir="$tmp_dir/install"
 bin_dir="$tmp_dir/bin"
 docker_log="$tmp_dir/docker.log"
+pull_count_file="$tmp_dir/pull-count"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 mkdir -p "$install_dir/data" "$bin_dir"
@@ -57,6 +58,19 @@ fi
 if [[ "${1:-}" == "compose" ]]; then
     shift
     args=("$@")
+    joined=" ${args[*]} "
+    if [[ "$joined" == *" pull "* ]]; then
+        count_file="${TEST_DOCKER_PULL_COUNT:-}"
+        count=0
+        [[ -n "$count_file" && -f "$count_file" ]] && count="$(cat "$count_file")"
+        count=$((count + 1))
+        [[ -n "$count_file" ]] && printf '%s\n' "$count" > "$count_file"
+        if [[ "${TEST_DOCKER_PULL_FAIL_ONCE:-}" == "1" && "$count" == "1" ]]; then
+            printf '%s\n' 'Error response from daemon: Head "https://registry-1.docker.io/v2/n8nio/n8n/manifests/2.6.4": Get "https://auth.docker.io/token?scope=repository%3An8nio%2Fn8n%3Apull&service=registry.docker.io": context deadline exceeded' >&2
+            exit 1
+        fi
+        exit 0
+    fi
     for ((i = 0; i < ${#args[@]}; i++)); do
         if [[ "${args[$i]}" == "config" && "${args[$((i + 1))]:-}" == "--services" ]]; then
             printf '%s\n' dashboard dashboard-api aider
@@ -113,6 +127,8 @@ PATH="$bin_dir:$PATH" \
 ODS_HOME="$install_dir" \
 NO_COLOR=1 \
 TEST_DOCKER_LOG="$docker_log" \
+TEST_DOCKER_PULL_COUNT="$pull_count_file" \
+TEST_DOCKER_PULL_FAIL_ONCE=1 \
     "$BASH" "$ods_cli" update --force > "$tmp_dir/update.out" 2>&1 || {
         cat "$tmp_dir/update.out" >&2
         exit 1
@@ -121,6 +137,25 @@ TEST_DOCKER_LOG="$docker_log" \
 grep -q 'Update complete' "$tmp_dir/update.out" || {
     cat "$tmp_dir/update.out" >&2
     printf '[FAIL] update did not reach completion\n' >&2
+    exit 1
+}
+
+grep -q -- 'pull --ignore-buildable' "$docker_log" || {
+    cat "$docker_log" >&2
+    printf '[FAIL] update did not skip local-build images during compose pull\n' >&2
+    exit 1
+}
+
+if [[ "$(cat "$pull_count_file")" != "2" ]]; then
+    cat "$tmp_dir/update.out" >&2
+    cat "$docker_log" >&2
+    printf '[FAIL] update did not retry transient compose pull failure\n' >&2
+    exit 1
+fi
+
+grep -q 'Docker registry pull hit a transient network error; retrying' "$tmp_dir/update.out" || {
+    cat "$tmp_dir/update.out" >&2
+    printf '[FAIL] update did not warn before retrying transient compose pull failure\n' >&2
     exit 1
 }
 

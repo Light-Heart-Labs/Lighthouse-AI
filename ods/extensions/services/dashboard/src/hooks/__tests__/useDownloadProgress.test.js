@@ -80,16 +80,14 @@ describe('useDownloadProgress', () => {
     const { result } = renderHook(() => useDownloadProgress())
 
     await waitFor(() => {
-      // isDownloading starts false and stays false for 'complete'
-      expect(fetch).toHaveBeenCalled()
+      expect(result.current.completedDownload).toEqual({
+        status: 'complete',
+        model: 'test-model',
+        updatedAt: '2026-05-16T12:00:00Z'
+      })
     })
     expect(result.current.isDownloading).toBe(false)
     expect(result.current.progress).toBeNull()
-    expect(result.current.completedDownload).toEqual({
-      status: 'complete',
-      model: 'test-model',
-      updatedAt: '2026-05-16T12:00:00Z'
-    })
   })
 
   test.each(['failed', 'error', 'cancelled'])('keeps %s status visible across a later idle poll', async (status) => {
@@ -304,6 +302,9 @@ describe('useDownloadProgress', () => {
 
     expect(result.current.formatEta(90)).toBe('1m 30s')
     expect(result.current.formatEta(30)).toBe('30s')
+    // Fractional eta (bytes-remaining / rate) must not leak float noise.
+    expect(result.current.formatEta(90.7)).toBe('1m 30s')
+    expect(result.current.formatEta(30.9)).toBe('30s')
     expect(result.current.formatEta(null)).toBe('calculating...')
     expect(result.current.formatEta('calculating...')).toBe('calculating...')
   })

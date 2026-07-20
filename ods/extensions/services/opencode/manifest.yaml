@@ -20,8 +20,8 @@ service:
   sidebar_icon: Code
   llm:
     consumes: true
-    route: direct
-    pinning: dynamic
+    route: gateway
+    pinning: none
     min_context: 65536
     probe:
       kind: custom

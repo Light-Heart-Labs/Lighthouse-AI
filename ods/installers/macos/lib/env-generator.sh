@@ -401,6 +401,7 @@ ODS_AGENT_HOST=${ODS_AGENT_HOST:-${agent_host}}
 
 #=== LLM Backend Mode ===
 ODS_MODE=local
+LLM_BACKEND=llama-server
 LLM_API_URL=${llm_api_url}
 LLM_BACKEND=llama-server
 

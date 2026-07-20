@@ -215,6 +215,8 @@ function New-ODSEnv {
         [string]$LemonadeServerImage = "",
         [string]$LemonadeModel = "",
         [int]$SystemRamGB = 0,
+        [bool]$WhisperCudaEnabled = $true,
+        [string]$SwitchboardMode = "",
         # Mirror the install-time ENABLE_LANGFUSE toggle from phase 03 into
         # .env's LANGFUSE_ENABLED default. Re-install preserves whatever the
         # user already had in .env (via Get-EnvOrNew), so manual
@@ -355,6 +357,15 @@ function New-ODSEnv {
     $difySecretKey    = Get-EnvOrNew "DIFY_SECRET_KEY"           (New-SecureHex -Bytes 32)
     $qdrantApiKey     = Get-EnvOrNew "QDRANT_API_KEY"            (New-SecureHex -Bytes 32)
     $opencodePassword = Get-EnvOrNew "OPENCODE_SERVER_PASSWORD"  (New-SecureBase64 -Bytes 16)
+    $switchboardModeDefault = if ([string]::IsNullOrWhiteSpace($SwitchboardMode)) { "observe" } else { $SwitchboardMode.Trim().ToLowerInvariant() }
+    if ($switchboardModeDefault -notin @("legacy", "observe", "enabled")) {
+        $switchboardModeDefault = "observe"
+    }
+    $switchboardMode = Get-EnvOrNew "ODS_MODEL_SWITCHBOARD" $switchboardModeDefault
+    $switchboardMode = $switchboardMode.Trim().ToLowerInvariant()
+    if ($switchboardMode -notin @("legacy", "observe", "enabled")) {
+        $switchboardMode = "observe"
+    }
     $cpuBudget = Get-LlamaCpuBudget -GpuBackend $(if ($GpuBackend -eq "none") { "cpu" } else { $GpuBackend })
     $llamaCpuLimit = Select-AutoCpuValue -Key "LLAMA_CPU_LIMIT" -Detected $cpuBudget.Limit
     $llamaCpuReservation = Select-AutoCpuValue -Key "LLAMA_CPU_RESERVATION" -Detected $cpuBudget.Reservation
@@ -447,8 +458,13 @@ function New-ODSEnv {
     # for Open WebUI. Match the Linux AMD behavior and authenticate with the
     # LiteLLM master key whenever Hermes targets LiteLLM.
     $hermesUsesLiteLlm = ($windowsAmdLemonade -or $ODSMode -eq "cloud")
+    if ($switchboardMode -eq "enabled") {
+        $hermesUsesLiteLlm = $true
+    }
     $hermesLlmBaseUrl = $(if ($hermesUsesLiteLlm) { "http://litellm:4000/v1" } else { "$llmApiUrl$llmApiBasePath" })
     $hermesLlmApiKey = $(if ($hermesUsesLiteLlm) { $litellmKey } else { "sk-ods-hermes-local" })
+    $openWebuiLlmBaseUrl = Get-EnvOrNew "OPEN_WEBUI_LLM_BASE_URL" $(if ($switchboardMode -eq "enabled") { "http://litellm:4000" } else { "" })
+    $openWebuiLlmApiKey = Get-EnvOrNew "OPEN_WEBUI_LLM_API_KEY" $(if ($switchboardMode -eq "enabled") { $litellmKey } else { "" })
 
     # Timezone -- convert Windows timezone ID to IANA for Docker containers
     $tz = $(try {
@@ -499,6 +515,27 @@ function New-ODSEnv {
     } catch { "UTC" })
 
     $timestamp = Get-Date -Format "o"
+    $whisperAccelerationDefault = $(if ($GpuBackend -eq "nvidia" -and $WhisperCudaEnabled) { "cuda" } else { "cpu" })
+    $whisperAcceleration = Get-EnvOrNew "WHISPER_ACCELERATION" $whisperAccelerationDefault
+    if ($GpuBackend -eq "nvidia" -and -not $WhisperCudaEnabled) {
+        $whisperAcceleration = "cpu"
+    }
+    if ($whisperAcceleration -notin @("cpu", "cuda")) {
+        $whisperAcceleration = $whisperAccelerationDefault
+    }
+
+    $whisperImageDefault = $(if ($whisperAcceleration -eq "cuda") { "" } else { "ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu" })
+    $whisperImage = Get-EnvOrNew "WHISPER_IMAGE" $whisperImageDefault
+    if ($whisperAcceleration -eq "cpu" -and
+        ([string]::IsNullOrWhiteSpace($whisperImage) -or $whisperImage -match "(?i)cuda")) {
+        $whisperImage = "ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu"
+    }
+
+    $audioSttModelDefault = $(if ($whisperAcceleration -eq "cuda") { "deepdml/faster-whisper-large-v3-turbo-ct2" } else { "Systran/faster-whisper-base" })
+    $audioSttModel = Get-EnvOrNew "AUDIO_STT_MODEL" $audioSttModelDefault
+    if ($whisperAcceleration -eq "cpu" -and $audioSttModel -match "(?i)large-v3|turbo") {
+        $audioSttModel = $audioSttModelDefault
+    }
 
     # Build .env content (matches Phase 06 format)
     $envContent = @"
@@ -518,8 +555,11 @@ ODS_AGENT_BIND=$(Get-EnvOrNew "ODS_AGENT_BIND" "0.0.0.0")
 
 #=== LLM Backend Mode ===
 ODS_MODE=$effectiveODSMode
+ODS_MODEL_SWITCHBOARD=$switchboardMode
 LLM_BACKEND=$llmBackend
 LLM_API_URL=$llmApiUrl
+OPEN_WEBUI_LLM_BASE_URL=$openWebuiLlmBaseUrl
+OPEN_WEBUI_LLM_API_KEY=$openWebuiLlmApiKey
 LLM_API_BASE_PATH=$llmApiBasePath
 AMD_INFERENCE_RUNTIME=$AmdInferenceRuntime
 AMD_INFERENCE_BACKEND=$AmdInferenceBackend
@@ -627,10 +667,14 @@ DIFY_SECRET_KEY=$difySecretKey
 
 #=== Voice Settings ===
 WHISPER_MODEL=base
-# Whisper STT model — NVIDIA uses the larger turbo model, others use base.
+# Whisper STT runtime. Windows NVIDIA uses CUDA only when the driver supports
+# the bundled Speaches CUDA image; otherwise Whisper stays on the CPU image.
+WHISPER_ACCELERATION=$whisperAcceleration
+$(if ($whisperImage) { "WHISPER_IMAGE=$whisperImage" } else { "#WHISPER_IMAGE=ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu" })
+# Whisper STT model — CUDA uses the larger turbo model, CPU uses base.
 # Open WebUI reads this to request transcription; installer pre-downloads
 # the same model so the first transcription works.
-AUDIO_STT_MODEL=$(Get-EnvOrNew "AUDIO_STT_MODEL" $(if ($GpuBackend -eq "nvidia") { "deepdml/faster-whisper-large-v3-turbo-ct2" } else { "Systran/faster-whisper-base" }))
+AUDIO_STT_MODEL=$audioSttModel
 TTS_VOICE=en_US-lessac-medium
 
 #=== Web UI Settings ===
@@ -695,6 +739,9 @@ model_list:
         chat_template_kwargs:
           enable_thinking: false
 
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
 litellm_settings:
   drop_params: true
   set_verbose: false
@@ -710,6 +757,33 @@ litellm_settings:
             -InstallDir $InstallDir -ModelId $effectiveLemonadeModel `
             -Port $lemonadePort -ApiKey $litellmLemonadeApiKey
     }
+
+    $modelRouterDir = Join-Path (Join-Path $InstallDir "config") "model-router"
+    New-Item -ItemType Directory -Path $modelRouterDir -Force | Out-Null
+    function ConvertTo-RouterOrigin {
+        param([string]$Url, [string]$Fallback)
+        $value = if ([string]::IsNullOrWhiteSpace($Url)) { $Fallback } else { $Url.TrimEnd("/") }
+        if ($value.EndsWith("/api/v1", [StringComparison]::OrdinalIgnoreCase)) {
+            return $value.Substring(0, $value.Length - "/v1".Length)
+        }
+        if ($value.EndsWith("/v1", [StringComparison]::OrdinalIgnoreCase)) {
+            return $value.Substring(0, $value.Length - "/v1".Length)
+        }
+        return $value
+    }
+    $routerLlamaBase = ConvertTo-RouterOrigin -Url "$llmApiUrl$llmApiBasePath" -Fallback "http://llama-server:8080"
+    $routerEndpoints = @(
+        [ordered]@{ id = "llama-server-default"; baseUrl = $routerLlamaBase }
+    )
+    if ($windowsAmdLemonade) {
+        $lemonadePort = $(if ($AmdInferencePort) { $AmdInferencePort } else { "8080" })
+        $routerEndpoints += [ordered]@{
+            id = "lemonade-default"
+            baseUrl = "http://host.docker.internal:$lemonadePort/api"
+        }
+    }
+    $routerPayload = [ordered]@{ endpoints = $routerEndpoints }
+    Write-Utf8NoBom -Path (Join-Path $modelRouterDir "endpoints.json") -Content (($routerPayload | ConvertTo-Json -Depth 6) + "`n")
 
     # Restrict .env to current user only (Windows ACL equivalent of chmod 600)
     try {

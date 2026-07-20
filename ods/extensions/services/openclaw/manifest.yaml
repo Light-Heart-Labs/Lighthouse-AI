@@ -28,7 +28,7 @@ service:
   depends_on: [llama-server, searxng]
   llm:
     consumes: true
-    route: direct
+    route: gateway
     pinning: none
     min_context: 65536
     probe:

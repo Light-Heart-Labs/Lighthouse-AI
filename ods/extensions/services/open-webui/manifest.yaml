@@ -21,8 +21,8 @@ service:
   depends_on: [llama-server]
   llm:
     consumes: true
-    route: direct
-    pinning: dynamic
+    route: gateway
+    pinning: none
     min_context: 0
     probe:
       kind: chat

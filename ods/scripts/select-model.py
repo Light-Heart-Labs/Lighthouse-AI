@@ -108,6 +108,7 @@ def normalize_model(raw: dict[str, Any]) -> dict[str, Any] | None:
         "quantization": raw.get("quantization") or "",
         "specialty": raw.get("specialty") or "General",
         "llama_server_image": raw.get("llama_server_image") or "",
+        "install_recommendation": value_enabled(raw.get("install_recommendation", True)),
         "runtime_profiles": raw.get("runtime_profiles") if isinstance(raw.get("runtime_profiles"), list) else [],
     }
 
@@ -249,6 +250,10 @@ def score_model(model: dict[str, Any], capacity_gb: float, profile: str) -> floa
     return specialty_weight + family_bonus + context_bonus + capability - headroom_penalty
 
 
+def install_recommendation_allowed(model: dict[str, Any]) -> bool:
+    return bool(model.get("gguf_url")) and bool(model.get("install_recommendation", True))
+
+
 def size_within_ceiling(model: dict[str, Any], max_size_mb: float) -> bool:
     """True if `model` respects an optional tier size ceiling.
 
@@ -271,7 +276,7 @@ def rank_models(catalog: list[dict[str, Any]], capacity_gb: float, profile: str,
                 max_size_mb: float = 0) -> list[dict[str, Any]]:
     candidates = []
     for model in catalog:
-        if installable_only and not model.get("gguf_url"):
+        if installable_only and not install_recommendation_allowed(model):
             continue
         if not family_allowed(model, profile):
             continue
@@ -286,12 +291,15 @@ def rank_models(catalog: list[dict[str, Any]], capacity_gb: float, profile: str,
     if not candidates:
         fallback_pool = [
             model for model in catalog
-            if (not installable_only or model.get("gguf_url"))
+            if (not installable_only or install_recommendation_allowed(model))
             and family_allowed(model, profile)
             and size_within_ceiling(model, max_size_mb)
         ] or [
             model for model in catalog
-            if (not installable_only or model.get("gguf_url")) and family_allowed(model, profile)
+            if (not installable_only or install_recommendation_allowed(model)) and family_allowed(model, profile)
+        ] or [
+            model for model in catalog
+            if install_recommendation_allowed(model)
         ] or catalog
         fallback = min(fallback_pool, key=lambda m: float(m.get("vram_required_gb") or 999))
         return [fallback]
@@ -339,7 +347,7 @@ def arch_policy_model(catalog: list[dict[str, Any]], tier: str, profile: str,
         return None, None
 
     for model in catalog:
-        if installable_only and not model.get("gguf_url"):
+        if installable_only and not install_recommendation_allowed(model):
             continue
         if normalize_key(model.get("id")) == normalize_key(SPARK_AARCH64_MODEL_ID):
             policy = SPARK_AARCH64_POLICY if is_spark_aarch64 else UNIFIED_MEMORY_POLICY

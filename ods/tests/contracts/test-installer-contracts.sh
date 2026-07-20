@@ -43,6 +43,9 @@ bash tests/contracts/test-port-contracts.sh
 echo "[contract] Windows AMD local compose readiness"
 bash tests/contracts/test-windows-amd-local-compose.sh
 
+echo "[contract] Windows restart recreates env-backed containers"
+bash tests/test-windows-restart-recreate-env.sh
+
 echo "[contract] external Lemonade compose overlay readiness"
 bash tests/contracts/test-external-lemonade-contracts.sh
 
@@ -271,6 +274,22 @@ awk '/cmd_start\(\)/,/^}/' ods-cli | grep -q '_ods_cli_wait_for_bootstrap_compos
   || { echo "[FAIL] ods start must wait for active bootstrap hot-swaps before compose"; exit 1; }
 awk '/cmd_start\(\)/,/^}/' ods-cli | grep -q '_ods_cli_reload_model_env' \
   || { echo "[FAIL] ods start must reload model env after bootstrap hot-swap wait"; exit 1; }
+grep -q '_macos_persist_bootstrap_upgrade_args' installers/macos/install-macos.sh \
+  || { echo "[FAIL] macOS installer must persist bootstrap-upgrade retry metadata"; exit 1; }
+grep -q '"$BOOTSTRAP_GGUF_FILE"' installers/macos/install-macos.sh \
+  || { echo "[FAIL] macOS installer must pass the bootstrap GGUF into bootstrap-upgrade"; exit 1; }
+grep -q '\$script:BOOTSTRAP_GGUF_FILE' installers/windows/install-windows.ps1 \
+  || { echo "[FAIL] Windows installer must pass the bootstrap GGUF into bootstrap-upgrade"; exit 1; }
+awk '/cmd_restart\(\)/,/^}/' installers/macos/ods-macos.sh | grep -q 'macos_maybe_resume_bootstrap_upgrade' \
+  || { echo "[FAIL] macOS ods restart must retry failed bootstrap upgrades"; exit 1; }
+awk '/cmd_start\(\)/,/^}/' installers/macos/ods-macos.sh | grep -q 'macos_maybe_resume_bootstrap_upgrade' \
+  || { echo "[FAIL] macOS ods start must retry failed bootstrap upgrades"; exit 1; }
+awk '/cmd_restart\(\)/,/^}/' installers/macos/ods-macos.sh | grep -q 'macos_wait_for_bootstrap_compose_safe' \
+  || { echo "[FAIL] macOS ods restart must wait for active bootstrap hot-swaps"; exit 1; }
+awk '/cmd_start\(\)/,/^}/' installers/macos/ods-macos.sh | grep -q 'macos_wait_for_bootstrap_compose_safe' \
+  || { echo "[FAIL] macOS ods start must wait for active bootstrap hot-swaps"; exit 1; }
+awk '/cmd_update\(\)/,/^}/' installers/macos/ods-macos.sh | grep -q 'macos_maybe_resume_bootstrap_upgrade' \
+  || { echo "[FAIL] macOS ods update must retry failed bootstrap upgrades after compose is back"; exit 1; }
 grep -q 'starting|verifying|swapping' ods-cli \
   || { echo "[FAIL] ods-cli bootstrap compose guard must include swapping"; exit 1; }
 

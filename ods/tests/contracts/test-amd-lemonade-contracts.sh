@@ -433,12 +433,14 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
                 return [pscustomobject]@{ version = "10.7.0" }
             }
             return [pscustomobject]@{
+                ctx_size = 4096
                 extra_models_dir = $script:expectedModelsDir
                 llamacpp = [pscustomobject]@{ backend = "vulkan" }
             }
         }
         $null = Set-ODSLemonadeModernRuntimeConfig `
-            -Port 8080 -ModelsDir $modelsDir -AdminApiKey "contract-admin-key"
+            -Port 8080 -ModelsDir $modelsDir -AdminApiKey "contract-admin-key" `
+            -ContextSize 4096
         if ($script:configPost.Uri -ne "http://127.0.0.1:8080/internal/set") {
             throw "Modern Lemonade config did not use loopback /internal/set"
         }
@@ -446,11 +448,12 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
             throw "Modern Lemonade config did not send the admin Bearer token"
         }
         $postedProperties = @($script:configPost.Body.PSObject.Properties.Name | Sort-Object)
-        if (($postedProperties -join ",") -ne "extra_models_dir,llamacpp") {
+        if (($postedProperties -join ",") -ne "ctx_size,extra_models_dir,llamacpp") {
             throw "Unexpected Lemonade config schema: $($postedProperties -join ",")"
         }
         if ($script:configPost.Body.extra_models_dir -ne $script:expectedModelsDir -or
-            $script:configPost.Body.llamacpp.backend -ne "vulkan") {
+            $script:configPost.Body.llamacpp.backend -ne "vulkan" -or
+            [int]$script:configPost.Body.ctx_size -ne 4096) {
             throw "Lemonade 10.7 config payload values are incorrect"
         }
         $resolvedModernModel = Resolve-ODSLemonadeModelId `
@@ -475,15 +478,20 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         $taskAction = New-ODSLemonadeScheduledTaskAction `
             -Contract $modern -EnvPath (Join-Path $probeRoot ".env") `
             -DiagnosticLogPath (Join-Path $probeRoot "lemonade-launch.log")
-        $encodedMatch = [regex]::Match($taskAction.Arguments, "-EncodedCommand\s+(\S+)")
-        if ($taskAction.Execute -ne "powershell.exe" -or -not $encodedMatch.Success) {
-            throw "Modern Lemonade task must use the secure PowerShell wrapper"
+        $launcherMatch = [regex]::Match($taskAction.Arguments, "-File\s+`"([^`"]+)`"")
+        if ($taskAction.Execute -ne "powershell.exe" -or -not $launcherMatch.Success) {
+            throw "Modern Lemonade task must use the secure PowerShell launcher file"
         }
-        $wrapper = [Text.Encoding]::Unicode.GetString(
-            [Convert]::FromBase64String($encodedMatch.Groups[1].Value)
-        )
+        if ($taskAction.Arguments.Length -gt 512) {
+            throw "Modern Lemonade task arguments are too long for standard-user Task Scheduler registration"
+        }
+        $launcherPath = $launcherMatch.Groups[1].Value
+        if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+            throw "Modern Lemonade task launcher file was not written"
+        }
+        $wrapper = Get-Content -LiteralPath $launcherPath -Raw
         if ($wrapper -match [regex]::Escape("contract-admin-key")) {
-            throw "Lemonade admin key leaked into Task Scheduler arguments"
+            throw "Lemonade admin key leaked into the launcher wrapper"
         }
         if ($wrapper -notmatch "LITELLM_LEMONADE_API_KEY" -or
             $wrapper -notmatch "Start-Process -FilePath.*-PassThru") {
@@ -496,6 +504,29 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         )
         if (@($parseErrors).Count -gt 0) {
             throw "Generated Lemonade task wrapper has PowerShell parse errors"
+        }
+
+        $contractText = Get-Content -LiteralPath (Join-Path $env:ROOT_DIR "installers/windows/lib/backend-contract.ps1") -Raw
+        if ($contractText -notmatch "whoami\.exe" -or
+            $contractText -notmatch "Translate\(\[System.Security.Principal.SecurityIdentifier\]\)") {
+            throw "Interactive scheduled task user resolver does not validate a fully qualified account"
+        }
+        function Resolve-ODSInteractiveScheduledTaskUser {
+            return "STRIXY\conta"
+        }
+        function New-ScheduledTaskPrincipal {
+            param($UserId, $LogonType, $RunLevel)
+            return [pscustomobject]@{
+                UserId = $UserId
+                LogonType = $LogonType
+                RunLevel = $RunLevel
+            }
+        }
+        $principal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
+        if ($principal.UserId -ne "STRIXY\conta" -or
+            $principal.LogonType -ne "Interactive" -or
+            $principal.RunLevel -ne "Limited") {
+            throw "Interactive scheduled task principal did not preserve the resolved user and limited token"
         }
     '; then
         pass "backend-contract.ps1: resolves Lemonade and enforces versioned secure launch/config contracts"
@@ -631,6 +662,9 @@ if command -v pwsh >/dev/null 2>&1; then
         }
         if ($localText -notmatch "(?m)^  request_timeout: 900\r?$" -or $localText -notmatch "(?m)^  stream_timeout: 900\r?$") {
             throw "Windows local LiteLLM config must keep long-model proxy timeouts at 900s"
+        }
+        if ($localText -notmatch "(?m)^general_settings:\r?$" -or $localText -notmatch "(?m)^  master_key: os\.environ/LITELLM_MASTER_KEY\r?$") {
+            throw "Windows local LiteLLM config must enforce the generated LiteLLM master key"
         }
     '; then
         pass "env-generator.ps1: Windows local writes local.yaml and repairs malformed bind-mount directories"
