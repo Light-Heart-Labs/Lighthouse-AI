@@ -389,7 +389,11 @@ def build_soul(
     context = build_context_block(env_path)
 
     if _INSERT_MARKER in template:
-        assembled = template.replace(_INSERT_MARKER, context)
+        # Replace only the dedicated insertion line. The template also names
+        # the literal marker in its operator-facing regeneration instructions;
+        # replacing every occurrence duplicated the full install context at
+        # the end of SOUL.md and could double an already-large system prompt.
+        assembled = template.replace(_INSERT_MARKER, context, 1)
     else:
         # Template doesn't have the marker yet — append the block so
         # operators upgrading from an older template still get the

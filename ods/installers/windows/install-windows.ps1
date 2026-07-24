@@ -2394,6 +2394,16 @@ $installReadiness = Write-ODSInstallReadinessSummary -Checks $readinessChecks `
     -LogPath (Join-Path $installDir "logs\install.log") `
     -DashboardUrl "http://localhost:$dashboardPort" `
     -PassThru
+
+# The first post-compose persona render happens as soon as the required core
+# containers exist. Optional extension containers can still be entering the
+# running set at that point, which previously left Windows Hermes claiming
+# that no extensions were active. Refresh again after readiness has observed
+# the final stack and sync the authoritative service inventory into Hermes.
+if ($enableHermes -and (Get-Command Invoke-HermesSoulRefresh -ErrorAction SilentlyContinue)) {
+    Invoke-HermesSoulRefresh -InstallRoot $installDir -SyncContainer
+}
+
 if ($installReadiness -and $installReadiness.AllReady -and $llmModelReady -and $sttModelReady) {
     $allHealthy = $true
 }
