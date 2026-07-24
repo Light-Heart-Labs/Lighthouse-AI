@@ -23,6 +23,7 @@ param(
     [switch]$NoBootstrap,
     [switch]$Lan,
     [string]$InstallDir = "",
+    [string]$ModelsDir = "",
     [string]$SummaryJsonPath = ""
 )
 

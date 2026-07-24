@@ -26,7 +26,7 @@ if grep -q 'function Test-WindowsLlmModelReadiness' "$LIB"; then
 else
     fail "Test-WindowsLlmModelReadiness missing from $LIB"
 fi
-if grep -q 'Test-Path \$modelPath' "$LIB"; then
+if grep -q 'Test-Path .*\$modelPath' "$LIB"; then
     pass "readiness checks the GGUF backing file exists on disk"
 else
     fail "readiness must verify the GGUF backing file exists (Test-Path)"

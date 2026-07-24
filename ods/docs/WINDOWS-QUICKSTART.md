@@ -15,6 +15,18 @@ cd ODS
 .\install.ps1
 ```
 
+To keep large GGUF model files on another local drive, pass an absolute
+directory to the public installer:
+
+```powershell
+.\install.ps1 -ModelsDir "D:\ODS Models"
+```
+
+The selected path is persisted in `.env` and reused by background downloads,
+native inference, model activation, and the dashboard. Re-running the installer
+without `-ModelsDir` keeps the saved path; passing a different path explicitly
+updates it. Existing model files are not moved automatically.
+
 The installer will:
 - Detect your GPU (NVIDIA or AMD) and pick the right model tier
 - Download the AI model for your hardware (~1.5GB bootstrap, full model in background)

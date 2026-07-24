@@ -904,7 +904,7 @@ def _normalize_model_download_status(status_path: Path, data: dict) -> dict:
 
         def _verify_stale_manifest() -> None:
             try:
-                models_dir = INSTALL_DIR / "data" / "models"
+                models_dir = _configured_models_dir()
                 manifest_valid, integrity_error = _verify_model_manifest(
                     models_dir,
                     manifest,
@@ -965,6 +965,23 @@ def load_env(env_path: Path) -> dict:
             key, _, val = line.partition("=")
             env[key.strip()] = val.strip().strip("'\"")
     return env
+
+
+def _configured_models_dir(env: dict | None = None) -> Path:
+    """Resolve the host model directory from persisted ODS configuration."""
+    values = env if env is not None else load_env(INSTALL_DIR / ".env")
+    raw = (
+        values.get("ODS_MODELS_DIR")
+        or values.get("ODS_WIN_MODELS_DIR")
+        or values.get("MODELS_DIR")
+    )
+    if not raw:
+        return INSTALL_DIR / "data" / "models"
+    text = str(raw).replace("\\'", "'")
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
+        return Path(text)
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else INSTALL_DIR / path
 
 
 def _switchboard_state_path() -> Path:
@@ -5067,8 +5084,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         if not check_auth(self):
             return
         try:
-            models_dir = INSTALL_DIR / "data" / "models"
             env_path = INSTALL_DIR / ".env"
+            env = load_env(env_path)
+            models_dir = _configured_models_dir(env)
 
             try:
                 library = _load_model_library_records()
@@ -5088,10 +5106,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                             pass
 
             # Active model from .env
-            active_gguf = ""
-            if env_path.exists():
-                env = load_env(env_path)
-                active_gguf = env.get("GGUF_FILE", "")
+            active_gguf = env.get("GGUF_FILE", "")
 
             json_response(self, 200, {
                 "library": library,
@@ -5195,7 +5210,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 500, {"error": "Model catalog manifest is invalid"})
             return
 
-        models_dir = INSTALL_DIR / "data" / "models"
+        models_dir = _configured_models_dir()
         status_path = INSTALL_DIR / "data" / "model-download-status.json"
         artifact_by_file = {
             artifact["file"]: artifact
@@ -5774,7 +5789,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         if not target_gguf:
             json_response(self, 400, {"error": "gguf_file is required"})
             return
-        target = _safe_model_artifact_path(INSTALL_DIR / "data" / "models", target_gguf)
+        target = _safe_model_artifact_path(_configured_models_dir(env), target_gguf)
         if target is None:
             json_response(self, 400, {"error": "Invalid model file path"})
             return
@@ -5865,7 +5880,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         def local_gguf_model_from_id(raw_model_id: str) -> dict | None:
-            models_dir = INSTALL_DIR / "data" / "models"
+            models_dir = _configured_models_dir(persisted_env)
             gguf_file = _resolve_local_gguf_filename(raw_model_id, models_dir)
             if not gguf_file:
                 return None
@@ -5947,7 +5962,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         llama_server_image = model.get("llama_server_image")
 
         # Verify GGUF exists on disk (with path traversal protection)
-        models_dir = INSTALL_DIR / "data" / "models"
+        models_dir = _configured_models_dir(persisted_env)
         target = (models_dir / gguf_file).resolve()
         if not target.is_relative_to(models_dir.resolve()):
             json_response(self, 400, {"error": "Invalid model file path"})
@@ -6904,7 +6919,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 400, {"error": "gguf_file is required"})
             return
 
-        models_dir = INSTALL_DIR / "data" / "models"
+        models_dir = _configured_models_dir()
         target = _safe_model_artifact_path(models_dir, gguf_file)
         if target is None:
             json_response(self, 400, {"error": "Invalid file path"})
@@ -7965,7 +7980,7 @@ def _restart_windows_native_llama_server(env_path: Path, env: dict):
     llama_log = INSTALL_DIR / "data" / "llama-server.log"
     pid_file = INSTALL_DIR / "data" / "llama-server.pid"
     gguf_file = env.get("GGUF_FILE", "")
-    model_path = INSTALL_DIR / "data" / "models" / gguf_file
+    model_path = _configured_models_dir(env) / gguf_file
     port = env.get("AMD_INFERENCE_PORT") or env.get("OLLAMA_PORT") or "8080"
 
     if not llama_bin.exists():
@@ -8089,7 +8104,7 @@ def _restart_windows_lemonade(env: dict):
         "ODS_WIN_LEMONADE_DIAGNOSTIC_LOG": str(
             INSTALL_DIR / "logs" / "lemonade-launch.log"
         ),
-        "ODS_WIN_MODELS_DIR": str(INSTALL_DIR / "data" / "models"),
+        "ODS_WIN_MODELS_DIR": str(_configured_models_dir(env)),
         "ODS_WIN_PID_FILE": str(INSTALL_DIR / "data" / "llama-server.pid"),
         "ODS_WIN_LEMONADE_PORT": env.get("AMD_INFERENCE_PORT", "8080") or "8080",
         "ODS_WIN_BIND_ADDR": env.get("BIND_ADDRESS", "127.0.0.1") or "127.0.0.1",
@@ -10071,7 +10086,7 @@ def _launch_native_llama_server(env_path: Path, llama_bin: Path, llama_log: Path
     env = load_env(env_path)
     gguf_file = env.get("GGUF_FILE", "")
     ctx_size = env.get("CTX_SIZE", "32768")
-    model_path = INSTALL_DIR / "data" / "models" / gguf_file
+    model_path = _configured_models_dir(env) / gguf_file
     reasoning = env.get("LLAMA_REASONING", "off")
     reasoning_fmt = {"off": "none", "on": "deepseek"}.get(reasoning, reasoning)
     # Honour the unified BIND_ADDRESS knob (PR #964); empty/missing → loopback.

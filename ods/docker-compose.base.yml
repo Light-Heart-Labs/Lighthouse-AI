@@ -26,7 +26,7 @@ services:
     container_name: ods-llama-server
     restart: unless-stopped
     volumes:
-      - ./data/models:/models:z
+      - ${ODS_WIN_MODELS_DIR:-${MODELS_DIR:-./data/models}}:/models:z
       - ./config/llama-server/models.ini:/config/models.ini:ro,z
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${OLLAMA_PORT:-11434}:8080"
@@ -277,6 +277,7 @@ services:
       - ./.env.example:/ods/.env.example:ro,z
       - ./.env.schema.json:/ods/.env.schema.json:ro,z
       - ./data:/data:z
+      - ${ODS_WIN_MODELS_DIR:-${MODELS_DIR:-./data/models}}:/data/models:z
       - ./templates:/ods/templates:ro,z
     deploy:
       resources:

@@ -1887,6 +1887,10 @@ litellm_settings:
                 $bashScript = ($upgradeScript -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
                 $bashUpgradeLog = ($upgradeLog -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
                 $bashUpgradeErrLog = ($upgradeErrLog -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
+                $upgradeModelsDir = Get-ODSModelsDir `
+                    -InstallDir $installDir -ModelsDirOverride $ModelsDir
+                $bashModelsDir = ($upgradeModelsDir -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
+                $bashModelsDirArg = "'" + $bashModelsDir.Replace("'", "'`"`"'`"`'") + "'"
                 $upgradePidFile = Join-Path $logDir "model-upgrade.pid"
                 $upgradeLaunchLog = Join-Path $logDir "model-upgrade-launch.log"
                 $upgradeLaunchErrLog = Join-Path $logDir "model-upgrade-launch-err.log"
@@ -1904,7 +1908,7 @@ litellm_settings:
 set -uo pipefail
 mkdir -p "`$(dirname "$bashUpgradeLog")"
 echo "`$`$" > "$bashUpgradePidFile"
-exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($fullTierConfig.GgufUrl)" "$($fullTierConfig.GgufSha256)" "$($fullTierConfig.LlmModel)" "$($fullTierConfig.MaxContext)" "$($script:BOOTSTRAP_GGUF_FILE)" > "$bashUpgradeLog" 2> "$bashUpgradeErrLog" < /dev/null
+exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($fullTierConfig.GgufUrl)" "$($fullTierConfig.GgufSha256)" "$($fullTierConfig.LlmModel)" "$($fullTierConfig.MaxContext)" "$($script:BOOTSTRAP_GGUF_FILE)" $bashModelsDirArg > "$bashUpgradeLog" 2> "$bashUpgradeErrLog" < /dev/null
 "@
                 [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent.Replace("`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
@@ -2115,7 +2119,9 @@ if (-not $cloudMode) {
         Write-AI "  Active model changed during install; verifying $($activeModel.GgufFile)."
     }
     $llmReady = Test-WindowsLlmModelReadiness -Endpoint $llmEndpoint -InstallDir $installDir `
-        -GgufFile $activeModel.GgufFile -TimeoutSec 120
+        -GgufFile $activeModel.GgufFile `
+        -ModelsDir (Get-ODSModelsDir -InstallDir $installDir -ModelsDirOverride $ModelsDir) `
+        -TimeoutSec 120
     if ($llmReady.Ok -and $useLemonade) {
         try {
             $lemonadeModel = [string]$llmReady.ModelId

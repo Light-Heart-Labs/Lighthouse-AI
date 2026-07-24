@@ -239,6 +239,7 @@ function Test-WindowsLlmModelReadiness {
         [Parameter(Mandatory = $true)] [string]$InstallDir,
         [string]$GgufFile = "",
         [string]$LemonadeModel = "",
+        [string]$ModelsDir = "",
         [int]$TimeoutSec = 120
     )
 
@@ -246,9 +247,17 @@ function Test-WindowsLlmModelReadiness {
 
     # 1. The backing GGUF must exist on disk where the backend loads it from.
     if (-not [string]::IsNullOrWhiteSpace($GgufFile)) {
-        $modelPath = Join-Path (Join-Path (Join-Path $InstallDir "data") "models") $GgufFile
+        $modelsRoot = $ModelsDir
+        if ([string]::IsNullOrWhiteSpace($modelsRoot)) {
+            if (Get-Command Get-ODSModelsDir -ErrorAction SilentlyContinue) {
+                $modelsRoot = Get-ODSModelsDir -InstallDir $InstallDir
+            } else {
+                $modelsRoot = Join-Path (Join-Path $InstallDir "data") "models"
+            }
+        }
+        $modelPath = Join-Path $modelsRoot $GgufFile
         $result.ModelFile = $modelPath
-        $result.FileExists = Test-Path $modelPath
+        $result.FileExists = Test-Path -LiteralPath $modelPath -PathType Leaf
     } else {
         # No local GGUF configured (e.g. cloud/managed backend) -> file gate N/A.
         $result.FileExists = $true

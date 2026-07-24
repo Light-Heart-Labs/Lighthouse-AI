@@ -66,7 +66,6 @@ $script:OPENCODE_BIN = Join-Path (Join-Path $script:ODS_USER_DIR ".opencode") "b
 $script:OPENCODE_EXE = Join-Path (Join-Path $script:ODS_USER_DIR ".opencode") "bin\opencode.exe"
 $script:OPENCODE_CONFIG_DIR = Join-Path (Join-Path $script:ODS_USER_DIR ".config") "opencode"
 $script:OPENCODE_PORT = 3003
-$script:OPENCODE_PORT = 3003
 
 # ODS Host Agent (host-level extension lifecycle manager)
 $script:ODS_AGENT_PORT       = 7710
@@ -91,7 +90,6 @@ $script:C = @{
     Cyan      = "Cyan"
     Reset     = "Gray"
 }
-
 function Get-ODSModelsDir {
     <#
     .SYNOPSIS
@@ -100,9 +98,10 @@ function Get-ODSModelsDir {
         Precedence:
           1. $ModelsDirOverride parameter
           2. $env:ODS_MODELS_DIR
-          3. $env:MODELS_DIR
-          4. ODS_WIN_MODELS_DIR or MODELS_DIR in .env file (if present)
-          5. Default fallback: $InstallDir\data\models
+          3. $env:ODS_WIN_MODELS_DIR
+          4. $env:MODELS_DIR
+          5. ODS_WIN_MODELS_DIR, then MODELS_DIR, in .env (if present)
+          6. Default fallback: $InstallDir\data\models
     #>
     [CmdletBinding()]
     param(
@@ -110,30 +109,67 @@ function Get-ODSModelsDir {
         [string]$ModelsDirOverride
     )
 
+    function Resolve-ODSModelsPath {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return $null
+        }
+        if ($Value.IndexOfAny([char[]]"`r`n") -ge 0) {
+            throw "Models directory must not contain newline characters"
+        }
+        try {
+            return [System.IO.Path]::GetFullPath($Value.Trim())
+        } catch {
+            throw "Invalid models directory '$Value': $($_.Exception.Message)"
+        }
+    }
+
+    function ConvertFrom-ODSEnvValue {
+        param([string]$Value)
+        $resolved = $Value.Trim()
+        if ($resolved.Length -ge 2) {
+            $first = $resolved.Substring(0, 1)
+            $last = $resolved.Substring($resolved.Length - 1, 1)
+            if (($first -eq "'" -or $first -eq '"') -and $last -eq $first) {
+                $resolved = $resolved.Substring(1, $resolved.Length - 2)
+                if ($first -eq "'") {
+                    $resolved = $resolved.Replace("\'", "'")
+                }
+            }
+        }
+        return $resolved
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($ModelsDirOverride)) {
-        return [System.IO.Path]::GetFullPath($ModelsDirOverride)
+        return Resolve-ODSModelsPath $ModelsDirOverride
     }
     if (-not [string]::IsNullOrWhiteSpace($env:ODS_MODELS_DIR)) {
-        return [System.IO.Path]::GetFullPath($env:ODS_MODELS_DIR)
+        return Resolve-ODSModelsPath $env:ODS_MODELS_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ODS_WIN_MODELS_DIR)) {
+        return Resolve-ODSModelsPath $env:ODS_WIN_MODELS_DIR
     }
     if (-not [string]::IsNullOrWhiteSpace($env:MODELS_DIR)) {
-        return [System.IO.Path]::GetFullPath($env:MODELS_DIR)
+        return Resolve-ODSModelsPath $env:MODELS_DIR
     }
     if (-not [string]::IsNullOrWhiteSpace($InstallDir)) {
         $envPath = Join-Path $InstallDir ".env"
         if (Test-Path -LiteralPath $envPath -PathType Leaf) {
+            $persisted = @{}
             $lines = Get-Content -LiteralPath $envPath -ErrorAction SilentlyContinue
             foreach ($line in $lines) {
-                if ($line -match "^(?:ODS_WIN_MODELS_DIR|MODELS_DIR)=\s*(.+)\s*$") {
-                    $val = $Matches[1].Trim().Trim('"').Trim("'")
-                    if (-not [string]::IsNullOrWhiteSpace($val)) {
-                        return [System.IO.Path]::GetFullPath($val)
-                    }
+                if ($line -match "^(ODS_WIN_MODELS_DIR|MODELS_DIR)=(.*)$") {
+                    $persisted[$Matches[1]] = ConvertFrom-ODSEnvValue $Matches[2]
+                }
+            }
+            foreach ($key in @("ODS_WIN_MODELS_DIR", "MODELS_DIR")) {
+                if ($persisted.ContainsKey($key) -and
+                    -not [string]::IsNullOrWhiteSpace($persisted[$key])) {
+                    return Resolve-ODSModelsPath $persisted[$key]
                 }
             }
         }
-        return Join-Path (Join-Path $InstallDir "data") "models"
+        return Resolve-ODSModelsPath (Join-Path (Join-Path $InstallDir "data") "models")
     }
     return $null
 }
-

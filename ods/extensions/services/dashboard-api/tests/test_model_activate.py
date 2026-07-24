@@ -35,6 +35,21 @@ _restart_windows_native_llama_server = _mod._restart_windows_native_llama_server
 _write_windows_native_litellm_config = _mod._write_windows_native_litellm_config
 
 
+def test_configured_models_dir_round_trips_literal_dollar_and_apostrophe(
+    monkeypatch, tmp_path
+):
+    custom_models = tmp_path / "ODS $cash O'Brien models"
+    custom_models.mkdir()
+    encoded = str(custom_models).replace("'", "\\'")
+    (tmp_path / ".env").write_text(
+        f"ODS_WIN_MODELS_DIR='{encoded}'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+
+    assert _mod._configured_models_dir() == custom_models
+
+
 @pytest.fixture(autouse=True)
 def _isolate_opencode_config(monkeypatch, tmp_path):
     """Never let model-activation tests mutate the developer's real config."""
@@ -1719,6 +1734,7 @@ class TestRestartWindowsLemonade:
         _restart_windows_lemonade({
             "AMD_INFERENCE_PORT": "8080",
             "BIND_ADDRESS": "0.0.0.0",
+            "ODS_WIN_MODELS_DIR": r"D:\ODS Models",
         })
 
         script = captured["script"]
@@ -1753,6 +1769,7 @@ class TestRestartWindowsLemonade:
             "installers/windows/lib/backend-contract.ps1"
         )
         assert captured["env"]["ODS_WIN_ENV_PATH"] == str(tmp_path / ".env")
+        assert captured["env"]["ODS_WIN_MODELS_DIR"] == r"D:\ODS Models"
 
     def test_installer_and_cli_lemonade_tasks_are_always_on(self):
         ods_root = Path(__file__).resolve().parents[4]

@@ -741,6 +741,18 @@ assert_contains "installers/windows/install-windows.ps1" 'Docker Compose did not
 assert_contains "installers/windows/install-windows.ps1" 'dashboard", "dashboard-api", "open-webui' "Windows installer does not require core container services"
 assert_contains "installers/windows/install-windows.ps1" 'Invoke-ODSWindowsComposeImagePreflight' "Windows installer does not preflight compose images before launch"
 assert_contains "installers/windows/install-windows.ps1" '--pull", "never' "Windows installer still allows implicit compose pulls during install launch"
+assert_contains "../install.ps1" '\[string\]\$ModelsDir' "public Windows installer does not expose the models directory override"
+assert_contains "installers/windows/install-windows.ps1" '\$bashModelsDir' "Windows background model upgrade does not receive the configured models directory"
+assert_contains "installers/windows/install-windows.ps1" '\$bashModelsDirArg' "Windows background model upgrade does not shell-quote the configured models directory"
+assert_contains "scripts/bootstrap-upgrade.sh" 'MODELS_DIR_OVERRIDE="\$\{8:-\}"' "background model upgrade ignores its models directory argument"
+assert_contains "bin/ods-host-agent.py" 'def _configured_models_dir' "Windows host-agent ignores the persisted models directory"
+if [[ "$(grep -c 'INSTALL_DIR / "data" / "models"' bin/ods-host-agent.py)" -ne 1 ]]; then
+  echo "[FAIL] host-agent model operations bypass the configured models directory helper"
+  exit 1
+fi
+assert_contains "installers/windows/lib/env-generator.ps1" "MODELS_DIR='\\\$dotenvModelsDir'" "Windows model paths are not persisted as literal dotenv values"
+assert_contains "docker-compose.base.yml" '\$\{ODS_WIN_MODELS_DIR:-\$\{MODELS_DIR:-\./data/models\}\}:/models' "inference containers ignore the configured models directory"
+assert_contains "docker-compose.base.yml" '\$\{ODS_WIN_MODELS_DIR:-\$\{MODELS_DIR:-\./data/models\}\}:/data/models' "dashboard cannot inspect externally stored models"
 
 echo "[contract] Windows host agent ignores Store Python aliases and bootstraps real Python"
 assert_contains "installers/windows/phases/07-devtools.ps1" 'Resolve-ODSHostAgentPython' "Windows installer does not resolve a real host-agent Python"
