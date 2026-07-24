@@ -1056,12 +1056,12 @@
         "opencode": {
           "status": "unsupported_until_revalidated",
           "label": "OpenCode revalidation required",
-          "reason": "Fresh exact-commit release coverage on strix-halo loaded Qwen 2.5 Coder 1.5B 128K through Lemonade and passed challenge-bound ODS Talk, LiteLLM, and Open WebUI. OpenCode routed to the exact model but emitted a webfetch tool payload with a mangled verification token instead of the requested phrase. Keep this model out of OpenCode release coverage on strix-halo until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo",
-          "recordedAt": "2026-07-24T13:57:35Z",
-          "productSha": "9ad366f47050b81121c832de353cd799ad9dbfdf",
-          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
-          "hostScope": ["strix-halo"],
+          "reason": "Fresh exact-commit release coverage on strix-halo and spark routed OpenCode to Qwen 2.5 Coder 1.5B 128K after challenge-bound ODS Talk, LiteLLM, and Open WebUI passed. The strix-halo run emitted a webfetch tool payload with a mangled verification token; the spark run replied that no changes were made and omitted the requested token while Perplexica also passed. Keep this model out of OpenCode release coverage on those hosts until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark",
+          "recordedAt": "2026-07-24T22:11:24Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["strix-halo", "spark"],
           "expiresAt": "2026-08-24T00:00:00Z"
         },
         "perplexica": {
@@ -1077,12 +1077,12 @@
         },
         "agent_viability": {
           "status": "not_agent_viable",
-          "reason": "The model failed agent-required browser verification on tower2 in ODS Talk, on strix-halo in OpenCode and Perplexica, and on windows-laptop in Perplexica after exact-model routing. Keep it out of agent-required release coverage on those hosts until the affected app paths are revalidated.",
-          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
-          "recordedAt": "2026-07-24T18:08:00Z",
-          "productSha": "f35e9af8eeab7bb154081d1a3076ad9824f58616",
-          "harnessSha": "7c6cd3af853b9151fdb46170b59105401def3036",
-          "hostScope": ["tower2", "strix-halo", "windows-laptop"],
+          "reason": "The model failed agent-required browser verification on tower2 in ODS Talk, on strix-halo in OpenCode and Perplexica, on spark in OpenCode, and on windows-laptop in Perplexica after exact-model routing. Keep it out of agent-required release coverage on those hosts until the affected app paths are revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T22:11:24Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["tower2", "strix-halo", "spark", "windows-laptop"],
           "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
