@@ -616,19 +616,21 @@ def test_qwen25_coder_15b_128k_has_scoped_app_blocks_until_revalidated():
     assert "webfetch tool payload" in compatibility["opencode"]["reason"]
     assert compatibility["opencode"]["hostScope"] == ["strix-halo", "spark"]
     assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
-    assert "unrelated prose" in compatibility["perplexica"]["reason"]
-    assert compatibility["perplexica"]["hostScope"] == ["strix-halo", "windows-laptop"]
+    assert "unrelated research output" in compatibility["perplexica"]["reason"]
+    assert compatibility["perplexica"]["hostScope"] == ["strix-halo", "m5-mbp", "windows-laptop"]
     assert compatibility["agent_viability"]["status"] == "not_agent_viable"
     assert compatibility["agent_viability"]["hostScope"] == [
         "tower2",
         "strix-halo",
         "spark",
+        "m5-mbp",
         "windows-laptop",
     ]
     assert _agent_viable_for_release(model)
     assert not _agent_viable_for_release(model, host="tower2")
     assert not _agent_viable_for_release(model, host="strix-halo")
     assert not _agent_viable_for_release(model, host="spark")
+    assert not _agent_viable_for_release(model, host="m5-mbp")
     assert not _agent_viable_for_release(model, host="windows-laptop")
 
 

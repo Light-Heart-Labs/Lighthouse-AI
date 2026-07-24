@@ -493,7 +493,7 @@ def test_real_catalog_granite41_opencode_block_is_strix_halo_and_spark_scoped():
     assert tower2["opencode"]["status"] == "unknown"
 
 
-def test_real_catalog_qwen25_coder_15b_opencode_block_includes_spark():
+def test_real_catalog_qwen25_coder_15b_blocks_include_spark_and_m5():
     by_id = {model["id"]: model for model in _official_model_catalog()}
     model = by_id["qwen2.5-coder-1.5b-128k-q4"]
 
@@ -509,7 +509,8 @@ def test_real_catalog_qwen25_coder_15b_opencode_block_includes_spark():
     assert spark["opencode"]["status"] == "unsupported_until_revalidated"
     assert spark["agentViability"]["status"] == "not_agent_viable"
     assert m5_mbp["opencode"]["status"] == "unknown"
-    assert m5_mbp["agentViability"]["status"] == "unknown"
+    assert m5_mbp["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["agentViability"]["status"] == "not_agent_viable"
 
 
 def test_real_catalog_qwen3_4b_instruct_windows_revalidation_is_verified():

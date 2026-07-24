@@ -1067,22 +1067,22 @@
         "perplexica": {
           "status": "unsupported_until_revalidated",
           "label": "Perplexica revalidation required",
-          "reason": "Fresh exact-route browser coverage on strix-halo and windows-laptop loaded Qwen 2.5 Coder 1.5B 128K and passed challenge-bound ODS Talk, LiteLLM, and Open WebUI. Perplexica returned unrelated prose and omitted its requested verification phrase on both hosts. Keep this model out of Perplexica release coverage on those hosts until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
-          "recordedAt": "2026-07-24T18:08:00Z",
-          "productSha": "f35e9af8eeab7bb154081d1a3076ad9824f58616",
-          "harnessSha": "7c6cd3af853b9151fdb46170b59105401def3036",
-          "hostScope": ["strix-halo", "windows-laptop"],
+          "reason": "Fresh exact-route browser coverage on strix-halo, m5-mbp, and windows-laptop loaded Qwen 2.5 Coder 1.5B 128K and passed challenge-bound ODS Talk, LiteLLM, and Open WebUI. Perplexica returned unrelated research output and omitted its requested verification phrase on all three hosts. Keep this model out of Perplexica release coverage on those hosts until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T22:22:05Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["strix-halo", "m5-mbp", "windows-laptop"],
           "expiresAt": "2026-08-24T00:00:00Z"
         },
         "agent_viability": {
           "status": "not_agent_viable",
-          "reason": "The model failed agent-required browser verification on tower2 in ODS Talk, on strix-halo in OpenCode and Perplexica, on spark in OpenCode, and on windows-laptop in Perplexica after exact-model routing. Keep it out of agent-required release coverage on those hosts until the affected app paths are revalidated.",
-          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
-          "recordedAt": "2026-07-24T22:11:24Z",
+          "reason": "The model failed agent-required browser verification on tower2 in ODS Talk, on strix-halo in OpenCode and Perplexica, on spark in OpenCode, and on m5-mbp and windows-laptop in Perplexica after exact-model routing. Keep it out of agent-required release coverage on those hosts until the affected app paths are revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T22:22:05Z",
           "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
           "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
-          "hostScope": ["tower2", "strix-halo", "spark", "windows-laptop"],
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop"],
           "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
