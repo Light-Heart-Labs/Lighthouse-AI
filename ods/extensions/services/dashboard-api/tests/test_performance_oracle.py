@@ -11,6 +11,7 @@ from performance_oracle import (
     model_compatibility_runtime_context,
     model_app_compatibility,
     model_publisher,
+    normalize_catalog_entry,
     rank_pre_download_models,
 )
 
@@ -91,6 +92,32 @@ def test_current_model_matches_complete_phi_aliases_and_runtime_prefixes():
     assert current_model_matches(mini, None, mini["gguf_file"])
     assert not current_model_matches(full, None, mini["gguf_file"])
     assert not current_model_matches(full, "custom.phi-4")
+
+
+def test_normalize_catalog_entry_tolerates_explicit_null_aliases():
+    """A catalog entry may carry an explicit ``"aliases": null`` (JSON null).
+
+    ``.get("aliases", [])`` only substitutes the default when the key is
+    absent, so a null value used to raise TypeError and take down every
+    caller of load_model_catalog. Aliases are still derived from the other
+    identity fields.
+    """
+    entry = normalize_catalog_entry(
+        {"id": "m", "gguf": "model-Q4_K_M.gguf", "aliases": None}
+    )
+
+    assert entry is not None
+    assert "m" in entry["aliases"]
+    assert "model-Q4_K_M.gguf" in entry["aliases"]
+
+
+def test_normalize_catalog_entry_keeps_listed_aliases():
+    entry = normalize_catalog_entry(
+        {"id": "m", "gguf": "model-Q4_K_M.gguf", "aliases": ["custom-alias"]}
+    )
+
+    assert entry is not None
+    assert "custom-alias" in entry["aliases"]
 
 
 def test_real_catalog_phi_models_have_exactly_one_loaded_identity(data_dir, tmp_path):
