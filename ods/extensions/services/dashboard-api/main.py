@@ -70,6 +70,7 @@ from routers import (
     talk,
     tailscale,
     usage,
+    node,
 )
 from settings import (
     _ENV_ASSIGNMENT_RE, _ENV_COMMENTED_ASSIGNMENT_RE, _SETTINGS_APPLY_ALLOWED_SERVICES, _parse_env_text, _read_env_map_from_path,
@@ -148,7 +149,9 @@ def _read_installed_version() -> str:
         try:
             for line in env_file.read_text().splitlines():
                 if line.startswith("ODS_VERSION="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
+                    env_version = line.split("=", 1)[1].strip().strip("\"'")
+                    if env_version:
+                        return env_version
         except OSError:
             pass
 
@@ -1099,6 +1102,7 @@ app.include_router(oauth_passthrough.router)
 app.include_router(talk.router)
 app.include_router(tailscale.router)
 app.include_router(usage.router)
+app.include_router(node.router)
 
 
 # ================================================================

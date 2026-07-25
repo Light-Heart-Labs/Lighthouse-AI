@@ -26,8 +26,13 @@ test: ## Run unit and contract tests
 	@bash tests/test-installer-context-parity.sh
 	@bash tests/test-hermes-context-floor.sh
 	@echo ""
+	@echo "=== Hermes slash worker prune ==="
+	@bash tests/test-hermes-slash-worker-prune.sh
+	@python3 tests/contracts/test-hermes-worker-guardrails.py
+	@echo ""
 	@echo "=== Installer contracts ==="
 	@bash tests/contracts/test-installer-contracts.sh
+	@bash tests/test-phase03-multigpu-tty.sh
 	@bash tests/contracts/test-preflight-fixtures.sh
 	@bash tests/test-preflight-resolver-bug.sh
 	@bash tests/test-linux-cloud-mode.sh
@@ -54,6 +59,12 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== safe .env loading (quote/CRLF handling) ==="
 	@bash tests/test-safe-env.sh
+	@echo ""
+	@echo "=== QR code helper LAN detection ==="
+	@bash tests/test-qrcode-helper.sh
+	@echo ""
+	@echo "=== mode switch status and switching ==="
+	@bash tests/test-mode-switch-status.sh
 	@echo ""
 	@echo "=== Bind address sweep ==="
 	@bash tests/test-bind-address-sweep.sh

@@ -47,14 +47,22 @@ def _has_runtime_scope(entry):
     )
 
 
-def _agent_viable_for_release(model):
+def _agent_viable_for_release(model, host=None):
     if str(model.get("source") or "").strip().lower() not in {"", "curated"}:
         return False
     compatibility = model.get("app_compatibility") or {}
     for entry in compatibility.values():
+        entry = entry or {}
         status = str((entry or {}).get("status") or "").strip().lower()
-        if status in BLOCKING_AGENT_STATUSES and not _has_runtime_scope(entry or {}):
-            return False
+        if status not in BLOCKING_AGENT_STATUSES or _has_runtime_scope(entry):
+            continue
+        host_scope = entry.get("hostScope") or entry.get("host_scope")
+        if host_scope:
+            scoped_hosts = {str(value).strip().lower() for value in host_scope}
+            if host is not None and str(host).strip().lower() in scoped_hosts:
+                return False
+            continue
+        return False
     return True
 
 
@@ -188,14 +196,20 @@ def test_llama31_8b_is_not_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["llama3.1-8b-instruct-q4"])
 
 
-def test_phi35_mini_is_direct_chat_unsupported_until_revalidated():
+def test_phi35_mini_requires_perplexica_revalidation_globally_and_runtime_revalidation_on_windows():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     compatibility = by_id["phi3.5-mini-q4"]["app_compatibility"]
 
     assert compatibility["openai_chat"]["status"] == "unsupported_until_revalidated"
     assert compatibility["openai_chat"]["evidence"]
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["globalScope"] is True
+    assert "tower2" in compatibility["perplexica"]["reason"]
+    assert "strix-halo" in compatibility["perplexica"]["reason"]
+    assert "cycle-001/{tower2,strix-halo}" in compatibility["perplexica"]["evidence"]
     assert not _agent_viable_for_release(by_id["phi3.5-mini-q4"])
+    assert not _agent_viable_for_release(by_id["phi3.5-mini-q4"], host="windows-laptop")
 
 
 def test_qwen25_15b_is_not_agent_viable_until_revalidated():
@@ -247,18 +261,94 @@ def test_granite33_2b_is_not_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["granite3.3-2b-instruct-q4"])
 
 
-def test_smollm3_3b_is_not_agent_viable_until_app_revalidated():
+def test_smollm3_3b_runtime_context_is_64k_and_it_remains_a_revalidation_candidate():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
-    compatibility = by_id["smollm3-3b-q4"]["app_compatibility"]
+    model = by_id["smollm3-3b-q4"]
+    compatibility = model["app_compatibility"]
 
+    assert model["context_length"] == 65536
     assert compatibility["openai_chat"]["status"] == "verified"
-    assert "cycle-003" in compatibility["openai_chat"]["evidence"]
-    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
-    assert "Perplexica" in compatibility["agent_viability"]["reason"]
-    assert "Privacy Shield" in compatibility["agent_viability"]["reason"]
-    assert "cycle-003" in compatibility["agent_viability"]["evidence"]
-    assert not _agent_viable_for_release(by_id["smollm3-3b-q4"])
+    assert "58944ba461fb" in compatibility["openai_chat"]["evidence"]
+    assert compatibility["hermes_talk"]["status"] == "verified"
+    assert compatibility["hermes_talk"]["productSha"] == "58944ba461fb87b87b1ce6fa854e32d15aeb8efa"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert "llmBackendScope" not in compatibility["perplexica"]
+    assert "hostScope" not in compatibility["perplexica"]
+    assert "cycle-003/tower2" in compatibility["perplexica"]["evidence"]
+    assert "cycle-003/strix-halo" in compatibility["perplexica"]["evidence"]
+    assert "cycle-003/spark" in compatibility["perplexica"]["evidence"]
+    assert "cycle-003/m5-mbp" in compatibility["perplexica"]["evidence"]
+    assert "cycle-003/windows-laptop" in compatibility["perplexica"]["evidence"]
+    assert "cycle-003/strixy" in compatibility["perplexica"]["evidence"]
+    assert "agent_viability" not in compatibility
+    assert not _agent_viable_for_release(model)
+
+
+def test_qwen3_4b_128k_talk_block_is_global_after_linux_revalidation():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen3-4b-128k-q4"]
+    compatibility = model["app_compatibility"]["hermes_talk"]
+
+    assert compatibility["status"] == "unsupported_until_revalidated"
+    assert compatibility["globalScope"] is True
+    assert "hostScope" not in compatibility
+    assert "cycle-006/m5-mbp" in compatibility["evidence"]
+    assert "cycle-005/windows-laptop" in compatibility["evidence"]
+    assert "cycle-006/tower2" in compatibility["evidence"]
+    assert ".MEDIA" in compatibility["reason"]
+    assert "180-second" in compatibility["reason"]
+    assert "3.9 seconds" in compatibility["reason"]
+    assert not _agent_viable_for_release(model)
+    assert not _agent_viable_for_release(model, host="m5-mbp")
+    assert not _agent_viable_for_release(model, host="windows-laptop")
+
+
+def test_windows_8gb_revalidation_models_have_64k_compressed_kv_profiles():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    expected = {
+        "qwen3-4b-instruct-2507-q4": ("nvidia-8gb-64k-q4-kv", "q4_0", 7.2),
+        "qwen3.5-4b-q4": ("nvidia-8gb-64k-q4-kv", "q4_0", 7.2),
+    }
+    for model_id, (profile_id, cache_type, required_gb) in expected.items():
+        model = by_id[model_id]
+        profiles = {profile["id"]: profile for profile in model["runtime_profiles"]}
+        profile = profiles[profile_id]
+
+        assert profile["backend"] == "nvidia"
+        assert profile["host_arch"] == ["amd64"]
+        assert profile["memory_type"] == "discrete"
+        assert profile["vram_min_gb"] == 7.5
+        assert profile["vram_max_gb"] == 8.5
+        assert profile["system_ram_min_gb"] == 31
+        assert profile["context_length"] == HERMES_CONTEXT_FLOOR
+        assert profile["estimated_required_gb"] == required_gb
+        assert profile["env"]["LLAMA_PARALLEL"] == "1"
+        assert profile["env"]["LLAMA_ARG_FLASH_ATTN"] == "on"
+        assert profile["env"]["LLAMA_ARG_CACHE_TYPE_K"] == cache_type
+        assert profile["env"]["LLAMA_ARG_CACHE_TYPE_V"] == cache_type
+
+
+def test_windows_8gb_revalidation_models_have_verified_app_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    expected_cycles = {
+        "qwen3-4b-instruct-2507-q4": "cycle-001/windows-laptop",
+        "qwen3.5-4b-q4": "cycle-002/windows-laptop",
+    }
+
+    for model_id, cycle_path in expected_cycles.items():
+        compatibility = by_id[model_id]["app_compatibility"]
+        for app in ("openai_chat", "hermes_talk", "perplexica", "agent_viability"):
+            verdict = compatibility[app]
+            assert verdict["status"] == "verified"
+            assert verdict["hostScope"] == ["windows-laptop"]
+            assert verdict["productSha"] == "449cf84d866d8bdedd8046d3c58faab6c07b5f03"
+            assert verdict["harnessSha"] == "954deb755b0730719512ac3675a748474180e01c"
+            assert cycle_path in verdict["evidence"]
 
 
 def test_granite31_requires_global_perplexica_revalidation_after_strixy_failure():
@@ -290,7 +380,8 @@ def test_granite4_h_1b_requires_perplexica_revalidation_after_m5_partial_reply()
     assert "m5-mbp" in compatibility["perplexica"]["reason"]
     assert "Perplexica" in compatibility["perplexica"]["reason"]
     assert "cycle-003" in compatibility["perplexica"]["evidence"]
-    assert not _agent_viable_for_release(model)
+    assert _agent_viable_for_release(model)
+    assert not _agent_viable_for_release(model, host="m5-mbp")
 
 
 def test_falcon_h1_15b_is_not_low_vram_agent_viable_after_opencode_failure():
@@ -322,7 +413,8 @@ def test_granite32_2b_is_direct_chat_only_after_windows_talk_timeout():
     assert "19,349-token Hermes prompt" in compatibility["agent_viability"]["reason"]
     assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
     assert "cycle-004" in compatibility["hermes_talk"]["evidence"]
-    assert not _agent_viable_for_release(model)
+    assert _agent_viable_for_release(model)
+    assert not _agent_viable_for_release(model, host="windows-laptop")
 
 
 def test_granite4_h_350m_is_not_agent_viable_after_talk_probe_failure():
@@ -371,7 +463,11 @@ def test_replacement_low_vram_long_context_models_are_cataloged_for_validation()
         assert model["context_length"] >= HERMES_CONTEXT_FLOOR
         assert model["gguf_sha256"] == sha256
         assert model["gguf_url"].startswith(url_prefix)
-        if model_id in {"granite3.1-2b-instruct-q4", "phi3-mini-128k-q4"}:
+        if model_id in {
+            "granite3.1-2b-instruct-q4",
+            "phi3-mini-128k-q4",
+            "qwen3-4b-128k-q4",
+        }:
             assert not _agent_viable_for_release(model)
         else:
             assert _agent_viable_for_release(model)
@@ -454,15 +550,30 @@ def test_qwen3_17b_is_below_release_context_floor_without_yarn_policy():
     assert not _agent_viable_for_release(model)
 
 
-def test_qwen25_coder_3b_is_not_agent_viable_until_revalidated():
+def test_qwen25_coder_3b_is_verified_on_windows_and_host_failures_are_scoped():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
-    compatibility = by_id["qwen2.5-coder-3b-128k-q4"]["app_compatibility"]
+    model = by_id["qwen2.5-coder-3b-128k-q4"]
+    compatibility = model["app_compatibility"]
 
-    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
-    assert compatibility["agent_viability"]["evidence"]
+    assert compatibility["agent_viability"]["status"] == "verified"
+    assert compatibility["agent_viability"]["hostScope"] == ["windows-laptop"]
+    assert "18-23-guardrail-fullapp" in compatibility["agent_viability"]["evidence"]
     assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
-    assert not _agent_viable_for_release(by_id["qwen2.5-coder-3b-128k-q4"])
+    assert compatibility["hermes_talk"]["hostScope"] == ["tower2"]
+    assert "23-54-27Z-release" in compatibility["hermes_talk"]["evidence"]
+    assert "acknowledged" in compatibility["hermes_talk"]["reason"]
+    assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["opencode"]["hostScope"] == ["strix-halo", "spark"]
+    assert "07-36-57Z-release" in compatibility["opencode"]["evidence"]
+    assert "/cycle-006/spark" in compatibility["opencode"]["evidence"]
+    assert "02-56-13Z-release" in compatibility["opencode"]["reason"]
+    assert "ODES verify" in compatibility["opencode"]["reason"]
+    assert _agent_viable_for_release(model)
+    assert _agent_viable_for_release(model, host="windows-laptop")
+    assert not _agent_viable_for_release(model, host="tower2")
+    assert not _agent_viable_for_release(model, host="strix-halo")
+    assert not _agent_viable_for_release(model, host="spark")
 
 
 def test_falcon_h1_15b_is_not_talk_or_opencode_agent_viable_until_revalidated():
@@ -498,7 +609,7 @@ def test_falcon_h1_3b_is_not_talk_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["falcon-h1-3b-instruct-q4"])
 
 
-def test_qwen25_coder_15b_128k_is_not_talk_agent_viable_until_revalidated():
+def test_qwen25_coder_15b_128k_has_scoped_app_blocks_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     model = by_id["qwen2.5-coder-1.5b-128k-q4"]
@@ -510,8 +621,27 @@ def test_qwen25_coder_15b_128k_is_not_talk_agent_viable_until_revalidated():
     assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
     assert "generic assistant prose" in compatibility["hermes_talk"]["reason"]
     assert "cycle-006" in compatibility["hermes_talk"]["evidence"]
+    assert compatibility["hermes_talk"]["hostScope"] == ["tower2"]
+    assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
+    assert "webfetch tool payload" in compatibility["opencode"]["reason"]
+    assert compatibility["opencode"]["hostScope"] == ["strix-halo", "spark"]
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert "unrelated research output" in compatibility["perplexica"]["reason"]
+    assert compatibility["perplexica"]["hostScope"] == ["strix-halo", "m5-mbp", "windows-laptop"]
     assert compatibility["agent_viability"]["status"] == "not_agent_viable"
-    assert not _agent_viable_for_release(model)
+    assert compatibility["agent_viability"]["hostScope"] == [
+        "tower2",
+        "strix-halo",
+        "spark",
+        "m5-mbp",
+        "windows-laptop",
+    ]
+    assert _agent_viable_for_release(model)
+    assert not _agent_viable_for_release(model, host="tower2")
+    assert not _agent_viable_for_release(model, host="strix-halo")
+    assert not _agent_viable_for_release(model, host="spark")
+    assert not _agent_viable_for_release(model, host="m5-mbp")
+    assert not _agent_viable_for_release(model, host="windows-laptop")
 
 
 def test_mistral_nemo_talk_block_is_scoped_to_apple_llama_server():
@@ -561,7 +691,10 @@ def test_qwen3_4b_long_context_replacements_are_release_candidates():
             assert model["size_bytes"] == expected_model["size_bytes"]
         if model_id != "qwen3.5-4b-q4":
             assert model.get("install_recommendation") is False
-        assert _agent_viable_for_release(model)
+        if model_id == "qwen3-4b-128k-q4":
+            assert not _agent_viable_for_release(model)
+        else:
+            assert _agent_viable_for_release(model)
 
 
 def test_qwen25_7b_is_not_agent_viable_on_low_vram_windows_until_revalidated():
