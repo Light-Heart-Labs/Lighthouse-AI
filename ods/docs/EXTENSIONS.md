@@ -221,7 +221,21 @@ Service section:
 
 Feature section (optional list):
 - required per feature: `id`, `name`, `description`, `icon`, `category`, `requirements`, `priority`
-- optional: `enabled_services_all`, `enabled_services_any`, `setup_time`, `gpu_backends`
+- optional: `enabled_services_all`, `enabled_services_any`, `launch`, `setup_time`, `gpu_backends`
+
+Feature health and launch fields have separate responsibilities:
+
+- `requirements.services` lists services that must all be healthy.
+- `requirements.services_any` lists interchangeable services where at least one
+  must be healthy. For the built-in `llama-server`/LiteLLM pair, Dashboard API
+  narrows readiness to the route selected by `LLM_URL`, `LLM_API_URL`, or
+  `OLLAMA_URL`, in that order.
+- `enabled_services_all` and `enabled_services_any` identify the healthy
+  services that constitute the feature itself. Requirements are still enforced.
+- `launch` declares the user-facing action. Use `{type: service, service: ...}`
+  only for a service with a browser UI, `{type: internal, path: ...}` for a
+  Dashboard route, and `{type: none}` for status-only features. When omitted,
+  the API and Dashboard do not infer a URL from dependencies.
 
 LLM section (optional under `service`, required for LLM consumers):
 - `llm.consumes`: `true` when the service sends prompts or completions to a language model

@@ -66,9 +66,9 @@ features:
     icon: Globe
     category: networking
     requirements:
-      services: [dashboard]
+      services: [dashboard, ods-proxy]
       vram_gb: 0
-    enabled_services_all: [ods-proxy]
+    enabled_services_all: [dashboard, ods-proxy]
     setup_time: Ready
     priority: 1
     launch:
