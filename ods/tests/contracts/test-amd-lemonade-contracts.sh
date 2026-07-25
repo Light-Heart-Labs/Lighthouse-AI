@@ -97,8 +97,8 @@ fi
 echo "[contract] Linux Lemonade Hermes timeout is lifted from the ODS default"
 if grep -q '_hermes_request_timeout=900' installers/phases/11-services.sh \
    && grep -q -- '--request-timeout-seconds "$_hermes_request_timeout"' installers/phases/11-services.sh \
-   && grep -q 'is_windows_bash || \[\[ "$runtime" == "lemonade" || "$llm_backend" == "lemonade" \]\]' scripts/bootstrap-upgrade.sh \
-   && grep -q 'is_windows_bash || \[\[ "$_gpu_backend_for_hermes" == "amd" || "$_hermes_llm_backend_for_timeout" == "lemonade" \]\]' scripts/bootstrap-upgrade.sh; then
+   && grep -Fq 'elif [[ "${ODS_MODE:-local}" != "cloud" ]] && { [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; }; then' installers/phases/11-services.sh \
+   && grep -Fq 'if is_windows_bash || [[ "$switchboard_mode" == "enabled" || "$runtime" == "lemonade" || "$llm_backend" == "lemonade" ]]; then' scripts/bootstrap-upgrade.sh; then
     pass "Linux Lemonade Hermes provider timeout is upgraded to 900s"
 else
     fail "Linux Lemonade Hermes config must pass --request-timeout-seconds 900 at install and after bootstrap swap"
