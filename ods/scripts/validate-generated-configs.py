@@ -180,6 +180,7 @@ def main(argv: list[str]) -> int:
             "env",
             "opencode",
             "litellm-local",
+            "litellm-local-native",
             "litellm-cloud",
             "litellm-hybrid",
             "litellm-lemonade",

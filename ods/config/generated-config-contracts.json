@@ -110,8 +110,12 @@
       ],
       "writers": [
         {
-          "platform": "canonical",
+          "platform": "canonical-renderer",
           "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "checked-in-template",
+          "path": "config/litellm/local.yaml"
         }
       ],
       "invariants": [
@@ -124,6 +128,39 @@
       ]
     },
     {
+      "id": "litellm-local-native",
+      "label": "LiteLLM host-native local model routing",
+      "target_paths": [
+        "config/litellm/local.yaml"
+      ],
+      "writers": [
+        {
+          "platform": "canonical-renderer",
+          "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "windows-installer",
+          "path": "installers/windows/lib/env-generator.ps1"
+        },
+        {
+          "platform": "windows-upgrade",
+          "path": "scripts/bootstrap-upgrade.sh"
+        },
+        {
+          "platform": "windows-runtime",
+          "path": "bin/ods-host-agent.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "native-local-projection-exists",
+          "type": "file_contains",
+          "path": "scripts/render-runtime-configs.py",
+          "needle": "def render_litellm_local_native"
+        }
+      ]
+    },
+    {
       "id": "litellm-cloud",
       "label": "LiteLLM cloud model routing",
       "target_paths": [
@@ -131,8 +168,12 @@
       ],
       "writers": [
         {
-          "platform": "canonical",
+          "platform": "canonical-preview",
           "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "checked-in-template",
+          "path": "config/litellm/cloud.yaml"
         }
       ],
       "invariants": [
@@ -152,8 +193,12 @@
       ],
       "writers": [
         {
-          "platform": "canonical",
+          "platform": "canonical-preview",
           "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "checked-in-template",
+          "path": "config/litellm/hybrid.yaml"
         }
       ],
       "invariants": [
@@ -172,6 +217,10 @@
         "config/litellm/lemonade.yaml"
       ],
       "writers": [
+        {
+          "platform": "canonical-renderer",
+          "path": "scripts/render-runtime-configs.py"
+        },
         {
           "platform": "linux",
           "path": "installers/phases/06-directories.sh"
@@ -214,8 +263,12 @@
       ],
       "writers": [
         {
-          "platform": "canonical",
+          "platform": "canonical-renderer",
           "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "checked-in-template",
+          "path": "config/litellm/switchboard.yaml"
         }
       ],
       "invariants": [
@@ -241,8 +294,12 @@
       ],
       "writers": [
         {
-          "platform": "canonical",
+          "platform": "canonical-renderer",
           "path": "scripts/render-runtime-configs.py"
+        },
+        {
+          "platform": "windows-installer",
+          "path": "installers/windows/lib/env-generator.ps1"
         }
       ],
       "invariants": [

@@ -1782,6 +1782,7 @@ else
         fi
     done
     if [[ "$_macos_switchboard_mode" == "enabled" ]] \
+       && [[ "$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODE")" != "cloud" ]] \
        && ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
             --surface litellm-switchboard "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
         ai_err "Failed to render required litellm-switchboard config"

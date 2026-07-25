@@ -99,6 +99,44 @@ litellm_settings:
     return RenderedFile("litellm-local", "config/litellm/local.yaml", content)
 
 
+def render_litellm_local_native(inputs: RenderInputs) -> RenderedFile:
+    model = inputs.gguf_file or inputs.model
+    api_base = inputs.llm_base_url.rstrip("/") or "http://host.docker.internal:8080/v1"
+    content = f"""model_list:
+  - model_name: default
+    litellm_params:
+      model: openai/{model}
+      api_base: {api_base}
+      api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_base: {api_base}
+      api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 900
+  stream_timeout: 900
+"""
+    return RenderedFile(
+        "litellm-local-native",
+        "config/litellm/local.yaml",
+        content,
+    )
+
+
 def render_litellm_cloud(inputs: RenderInputs) -> RenderedFile:
     content = """model_list:
   # Stable public alias used by Switchboard-aware ODS consumers.
@@ -429,6 +467,7 @@ RENDERERS: dict[str, Callable[[RenderInputs], RenderedFile]] = {
     "env": render_env,
     "opencode": render_opencode,
     "litellm-local": render_litellm_local,
+    "litellm-local-native": render_litellm_local_native,
     "litellm-cloud": render_litellm_cloud,
     "litellm-hybrid": render_litellm_hybrid,
     "litellm-lemonade": render_litellm_lemonade,
@@ -503,6 +542,11 @@ def render(args: argparse.Namespace) -> dict[str, object]:
         opencode_port=args.opencode_port,
         context_length=args.context_length,
     )
+    if args.surface == "litellm-switchboard" and inputs.ods_mode == "cloud":
+        raise ValueError(
+            "litellm-switchboard is local-runtime-only and cannot be rendered "
+            "for ODS_MODE=cloud"
+        )
     files = [
         RENDERERS[name](inputs)
         for name in select_surfaces(
@@ -530,7 +574,11 @@ def render(args: argparse.Namespace) -> dict[str, object]:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    payload = render(args)
+    try:
+        payload = render(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     if args.format == "paths":
         for item in payload["files"]:
             print(item["path"])

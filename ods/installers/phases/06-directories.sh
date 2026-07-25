@@ -1064,9 +1064,10 @@ LITELLM_EOF
         error "Model router config renderer is unavailable"
         return 1
     fi
+    _router_ods_mode="${ODS_MODE_VALUE:-${ODS_MODE:-local}}"
     _router_common_args=(
         --switchboard-mode "${ODS_MODEL_SWITCHBOARD_VALUE:-observe}"
-        --ods-mode "${ODS_MODE:-local}"
+        --ods-mode "$_router_ods_mode"
         --gpu-backend "${GPU_BACKEND:-nvidia}"
         --gguf-file "${GGUF_FILE:-}"
         --lemonade-model-id "${LEMONADE_MODEL_VALUE:-}"
@@ -1076,7 +1077,11 @@ LITELLM_EOF
         --output-root "$INSTALL_DIR"
         --write
     )
-    for _router_surface in model-router-endpoints litellm-switchboard; do
+    _router_surfaces=(model-router-endpoints)
+    if [[ "$_router_ods_mode" != "cloud" ]]; then
+        _router_surfaces+=(litellm-switchboard)
+    fi
+    for _router_surface in "${_router_surfaces[@]}"; do
         if ! "$_router_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
             --surface "$_router_surface" "${_router_common_args[@]}" \
             >> "$LOG_FILE" 2>&1; then
@@ -1085,6 +1090,7 @@ LITELLM_EOF
         fi
     done
     unset _router_renderer_py _router_surface _router_common_args
+    unset _router_ods_mode _router_surfaces
 
     # Validate generated .env against schema (fails fast on missing/unknown keys).
     _phase06_step "validate-env"

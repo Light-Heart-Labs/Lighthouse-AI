@@ -8442,7 +8442,10 @@ def _render_model_router_runtime_configs(
         "context_length": int(context_length),
         "switchboard_mode": switchboard_mode,
     }
-    for surface in ("model-router-endpoints", "litellm-switchboard"):
+    surfaces = ["model-router-endpoints"]
+    if str(common["ods_mode"]).strip().lower() != "cloud":
+        surfaces.append("litellm-switchboard")
+    for surface in surfaces:
         if _render_runtime_config(install_dir, surface, **common):
             continue
         message = f"Failed to render required {surface} config"

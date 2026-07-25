@@ -96,6 +96,44 @@ def test_cloud_enabled_never_renders_local_switchboard() -> None:
     assert "model-router" not in cloud
 
 
+def test_explicit_cloud_switchboard_render_fails_closed() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--surface",
+            "litellm-switchboard",
+            "--ods-mode",
+            "cloud",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.returncode == 2
+    assert "local-runtime-only" in proc.stderr
+
+
+def test_native_local_projection_uses_host_route_and_concrete_model() -> None:
+    payload = run_renderer(
+        "--surface",
+        "litellm-local-native",
+        "--ods-mode",
+        "local",
+        "--gguf-file",
+        "Native-Model.gguf",
+        "--llm-base-url",
+        "http://host.docker.internal:13306/v1",
+    )
+    content = file_by_surface(payload, "litellm-local-native")["content"]
+    assert "model: openai/Native-Model.gguf" in content
+    assert "api_base: http://host.docker.internal:13306/v1" in content
+    assert "enable_thinking: false" in content
+    assert "request_timeout: 900" in content
+    assert "stream_timeout: 900" in content
+
+
 def test_checked_in_mode_configs_match_renderer() -> None:
     for mode in ("local", "cloud", "hybrid"):
         payload = run_renderer("--surface", f"litellm-{mode}", "--ods-mode", mode)
@@ -350,6 +388,8 @@ def main() -> int:
         test_switchboard_surface_gated_on_enabled_mode,
         test_all_selects_one_mode_config,
         test_cloud_enabled_never_renders_local_switchboard,
+        test_explicit_cloud_switchboard_render_fails_closed,
+        test_native_local_projection_uses_host_route_and_concrete_model,
         test_checked_in_mode_configs_match_renderer,
         test_enabled_env_exports_switchboard_webui_gateway,
         test_enabled_perplexica_uses_stable_alias,

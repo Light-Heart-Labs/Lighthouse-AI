@@ -55,6 +55,15 @@ def test_openclaw_receives_persisted_lemonade_model_id() -> None:
     assert "`extra.${GGUF_FILE}`" in injector
 
 
+def test_cloud_callers_do_not_render_local_switchboard() -> None:
+    linux = read("installers/phases/06-directories.sh")
+    macos = read("installers/macos/install-macos.sh")
+    host_agent = read("bin/ods-host-agent.py")
+    assert 'if [[ "$_router_ods_mode" != "cloud" ]]' in linux
+    assert '"ODS_MODE")" != "cloud"' in macos
+    assert 'str(common["ods_mode"]).strip().lower() != "cloud"' in host_agent
+
+
 def main() -> int:
     for test in (
         test_linux_installer_uses_renderer_with_fallback,
@@ -62,6 +71,7 @@ def main() -> int:
         test_bootstrap_upgrade_promotes_lemonade_model_id,
         test_host_agent_uses_renderer_with_fallback,
         test_openclaw_receives_persisted_lemonade_model_id,
+        test_cloud_callers_do_not_render_local_switchboard,
     ):
         test()
         print(f"[PASS] {test.__name__}")
