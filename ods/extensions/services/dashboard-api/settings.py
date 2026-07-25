@@ -369,13 +369,17 @@ def _empty_value_unsets_env_key(key: str, field: dict[str, Any]) -> bool:
 def _match_apply_service(key: str) -> Optional[str]:
     if key in _LLAMA_APPLY_KEYS or key.startswith(("LLAMA_", "GGUF_")):
         return "llama-server"
+    # SEARXNG_URL points Hermes at a search backend; the rest of the SEARXNG_*
+    # keys (port, secret) are read by the searxng container itself. Open WebUI
+    # reaches searxng over the fixed internal port and consumes neither.
     if key == "SEARXNG_URL":
         return "hermes"
+    if key.startswith("SEARXNG_"):
+        return "searxng"
     if (
         key in _OPEN_WEBUI_APPLY_KEYS
         or key.startswith("WEBUI_")
         or key.startswith("OPENAI_API_")
-        or key.startswith("SEARXNG_")
     ):
         return "open-webui"
     if key in _TOKEN_SPY_APPLY_KEYS or key.startswith("TOKEN_SPY_"):
