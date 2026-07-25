@@ -56,6 +56,9 @@ test: ## Run unit and contract tests
 	@echo "=== safe .env loading (quote/CRLF handling) ==="
 	@bash tests/test-safe-env.sh
 	@echo ""
+	@echo "=== LAN IP detection for the success card / QR ==="
+	@bash tests/test-lan-ip-detection.sh
+	@echo ""
 	@echo "=== Bind address sweep ==="
 	@bash tests/test-bind-address-sweep.sh
 	@bash tests/test-n8n-cookie-policy.sh

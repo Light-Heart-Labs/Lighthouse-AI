@@ -10,12 +10,23 @@
 _ods_lan_ip() {
     local lan_ip=""
     if command -v ip >/dev/null 2>&1; then
-        lan_ip=$(ip route get 1 2>/dev/null | awk '{print $7; exit}')
+        # Key off the `src` label rather than a fixed field number. Only a
+        # route through a gateway prints `... via GW dev IF src ADDR`; a
+        # directly-connected route omits `via GW`, which shifts every later
+        # field two positions left and turns a positional read into whatever
+        # follows (the `uid` value). Matches the detection in
+        # installers/phases/06-directories.sh.
+        lan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null \
+            | awk '{for (i = 1; i <= NF; i++) if ($i == "src") print $(i + 1); exit}')
     fi
 
     if [[ -z "$lan_ip" ]] && command -v ifconfig >/dev/null 2>&1; then
         lan_ip=$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
     fi
+
+    # Anything that is not a dotted quad would render as a broken URL in the
+    # success card and the QR code, so drop it rather than print it.
+    [[ "$lan_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || lan_ip=""
 
     printf '%s' "$lan_ip"
 }
