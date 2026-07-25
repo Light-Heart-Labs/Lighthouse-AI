@@ -44,7 +44,7 @@ def test_all_surfaces_render() -> None:
     payload = run_renderer("--surface", "all")
     surfaces = {item["surface"] for item in payload["files"]}
     assert surfaces == {
-        "env", "opencode", "litellm-lemonade", "perplexica", "hermes",
+        "env", "opencode", "litellm-local", "perplexica", "hermes",
         "model-router-endpoints",
     }
     assert payload["mode"] == "dry-run"
@@ -63,6 +63,47 @@ def test_switchboard_surface_gated_on_enabled_mode() -> None:
     assert 'model_name: "*"' in switchboard["content"]
     assert "api_base: http://model-router:9099/v1" in switchboard["content"]
     assert switchboard["content"].count("http://model-router:9099/v1") == 4
+
+
+def test_all_selects_one_mode_config() -> None:
+    expected = {
+        "local": "litellm-local",
+        "cloud": "litellm-cloud",
+        "hybrid": "litellm-hybrid",
+        "lemonade": "litellm-lemonade",
+    }
+    all_mode_surfaces = set(expected.values())
+    for mode, expected_surface in expected.items():
+        payload = run_renderer("--surface", "all", "--ods-mode", mode)
+        surfaces = {item["surface"] for item in payload["files"]}
+        assert surfaces & all_mode_surfaces == {expected_surface}
+
+
+def test_cloud_enabled_never_renders_local_switchboard() -> None:
+    payload = run_renderer(
+        "--surface",
+        "all",
+        "--ods-mode",
+        "cloud",
+        "--switchboard-mode",
+        "enabled",
+    )
+    surfaces = {item["surface"] for item in payload["files"]}
+    assert "litellm-cloud" in surfaces
+    assert "litellm-switchboard" not in surfaces
+    cloud = file_by_surface(payload, "litellm-cloud")["content"]
+    assert "model_name: ods/current" in cloud
+    assert "model-router" not in cloud
+
+
+def test_checked_in_mode_configs_match_renderer() -> None:
+    for mode in ("local", "cloud", "hybrid"):
+        payload = run_renderer("--surface", f"litellm-{mode}", "--ods-mode", mode)
+        rendered = file_by_surface(payload, f"litellm-{mode}")["content"]
+        checked_in = (ROOT / "config" / "litellm" / f"{mode}.yaml").read_text(
+            encoding="utf-8"
+        )
+        assert rendered == checked_in
 
 
 def test_enabled_env_exports_switchboard_webui_gateway() -> None:
@@ -307,6 +348,9 @@ def main() -> int:
     tests = [
         test_all_surfaces_render,
         test_switchboard_surface_gated_on_enabled_mode,
+        test_all_selects_one_mode_config,
+        test_cloud_enabled_never_renders_local_switchboard,
+        test_checked_in_mode_configs_match_renderer,
         test_enabled_env_exports_switchboard_webui_gateway,
         test_enabled_perplexica_uses_stable_alias,
         test_enabled_hermes_uses_stable_switchboard_alias,

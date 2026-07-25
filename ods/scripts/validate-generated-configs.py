@@ -176,7 +176,18 @@ def main(argv: list[str]) -> int:
             surface_id = validate_surface(issues, surface, f"$.surfaces[{index}]")
             if surface_id:
                 surface_ids.append(surface_id)
-        required = {"env", "opencode", "litellm-lemonade", "perplexica", "hermes"}
+        required = {
+            "env",
+            "opencode",
+            "litellm-local",
+            "litellm-cloud",
+            "litellm-hybrid",
+            "litellm-lemonade",
+            "litellm-switchboard",
+            "model-router-endpoints",
+            "perplexica",
+            "hermes",
+        }
         issues.require(set(surface_ids) == required, "$.surfaces", f"must define exactly {sorted(required)}")
 
     issues.exit_if_any()

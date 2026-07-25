@@ -103,6 +103,69 @@
       ]
     },
     {
+      "id": "litellm-local",
+      "label": "LiteLLM local model routing",
+      "target_paths": [
+        "config/litellm/local.yaml"
+      ],
+      "writers": [
+        {
+          "platform": "canonical",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "local-routes-to-llama-server",
+          "type": "yaml_text_contains",
+          "path": "config/litellm/local.yaml",
+          "needle": "api_base: http://llama-server:8080/v1"
+        }
+      ]
+    },
+    {
+      "id": "litellm-cloud",
+      "label": "LiteLLM cloud model routing",
+      "target_paths": [
+        "config/litellm/cloud.yaml"
+      ],
+      "writers": [
+        {
+          "platform": "canonical",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "cloud-exposes-stable-alias",
+          "type": "yaml_text_contains",
+          "path": "config/litellm/cloud.yaml",
+          "needle": "model_name: ods/current"
+        }
+      ]
+    },
+    {
+      "id": "litellm-hybrid",
+      "label": "LiteLLM hybrid model routing",
+      "target_paths": [
+        "config/litellm/hybrid.yaml"
+      ],
+      "writers": [
+        {
+          "platform": "canonical",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "hybrid-preserves-cloud-fallback",
+          "type": "yaml_text_contains",
+          "path": "config/litellm/hybrid.yaml",
+          "needle": "fallbacks:"
+        }
+      ]
+    },
+    {
       "id": "litellm-lemonade",
       "label": "LiteLLM Lemonade model routing",
       "target_paths": [
@@ -140,6 +203,54 @@
           "type": "file_contains",
           "path": "scripts/bootstrap-upgrade.sh",
           "needle": "extra."
+        }
+      ]
+    },
+    {
+      "id": "litellm-switchboard",
+      "label": "LiteLLM stable-alias Switchboard routing",
+      "target_paths": [
+        "config/litellm/switchboard.yaml"
+      ],
+      "writers": [
+        {
+          "platform": "canonical",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "switchboard-exposes-stable-alias",
+          "type": "yaml_text_contains",
+          "path": "config/litellm/switchboard.yaml",
+          "needle": "model_name: ods/current"
+        },
+        {
+          "id": "switchboard-routes-to-model-router",
+          "type": "yaml_text_contains",
+          "path": "config/litellm/switchboard.yaml",
+          "needle": "api_base: http://model-router:9099/v1"
+        }
+      ]
+    },
+    {
+      "id": "model-router-endpoints",
+      "label": "Model Router endpoint allowlist",
+      "target_paths": [
+        "config/model-router/endpoints.json"
+      ],
+      "writers": [
+        {
+          "platform": "canonical",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "router-endpoint-document",
+          "type": "file_contains",
+          "path": "config/model-router/endpoints.json",
+          "needle": "\"endpoints\""
         }
       ]
     },

@@ -73,6 +73,130 @@ def opencode_key(inputs: RenderInputs) -> str:
     return inputs.litellm_key if inputs.ods_mode == "lemonade" else NO_KEY
 
 
+def render_litellm_local(inputs: RenderInputs) -> RenderedFile:
+    content = """model_list:
+  - model_name: default
+    litellm_params:
+      model: openai/default
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 120
+  stream_timeout: 60
+"""
+    return RenderedFile("litellm-local", "config/litellm/local.yaml", content)
+
+
+def render_litellm_cloud(inputs: RenderInputs) -> RenderedFile:
+    content = """model_list:
+  # Stable public alias used by Switchboard-aware ODS consumers.
+  - model_name: ods/current
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: default
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: fast
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: minimax
+    litellm_params:
+      model: openai/MiniMax-M2.7
+      api_base: https://api.minimax.io/v1
+      api_key: os.environ/MINIMAX_API_KEY
+
+  - model_name: minimax-fast
+    litellm_params:
+      model: openai/MiniMax-M2.7-highspeed
+      api_base: https://api.minimax.io/v1
+      api_key: os.environ/MINIMAX_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+"""
+    return RenderedFile("litellm-cloud", "config/litellm/cloud.yaml", content)
+
+
+def render_litellm_hybrid(inputs: RenderInputs) -> RenderedFile:
+    content = """model_list:
+  - model_name: local
+    litellm_params:
+      model: openai/default
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
+  - model_name: cloud
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: minimax
+    litellm_params:
+      model: openai/MiniMax-M2.7
+      api_base: https://api.minimax.io/v1
+      api_key: os.environ/MINIMAX_API_KEY
+
+  - model_name: minimax-fast
+    litellm_params:
+      model: openai/MiniMax-M2.7-highspeed
+      api_base: https://api.minimax.io/v1
+      api_key: os.environ/MINIMAX_API_KEY
+
+  - model_name: default
+    litellm_params:
+      model: openai/default
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  fallbacks:
+    - local:
+        - cloud
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 120
+  stream_timeout: 60
+"""
+    return RenderedFile("litellm-hybrid", "config/litellm/hybrid.yaml", content)
+
+
 def render_litellm_lemonade(inputs: RenderInputs) -> RenderedFile:
     model = lemonade_model_id(inputs)
     api_base = inputs.lemonade_api_base.rstrip("/") or "http://llama-server:8080/api/v1"
@@ -304,6 +428,9 @@ def render_model_router_endpoints(inputs: RenderInputs) -> RenderedFile:
 RENDERERS: dict[str, Callable[[RenderInputs], RenderedFile]] = {
     "env": render_env,
     "opencode": render_opencode,
+    "litellm-local": render_litellm_local,
+    "litellm-cloud": render_litellm_cloud,
+    "litellm-hybrid": render_litellm_hybrid,
     "litellm-lemonade": render_litellm_lemonade,
     "perplexica": render_perplexica,
     "hermes": render_hermes,
@@ -336,11 +463,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def select_surfaces(surface: str, switchboard_mode: str = "observe") -> list[str]:
+def select_surfaces(
+    surface: str,
+    ods_mode: str = "local",
+    switchboard_mode: str = "observe",
+) -> list[str]:
     if surface == "all":
-        surfaces = ["env", "opencode", "litellm-lemonade", "perplexica", "hermes",
-                    "model-router-endpoints"]
-        if switchboard_mode == "enabled":
+        mode_surface = {
+            "local": "litellm-local",
+            "cloud": "litellm-cloud",
+            "hybrid": "litellm-hybrid",
+            "lemonade": "litellm-lemonade",
+        }[ods_mode]
+        surfaces = [
+            "env",
+            "opencode",
+            mode_surface,
+            "perplexica",
+            "hermes",
+            "model-router-endpoints",
+        ]
+        if switchboard_mode == "enabled" and ods_mode != "cloud":
             surfaces.append("litellm-switchboard")
         return surfaces
     return [surface]
@@ -360,7 +503,14 @@ def render(args: argparse.Namespace) -> dict[str, object]:
         opencode_port=args.opencode_port,
         context_length=args.context_length,
     )
-    files = [RENDERERS[name](inputs) for name in select_surfaces(args.surface, inputs.switchboard_mode)]
+    files = [
+        RENDERERS[name](inputs)
+        for name in select_surfaces(
+            args.surface,
+            inputs.ods_mode,
+            inputs.switchboard_mode,
+        )
+    ]
     written: list[str] = []
     if args.write:
         output_root = Path(args.output_root)
