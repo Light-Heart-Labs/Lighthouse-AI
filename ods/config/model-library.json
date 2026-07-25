@@ -1127,13 +1127,13 @@
         },
         "opencode": {
           "status": "unsupported_until_revalidated",
-          "label": "OpenCode revalidation required on Strix Halo",
-          "reason": "Fresh exact-commit release coverage on strix-halo loaded Qwen 2.5 Coder 3B 128K through the browser switchboard and passed challenge-bound ODS Talk, LiteLLM, Open WebUI, and Perplexica, but OpenCode returned only the verification prefix instead of the full unpredictable phrase. Keep this model out of Strix Halo all-app release coverage until its literal-response behavior is revalidated.",
-          "evidence": "fleet-test/runs/2026-07-25T02-56-13Z-release-product-89c6e46fde88-harness-78aeb37d418e-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo",
-          "recordedAt": "2026-07-25T04:23:22Z",
-          "productSha": "89c6e46fde886ed4edac2bd4c1c2f7cb6beba6d6",
-          "harnessSha": "78aeb37d418efae52efd04e4bc7e64eac128fbb7",
-          "hostScope": ["strix-halo"],
+          "label": "OpenCode revalidation required on Strix Halo and Spark",
+          "reason": "Fresh exact-commit release coverage on strix-halo and spark loaded Qwen 2.5 Coder 3B 128K through the browser switchboard and passed challenge-bound ODS Talk, LiteLLM, Open WebUI, and Perplexica, but OpenCode did not return the exact unpredictable phrase. Strix Halo returned only the verification prefix; Spark changed the required 'ODS verify' prefix to 'ODES verify'. Keep this model out of Strix Halo and Spark all-app release coverage until its literal-response behavior is revalidated. Prior Strix Halo evidence: fleet-test/runs/2026-07-25T02-56-13Z-release-product-89c6e46fde88-harness-78aeb37d418e-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo.",
+          "evidence": "fleet-test/runs/2026-07-25T07-36-57Z-release-product-ac90d567a6ea-harness-bfe040f32941-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark",
+          "recordedAt": "2026-07-25T09:13:26Z",
+          "productSha": "ac90d567a6ea721cedc2817f98edca16dd60dd0a",
+          "harnessSha": "bfe040f32941fa3cf82f709a02ab65dcf2e28c7a",
+          "hostScope": ["strix-halo", "spark"],
           "expiresAt": "2026-08-25T00:00:00Z"
         }
       },

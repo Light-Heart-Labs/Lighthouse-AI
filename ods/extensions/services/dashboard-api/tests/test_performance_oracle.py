@@ -823,6 +823,7 @@ def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
 
     tower = model_app_compatibility(model, runtime_context={"hosts": ["tower2"]})
     halo = model_app_compatibility(model, runtime_context={"hosts": ["strix-halo"]})
+    spark = model_app_compatibility(model, runtime_context={"hosts": ["spark"]})
     windows = model_app_compatibility(model, runtime_context={"hosts": ["windows-laptop"]})
 
     assert tower["hermesTalk"]["status"] == "unsupported_until_revalidated"
@@ -831,6 +832,9 @@ def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
     assert halo["hermesTalk"]["status"] == "unknown"
     assert halo["opencode"]["status"] == "unsupported_until_revalidated"
     assert halo["agentViability"]["status"] == "unknown"
+    assert spark["hermesTalk"]["status"] == "unknown"
+    assert spark["opencode"]["status"] == "unsupported_until_revalidated"
+    assert spark["agentViability"]["status"] == "unknown"
     assert windows["hermesTalk"]["status"] == "unknown"
     assert windows["opencode"]["status"] == "unknown"
     assert windows["agentViability"]["status"] == "verified"

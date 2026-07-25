@@ -564,13 +564,16 @@ def test_qwen25_coder_3b_is_verified_on_windows_and_host_failures_are_scoped():
     assert "23-54-27Z-release" in compatibility["hermes_talk"]["evidence"]
     assert "acknowledged" in compatibility["hermes_talk"]["reason"]
     assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
-    assert compatibility["opencode"]["hostScope"] == ["strix-halo"]
-    assert "02-56-13Z-release" in compatibility["opencode"]["evidence"]
-    assert "verification prefix" in compatibility["opencode"]["reason"]
+    assert compatibility["opencode"]["hostScope"] == ["strix-halo", "spark"]
+    assert "07-36-57Z-release" in compatibility["opencode"]["evidence"]
+    assert "/cycle-006/spark" in compatibility["opencode"]["evidence"]
+    assert "02-56-13Z-release" in compatibility["opencode"]["reason"]
+    assert "ODES verify" in compatibility["opencode"]["reason"]
     assert _agent_viable_for_release(model)
     assert _agent_viable_for_release(model, host="windows-laptop")
     assert not _agent_viable_for_release(model, host="tower2")
     assert not _agent_viable_for_release(model, host="strix-halo")
+    assert not _agent_viable_for_release(model, host="spark")
 
 
 def test_falcon_h1_15b_is_not_talk_or_opencode_agent_viable_until_revalidated():
