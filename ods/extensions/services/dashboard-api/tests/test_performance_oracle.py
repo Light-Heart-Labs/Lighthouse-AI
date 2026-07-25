@@ -817,16 +817,22 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
     assert "qwen3-1.7b-q4" not in candidate_ids
 
 
-def test_real_catalog_blocks_qwen25_coder_3b_talk_only_on_tower():
+def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
     catalog = _official_model_catalog()
     model = next(model for model in catalog if model["id"] == "qwen2.5-coder-3b-128k-q4")
 
     tower = model_app_compatibility(model, runtime_context={"hosts": ["tower2"]})
+    halo = model_app_compatibility(model, runtime_context={"hosts": ["strix-halo"]})
     windows = model_app_compatibility(model, runtime_context={"hosts": ["windows-laptop"]})
 
     assert tower["hermesTalk"]["status"] == "unsupported_until_revalidated"
     assert tower["agentViability"]["status"] == "unknown"
+    assert tower["opencode"]["status"] == "unknown"
+    assert halo["hermesTalk"]["status"] == "unknown"
+    assert halo["opencode"]["status"] == "unsupported_until_revalidated"
+    assert halo["agentViability"]["status"] == "unknown"
     assert windows["hermesTalk"]["status"] == "unknown"
+    assert windows["opencode"]["status"] == "unknown"
     assert windows["agentViability"]["status"] == "verified"
 
 
