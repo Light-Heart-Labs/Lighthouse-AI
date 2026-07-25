@@ -109,6 +109,31 @@ else
 fi
 
 # 5. .env missing one required key → exit 2
+REAL_JQ="$(command -v jq)"
+CRLF_JQ_DIR="$TMP_DIR/crlf-jq"
+mkdir -p "$CRLF_JQ_DIR"
+cat > "$CRLF_JQ_DIR/jq" <<'EOF'
+#!/usr/bin/env bash
+set -o pipefail
+if [[ " $* " == *" -r "* ]]; then
+    "$ODS_TEST_REAL_JQ" "$@" | sed $'s/$/\r/'
+    exit "${PIPESTATUS[0]}"
+fi
+exec "$ODS_TEST_REAL_JQ" "$@"
+EOF
+chmod +x "$CRLF_JQ_DIR/jq"
+set +e
+PATH="$CRLF_JQ_DIR:$PATH" ODS_TEST_REAL_JQ="$REAL_JQ" \
+    "$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" \
+    "$TMP_DIR/valid.env" "$ROOT_DIR/.env.schema.json" >/dev/null 2>&1
+r=$?
+set -e
+if [[ $r -eq 0 ]]; then
+    pass "CRLF jq raw output is normalized"
+else
+    fail "CRLF jq raw output should yield exit 0, got $r"
+fi
+
 cat > "$TMP_DIR/missing.env" <<'EOF'
 WEBUI_SECRET=test-secret
 SEARXNG_SECRET=searxsecret
