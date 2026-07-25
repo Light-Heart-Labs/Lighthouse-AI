@@ -83,6 +83,191 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
+function Get-WindowsODSRuntimeConfigRenderer {
+    [CmdletBinding()]
+    param(
+        [string]$InstallDir = ""
+    )
+
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($InstallDir)) {
+        [void]$candidates.Add((Join-Path (Join-Path $InstallDir "scripts") "render-runtime-configs.py"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        [void]$candidates.Add((Join-Path (Join-Path $repoRoot "scripts") "render-runtime-configs.py"))
+    }
+
+    $seen = @{}
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if ($seen.ContainsKey($candidate)) { continue }
+        $seen[$candidate] = $true
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+
+    throw "Runtime config renderer not found for Windows Lemonade route."
+}
+
+function Test-WindowsODSRuntimeConfigPythonCandidate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$PrefixArgs = @()
+    )
+
+    if ([string]::IsNullOrWhiteSpace($FilePath)) {
+        return $false
+    }
+
+    $commandPath = $FilePath
+    $resolvedCommand = Get-Command $FilePath -CommandType Application -ErrorAction SilentlyContinue
+    if ($resolvedCommand -and $resolvedCommand.Source) {
+        $commandPath = $resolvedCommand.Source
+    }
+    if ($commandPath -match '\\WindowsApps\\python3?\.exe$') {
+        return $false
+    }
+
+    $probeArgs = @($PrefixArgs) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & $FilePath @probeArgs 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+function New-WindowsODSRuntimeConfigPythonCandidate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$PrefixArgs = @()
+    )
+
+    [pscustomobject]@{
+        FilePath = $FilePath
+        PrefixArgs = @($PrefixArgs)
+    }
+}
+
+function Resolve-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $candidateFiles = New-Object 'System.Collections.Generic.List[string]'
+    $candidateRoots = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        [void]$candidateRoots.Add((Join-Path $env:LOCALAPPDATA "Programs\Python"))
+    }
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not [string]::IsNullOrWhiteSpace($root)) { [void]$candidateRoots.Add($root) }
+    }
+
+    foreach ($root in $candidateRoots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) { continue }
+        Get-ChildItem -LiteralPath $root -Directory -Filter "Python*" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $exe = Join-Path $_.FullName "python.exe"
+                if (Test-Path -LiteralPath $exe -PathType Leaf) { [void]$candidateFiles.Add($exe) }
+            }
+    }
+
+    $sharedResolver = Get-Command Get-ODSPythonDownloadCommand -ErrorAction SilentlyContinue
+    if ($sharedResolver) {
+        $resolved = Get-ODSPythonDownloadCommand
+        if ($resolved -and (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))
+        }
+    }
+
+    $candidates = @(
+        @{ FilePath = "python3"; PrefixArgs = @() },
+        @{ FilePath = "python"; PrefixArgs = @() },
+        @{ FilePath = "py"; PrefixArgs = @("-3") }
+    )
+
+    $seen = @{}
+    foreach ($candidateFile in $candidateFiles) {
+        $key = $candidateFile.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $candidateFile) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $candidateFile)
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $filePath = [string]$candidate.FilePath
+        $prefixArgs = @($candidate.PrefixArgs)
+        if (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $filePath -PrefixArgs $prefixArgs) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $filePath -PrefixArgs $prefixArgs)
+        }
+    }
+
+    return $null
+}
+
+function Install-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $sharedInstaller = Get-Command Install-ODSHostAgentPython -ErrorAction SilentlyContinue
+    if ($sharedInstaller) {
+        $resolved = Install-ODSHostAgentPython
+        if ($resolved -and (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))
+        }
+    }
+
+    $winget = Get-Command winget -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        return $null
+    }
+
+    if (Get-Command Write-AIWarn -ErrorAction SilentlyContinue) {
+        Write-AIWarn "Python 3 not found. Installing Python 3.12 via winget for runtime config rendering..."
+    } else {
+        Write-Warning "Python 3 not found. Installing Python 3.12 via winget for runtime config rendering..."
+    }
+
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & winget install --exact --id Python.Python.3.12 --silent --disable-interactivity --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH = "$machinePath;$userPath"
+    return (Resolve-WindowsODSRuntimeConfigPython)
+}
+
+function Get-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $resolved = Resolve-WindowsODSRuntimeConfigPython
+    if ($resolved) { return $resolved }
+
+    $installed = Install-WindowsODSRuntimeConfigPython
+    if ($installed) { return $installed }
+
+    throw "Python 3 is required to render Windows Lemonade LiteLLM config and could not be installed automatically."
+}
+
 function Write-WindowsODSLemonadeLiteLlmConfig {
     [CmdletBinding()]
     param(
@@ -102,38 +287,39 @@ function Write-WindowsODSLemonadeLiteLlmConfig {
     if ($ModelId -match '[\r\n]') {
         throw "Lemonade model ID cannot contain line breaks."
     }
+    if ($ApiKey -match '[\r\n]') {
+        throw "Lemonade API key cannot contain line breaks."
+    }
+    $parsedPort = 0
+    if (-not [int]::TryParse($Port, [ref]$parsedPort) -or $parsedPort -lt 1 -or $parsedPort -gt 65535) {
+        throw "Lemonade port must be an integer in 1..65535."
+    }
 
     $litellmDir = Join-Path (Join-Path $InstallDir "config") "litellm"
     New-Item -ItemType Directory -Path $litellmDir -Force | Out-Null
-    $lemonadeApiBase = "http://host.docker.internal:$Port/api/v1"
-    $lemonadeConfig = @"
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/$ModelId
-      api_base: $lemonadeApiBase
-      api_key: $ApiKey
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
+    $renderer = Get-WindowsODSRuntimeConfigRenderer -InstallDir $InstallDir
+    $python = Get-WindowsODSRuntimeConfigPython
+    $lemonadeApiBase = "http://host.docker.internal:$parsedPort/api/v1"
+    $renderArgs = @($python.PrefixArgs) + @(
+        $renderer,
+        "--surface", "litellm-lemonade",
+        "--ods-mode", "lemonade",
+        "--gpu-backend", "amd",
+        "--lemonade-model-id", $ModelId,
+        "--lemonade-api-base", $lemonadeApiBase,
+        "--litellm-key", $ApiKey,
+        "--output-root", $InstallDir,
+        "--write"
+    )
+    $renderOutput = & $python.FilePath @renderArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runtime config renderer failed for Windows Lemonade route: $($renderOutput -join "`n")"
+    }
 
-  - model_name: "*"
-    litellm_params:
-      model: openai/$ModelId
-      api_base: $lemonadeApiBase
-      api_key: $ApiKey
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  request_timeout: 900
-  stream_timeout: 900
-"@
     $configPath = Join-Path $litellmDir "lemonade.yaml"
-    Write-Utf8NoBom -Path $configPath -Content $lemonadeConfig
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw "Runtime config renderer did not create $configPath"
+    }
     return $configPath
 }
 

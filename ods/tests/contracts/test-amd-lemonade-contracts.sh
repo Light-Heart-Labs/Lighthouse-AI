@@ -356,8 +356,10 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
         $programFiles = Join-Path $probeRoot "Program Files"
         $programFilesX86 = Join-Path $probeRoot "Program Files (x86)"
+        $localAppData = Join-Path $probeRoot "LocalAppData"
         ${env:ProgramFiles} = $programFiles
         ${env:ProgramFiles(x86)} = $programFilesX86
+        $env:LOCALAPPDATA = $localAppData
         $script:LEMONADE_EXE = Join-Path (Join-Path (Join-Path $programFiles "Lemonade Server") "bin") "lemonade-server.exe"
         $x86Exe = Join-Path (Join-Path (Join-Path $programFilesX86 "Lemonade Server") "bin") "LemonadeServer.exe"
         New-Item -ItemType Directory -Path (Split-Path $x86Exe) -Force | Out-Null

@@ -3,15 +3,28 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "render-runtime-configs.py"
+
+
+def load_renderer_module() -> ModuleType:
+    name = "ods_render_runtime_configs_test"
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_renderer(*args: str) -> dict[str, object]:
@@ -380,6 +393,37 @@ def test_write_mode_writes_under_output_root() -> None:
         assert payload["mode"] == "write"
         assert target.exists()
         assert "openai/extra.Written.gguf" in target.read_text(encoding="utf-8")
+        if os.name != "nt":
+            assert target.stat().st_mode & 0o777 == 0o644
+        assert not list(target.parent.glob(f".{target.name}.*.tmp"))
+
+
+def test_atomic_write_failure_preserves_known_good_config() -> None:
+    renderer = load_renderer_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "lemonade.yaml"
+        target.write_text("known-good\n", encoding="utf-8")
+        original_replace = renderer.os.replace
+        original_sleep = renderer.time.sleep
+
+        def fail_replace(*_args, **_kwargs) -> None:
+            raise PermissionError("injected replace failure")
+
+        renderer.os.replace = fail_replace
+        renderer.time.sleep = lambda _seconds: None
+        try:
+            try:
+                renderer.atomic_write_text(target, "new-route\n")
+            except PermissionError as exc:
+                assert "injected replace failure" in str(exc)
+            else:
+                raise AssertionError("fault injection did not fail the replace")
+        finally:
+            renderer.os.replace = original_replace
+            renderer.time.sleep = original_sleep
+
+        assert target.read_text(encoding="utf-8") == "known-good\n"
+        assert not list(target.parent.glob(f".{target.name}.*.tmp"))
 
 
 def main() -> int:
@@ -402,6 +446,7 @@ def main() -> int:
         test_hermes_uses_lemonade_model_id_for_amd,
         test_perplexica_default_model_matches_route,
         test_write_mode_writes_under_output_root,
+        test_atomic_write_failure_preserves_known_good_config,
     ]
     for test in tests:
         test()

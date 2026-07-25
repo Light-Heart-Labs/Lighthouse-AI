@@ -322,6 +322,10 @@ snapshot_active_model_config() {
         : > "$ACTIVE_CONFIG_SNAPSHOT_DIR/models.ini.missing"
     fi
 
+    snapshot_file_state \
+        "$INSTALL_DIR/config/litellm/lemonade.yaml" \
+        "$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade" || return 1
+
     if [[ "$include_windows_lemonade" == "true" ]]; then
         snapshot_file_state \
             "$INSTALL_DIR/extensions/services/hermes/cli-config.yaml.template" \
@@ -352,6 +356,10 @@ restore_active_model_config() {
         rm -f "$MODELS_INI"
     fi
 
+    restore_file_state \
+        "$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade" \
+        "$INSTALL_DIR/config/litellm/lemonade.yaml" || return 1
+
     if [[ -f "$ACTIVE_CONFIG_SNAPSHOT_DIR/windows-lemonade.included" ]]; then
         restore_file_state \
             "$ACTIVE_CONFIG_SNAPSHOT_DIR/windows-lemonade/hermes-template" \
@@ -378,7 +386,15 @@ discard_active_model_config_snapshot() {
 restore_docker_llama_server_after_swap_failure() {
     local health_url="${1:-}"
     local compose_arg_count=0
+    local previous_gguf previous_gpu_backend previous_model_id
     local rollback_healthy=false
+
+    previous_gguf="$(snapshot_env_value GGUF_FILE)"
+    previous_gpu_backend="$(snapshot_env_value GPU_BACKEND | tr '[:upper:]' '[:lower:]')"
+    previous_model_id="$(snapshot_env_value LEMONADE_MODEL)"
+    if [[ -z "$previous_model_id" && -n "$previous_gguf" ]]; then
+        previous_model_id="extra.${previous_gguf}"
+    fi
 
     log "Restoring previous active model config after Docker llama-server swap failure..."
     if ! restore_active_model_config; then
@@ -411,6 +427,22 @@ restore_docker_llama_server_after_swap_failure() {
     done
 
     if [[ "$rollback_healthy" == "true" ]]; then
+        if [[ "$previous_gpu_backend" == "amd" ]] \
+            && $DOCKER_CMD ps --filter name=ods-litellm --format '{{.Names}}' 2>/dev/null | grep -q ods-litellm; then
+            local restored_litellm_port
+            restored_litellm_port="$(read_env_value LITELLM_PORT)"
+            [[ -n "$restored_litellm_port" ]] || restored_litellm_port="4000"
+            log "Restarting LiteLLM with the restored Lemonade route..."
+            if ! $DOCKER_CMD restart ods-litellm 2>&1 \
+                || ! verify_model_completion_route \
+                    "http://127.0.0.1:${restored_litellm_port}/v1" \
+                    "$previous_model_id" \
+                    "$(read_env_value LITELLM_KEY)" \
+                    "restored LiteLLM route"; then
+                log "WARNING: previous runtime is healthy, but its restored LiteLLM route could not be proved."
+                return 1
+            fi
+        fi
         log "Rollback complete: llama-server is healthy with the previous active model config."
         return 0
     fi
@@ -1389,7 +1421,7 @@ refresh_windows_lemonade_litellm_after_swap() {
     [[ -n "$model_id" ]] || return 1
 
     local litellm_dir litellm_config lemonade_port lemonade_api_base lemonade_api_key
-    local renderer_script renderer_py renderer_ok=false
+    local renderer_script renderer_py
     litellm_dir="$INSTALL_DIR/config/litellm"
     litellm_config="$litellm_dir/lemonade.yaml"
     lemonade_port="$(read_env_value AMD_INFERENCE_PORT)"
@@ -1406,57 +1438,22 @@ refresh_windows_lemonade_litellm_after_swap() {
         . "$INSTALL_DIR/lib/python-cmd.sh"
         renderer_py="$(ods_detect_python_cmd 2>/dev/null || true)"
     fi
-    if [[ -n "$renderer_py" && -f "$renderer_script" ]]; then
-        if "$renderer_py" "$renderer_script" \
-            --surface litellm-lemonade \
-            --ods-mode lemonade \
-            --gpu-backend amd \
-            --gguf-file "$FULL_GGUF_FILE" \
-            --lemonade-model-id "$model_id" \
-            --lemonade-api-base "$lemonade_api_base" \
-            --litellm-key "$lemonade_api_key" \
-            --output-root "$INSTALL_DIR" \
-            --write >/dev/null 2>&1; then
-            renderer_ok=true
-        fi
+    if [[ -z "$renderer_py" || ! -f "$renderer_script" ]]; then
+        log "ERROR: runtime config renderer is unavailable for Windows Lemonade"
+        return 1
     fi
-
-    if [[ "$renderer_ok" != "true" ]]; then
-        local litellm_tmp="${litellm_config}.tmp.$$"
-        if ! cat > "$litellm_tmp" << LITELLM_WINDOWS_LEMONADE_EOF
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/${model_id}
-      api_base: ${lemonade_api_base}
-      api_key: ${lemonade_api_key}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-  - model_name: "*"
-    litellm_params:
-      model: openai/${model_id}
-      api_base: ${lemonade_api_base}
-      api_key: ${lemonade_api_key}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  request_timeout: 900
-  stream_timeout: 900
-LITELLM_WINDOWS_LEMONADE_EOF
-        then
-            rm -f "$litellm_tmp"
-            return 1
-        fi
-        mv "$litellm_tmp" "$litellm_config" || {
-            rm -f "$litellm_tmp"
-            return 1
-        }
+    if ! "$renderer_py" "$renderer_script" \
+        --surface litellm-lemonade \
+        --ods-mode lemonade \
+        --gpu-backend amd \
+        --gguf-file "$FULL_GGUF_FILE" \
+        --lemonade-model-id "$model_id" \
+        --lemonade-api-base "$lemonade_api_base" \
+        --litellm-key "$lemonade_api_key" \
+        --output-root "$INSTALL_DIR" \
+        --write >/dev/null 2>&1; then
+        log "ERROR: runtime config renderer failed for Windows Lemonade"
+        return 1
     fi
 
     grep -Fq "model: openai/${model_id}" "$litellm_config" || return 1
@@ -1578,6 +1575,45 @@ verify_windows_lemonade_downstream_route() {
     done
 
     log "ERROR: ${route_label} did not complete through ${route_base} with model ${model_id}."
+    return 1
+}
+
+verify_model_completion_route() {
+    local route_base="${1:-}" model_id="${2:-}" route_key="${3:-}" route_label="${4:-model route}"
+    local attempts request_timeout request_body response escaped_model
+    [[ -n "$route_base" && -n "$model_id" ]] || return 1
+
+    escaped_model="${model_id//\\/\\\\}"
+    escaped_model="${escaped_model//\"/\\\"}"
+    request_body="{\"model\":\"${escaped_model}\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with OK.\"}],\"max_tokens\":4,\"temperature\":0,\"stream\":false}"
+    attempts="${ODS_MODEL_ROUTE_ATTEMPTS:-12}"
+    case "$attempts" in ''|*[!0-9]*|0) attempts=12 ;; esac
+    request_timeout="${ODS_MODEL_ROUTE_TIMEOUT:-120}"
+    case "$request_timeout" in ''|*[!0-9]*|0) request_timeout=120 ;; esac
+
+    log "Verifying ${route_label} with an exact-model completion through ${route_base}..."
+    for _route_i in $(seq 1 "$attempts"); do
+        if [[ -n "$route_key" ]]; then
+            response="$(curl -fsS --max-time "$request_timeout" -X POST \
+                "${route_base%/}/chat/completions" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${route_key}" \
+                -d "$request_body" 2>/dev/null || true)"
+        else
+            response="$(curl -fsS --max-time "$request_timeout" -X POST \
+                "${route_base%/}/chat/completions" \
+                -H "Content-Type: application/json" \
+                -d "$request_body" 2>/dev/null || true)"
+        fi
+        if grep -q '"choices"[[:space:]]*:' <<<"$response" \
+            && ! grep -q '"error"[[:space:]]*:' <<<"$response"; then
+            log "Verified ${route_label} with model ${model_id}."
+            return 0
+        fi
+        sleep 2
+    done
+
+    log "ERROR: ${route_label} did not complete with model ${model_id}."
     return 1
 }
 
@@ -2566,12 +2602,11 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
 
     if $_healthy; then
         log "SUCCESS: llama-server is running with $FULL_LLM_MODEL"
-        HOT_SWAP_VERIFIED=true
-        discard_active_model_config_snapshot
         # Regenerate lemonade.yaml with the new model ID and restart LiteLLM.
         # Lemonade exposes models as "extra.<GGUF_FILE>" — the config must
         # reference the exact ID, not a wildcard passthrough.
-        if $DOCKER_CMD ps --filter name=ods-litellm --format '{{.Names}}' 2>/dev/null | grep -q ods-litellm; then
+        if [[ "$_gpu_backend" == "amd" ]] \
+            && $DOCKER_CMD ps --filter name=ods-litellm --format '{{.Names}}' 2>/dev/null | grep -q ods-litellm; then
             _lemonade_model_id="$(read_env_value LEMONADE_MODEL)"
             if ! lemonade_model_id_matches_gguf "$_lemonade_model_id" "$FULL_GGUF_FILE"; then
                 _resolved_lemonade_model_id="$(resolve_live_lemonade_model_id "${OLLAMA_PORT:-8080}" "$FULL_GGUF_FILE" || true)"
@@ -2612,7 +2647,6 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
             if [[ "$_amd_location" == "host" ]]; then
                 _lemonade_api_base="http://host.docker.internal:${_amd_port}/api/v1"
             fi
-            _renderer_ok=false
             _renderer_script="$INSTALL_DIR/scripts/render-runtime-configs.py"
             _renderer_py="${ODS_PYTHON_CMD:-}"
             if [[ -z "$_renderer_py" && -f "$INSTALL_DIR/lib/python-cmd.sh" ]]; then
@@ -2622,8 +2656,9 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
             if [[ -z "$_renderer_py" ]]; then
                 _renderer_py="python3"
             fi
-            if [[ -f "$_renderer_script" ]] && command -v "$_renderer_py" >/dev/null 2>&1; then
-                if "$_renderer_py" "$_renderer_script" \
+            if [[ ! -f "$_renderer_script" ]] \
+                || ! command -v "$_renderer_py" >/dev/null 2>&1 \
+                || ! "$_renderer_py" "$_renderer_script" \
                     --surface litellm-lemonade \
                     --ods-mode lemonade \
                     --gpu-backend amd \
@@ -2633,43 +2668,58 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
                     --litellm-key "$LITELLM_LEMONADE_API_KEY" \
                     --output-root "$INSTALL_DIR" \
                     --write >/dev/null 2>&1; then
-                    _renderer_ok=true
-                else
-                    log "WARNING: Runtime config renderer failed for LiteLLM; falling back to inline writer"
+                log "ERROR: runtime config renderer failed for the Lemonade route"
+                _rollback_status="Previous active model config restore was attempted; inspect the logs before retrying."
+                if restore_docker_llama_server_after_swap_failure "$_health_url"; then
+                    _rollback_status="Previous active model config restored and llama-server is healthy; re-run to retry the full-model swap."
                 fi
+                write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 \
+                    "Full model downloaded and verified, but ODS could not render the Lemonade route. ${_rollback_status}"
+                exit 1
             fi
-            if [[ "$_renderer_ok" != "true" ]]; then
-                cat > "$INSTALL_DIR/config/litellm/lemonade.yaml" << LITELLM_UPGRADE_EOF
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/${_lemonade_model_id}
-      api_base: ${_lemonade_api_base}
-      api_key: ${LITELLM_LEMONADE_API_KEY}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-  - model_name: "*"
-    litellm_params:
-      model: openai/${_lemonade_model_id}
-      api_base: ${_lemonade_api_base}
-      api_key: ${LITELLM_LEMONADE_API_KEY}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  request_timeout: 900
-  stream_timeout: 900
-LITELLM_UPGRADE_EOF
-            fi
-            unset _renderer_ok _renderer_script _renderer_py _lemonade_api_base _lemonade_model_id _resolved_lemonade_model_id _amd_location _amd_port
+            unset _renderer_script _renderer_py _lemonade_api_base _lemonade_model_id _resolved_lemonade_model_id _amd_location _amd_port
             log "Restarting LiteLLM to pick up model change..."
-            $DOCKER_CMD restart ods-litellm 2>&1 || log "WARNING: LiteLLM restart failed (non-fatal)"
+            _litellm_port="$(read_env_value LITELLM_PORT)"
+            [[ -n "$_litellm_port" ]] || _litellm_port="4000"
+            if ! $DOCKER_CMD restart ods-litellm 2>&1 \
+                || ! verify_model_completion_route \
+                    "http://127.0.0.1:${_litellm_port}/v1" \
+                    "$(read_env_value LEMONADE_MODEL)" \
+                    "$(read_env_value LITELLM_KEY)" \
+                    "promoted LiteLLM route"; then
+                log "ERROR: LiteLLM did not reload and complete through the promoted Lemonade route"
+                _rollback_status="Previous active model config restore was attempted; inspect the logs before retrying."
+                if restore_docker_llama_server_after_swap_failure "$_health_url"; then
+                    _rollback_status="Previous active model config and routed model restored; re-run to retry the full-model swap."
+                fi
+                write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 \
+                    "Full model downloaded and verified, but ODS could not prove the promoted LiteLLM route. ${_rollback_status}"
+                exit 1
+            fi
+            unset _litellm_port
+        elif [[ "$_gpu_backend" == "amd" ]]; then
+            _direct_model="$(read_env_value LEMONADE_MODEL)"
+            [[ -n "$_direct_model" ]] || _direct_model="extra.${FULL_GGUF_FILE}"
+            _direct_port="$(read_env_value AMD_INFERENCE_PORT)"
+            [[ -n "$_direct_port" ]] || _direct_port="8080"
+            if ! verify_model_completion_route \
+                "http://127.0.0.1:${_direct_port}/api/v1" \
+                "$_direct_model" \
+                "$(read_env_value LITELLM_LEMONADE_API_KEY)" \
+                "promoted Lemonade route"; then
+                log "ERROR: Lemonade did not complete with the promoted model"
+                _rollback_status="Previous active model config restore was attempted; inspect the logs before retrying."
+                if restore_docker_llama_server_after_swap_failure "$_health_url"; then
+                    _rollback_status="Previous active model config restored and llama-server is healthy; re-run to retry the full-model swap."
+                fi
+                write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 \
+                    "Full model downloaded and verified, but Lemonade did not complete with it. ${_rollback_status}"
+                exit 1
+            fi
+            unset _direct_model _direct_port
         fi
+        HOT_SWAP_VERIFIED=true
+        discard_active_model_config_snapshot
         # Recreate OpenClaw so inject-token.js picks up the new GGUF_FILE/LLM_MODEL
         # from .env. A restart alone won't work — env vars are baked in at container
         # creation time, and inject-token.js builds the Lemonade model name from them.

@@ -11,7 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
+import tempfile
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -24,6 +27,48 @@ DEFAULT_CONTEXT = 131072
 DEFAULT_HERMES_MAX_TOKENS = 1024
 DEFAULT_LITELLM_KEY = "sk-lemonade"
 NO_KEY = "no-key"
+
+
+def atomic_write_text(target: Path, content: str) -> None:
+    """Replace a generated config without exposing a truncated live file."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Generated YAML is bind-mounted into LiteLLM and must remain readable
+    # when the image runs as a non-root UID. Preserve an existing mode and use
+    # the checked-in template's 0644 mode only when recreating a missing file.
+    mode = 0o644
+    try:
+        if target.is_file():
+            mode = stat.S_IMODE(target.stat().st_mode)
+    except OSError:
+        pass
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=target.parent,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, mode)
+
+        last_error: PermissionError | None = None
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, target)
+                last_error = None
+                break
+            except PermissionError as exc:
+                last_error = exc
+                if attempt < 9:
+                    time.sleep(0.05 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -237,6 +282,7 @@ litellm_settings:
 
 
 def render_litellm_lemonade(inputs: RenderInputs) -> RenderedFile:
+    # ODS-CONTRACT-WRITER: litellm-lemonade
     model = lemonade_model_id(inputs)
     api_base = inputs.lemonade_api_base.rstrip("/") or "http://llama-server:8080/api/v1"
     content = f"""model_list:
@@ -561,8 +607,7 @@ def render(args: argparse.Namespace) -> dict[str, object]:
         output_root = Path(args.output_root)
         for item in files:
             target = output_root / item.path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(ensure_trailing_newline(item.content), encoding="utf-8")
+            atomic_write_text(target, ensure_trailing_newline(item.content))
             written.append(str(target))
     return {
         "version": "1",

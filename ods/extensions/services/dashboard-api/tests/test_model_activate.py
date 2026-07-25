@@ -5,12 +5,15 @@ import importlib.util
 import http.client
 import io
 import json
+import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
 import pytest
+
+_real_subprocess_run = subprocess.run
 
 # Import the host agent module from bin/ using importlib.
 # The module has an ``if __name__ == "__main__":`` guard so no server starts.
@@ -61,6 +64,15 @@ def _isolate_opencode_config(monkeypatch, tmp_path):
         lambda: {"system": _mod.platform.system(), "active": False},
     )
     monkeypatch.setattr(_mod, "_opencode_installed", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _install_runtime_renderer(tmp_path):
+    """Exercise host-agent rendering through the shipped canonical script."""
+    source = _agent_path.parents[1] / "scripts" / "render-runtime-configs.py"
+    target = tmp_path / "scripts" / "render-runtime-configs.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
 
 
 def test_host_agent_backlog_handles_dashboard_poll_bursts():
@@ -733,17 +745,20 @@ class TestWriteLemonadeConfig:
         assert "request_timeout: 900" in content
         assert "stream_timeout: 900" in content
 
-    def test_fallback_writer_keeps_long_model_timeouts(self, monkeypatch, tmp_path):
+    def test_renderer_failure_preserves_existing_config(self, monkeypatch, tmp_path):
         litellm_dir = tmp_path / "config" / "litellm"
         litellm_dir.mkdir(parents=True)
+        config = litellm_dir / "lemonade.yaml"
+        config.write_text("known-good\n", encoding="utf-8")
         monkeypatch.setattr(_mod, "_render_runtime_config", lambda *args, **kwargs: False)
 
-        _write_lemonade_config(tmp_path, "fallback-model.gguf")
+        with pytest.raises(
+            RuntimeError,
+            match="Failed to render required litellm-lemonade config",
+        ):
+            _write_lemonade_config(tmp_path, "fallback-model.gguf")
 
-        content = (litellm_dir / "lemonade.yaml").read_text()
-        assert "model: openai/extra.fallback-model.gguf" in content
-        assert "request_timeout: 900" in content
-        assert "stream_timeout: 900" in content
+        assert config.read_text(encoding="utf-8") == "known-good\n"
 
     def test_reads_lemonade_key_from_env_file_when_process_env_unset(
         self, monkeypatch, tmp_path,
@@ -800,7 +815,7 @@ class TestSwitchboardRuntimeConfig:
         self, monkeypatch, tmp_path,
     ):
         renderer = tmp_path / "scripts" / "render-runtime-configs.py"
-        renderer.parent.mkdir(parents=True)
+        renderer.parent.mkdir(parents=True, exist_ok=True)
         renderer.write_text("# renderer placeholder\n", encoding="utf-8")
         calls = []
 
@@ -2023,6 +2038,10 @@ def _write_model_activation_fixture(
     models_dir.mkdir(parents=True)
     llama_dir.mkdir(parents=True)
     litellm_dir.mkdir(parents=True)
+    renderer_source = _agent_path.parents[1] / "scripts" / "render-runtime-configs.py"
+    renderer_target = install_dir / "scripts" / "render-runtime-configs.py"
+    renderer_target.parent.mkdir(parents=True)
+    shutil.copyfile(renderer_source, renderer_target)
 
     (models_dir / "new-model.gguf").write_text("model", encoding="utf-8")
     (config_dir / "model-library.json").write_text(
@@ -2659,6 +2678,8 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
 
         def fake_run(cmd, **_kwargs):
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 stdout = json.dumps({
                     "data": [{"id": "extra.new-model.gguf"}]
@@ -2738,6 +2759,8 @@ class TestModelActivateRollback:
         )
 
         def fake_run(cmd, **_kwargs):
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 return subprocess.CompletedProcess(
                     cmd,
@@ -3014,6 +3037,8 @@ class TestModelActivateRollback:
 
         def fake_run(cmd, **_kwargs):
             calls.append(cmd)
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 stdout = json.dumps({
                     "data": [{"id": "extra.new-model.gguf"}]
@@ -3111,6 +3136,77 @@ class TestModelActivateRollback:
         assert "LLM_MODEL=target-model" in updated_env
         assert "LEMONADE_MODEL=Modern-Model" in updated_env
         assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
+
+    def test_windows_lemonade_runtime_ensure_rolls_back_renderer_failure(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, lemonade_yaml, _yaml_text = (
+            _write_model_activation_fixture(
+                tmp_path,
+                gpu_backend="amd",
+                lemonade=True,
+                lemonade_api_key="sk-inline-from-env-file-67890",
+            )
+        )
+        old_env = (
+            "ODS_MODE=lemonade\r\n"
+            "GPU_BACKEND=amd\r\n"
+            "LLM_BACKEND=lemonade\r\n"
+            "AMD_INFERENCE_RUNTIME=lemonade\r\n"
+            "AMD_INFERENCE_LOCATION=host\r\n"
+            "AMD_INFERENCE_PORT=8080\r\n"
+            "GGUF_FILE=old-model.gguf\r\n"
+            "LLM_MODEL=old-model\r\n"
+            "LEMONADE_MODEL=Old-Model\r\n"
+            "CTX_SIZE=2048\r\n"
+            "LITELLM_LEMONADE_API_KEY=sk-inline-from-env-file-67890\r\n"
+        ).encode()
+        old_yaml = b"model_list:\r\n  - model_name: old\r\n"
+        env_path.write_bytes(old_env)
+        lemonade_yaml.write_bytes(old_yaml)
+        restarts = []
+        readiness_calls = []
+
+        def record_restart(env):
+            restarts.append(env["GGUF_FILE"])
+
+        def prove_previous(env, **kwargs):
+            readiness_calls.append((dict(env), dict(kwargs)))
+            return {
+                "identity": "Old-Model",
+                "contextLength": 2048,
+                "contextVerified": True,
+                "verifiedAt": "2026-07-25T00:00:00+00:00",
+            }
+
+        def fail_renderer(*_args, **_kwargs):
+            raise RuntimeError("simulated renderer failure")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod, "_live_runtime_has_model", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(_mod, "_restart_windows_lemonade", record_restart)
+        monkeypatch.setattr(_mod, "_resolve_lemonade_model_id", lambda *_args, **_kwargs: "Modern-Model")
+        monkeypatch.setattr(_mod, "_write_lemonade_config", fail_renderer)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", prove_previous)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_windows_lemonade_runtime_ensure(
+            handler,
+            model_id="target-model",
+            gguf_file="new-model.gguf",
+        )
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert restarts == ["new-model.gguf", "old-model.gguf"]
+        assert env_path.read_bytes() == old_env
+        assert lemonade_yaml.read_bytes() == old_yaml
+        assert len(readiness_calls) == 1
+        assert readiness_calls[0][1]["gguf_file"] == "old-model.gguf"
+        assert readiness_calls[0][1]["lemonade_model_id"] == "Old-Model"
+        assert readiness_calls[0][1]["return_proof"] is True
 
     def test_windows_native_llama_activation_uses_plain_health_and_litellm_local(
         self, tmp_path, monkeypatch,

@@ -5786,42 +5786,117 @@ class AgentHandler(BaseHTTPRequestHandler):
         if not llm_model_name:
             json_response(self, 400, {"error": "model_id could not be resolved"})
             return
-        env["GGUF_FILE"] = target_gguf
-        env["LLM_MODEL"] = llm_model_name
-        _upsert_env_value(env_path, "GGUF_FILE", target_gguf)
-        _upsert_env_value(env_path, "LLM_MODEL", llm_model_name)
-
-        if _live_runtime_has_model(env, target_gguf) is not True:
-            _restart_windows_lemonade(env)
-
-        lemonade_host, lemonade_port = _lemonade_runtime_address(env)
-        lemonade_model_id = _resolve_lemonade_model_id(
-            env,
-            target_gguf,
-            host=lemonade_host,
-            port=lemonade_port,
-        )
-        if not lemonade_model_id:
+        previous_env = dict(env)
+        lemonade_path = INSTALL_DIR / "config" / "litellm" / "lemonade.yaml"
+        try:
+            env_snapshot = _snapshot_text_file(env_path)
+            lemonade_snapshot = _snapshot_text_file(lemonade_path)
+        except Exception:
+            logger.exception("Windows Lemonade runtime ensure could not snapshot active state")
             json_response(
                 self,
                 500,
-                {"error": f"Could not resolve Lemonade model ID for {target_gguf}"},
+                {"error": "Windows Lemonade runtime ensure could not snapshot active state"},
             )
             return
 
-        env["LEMONADE_MODEL"] = lemonade_model_id
-        _upsert_env_value(env_path, "LEMONADE_MODEL", lemonade_model_id)
-        _write_lemonade_config(INSTALL_DIR, target_gguf, lemonade_model_id)
-        json_response(
-            self,
-            200,
-            {
-                "status": "configured",
-                "model_id": model_id or llm_model_name,
-                "gguf_file": target_gguf,
-                "lemonade_model_id": lemonade_model_id,
-            },
-        )
+        mutation_started = False
+        try:
+            mutation_started = True
+            env["GGUF_FILE"] = target_gguf
+            env["LLM_MODEL"] = llm_model_name
+            _upsert_env_value(env_path, "GGUF_FILE", target_gguf)
+            _upsert_env_value(env_path, "LLM_MODEL", llm_model_name)
+
+            if _live_runtime_has_model(env, target_gguf) is not True:
+                _restart_windows_lemonade(env)
+
+            lemonade_host, lemonade_port = _lemonade_runtime_address(env)
+            lemonade_model_id = _resolve_lemonade_model_id(
+                env,
+                target_gguf,
+                host=lemonade_host,
+                port=lemonade_port,
+            )
+            if not lemonade_model_id:
+                raise RuntimeError(
+                    f"Could not resolve Lemonade model ID for {target_gguf}"
+                )
+
+            env["LEMONADE_MODEL"] = lemonade_model_id
+            _upsert_env_value(env_path, "LEMONADE_MODEL", lemonade_model_id)
+            _write_lemonade_config(INSTALL_DIR, target_gguf, lemonade_model_id)
+            json_response(
+                self,
+                200,
+                {
+                    "status": "configured",
+                    "model_id": model_id or llm_model_name,
+                    "gguf_file": target_gguf,
+                    "lemonade_model_id": lemonade_model_id,
+                },
+            )
+        except Exception:
+            logger.exception("Windows Lemonade runtime ensure failed")
+            rolled_back = False
+            rollback_errors: list[str] = []
+            if mutation_started:
+                try:
+                    _restore_text_file(env_path, env_snapshot)
+                    _restore_text_file(lemonade_path, lemonade_snapshot)
+                except Exception:
+                    logger.exception(
+                        "Windows Lemonade runtime ensure could not restore active files"
+                    )
+                    rollback_errors.append("active files could not be restored")
+
+                previous_gguf = str(previous_env.get("GGUF_FILE") or "").strip()
+                previous_llm_model = str(
+                    previous_env.get("LLM_MODEL") or previous_gguf
+                ).strip()
+                previous_lemonade_model = str(
+                    previous_env.get("LEMONADE_MODEL") or ""
+                ).strip()
+                if not rollback_errors and previous_gguf:
+                    try:
+                        _restart_windows_lemonade(previous_env)
+                        rollback_proof = _wait_for_model_readiness(
+                            previous_env,
+                            model_id=previous_llm_model,
+                            gguf_file=previous_gguf,
+                            llm_model_name=previous_llm_model,
+                            lemonade_model_id=previous_lemonade_model,
+                            attempts=12,
+                            initial_delay=0,
+                            interval=2,
+                            return_proof=True,
+                        )
+                        rolled_back = bool(rollback_proof)
+                        if not rolled_back:
+                            rollback_errors.append(
+                                "previous model readiness/completion proof failed"
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Windows Lemonade runtime ensure rollback could not be proved"
+                        )
+                        rollback_errors.append(
+                            "previous runtime could not be restarted and proved"
+                        )
+                elif not previous_gguf:
+                    rollback_errors.append("previous GGUF identity was unavailable")
+
+            payload = {
+                "error": (
+                    "Windows Lemonade runtime ensure failed; previous model restored"
+                    if rolled_back
+                    else "Windows Lemonade runtime ensure failed; previous model restoration could not be proved"
+                ),
+                "rolled_back": rolled_back,
+            }
+            if rollback_errors:
+                payload["rollback_error"] = "; ".join(rollback_errors)
+            json_response(self, 500, payload)
 
     def _do_model_activate(
         self,
@@ -8465,7 +8540,6 @@ def _write_lemonade_config(
     must reference the exact ID, not a wildcard passthrough.
     Mirrors bootstrap-upgrade.sh lines 369-382.
     """
-    config_path = install_dir / "config" / "litellm" / "lemonade.yaml"
     # Read from .env via load_env, NOT os.environ. The host-agent systemd
     # unit does not source .env as an EnvironmentFile, so os.environ is
     # unreliable for installer-written values; falling back to the legacy
@@ -8483,7 +8557,7 @@ def _write_lemonade_config(
     if env.get("AMD_INFERENCE_LOCATION", "").lower() == "host":
         lemonade_port = env.get("AMD_INFERENCE_PORT", "8080") or "8080"
         lemonade_api_base = f"http://host.docker.internal:{lemonade_port}/api/v1"
-    if _render_runtime_config(
+    if not _render_runtime_config(
         install_dir,
         "litellm-lemonade",
         gguf_file=gguf_file,
@@ -8493,31 +8567,11 @@ def _write_lemonade_config(
         ods_mode=ods_mode,
         gpu_backend=gpu_backend,
     ):
-        logger.info(
-            "Wrote lemonade.yaml via runtime renderer for model: %s",
-            lemonade_model_id,
-        )
-        return
-
-    content = (
-        "model_list:\n"
-        "  - model_name: \"*\"\n"
-        "    litellm_params:\n"
-        f"      model: openai/{lemonade_model_id}\n"
-        f"      api_base: {lemonade_api_base}\n"
-        f"      api_key: {lemonade_api_key}\n"
-        "      extra_body:\n"
-        "        chat_template_kwargs:\n"
-        "          enable_thinking: false\n"
-        "\n"
-        "litellm_settings:\n"
-        "  drop_params: true\n"
-        "  set_verbose: false\n"
-        "  request_timeout: 900\n"
-        "  stream_timeout: 900\n"
+        raise RuntimeError("Failed to render required litellm-lemonade config")
+    logger.info(
+        "Wrote lemonade.yaml via runtime renderer for model: %s",
+        lemonade_model_id,
     )
-    _atomic_write_text(config_path, content)
-    logger.info("Wrote lemonade.yaml for model: %s", lemonade_model_id)
 
 
 def _write_windows_native_litellm_config(install_dir: Path, gguf_file: str, env: dict):
