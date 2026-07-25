@@ -1719,6 +1719,7 @@ activate_windows_lemonade_full_model() {
 }
 
 refresh_windows_native_litellm_local_config_after_swap() {
+    # ODS-CONTRACT-WRITER: litellm-local-native
     is_windows_bash || return 0
 
     local runtime runtime_mode location managed

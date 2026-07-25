@@ -850,6 +850,7 @@ litellm_settings:
   request_timeout: 900
   stream_timeout: 900
 "@
+                    # ODS-CONTRACT-WRITER: litellm-local-native
                     [System.IO.File]::WriteAllText((Join-Path $litellmDir "local.yaml"), $litellmLocal, (New-Object System.Text.UTF8Encoding($false)))
                     Write-AISuccess "Patched LiteLLM local config for native llama-server"
                 }

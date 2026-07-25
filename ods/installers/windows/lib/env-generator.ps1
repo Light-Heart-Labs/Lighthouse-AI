@@ -834,6 +834,7 @@ litellm_settings:
   request_timeout: 900
   stream_timeout: 900
 "@
+        # ODS-CONTRACT-WRITER: litellm-local-native
         Write-Utf8NoBom -Path (Join-Path $litellmDir "local.yaml") -Content $localConfig
     }
 

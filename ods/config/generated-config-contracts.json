@@ -133,6 +133,7 @@
       "target_paths": [
         "config/litellm/local.yaml"
       ],
+      "writer_marker": "ODS-CONTRACT-WRITER: litellm-local-native",
       "writers": [
         {
           "platform": "canonical-renderer",
@@ -140,6 +141,10 @@
         },
         {
           "platform": "windows-installer",
+          "path": "installers/windows/install-windows.ps1"
+        },
+        {
+          "platform": "windows-env-generator",
           "path": "installers/windows/lib/env-generator.ps1"
         },
         {
