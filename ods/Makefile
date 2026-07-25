@@ -56,6 +56,9 @@ test: ## Run unit and contract tests
 	@echo "=== safe .env loading (quote/CRLF handling) ==="
 	@bash tests/test-safe-env.sh
 	@echo ""
+	@echo "=== QR code helper LAN detection ==="
+	@bash tests/test-qrcode-helper.sh
+	@echo ""
 	@echo "=== mode switch status and switching ==="
 	@bash tests/test-mode-switch-status.sh
 	@echo ""
