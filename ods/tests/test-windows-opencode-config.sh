@@ -42,6 +42,8 @@ grep -q 'ODS_MODEL_SWITCHBOARD' "$OPENCODE_LIB" && pass "switchboard mode is rea
 grep -q 'ods/current' "$OPENCODE_LIB" && pass "switchboard alias is written to OpenCode config" || fail "switchboard alias missing from OpenCode helper"
 grep -q 'LITELLM_KEY' "$OPENCODE_LIB" && pass "switchboard OpenCode route uses LiteLLM key" || fail "switchboard LiteLLM key missing from OpenCode helper"
 grep -q 'ODS switchboard' "$OPENCODE_LIB" && pass "switchboard provider is labelled" || fail "switchboard provider label missing"
+grep -q 'Move-Item -LiteralPath' "$OPENCODE_LIB" && pass "OpenCode config write uses Move-Item -LiteralPath" || fail "OpenCode config write missing Move-Item -LiteralPath"
+grep -q '\.\$PID\.tmp' "$OPENCODE_LIB" && pass "OpenCode config write uses temp file with PID suffix" || fail "OpenCode config write missing PID temp file"
 
 if grep -q 'preserving existing configuration' "$DEVTOOLS_PS1"; then
     fail "existing configs are still preserved without migration"

@@ -184,7 +184,7 @@ function Sync-WindowsOpenCodeConfig {
     foreach ($_targetFile in @($_ocConfigFile, $_ocCompatConfigFile)) {
         $_tmpFile = "$_targetFile.$PID.tmp"
         [System.IO.File]::WriteAllText($_tmpFile, $_configJson, $_utf8NoBom)
-        Move-Item -Path $_tmpFile -Destination $_targetFile -Force
+        Move-Item -LiteralPath $_tmpFile -Destination $_targetFile -Force
     }
 
     return @{
