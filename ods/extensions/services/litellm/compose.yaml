@@ -12,12 +12,14 @@ services:
       - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - ODS_MODE=${ODS_MODE:-local}
       - ODS_MODEL_SWITCHBOARD=${ODS_MODEL_SWITCHBOARD:-observe}
       - TOKEN_SPY_URL=${TOKEN_SPY_URL:-http://token-spy:8080}
       - TOKEN_SPY_API_KEY=${TOKEN_SPY_API_KEY:-}
     volumes:
       - ./config/litellm/${ODS_MODE:-local}.yaml:/app/config.yaml:ro,z
       - ./config/litellm/switchboard.yaml:/app/switchboard.yaml:ro,z
+      - ./extensions/services/litellm/select-config.sh:/app/ods-select-config.sh:ro,z
       # LiteLLM resolves custom callback modules relative to the generated
       # /tmp/config.yaml, so the callback must be mounted alongside it.
       - ./extensions/services/litellm/ods_token_spy_callback.py:/tmp/ods_token_spy_callback.py:ro,z
@@ -26,10 +28,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        CONFIG_PATH=/app/config.yaml
-        if [ "$$ODS_MODEL_SWITCHBOARD" = "enabled" ]; then
-          CONFIG_PATH=/app/switchboard.yaml
-        fi
+        CONFIG_PATH=$$(sh /app/ods-select-config.sh)
         export CONFIG_PATH
         python3 -c "
         import os
