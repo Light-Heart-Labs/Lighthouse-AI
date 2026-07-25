@@ -17,6 +17,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: Set up Python for manifest validation
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install manifest validator dependencies
+        run: python3 -m pip install "PyYAML>=6.0,<7.0" "jsonschema>=4.21,<5.0"
+
       - name: Docs Link Checks
         run: bash tests/test-doc-links.sh
 
@@ -63,7 +71,9 @@ jobs:
         run: python3 tests/test-local-image-build-coverage.py
 
       - name: Validate Manifests Tests
-        run: bash tests/test-validate-manifests.sh
+        run: |
+          bash tests/test-validate-manifests.sh
+          bash tests/test-validate-manifest-schema.sh
 
       - name: Health Check Tests
         run: bash tests/test-health-check.sh
