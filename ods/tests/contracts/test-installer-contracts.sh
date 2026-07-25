@@ -16,6 +16,9 @@ for f in config/backends/amd.json config/backends/nvidia.json config/backends/cp
     || { echo "[FAIL] invalid backend contract: $f"; exit 1; }
 done
 
+echo "[contract] Intel Arc capability profile and installer routing"
+bash tests/test-intel-arc-installer-routing.sh
+
 echo "[contract] hardware class mapping"
 test -f config/hardware-classes.json || { echo "[FAIL] missing config/hardware-classes.json"; exit 1; }
 jq -e '.version and (.classes | type=="array" and length>0)' config/hardware-classes.json >/dev/null \
