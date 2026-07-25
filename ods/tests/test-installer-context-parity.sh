@@ -101,6 +101,14 @@ assert_grep "installers/windows/install-windows.ps1" 'CTX_SIZE=\$\(\$tierConfig\
 
 echo ""
 echo "Hermes config patch paths:"
+assert_grep "extensions/services/hermes/cli-config.yaml.template" '^  max_tokens: 1024$' \
+    "Hermes template bounds each model turn"
+assert_grep "scripts/render-runtime-configs.py" '^DEFAULT_HERMES_MAX_TOKENS = 1024$' \
+    "runtime renderer uses the bounded Hermes output default"
+assert_grep "bin/ods-host-agent.py" 'max_tokens: int = 1024' \
+    "runtime model switch patcher migrates an uncapped Hermes config"
+assert_grep "installers/windows/phases/06-directories.ps1" '\[int\]\$MaxTokens = 1024' \
+    "Windows installer migrates an uncapped Hermes config"
 assert_grep "installers/phases/11-services.sh" '_hermes_context="\$\{MAX_CONTEXT:-65536\}"' \
     "Linux Hermes patcher uses selected context with 64K fallback"
 assert_grep "installers/phases/11-services.sh" '--context-length "\$_hermes_context"' \
@@ -198,6 +206,9 @@ pass "Hermes patcher updates base_url"
 grep -q '^  context_length: 65536$' "$tmp_hermes" \
     || fail "Hermes patcher updates model.context_length"
 pass "Hermes patcher updates model.context_length"
+grep -q '^  max_tokens: 1024$' "$tmp_hermes" \
+    || fail "Hermes patcher adds the bounded model output default"
+pass "Hermes patcher adds the bounded model output default"
 grep -q '^    request_timeout_seconds: 180$' "$tmp_hermes" \
     || fail "Hermes patcher writes local provider request timeout"
 pass "Hermes patcher writes local provider request timeout"
@@ -236,6 +247,7 @@ pass "Hermes patcher writes WhatsApp bridge port away from Open WebUI"
 cat > "$tmp_hermes_custom" <<'HERMES_CUSTOM_EOF'
 model:
   default: "old-model"
+  max_tokens: 2048
 platforms:
   whatsapp:
     enabled: true
@@ -260,6 +272,9 @@ pass "Hermes patcher preserves custom WhatsApp bridge port"
 grep -q '^    request_timeout_seconds: 360$' "$tmp_hermes_custom" \
     || fail "Hermes patcher preserves custom provider request timeout"
 pass "Hermes patcher preserves custom provider request timeout"
+grep -q '^  max_tokens: 2048$' "$tmp_hermes_custom" \
+    || fail "Hermes patcher preserves a custom model output cap"
+pass "Hermes patcher preserves a custom model output cap"
 
 echo ""
 echo "Results: $PASS passed"

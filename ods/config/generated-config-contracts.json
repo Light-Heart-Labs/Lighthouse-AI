@@ -239,6 +239,12 @@
           "needle": "context_length: 131072"
         },
         {
+          "id": "template-output-cap",
+          "type": "yaml_text_contains",
+          "path": "extensions/services/hermes/cli-config.yaml.template",
+          "needle": "max_tokens: 1024"
+        },
+        {
           "id": "patcher-updates-model-name",
           "type": "file_contains",
           "path": "scripts/patch-hermes-config.py",

@@ -344,6 +344,7 @@ function Update-HermesConfigFile {
         [string]$BaseUrl,
         [int]$ContextLength,
         [int]$RequestTimeoutSeconds = 180,
+        [int]$MaxTokens = 1024,
         [switch]$LemonadeCompact
     )
 
@@ -355,6 +356,10 @@ function Update-HermesConfigFile {
     $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
     $content = $content -replace '(?m)^    context_length: .+\r?$', "    context_length: $ContextLength"
+    if ($MaxTokens -lt 1) { $MaxTokens = 1024 }
+    if ($content -notmatch '(?m)^  max_tokens:\s*\d+\s*$') {
+        $content = $content -replace '(?m)^model:\s*$', "model:`n  max_tokens: $MaxTokens"
+    }
     if ($RequestTimeoutSeconds -lt 1) { $RequestTimeoutSeconds = 180 }
 
     $timeoutMatch = [regex]::Match($content, '(?m)^    request_timeout_seconds:\s*(\d+)\s*$')

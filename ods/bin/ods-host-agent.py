@@ -8561,6 +8561,7 @@ def _patch_hermes_config_text(
     model_name: str,
     base_url: str | None = None,
     context_length: int | None = None,
+    max_tokens: int = 1024,
 ) -> tuple[str, bool]:
     """Return Hermes YAML with its routing fields updated line-for-line."""
     lines = text.splitlines()
@@ -8581,6 +8582,9 @@ def _patch_hermes_config_text(
             changed = True
         if context_length and "context_length" not in model_fields:
             new_lines.append(f"{model_indent}context_length: {int(context_length)}")
+            changed = True
+        if max_tokens and "max_tokens" not in model_fields:
+            new_lines.append(f"{model_indent}max_tokens: {int(max_tokens)}")
             changed = True
 
     for line in lines:
@@ -8617,6 +8621,13 @@ def _patch_hermes_config_text(
             new_lines.append(new_line)
             changed = changed or new_line != line
             continue
+        if in_model_block and re.match(r"^\s+max_tokens:\s*", line):
+            # Preserve an operator's explicit output cap. ODS only supplies
+            # its bounded default when the field is absent.
+            model_fields.add("max_tokens")
+            model_indent = line[:len(line) - len(line.lstrip())]
+            new_lines.append(line)
+            continue
         if context_length and re.match(r"^\s+context_length:\s*", line):
             indent = line[:len(line) - len(line.lstrip())]
             new_line = f"{indent}context_length: {int(context_length)}"
@@ -8638,6 +8649,8 @@ def _patch_hermes_config_text(
             new_lines.append(f'{model_indent}base_url: "{base_url}"')
         if context_length:
             new_lines.append(f"{model_indent}context_length: {int(context_length)}")
+        if max_tokens:
+            new_lines.append(f"{model_indent}max_tokens: {int(max_tokens)}")
         changed = True
 
     return "\n".join(new_lines) + "\n", changed
