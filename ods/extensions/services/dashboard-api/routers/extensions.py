@@ -1583,14 +1583,18 @@ def _rewrite_build_context(compose_path: Path, final_dir: Path) -> None:
                 changed = True
 
     if changed:
-        tmp_compose_path = compose_path.with_name(f".{compose_path.name}.tmp")
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(compose_path.parent),
+            prefix=f".{compose_path.name}.",
+            suffix=".tmp",
+        )
         try:
-            with open(tmp_compose_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 yaml.safe_dump(data, f, sort_keys=False)
-            os.replace(tmp_compose_path, compose_path)
+            os.replace(tmp_path, compose_path)
         except BaseException:
             try:
-                os.unlink(tmp_compose_path)
+                os.unlink(tmp_path)
             except OSError:
                 pass
             raise
