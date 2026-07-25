@@ -15,7 +15,7 @@ try {
     # Write-Utf8NoBom atomic replacement and literal-path contract under bracketed temp directory
     $bracketDir = Join-Path $testRoot "bracket [test] path"
     $bracketFile = Join-Path $bracketDir "config.env"
-    $expectedUtf8Content = "KEY=value_with_unicode_✓"
+    $expectedUtf8Content = "KEY=value_with_unicode_$([char]0x2713)"
     Write-Utf8NoBom -Path $bracketFile -Content $expectedUtf8Content
 
     if (-not (Test-Path -LiteralPath $bracketFile -PathType Leaf)) {
@@ -31,7 +31,7 @@ try {
     }
 
     # Assert atomic replacement when overwriting an existing file under a bracketed path
-    $updatedUtf8Content = "KEY=updated_value_✓"
+    $updatedUtf8Content = "KEY=updated_value_$([char]0x2713)"
     Write-Utf8NoBom -Path $bracketFile -Content $updatedUtf8Content
     $updatedContent = [System.IO.File]::ReadAllText($bracketFile)
     if ($updatedContent -ne $updatedUtf8Content) {
