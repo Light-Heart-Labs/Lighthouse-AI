@@ -1,6 +1,18 @@
 """Tests for the OAuth passthrough — the redirect target that bridges
 provider auth flows back into the agent's session without the user
-having to copy-paste a code."""
+having to copy-paste a code.
+
+The security contract these tests enforce:
+
+  * ``/api/oauth/callback`` MUST only write a callback file when
+    ``state`` matches a live nonce issued by ``/api/oauth/init`` or registered via ``/api/oauth/pending``.
+  * Nonces are single-use and consumed before the callback payload is
+    written, so replays and concurrent uses can't both succeed.
+  * The callback endpoint stays unauthenticated (it's a provider
+    redirect target) but has zero side effects when validation fails.
+  * ``skill_id`` and ``return_url`` are bound at init time; the callback
+    query string can't influence either.
+"""
 
 from __future__ import annotations
 
@@ -46,24 +58,145 @@ def oauth_client(monkeypatch):
     return client
 
 
-def test_oauth_callback_writes_pending_file_and_returns_success_html(oauth_client):
-    """Happy path: provider redirects to /api/oauth/callback with a code.
-    The handler should persist the code under data/persona/ and return
-    an HTML success page."""
-    _register_state("google-workspace", "google-workspace")
+def _init_flow(client, skill_id="google-workspace", return_url="", ttl_seconds=None):
+    """Bootstrap a valid nonce for ``skill_id``. Returns the state string.
+    Every callback happy-path test starts here — mirrors what Hermes does
+    on ``setup.py --auth-url``."""
+    body = {"skill_id": skill_id, "return_url": return_url}
+    if ttl_seconds is not None:
+        body["ttl_seconds"] = ttl_seconds
+    resp = client.post("/api/oauth/init", json=body, headers=client.auth_headers)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["state"]
+
+
+# ---------------------------------------------------------------------------
+# /api/oauth/init
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_init_requires_auth(oauth_client):
+    """Only the agent (which holds the dashboard API key) can request a
+    nonce. Without auth, no nonce is issued."""
+    resp = oauth_client.post("/api/oauth/init", json={"skill_id": "google-workspace"})
+    assert resp.status_code == 401
+
+
+def test_oauth_init_returns_state_and_expiry(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/init",
+        json={"skill_id": "google-workspace"},
+        headers=oauth_client.auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["skill_id"] == "google-workspace"
+    assert 22 <= len(body["state"]) <= 128
+    assert body["expires_at"] > int(time.time())
+
+
+def test_oauth_init_generates_unique_nonces(oauth_client):
+    seen = set()
+    for _ in range(5):
+        state = _init_flow(oauth_client)
+        assert state not in seen
+        seen.add(state)
+
+
+@pytest.mark.parametrize(
+    "skill_id",
+    ["", "   ", "has spaces", "has/slash", "has\\backslash", "has$shell", "a" * 65],
+)
+def test_oauth_init_rejects_bad_skill_id(oauth_client, skill_id):
+    resp = oauth_client.post(
+        "/api/oauth/init",
+        json={"skill_id": skill_id},
+        headers=oauth_client.auth_headers,
+    )
+    assert resp.status_code == 422, f"skill_id={skill_id!r} should have been rejected"
+
+
+@pytest.mark.parametrize(
+    "return_url",
+    ["http://evil.example/", "//evil.example/", "javascript:alert(1)", "not-a-path"],
+)
+def test_oauth_init_rejects_unsafe_return_url(oauth_client, return_url):
+    resp = oauth_client.post(
+        "/api/oauth/init",
+        json={"skill_id": "google-workspace", "return_url": return_url},
+        headers=oauth_client.auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_oauth_init_accepts_relative_return_url(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/init",
+        json={"skill_id": "google-workspace", "return_url": "/talk"},
+        headers=oauth_client.auth_headers,
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("ttl_seconds", [30, 1801, -1, 0])
+def test_oauth_init_clamps_ttl(oauth_client, ttl_seconds):
+    resp = oauth_client.post(
+        "/api/oauth/init",
+        json={"skill_id": "google-workspace", "ttl_seconds": ttl_seconds},
+        headers=oauth_client.auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file mode bits are not reliable on Windows")
+def test_oauth_init_nonce_file_is_owner_only(oauth_client):
+    state = _init_flow(oauth_client)
+    nonce_file = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+    assert nonce_file.exists()
+    assert stat.S_IMODE(nonce_file.stat().st_mode) == 0o600
+
+
+def test_oauth_init_prunes_expired_nonces(oauth_client):
+    """A stale nonce sitting on disk should be reaped on the next init
+    so we don't accumulate garbage across long deployments."""
+    nonce_dir = oauth_client.tmp / "oauth-nonces"
+    nonce_dir.mkdir(parents=True, exist_ok=True)
+    stale = nonce_dir / "stale-nonce-abcdefghijklmno.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "nonce": "stale-nonce-abcdefghijklmno",
+                "skill_id": "google-workspace",
+                "return_url": "",
+                "created_at": int(time.time()) - 3600,
+                "ttl_seconds": 900,
+            }
+        )
+    )
+    assert stale.exists()
+
+    _init_flow(oauth_client, skill_id="spotify")
+    assert not stale.exists(), "expired nonce should have been pruned on init"
+
+
+# ---------------------------------------------------------------------------
+# /api/oauth/callback — happy path
+# ---------------------------------------------------------------------------
+
+
+def test_callback_with_valid_nonce_writes_callback_and_returns_success(oauth_client):
+    """Full happy path: init → callback with the issued state → callback
+    file written with the SERVER-RESOLVED skill_id."""
+    state = _init_flow(oauth_client, skill_id="google-workspace")
     resp = oauth_client.get(
         "/api/oauth/callback",
-        params={"code": "fake-code-abc123", "state": "google-workspace"},
+        params={"code": "fake-code-abc123", "state": state},
     )
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    # Confirms the user-facing copy mentions the skill so they know what
-    # they just authorised — important when multiple skills are in play.
     assert "google-workspace" in resp.text or "service" in resp.text
     assert "Authorised" in resp.text or "Authorized" in resp.text or "✓" in resp.text
 
-    # The handler should have written the callback to disk for the
-    # agent to pick up on its next turn.
     callback = oauth_client.tmp / "oauth_callback.json"
     assert callback.exists(), f"callback file not written at {callback}"
     payload = json.loads(callback.read_text())
@@ -72,77 +205,332 @@ def test_oauth_callback_writes_pending_file_and_returns_success_html(oauth_clien
     assert isinstance(payload["captured_at"], int)
 
 
+def test_callback_consumes_nonce_after_success(oauth_client):
+    state = _init_flow(oauth_client)
+    nonce_file = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+    assert nonce_file.exists()
+
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "x", "state": state})
+    assert resp.status_code == 200
+    assert not nonce_file.exists(), "nonce should be deleted after successful callback"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file mode bits are not reliable on Windows")
-def test_oauth_callback_file_is_owner_only(oauth_client):
-    _register_state("google-workspace", "google-workspace")
-    resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code-abc123", "state": "google-workspace"},
-    )
+def test_callback_file_is_owner_only(oauth_client):
+    state = _init_flow(oauth_client)
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake", "state": state})
     assert resp.status_code == 200
     callback = oauth_client.tmp / "oauth_callback.json"
     assert stat.S_IMODE(callback.stat().st_mode) == 0o600
 
 
-def test_oauth_callback_handles_provider_error(oauth_client):
-    """If the user denied the consent or the provider sent back an
-    error, surface the reason in HTML rather than writing a corrupt
-    callback file. The agent shouldn't see a callback that contains
-    no code."""
-    _register_state("google-workspace", "google-workspace")
+def test_callback_uses_bound_return_url_not_query_param(oauth_client):
+    """return_url is bound at init and MUST come from the nonce — a
+    callback query param must not influence it."""
+    state = _init_flow(oauth_client, return_url="/talk")
     resp = oauth_client.get(
         "/api/oauth/callback",
-        params={"error": "access_denied", "state": "google-workspace"},
+        params={"code": "fake", "state": state, "return_url": "javascript:alert(1)"},
+    )
+    assert resp.status_code == 200
+    assert 'href="/talk"' in resp.text
+    assert "javascript:alert" not in resp.text
+
+
+def test_callback_success_page_omits_button_when_no_return_url_bound(oauth_client):
+    state = _init_flow(oauth_client, return_url="")
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake", "state": state})
+    assert resp.status_code == 200
+    assert "Back to ODS Talk" not in resp.text
+
+
+def test_callback_escapes_skill_id_in_success_html(oauth_client):
+    nonce_dir = oauth_client.tmp / "oauth-nonces"
+    nonce_dir.mkdir(parents=True, exist_ok=True)
+    state = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"
+    nonce_file = nonce_dir / f"{state}.json"
+    nonce_file.write_text(
+        json.dumps(
+            {
+                "nonce": state,
+                "skill_id": "<script>alert(1)</script>",
+                "return_url": "",
+                "created_at": int(time.time()),
+                "ttl_seconds": 900,
+            }
+        )
+    )
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake", "state": state})
+    assert resp.status_code == 200
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "service" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# /api/oauth/callback — rejection paths
+# ---------------------------------------------------------------------------
+
+
+def test_callback_rejects_missing_state(oauth_client):
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake"})
+    assert resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+def test_callback_rejects_unknown_state(oauth_client):
+    fake_state = "attacker-guessed-state-abcdefghijklmnop"
+    resp = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "attacker-code", "state": fake_state},
+    )
+    assert resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "short",
+        "has spaces in it and more",
+        "../../../../etc/passwd",
+        "..",
+        "/absolute/path/attack",
+        "has.dots.in.it.abcdefghij",
+        "a" * 200,
+    ],
+)
+def test_callback_rejects_malformed_state(oauth_client, state):
+    resp = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "code", "state": state},
+    )
+    assert resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+def test_callback_rejects_expired_nonce(oauth_client):
+    state = _init_flow(oauth_client)
+    nonce_file = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+    payload = json.loads(nonce_file.read_text())
+    payload["created_at"] = int(time.time()) - 10_000
+    nonce_file.write_text(json.dumps(payload))
+
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake", "state": state})
+    assert resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+    assert not nonce_file.exists()
+
+
+def test_callback_rejects_replayed_nonce(oauth_client):
+    state = _init_flow(oauth_client)
+    first = oauth_client.get("/api/oauth/callback", params={"code": "first", "state": state})
+    assert first.status_code == 200
+
+    callback_file = oauth_client.tmp / "oauth_callback.json"
+    original = callback_file.read_text()
+
+    second = oauth_client.get("/api/oauth/callback", params={"code": "second", "state": state})
+    assert second.status_code == 400
+    assert callback_file.read_text() == original
+
+
+def test_callback_rejects_unreadable_nonce(oauth_client):
+    state = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"
+    nonce_dir = oauth_client.tmp / "oauth-nonces"
+    nonce_dir.mkdir(parents=True, exist_ok=True)
+    nonce_file = nonce_dir / f"{state}.json"
+    nonce_file.write_text("not-json{{{")
+
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "fake", "state": state})
+    assert resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+    assert not nonce_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Provider error paths
+# ---------------------------------------------------------------------------
+
+
+def test_callback_provider_error_consumes_nonce(oauth_client):
+    state = _init_flow(oauth_client)
+    nonce_file = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+    assert nonce_file.exists()
+
+    resp = oauth_client.get(
+        "/api/oauth/callback",
+        params={"error": "access_denied", "state": state},
     )
     assert resp.status_code == 400
     assert "access_denied" in resp.text
     assert not (oauth_client.tmp / "oauth_callback.json").exists()
+    assert not nonce_file.exists()
 
 
-def test_oauth_callback_rejects_missing_code(oauth_client):
-    """If a provider redirect somehow lands here with no code and no
-    error, fail loudly rather than write a corrupt callback file."""
-    _register_state("google-workspace", "google-workspace")
-    resp = oauth_client.get("/api/oauth/callback", params={"state": "google-workspace"})
+def test_callback_missing_code_consumes_nonce(oauth_client):
+    state = _init_flow(oauth_client)
+    nonce_file = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+
+    resp = oauth_client.get("/api/oauth/callback", params={"state": state})
     assert resp.status_code == 400
     assert "code" in resp.text.lower()
     assert not (oauth_client.tmp / "oauth_callback.json").exists()
+    assert not nonce_file.exists()
 
 
-def test_oauth_callback_rejects_missing_state(oauth_client):
-    """Replacing test_oauth_callback_defaults_state_to_google_workspace.
-    If state is missing, the callback must be rejected immediately to
-    prevent unauthenticated state bypass/injection."""
-    resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code"},
-    )
+def test_callback_provider_error_without_state_still_400s(oauth_client):
+    resp = oauth_client.get("/api/oauth/callback", params={"error": "server_error"})
     assert resp.status_code == 400
-    assert "missing state" in resp.text.lower()
     assert not (oauth_client.tmp / "oauth_callback.json").exists()
 
 
+# ---------------------------------------------------------------------------
+# Concurrent flows
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_flows_have_independent_nonces(oauth_client):
+    state_a = _init_flow(oauth_client, skill_id="google-workspace")
+    state_b = _init_flow(oauth_client, skill_id="spotify")
+    assert state_a != state_b
+
+    oauth_client.get("/api/oauth/callback", params={"code": "code-b", "state": state_b})
+    b_payload = json.loads((oauth_client.tmp / "oauth_callback.json").read_text())
+    assert b_payload["state"] == "spotify"
+    assert b_payload["code"] == "code-b"
+
+    oauth_client.get("/api/oauth/callback", params={"code": "code-a", "state": state_a})
+    a_payload = json.loads((oauth_client.tmp / "oauth_callback.json").read_text())
+    assert a_payload["state"] == "google-workspace"
+    assert a_payload["code"] == "code-a"
+
+
+def test_callback_atomic_write(oauth_client):
+    state = _init_flow(oauth_client)
+    resp = oauth_client.get("/api/oauth/callback", params={"code": "code1", "state": state})
+    assert resp.status_code == 200
+    assert not (oauth_client.tmp / "oauth_callback.json.tmp").exists()
+    assert (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Pending flow tests (/api/oauth/pending)
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_pending_registration_requires_auth(oauth_client):
+    resp = oauth_client.post("/api/oauth/pending", json={"skill": "spotify"})
+    assert resp.status_code == 401
+
+
+def test_oauth_registration_generates_high_entropy_state(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "state" in body
+    assert len(body["state"]) >= 32
+
+
+def test_different_registrations_generate_different_states(oauth_client):
+    r1 = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    r2 = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    assert r1["state"] != r2["state"]
+
+
+def test_state_is_bound_to_registered_skill(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    state = resp["state"]
+    assert oauth_passthrough._PENDING_FLOWS[state]["skill"] == "spotify"
+
+
+def test_valid_state_callback_succeeds(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    state = resp["state"]
+
+    callback_resp = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "auth-code-123", "state": state}
+    )
+    assert callback_resp.status_code == 200
+
+    legacy = oauth_client.tmp / "oauth_callback.json"
+    skill_specific = oauth_client.tmp / "oauth_callback_spotify.json"
+    assert legacy.exists()
+    assert skill_specific.exists()
+
+
+def test_expired_state_is_rejected_without_artifact(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    state = resp["state"]
+
+    oauth_passthrough._PENDING_FLOWS[state]["expires_at"] = int(time.time()) - 1
+
+    callback_resp = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "code123", "state": state}
+    )
+    assert callback_resp.status_code == 400
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+def test_consumed_state_cannot_be_reused(oauth_client):
+    resp = oauth_client.post(
+        "/api/oauth/pending",
+        json={"skill": "spotify"},
+        headers=oauth_client.auth_headers
+    ).json()
+    state = resp["state"]
+
+    r1 = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "code1", "state": state}
+    )
+    assert r1.status_code == 200
+
+    r2 = oauth_client.get(
+        "/api/oauth/callback",
+        params={"code": "code2", "state": state}
+    )
+    assert r2.status_code == 400
+
+
 def test_oauth_pending_endpoint_returns_false_when_no_callback(oauth_client):
-    """The pending endpoint is a debugging helper for the agent / operator.
-    Returns ``{"pending": false}`` when nothing's waiting."""
     unauth = oauth_client.get("/api/oauth/pending")
     assert unauth.status_code == 401
 
     resp = oauth_client.get("/api/oauth/pending", headers=oauth_client.auth_headers)
     assert resp.status_code == 200
-    body = resp.json()
-    assert body == {"pending": False}
+    assert resp.json() == {"pending": False}
 
 
 def test_oauth_pending_endpoint_returns_true_after_callback(oauth_client):
-    """After a callback lands, pending should report ``true`` plus the
-    state and age so the agent can decide whether the code is still
-    fresh enough to redeem."""
-    _register_state("google-workspace", "google-workspace")
-    oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fresh-code", "state": "google-workspace"},
-    )
+    state = _init_flow(oauth_client)
+    oauth_client.get("/api/oauth/callback", params={"code": "fresh-code", "state": state})
+
     resp = oauth_client.get("/api/oauth/pending", headers=oauth_client.auth_headers)
     body = resp.json()
     assert body["pending"] is True
@@ -200,285 +588,3 @@ def test_oauth_providers_reports_credential_status(oauth_client, monkeypatch):
     assert by_id["google"]["configured"] is True
     assert by_id["spotify"]["configured"] is False
     assert by_id["google"]["found_credentials"] == ["hermes/google_client_secret.json"]
-
-
-def test_oauth_callback_atomic_write(oauth_client):
-    """The handler writes via a .tmp + rename so a concurrent read by the
-    agent never sees a half-written file. Verify the tmp file is gone
-    after a successful callback."""
-    _register_state("google-workspace", "google-workspace")
-    resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code1", "state": "google-workspace"},
-    )
-    assert resp.status_code == 200
-    assert not (oauth_client.tmp / "oauth_callback.json.tmp").exists()
-    assert (oauth_client.tmp / "oauth_callback.json").exists()
-
-
-def test_oauth_callback_overwrites_previous_pending(oauth_client):
-    """A user might restart the OAuth flow mid-setup (cancel, retry).
-    The latest callback should overwrite the previous one cleanly."""
-    _register_state("google-workspace", "google-workspace")
-    oauth_client.get("/api/oauth/callback", params={"code": "first", "state": "google-workspace"})
-    _register_state("google-workspace", "google-workspace")
-    oauth_client.get("/api/oauth/callback", params={"code": "second", "state": "google-workspace"})
-    payload = json.loads((oauth_client.tmp / "oauth_callback.json").read_text())
-    assert payload["code"] == "second"
-
-
-def test_oauth_callback_rejects_malicious_skill_name(oauth_client):
-    """Replacing test_oauth_callback_escapes_state_in_success_html.
-    Strict regex check on skill names prevents HTML injection by rejecting
-    any malformed skill layouts with 400."""
-    reg_resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "google-workspace"},
-        headers=oauth_client.auth_headers
-    )
-    state = reg_resp.json()["state"]
-
-    # We mock the skill name in the database directly to test rejection
-    oauth_passthrough._PENDING_FLOWS[state]["skill"] = "<script>alert(1)</script>"
-
-    resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code", "state": state},
-    )
-    assert resp.status_code == 400
-    assert "invalid skill name structure" in resp.text.lower()
-
-
-def test_oauth_callback_only_reflects_relative_return_url(oauth_client):
-    _register_state("google-workspace", "google-workspace")
-    safe = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code", "state": "google-workspace", "return_url": "/talk"},
-    )
-    assert 'href="/talk"' in safe.text
-
-    _register_state("google-workspace", "google-workspace")
-    unsafe = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code", "state": "google-workspace", "return_url": "javascript:alert(1)"},
-    )
-    assert "javascript:alert" not in unsafe.text
-    assert "Back to ODS Talk" not in unsafe.text
-
-    _register_state("google-workspace", "google-workspace")
-    unsafe_double_slash = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code", "state": "google-workspace", "return_url": "//evil.com"},
-    )
-    assert "//evil.com" not in unsafe_double_slash.text
-    assert "Back to ODS Talk" not in unsafe_double_slash.text
-
-    _register_state("google-workspace", "google-workspace")
-    unsafe_backslash = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "fake-code", "state": "google-workspace", "return_url": "/\\evil.com"},
-    )
-    assert "evil.com" not in unsafe_backslash.text
-    assert "Back to ODS Talk" not in unsafe_backslash.text
-
-
-# =============================================================================
-# Issue #1790 Secure OAuth State Validation Regression Tests
-# =============================================================================
-
-def test_oauth_pending_registration_requires_auth(oauth_client):
-    """POST /api/oauth/pending requires authentication."""
-    resp = oauth_client.post("/api/oauth/pending", json={"skill": "spotify"})
-    assert resp.status_code == 401
-
-
-def test_oauth_registration_generates_high_entropy_state(oauth_client):
-    """Registration generates a high-entropy server-side state nonce."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "state" in body
-    assert len(body["state"]) >= 32  # generated via token_urlsafe(32)
-
-
-def test_different_registrations_generate_different_states(oauth_client):
-    """Different registrations generate unique states."""
-    r1 = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    r2 = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    assert r1["state"] != r2["state"]
-
-
-def test_state_is_bound_to_registered_skill(oauth_client):
-    """State is bound to the registered skill in the pending flow registry."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-    assert oauth_passthrough._PENDING_FLOWS[state]["skill"] == "spotify"
-
-
-def test_valid_state_callback_succeeds(oauth_client):
-    """A valid state callback succeeds and writes the correct artifacts."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-
-    callback_resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "auth-code-123", "state": state}
-    )
-    assert callback_resp.status_code == 200
-
-    legacy = oauth_client.tmp / "oauth_callback.json"
-    skill_specific = oauth_client.tmp / "oauth_callback_spotify.json"
-    assert legacy.exists()
-    assert skill_specific.exists()
-
-
-def test_unknown_state_is_rejected_without_artifact(oauth_client):
-    """An unknown state callback is rejected without writing any callback artifacts."""
-    resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code123", "state": "unknown-state-nonce"}
-    )
-    assert resp.status_code == 400
-    assert not (oauth_client.tmp / "oauth_callback.json").exists()
-
-
-def test_expired_state_is_rejected_without_artifact(oauth_client):
-    """An expired state callback is rejected without writing any callback artifacts."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-
-    # Backdate expiration time
-    oauth_passthrough._PENDING_FLOWS[state]["expires_at"] = int(time.time()) - 1
-
-    callback_resp = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code123", "state": state}
-    )
-    assert callback_resp.status_code == 400
-    assert not (oauth_client.tmp / "oauth_callback.json").exists()
-
-
-def test_consumed_state_cannot_be_reused(oauth_client):
-    """A consumed state is immediately removed and cannot be reused."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-
-    # First succeeds
-    r1 = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code1", "state": state}
-    )
-    assert r1.status_code == 200
-
-    # Second fails
-    r2 = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code2", "state": state}
-    )
-    assert r2.status_code == 400
-
-
-def test_callback_derives_skill_from_trusted_pending_flow(oauth_client):
-    """Callback derives the skill identifier solely from the trusted registration record."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "github"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-
-    # Callback parameters do not carry the skill identifier anymore
-    r = oauth_client.get(
-        "/api/oauth/callback",
-        params={"code": "code123", "state": state}
-    )
-    assert r.status_code == 200
-    # Verified by check of the skill-specific artifact written
-    assert (oauth_client.tmp / "oauth_callback_github.json").exists()
-
-
-def test_independent_skill_artifacts_do_not_clobber(oauth_client):
-    """Independent skill flows write to separate files and do not clobber each other."""
-    state_spotify = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()["state"]
-
-    state_github = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "github"},
-        headers=oauth_client.auth_headers
-    ).json()["state"]
-
-    # Trigger both callbacks
-    oauth_client.get("/api/oauth/callback", params={"code": "c_spotify", "state": state_spotify})
-    oauth_client.get("/api/oauth/callback", params={"code": "c_github", "state": state_github})
-
-    art_spotify = oauth_client.tmp / "oauth_callback_spotify.json"
-    art_github = oauth_client.tmp / "oauth_callback_github.json"
-
-    assert art_spotify.exists()
-    assert art_github.exists()
-    assert json.loads(art_spotify.read_text())["code"] == "c_spotify"
-    assert json.loads(art_github.read_text())["code"] == "c_github"
-
-
-def test_concurrent_consumption_allows_exactly_one_success(oauth_client):
-    """Simultaneous validation-and-consume checks block race double redemption."""
-    resp = oauth_client.post(
-        "/api/oauth/pending",
-        json={"skill": "spotify"},
-        headers=oauth_client.auth_headers
-    ).json()
-    state = resp["state"]
-
-    # Sequential callback checks (as uvicorn executes requests atomically under store locking)
-    r1 = oauth_client.get("/api/oauth/callback", params={"code": "code1", "state": state})
-    r2 = oauth_client.get("/api/oauth/callback", params={"code": "code2", "state": state})
-
-    assert r1.status_code == 200
-    assert r2.status_code == 400
-
-
-def test_expired_pending_flow_cleanup():
-    """Registration triggers the cleanup of any expired flow records."""
-    s1, _ = oauth_passthrough.register_pending_flow("spotify")
-    s2, _ = oauth_passthrough.register_pending_flow("github")
-
-    # Manually expire s2
-    oauth_passthrough._PENDING_FLOWS[s2]["expires_at"] = int(time.time()) - 10
-
-    # New registration triggers cleanup
-    oauth_passthrough.register_pending_flow("google-workspace")
-
-    assert s1 in oauth_passthrough._PENDING_FLOWS
-    assert s2 not in oauth_passthrough._PENDING_FLOWS

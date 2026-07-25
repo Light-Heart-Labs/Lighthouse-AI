@@ -71,3 +71,19 @@ jobs:
       - name: Windows Lemonade Task Cleanup Contract
         shell: pwsh
         run: ./tests/contracts/test-windows-lemonade-task-cleanup.ps1
+
+      - name: Windows Model Activation Contract
+        shell: pwsh
+        run: ./tests/test-windows-model-activation.ps1
+
+      - name: Windows Catalog Source Boundary Contract
+        shell: pwsh
+        run: ./tests/test-windows-catalog-selector.ps1
+
+      - name: Windows Port Preflight Contract
+        shell: pwsh
+        run: ./tests/test-windows-port-preflight.ps1
+
+      - name: Windows Runtime Recovery Contract
+        shell: pwsh
+        run: ./tests/contracts/test-windows-runtime-recovery.ps1

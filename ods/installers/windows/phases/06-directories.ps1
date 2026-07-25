@@ -12,6 +12,7 @@
 #   $selectedTier, $tierConfig -- from phase 02
 #   $gpuInfo                   -- from phase 02
 #   $llamaServerImage          -- from phase 02
+#   $whisperCudaSupported      -- from phase 02
 #   $enableOpenClaw            -- from phase 03
 #   $openClawConfig            -- from phase 03
 #
@@ -90,8 +91,10 @@ $_expectedRegularFiles = @(
     ".env",
     ".env.example",
     ".env.schema.json",
+    "config\llama-server\models.ini",
     "config\litellm\local.yaml",
     "config\litellm\lemonade.yaml",
+    "config\litellm\switchboard.yaml",
     "data\.extensions-lock",
     "extensions\services\hermes\cli-config.yaml.template",
     "extensions\services\hermes\SOUL.md.template",
@@ -146,7 +149,7 @@ if ($sourceRoot -ne $installDir) {
     if ($LASTEXITCODE -gt 7) {
         Write-AIError "File copy failed (robocopy exit code: $LASTEXITCODE)."
         Write-AI "  Try re-running with --Force or check that $installDir is writable."
-        exit 1
+        throw "ODS_INSTALL_ABORTED"
     }
     Write-AISuccess "Source files installed to $installDir"
 } else {
@@ -272,7 +275,7 @@ if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) {
     $_amdInferenceRuntime = "lemonade"
     $_amdInferenceBackend = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.windows_backend) { $amdLemonadeRuntime.windows_backend } else { "vulkan" })
     $_amdInferenceLocation = "host"
-    $_amdInferencePort = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.api_port) { [string]$amdLemonadeRuntime.api_port } else { "8080" })
+    $_amdInferencePort = [string]$script:LEMONADE_PORT
     $_amdInferenceSupportedBackends = $_amdInferenceBackend
     $_amdInferenceRuntimeMode = "windows-legacy-lemonade"
     $_amdInferenceManaged = "true"
@@ -296,7 +299,9 @@ $envResult = New-ODSEnv `
     -AmdInferenceManaged $_amdInferenceManaged `
     -LemonadeServerImage $_lemonadeServerImage `
     -SystemRamGB    $systemRamGB `
+    -WhisperCudaEnabled $whisperCudaSupported `
     -EnableLangfuse $enableLangfuse `
+    -SwitchboardMode $env:ODS_MODEL_SWITCHBOARD `
     -EnableLan      $lanFlag
 Write-AISuccess "Generated .env with secure secrets"
 
@@ -315,6 +320,9 @@ if (Test-Path $_envPath) {
         }
     }
 }
+if ($_amdInferenceRuntime -eq "lemonade") {
+    $_requiredKeys += "LEMONADE_MODEL"
+}
 $_missingKeys = @()
 foreach ($_k in $_requiredKeys) {
     if (-not $_envLines.ContainsKey($_k) -or -not $_envLines[$_k]) {
@@ -325,7 +333,7 @@ if ($_missingKeys.Count -gt 0) {
     Write-AIError ".env is missing required keys: $($_missingKeys -join ', ')"
     Write-AI "  This will cause docker compose to fail. The .env file may be corrupted."
     Write-AI "  Try deleting $(Join-Path $installDir '.env') and re-running the installer."
-    exit 1
+    throw "ODS_INSTALL_ABORTED"
 }
 Write-AISuccess "Verified .env contains all required secrets"
 
@@ -519,17 +527,31 @@ function Invoke-HermesSoulRefresh {
 }
 
 if ($enableHermes) {
+    $_switchboardMode = $(if ($_envLines.ContainsKey("ODS_MODEL_SWITCHBOARD")) {
+        ([string]$_envLines["ODS_MODEL_SWITCHBOARD"]).Trim().ToLowerInvariant()
+    } else {
+        "observe"
+    })
     $_hermesModel = $(if ($tierConfig.GgufFile) {
-        if ($gpuInfo.Backend -eq "amd") { "extra.$($tierConfig.GgufFile)" } else { $tierConfig.GgufFile }
+        if ($gpuInfo.Backend -eq "amd" -and
+            $_envLines.ContainsKey("LEMONADE_MODEL") -and
+            -not [string]::IsNullOrWhiteSpace([string]$_envLines["LEMONADE_MODEL"])) {
+            $_envLines["LEMONADE_MODEL"].Trim().Trim('"').Trim("'")
+        } else {
+            $tierConfig.GgufFile
+        }
     } else {
         $tierConfig.LlmModel
     })
+    if ($_switchboardMode -eq "enabled") {
+        $_hermesModel = "ods/current"
+    }
     $_hermesBaseUrl = ""
     if ($_envLines.ContainsKey("HERMES_LLM_BASE_URL")) {
         $_hermesBaseUrl = $_envLines["HERMES_LLM_BASE_URL"].Trim().Trim('"').Trim("'")
     }
     if ([string]::IsNullOrWhiteSpace($_hermesBaseUrl)) {
-        $_hermesBaseUrl = $(if ($cloudMode -or $gpuInfo.Backend -eq "amd") {
+        $_hermesBaseUrl = $(if ($cloudMode -or $gpuInfo.Backend -eq "amd" -or $_switchboardMode -eq "enabled") {
             "http://litellm:4000/v1"
         } else {
             "http://llama-server:8080/v1"
@@ -539,17 +561,17 @@ if ($enableHermes) {
     $_hermesLive = Join-Path (Join-Path $installDir "data\hermes") "config.yaml"
     if (-not (Test-Path $_hermesTemplate)) {
         Write-AIError "Missing Hermes config template at $_hermesTemplate"
-        exit 1
+        throw "ODS_INSTALL_ABORTED"
     }
     if (-not (Test-Path $_hermesLive)) {
         Copy-Item -Path $_hermesTemplate -Destination $_hermesLive -Force
     }
-    $_hermesRequestTimeout = $(if ($cloudMode) { 180 } else { 900 })
+    $_hermesRequestTimeout = $(if ($cloudMode -and $_switchboardMode -ne "enabled") { 180 } else { 900 })
     $_patchedHermesTemplate = Update-HermesConfigFile -Path $_hermesTemplate -Model $_hermesModel -BaseUrl $_hermesBaseUrl -ContextLength ([int]$tierConfig.MaxContext) -RequestTimeoutSeconds $_hermesRequestTimeout -LemonadeCompact:($gpuInfo.Backend -eq "amd")
     $_patchedHermesLive = Update-HermesConfigFile -Path $_hermesLive -Model $_hermesModel -BaseUrl $_hermesBaseUrl -ContextLength ([int]$tierConfig.MaxContext) -RequestTimeoutSeconds $_hermesRequestTimeout -LemonadeCompact:($gpuInfo.Backend -eq "amd")
     if (-not ($_patchedHermesTemplate -and $_patchedHermesLive)) {
         Write-AIError "Failed to patch Hermes config for Windows runtime (model=$_hermesModel, base_url=$_hermesBaseUrl)"
-        exit 1
+        throw "ODS_INSTALL_ABORTED"
     }
     Invoke-HermesSoulRefresh -InstallRoot $installDir
     Write-AISuccess "Patched Hermes config (model=$_hermesModel, context=$($tierConfig.MaxContext), request_timeout=${_hermesRequestTimeout}s)"
@@ -566,7 +588,7 @@ if ($enableOpenClaw) {
     # Lemonade serves at /api/v1, so OpenClaw base URL needs /api prefix
     # (OpenClaw appends /v1/chat/completions to the base URL)
     $_providerUrl = $(if ($gpuInfo.Backend -eq "amd") {
-        "http://host.docker.internal:8080/api"
+        "http://host.docker.internal:$($script:LEMONADE_PORT)/api"
     } else {
         "http://llama-server:8080"
     })
@@ -594,7 +616,7 @@ if ($enableOpenClaw) {
             }
         } else {
             Write-AIError "Missing OpenClaw config $openClawConfig and no fallback present in repo. This is a packaging bug; please re-clone or report."
-            exit 1
+            throw "ODS_INSTALL_ABORTED"
         }
     }
 }
