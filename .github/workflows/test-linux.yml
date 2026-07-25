@@ -134,6 +134,11 @@ jobs:
       - name: CPU-Only Path Tests
         run: bash tests/test-cpu-only-path.sh
 
+      - name: Hermes Slash Worker Prune Tests
+        run: |
+          bash tests/test-hermes-slash-worker-prune.sh
+          python3 tests/contracts/test-hermes-worker-guardrails.py
+
       - name: Installer Contract Checks
         run: |
           bash tests/contracts/test-installer-contracts.sh

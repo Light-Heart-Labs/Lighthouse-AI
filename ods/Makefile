@@ -26,6 +26,10 @@ test: ## Run unit and contract tests
 	@bash tests/test-installer-context-parity.sh
 	@bash tests/test-hermes-context-floor.sh
 	@echo ""
+	@echo "=== Hermes slash worker prune ==="
+	@bash tests/test-hermes-slash-worker-prune.sh
+	@python3 tests/contracts/test-hermes-worker-guardrails.py
+	@echo ""
 	@echo "=== Installer contracts ==="
 	@bash tests/contracts/test-installer-contracts.sh
 	@bash tests/test-phase03-multigpu-tty.sh
