@@ -320,6 +320,9 @@ if grep -q '_env_set "HSA_OVERRIDE_GFX_VERSION" "\$gfx_ver"' ods-cli; then
   exit 1
 fi
 
+echo "[contract] AMD ComfyUI uses native gfx architecture"
+bash tests/contracts/test-amd-comfyui-architecture.sh
+
 echo "[contract] dashboard diagnostics route through docker network URLs"
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   tmp_env="$(mktemp)"
