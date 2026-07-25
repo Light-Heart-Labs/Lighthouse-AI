@@ -25,9 +25,7 @@ These instructions apply to the entire repository. `CLAUDE.md` and the documents
 
 ## Secrets and external tools
 
-- Never commit, print, log, or place secret values in shell arguments, launchd variables, Codex config, fixtures, or documentation.
-- Store only 1Password secret references such as `op://Vault/Item/Field`. Inject them into the smallest child process with `op run`.
-- Noninteractive automation uses a least-privilege 1Password service account. Do not substitute the 1Password MCP server or shell plugins when a workflow forbids interactive desktop/biometric authorization.
+- Store 1Password secret references (e.g. `op://Vault/Item/Field`) only in mode-0600 host files and inject them into the smallest child process with `op run`.
 - Exercise MCP/app functions only when they are relevant and within scope. Read-only search and repository inspection do not authorize GitHub writes, messages, deployments, cloud mutations, or CRM changes.
 - Prefer primary official documentation for technical claims. Record a source when a version, security property, or integration decision depends on current external behavior.
 
