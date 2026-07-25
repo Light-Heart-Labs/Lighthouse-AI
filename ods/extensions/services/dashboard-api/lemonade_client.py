@@ -98,6 +98,27 @@ def classify_status(status_code: int) -> str:
     return "request_rejected"
 
 
+def _classified_error(exc: httpx.HTTPError) -> LemonadeClientError:
+    """Map an httpx failure onto the client's classified error contract.
+
+    Every public method must fail with LemonadeClientError: callers such as
+    the GPU router branch on ``exc.kind`` and catch nothing else, so a raw
+    httpx transport error escaping a request method becomes an unhandled 500
+    instead of a reported "unreachable" provider.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        payload = _json_payload(exc.response)
+        return LemonadeClientError(
+            classify_status(exc.response.status_code),
+            _payload_message(payload) or exc.response.text or str(exc),
+            status_code=exc.response.status_code,
+            payload=payload,
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return LemonadeClientError("timeout", str(exc))
+    return LemonadeClientError("provider_unreachable", str(exc))
+
+
 class LemonadeClient:
     """Async client for the Lemonade API paths ODS depends on."""
 
@@ -161,19 +182,8 @@ class LemonadeClient:
             response.raise_for_status()
             payload = response.json() if response.content else {}
             return payload if isinstance(payload, dict) else {"data": payload}
-        except httpx.HTTPStatusError as exc:
-            payload = _json_payload(exc.response)
-            message = _payload_message(payload) or exc.response.text or str(exc)
-            raise LemonadeClientError(
-                classify_status(exc.response.status_code),
-                message,
-                status_code=exc.response.status_code,
-                payload=payload,
-            ) from exc
-        except httpx.TimeoutException as exc:
-            raise LemonadeClientError("timeout", str(exc)) from exc
-        except httpx.RequestError as exc:
-            raise LemonadeClientError("provider_unreachable", str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise _classified_error(exc) from exc
         except ValueError as exc:
             raise LemonadeClientError("invalid_response", str(exc)) from exc
 
@@ -226,14 +236,17 @@ class LemonadeClient:
 
     async def speech(self, model: str, text: str, *, voice: str = "af_heart") -> bytes:
         client = await self._ensure_client()
-        response = await client.post(
-            self.api_url("audio/speech"),
-            json={"model": model, "input": text, "voice": voice},
-            headers=self.auth_headers(),
-            timeout=self.settings.timeout,
-        )
-        response.raise_for_status()
-        return response.content
+        try:
+            response = await client.post(
+                self.api_url("audio/speech"),
+                json={"model": model, "input": text, "voice": voice},
+                headers=self.auth_headers(),
+                timeout=self.settings.timeout,
+            )
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPError as exc:
+            raise _classified_error(exc) from exc
 
     async def transcribe_wav(self, model: str, wav_bytes: bytes, *, filename: str = "audio.wav") -> dict[str, Any]:
         client = await self._ensure_client()
@@ -248,14 +261,8 @@ class LemonadeClient:
             response.raise_for_status()
             payload = response.json() if response.content else {}
             return payload if isinstance(payload, dict) else {"data": payload}
-        except httpx.HTTPStatusError as exc:
-            payload = _json_payload(exc.response)
-            raise LemonadeClientError(
-                classify_status(exc.response.status_code),
-                _payload_message(payload) or exc.response.text or str(exc),
-                status_code=exc.response.status_code,
-                payload=payload,
-            ) from exc
+        except httpx.HTTPError as exc:
+            raise _classified_error(exc) from exc
 
 
 def _json_payload(response: httpx.Response) -> dict[str, Any]:

@@ -171,3 +171,82 @@ async def test_explicit_timeout_override_is_applied():
     await client.aclose()
 
     assert seen["timeout"].get("read") == 5.0
+
+
+@pytest.mark.asyncio
+async def test_speech_classifies_transport_failures():
+    # speech() bypassed _request_json, so an unreachable Lemonade raised a raw
+    # httpx.ConnectError. Callers only catch LemonadeClientError, which turned
+    # a reportable "provider_unreachable" into an unhandled 500.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.speech("kokoro", "hello")
+
+    assert exc.value.kind == "provider_unreachable"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_speech_classifies_timeouts():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.speech("kokoro", "hello")
+
+    assert exc.value.kind == "timeout"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_speech_classifies_http_status_errors():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "no such voice"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.speech("kokoro", "hello")
+
+    assert exc.value.kind == "not_found"
+    assert exc.value.status_code == 404
+    assert "no such voice" in str(exc.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_wav_classifies_transport_failures():
+    # transcribe_wav() classified HTTP status errors only, so connection and
+    # timeout failures escaped as raw httpx errors.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.transcribe_wav("whisper", b"RIFF")
+
+    assert exc.value.kind == "provider_unreachable"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_speech_returns_audio_bytes_on_success():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"\x00\x01audio")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    assert await adapter.speech("kokoro", "hello") == b"\x00\x01audio"
+    await client.aclose()
