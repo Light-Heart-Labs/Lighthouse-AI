@@ -75,6 +75,30 @@ if echo "$IMPLEMENT_BLOCK" | grep -q "uses: anthropics/claude-code-action"; then
     else
         fail "Could not locate --allowedTools configuration in implement job"
     fi
+
+    # Check implement job permissions
+    IMPLEMENT_HEADER=$(awk '/^  implement:/, /^    steps:/' "$WORKFLOW_PR")
+    if [[ -z "$IMPLEMENT_HEADER" ]]; then
+        fail "Could not locate implement job header in issue-to-pr.yml"
+    else
+        if echo "$IMPLEMENT_HEADER" | grep -q "permissions:" && echo "$IMPLEMENT_HEADER" | grep -q "contents: read"; then
+            pass "Implement job permissions contain contents: read"
+        else
+            fail "Implement job permissions missing contents: read"
+        fi
+
+        if echo "$IMPLEMENT_HEADER" | grep -q "issues: write"; then
+            fail "Implement job permissions contain issues: write (must not have write access)"
+        else
+            pass "Implement job permissions do not contain issues: write"
+        fi
+
+        if echo "$IMPLEMENT_HEADER" | grep -q "pull-requests: write"; then
+            fail "Implement job permissions contain pull-requests: write (must not have write access)"
+        else
+            pass "Implement job permissions do not contain pull-requests: write"
+        fi
+    fi
 else
     echo "  - Skipped issue-to-pr.yml checks (not yet using claude-code-action)"
 fi
