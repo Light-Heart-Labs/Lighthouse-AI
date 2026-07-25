@@ -85,6 +85,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 . (Join-Path $LibDir "backend-contract.ps1")
 . (Join-Path $LibDir "tier-map.ps1")
 . (Join-Path $LibDir "detection.ps1")
+. (Join-Path $LibDir "model-storage.ps1")
 . (Join-Path $LibDir "env-generator.ps1")
 . (Join-Path $LibDir "llm-endpoint.ps1")
 . (Join-Path $LibDir "opencode-config.ps1")
@@ -194,6 +195,27 @@ function Get-UsableWindowsBash {
 $PhasesDir = Join-Path $ScriptDir "phases"
 
 Write-ODSBanner
+
+$desiredModelsDir = Get-ODSModelsDir `
+    -InstallDir $installDir -ModelsDirOverride $ModelsDir
+$ModelsDir = $desiredModelsDir
+$modelStorageChange = Get-ODSWindowsModelStorageChange `
+    -InstallDir $installDir -DesiredModelsDir $desiredModelsDir
+if ($modelStorageChange.Changed) {
+    Write-AIError "Changing the model directory of an existing Windows installation is not supported by this installer."
+    Write-AI "  Installed model directory: $($modelStorageChange.PersistedModelsDir)"
+    Write-AI "  Requested model directory: $($modelStorageChange.DesiredModelsDir)"
+    Write-AI "  Keep the installed path for this rerun, or perform a fresh install with -ModelsDir."
+    $global:LASTEXITCODE = 1
+    exit 1
+}
+if ($modelStorageChange.ExistingInstall -and
+        (Test-ODSWindowsModelUpgradeActive -InstallDir $installDir)) {
+    Write-AIError "A full-model upgrade is still active or pending."
+    Write-AI "  Let it finish, or use ods start to resume a failed upgrade, before rerunning the installer."
+    $global:LASTEXITCODE = 1
+    exit 1
+}
 
 # Variables produced by each phase and consumed by downstream phases:
 #

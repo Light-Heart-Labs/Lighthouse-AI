@@ -612,19 +612,39 @@ function Test-DiskSpace {
         [int]$RequiredGB = 20
     )
 
-    $drive = (Resolve-Path $Path -ErrorAction SilentlyContinue).Drive
-    if (-not $drive) {
-        $driveLetter = $Path.Substring(0, 1)
-        $drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+    $resolvedInput = try {
+        [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        $Path
+    }
+    $existingPath = $resolvedInput
+    while ($existingPath -and
+            -not (Test-Path -LiteralPath $existingPath -ErrorAction SilentlyContinue)) {
+        $parent = Split-Path -Parent $existingPath
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $existingPath) {
+            break
+        }
+        $existingPath = $parent
+    }
+
+    $drive = $null
+    if ($existingPath -and
+        (Test-Path -LiteralPath $existingPath -ErrorAction SilentlyContinue)) {
+        $resolved = Resolve-Path -LiteralPath $existingPath -ErrorAction SilentlyContinue
+        if ($resolved) { $drive = $resolved.Drive }
+    }
+    $qualifier = Split-Path -Qualifier $resolvedInput -ErrorAction SilentlyContinue
+    if (-not $drive -and $qualifier -match "^([A-Za-z]):") {
+        $drive = Get-PSDrive -Name $Matches[1] -ErrorAction SilentlyContinue
     }
 
     $freeGB = 0
-    if ($drive -and $drive.Free) {
+    if ($drive -and $null -ne $drive.Free) {
         $freeGB = [math]::Floor($drive.Free / 1073741824)
     } else {
         # Fallback: use WMI
         try {
-            $driveLetter = (Split-Path -Qualifier $Path).TrimEnd(":")
+            $driveLetter = $qualifier.TrimEnd(":", "\")
             $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${driveLetter}:'" -ErrorAction Stop
             $freeGB = [math]::Floor($disk.FreeSpace / 1073741824)
         } catch {
@@ -633,7 +653,7 @@ function Test-DiskSpace {
     }
 
     return @{
-        Drive      = (Split-Path -Qualifier $Path)
+        Drive      = $qualifier
         FreeGB     = $freeGB
         RequiredGB = $RequiredGB
         Sufficient = ($freeGB -ge $RequiredGB)

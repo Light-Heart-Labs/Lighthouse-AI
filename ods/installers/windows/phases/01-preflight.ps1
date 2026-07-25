@@ -197,6 +197,7 @@ if ($_fsNetworked) {
 # as a Docker Desktop file-sharing problem.
 $_shareOk = $true
 $_shareErr = ""
+$_sharePath = $installDir
 $_probeImage = "alpine:3.20"
 try {
     $_prevProbeEap = $ErrorActionPreference
@@ -237,13 +238,53 @@ try {
     } elseif ($_probeExit -ne 0) {
         Write-AIError "Docker bind-mount probe failed before compose startup."
         Write-AI "  This probe uses $_probeImage to verify Docker can mount:"
-        Write-AI "  $installDir"
+        Write-AI "  $_sharePath"
         Write-AI "  Confirm Docker Desktop is running, WSL2 backend is enabled, and $_probeImage is downloaded."
         if ($_probeText) {
             Write-AI "  Probe output:"
             $_probeText -split "`n" | ForEach-Object { Write-Host "    $_" }
         }
         throw "Docker bind-mount probe failed"
+    }
+
+    $_installRoot = [System.IO.Path]::GetFullPath($installDir).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    $_desiredModelsFull = [System.IO.Path]::GetFullPath($desiredModelsDir)
+    $_modelsOutsideInstall = -not $_desiredModelsFull.StartsWith(
+        $_installRoot,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+    if ($_modelsOutsideInstall) {
+        $_modelFsProbe = $_desiredModelsFull
+        while ($_modelFsProbe -and
+                -not (Test-Path -LiteralPath $_modelFsProbe)) {
+            $_modelFsProbe = Split-Path -Parent $_modelFsProbe
+        }
+        if (-not $_modelFsProbe) { $_modelFsProbe = $_desiredModelsFull }
+        $_sharePath = $_desiredModelsFull
+        $_prevRunEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $_probeOut = & docker run --rm `
+            -v "${_modelFsProbe}:/check:ro" $_probeImage true 2>&1
+        $_probeExit = $LASTEXITCODE
+        $ErrorActionPreference = $_prevRunEap
+        $_probeText = ($_probeOut -join "`n")
+        if ($_probeExit -ne 0 -and $_probeText -match `
+            "not shared from the host|Mounts denied|file sharing|filesharing") {
+            $_shareOk = $false
+            $_shareErr = $_probeText
+        } elseif ($_probeExit -ne 0) {
+            Write-AIError "Docker bind-mount probe failed for the configured model directory."
+            Write-AI "  Model storage target: $_desiredModelsFull"
+            if ($_probeText) {
+                Write-AI "  Probe output:"
+                $_probeText -split "`n" |
+                    ForEach-Object { Write-Host "    $_" }
+            }
+            throw "Docker bind-mount probe failed"
+        }
     }
 } catch {
     if ($_prevProbeEap) { $ErrorActionPreference = $_prevProbeEap }
@@ -259,7 +300,7 @@ try {
     $_shareErr = $_.Exception.Message
 }
 if (-not $_shareOk) {
-    Write-AIError "Docker Desktop cannot bind-mount $installDir."
+    Write-AIError "Docker Desktop cannot bind-mount $_sharePath."
     Write-AIError "Add the path to Docker Desktop > Settings > Resources > File Sharing,"
     Write-AIError "apply, then re-run this installer."
     Write-AI "  The probe image ($_probeImage) is already available; this is a file-sharing path issue."
@@ -267,7 +308,7 @@ if (-not $_shareOk) {
         Write-AI "  Probe output:"
         $_shareErr -split "`n" | ForEach-Object { Write-Host "    $_" }
     }
-    throw "Docker Desktop cannot bind-mount $installDir"
+    throw "Docker Desktop cannot bind-mount $_sharePath"
 }
 Write-AISuccess "Docker Desktop file sharing OK"
 

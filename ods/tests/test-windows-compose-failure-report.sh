@@ -84,7 +84,7 @@ check 'Docker could not download $_probeImage' "$PRE_SCRIPT" "preflight reports 
 check 'throw "Docker probe image download failed"' "$PRE_SCRIPT" "preflight image download failure terminates installer"
 check 'throw "Docker bind-mount probe failed"' "$PRE_SCRIPT" "preflight unexpected bind-mount failure terminates installer"
 check 'The probe image ($_probeImage) is already available; this is a file-sharing path issue.' "$PRE_SCRIPT" "preflight separates file sharing from image availability"
-check 'throw "Docker Desktop cannot bind-mount $installDir"' "$PRE_SCRIPT" "preflight file-sharing failure terminates installer"
+check 'throw "Docker Desktop cannot bind-mount $_sharePath"' "$PRE_SCRIPT" "preflight file-sharing failure terminates installer"
 check 'throw "Docker daemon is not responding"' "$DOCKER_PHASE" "Docker daemon prerequisite failure is terminating"
 check 'throw "Docker Compose not found"' "$DOCKER_PHASE" "Docker Compose prerequisite failure is terminating"
 

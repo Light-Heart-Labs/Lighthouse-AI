@@ -24,8 +24,10 @@ directory to the public installer:
 
 The selected path is persisted in `.env` and reused by background downloads,
 native inference, model activation, and the dashboard. Re-running the installer
-without `-ModelsDir` keeps the saved path; passing a different path explicitly
-updates it. Existing model files are not moved automatically.
+without `-ModelsDir` keeps the saved path. Choose the path during the first
+install: changing the model root of a live installation is rejected before
+ODS services are stopped because model files and consumer routes cannot yet be
+migrated transactionally.
 
 The installer will:
 - Detect your GPU (NVIDIA or AMD) and pick the right model tier

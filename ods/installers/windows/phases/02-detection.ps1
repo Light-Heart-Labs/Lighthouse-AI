@@ -140,7 +140,7 @@ Write-InfoBox "  Capacity:" "$_usersEst"
 
 # ── Tier-aware disk re-check ──────────────────────────────────────────────────
 # Now that tier is known we can calculate the actual storage needed:
-# model file + Docker image layers (~15 GB headroom).
+# model file plus room for the bootstrap and an in-progress replacement.
 $_modelGB = $(
     if ($tierConfig.ModelSizeMB) { [Math]::Ceiling([double]$tierConfig.ModelSizeMB / 1024.0) }
     elseif ($tierConfig.GgufFile -match "80B|Coder-Next") { 50 }
@@ -153,21 +153,19 @@ $_modelGB = $(
     elseif ($tierConfig.GgufFile -match "9B|8B")  {  8 }
     else                                        {  5 }
 )
-$_neededGB = $_modelGB + 15   # model + Docker images
-$_tierDisk = Test-DiskSpace -Path $installDir -RequiredGB $_neededGB
+$_neededGB = $_modelGB + 5
+$_tierDisk = Test-ODSWindowsModelStorageCapacity `
+    -InstallDir $installDir -ModelsDirOverride $ModelsDir `
+    -RequiredGB $_neededGB
 if (-not $_tierDisk.Sufficient) {
-    Write-AIWarn "Tier $selectedTier needs ~${_neededGB} GB (${_modelGB} GB model + 15 GB Docker images)."
+    Write-AIWarn "Tier $selectedTier needs ~${_neededGB} GB on the model volume (${_modelGB} GB model + 5 GB staging headroom)."
     Write-AIWarn "Only $($_tierDisk.FreeGB) GB free on $($_tierDisk.Drive)."
-    Write-AI "  Install target checked: $installDir"
-    $_installDirHint = "<path-with-enough-space>\ods"
-    if ($sourceRoot -match "^([A-Za-z]):") {
-        $_installDirHint = "$($Matches[1].ToUpperInvariant()):\ods"
-    }
+    Write-AI "  Model storage target checked: $($_tierDisk.ModelsDir)"
     Write-AI "  To use a different drive/path, rerun from the source checkout with:"
-    Write-AI "  .\install.ps1 -InstallDir $_installDirHint"
+    Write-AI '  .\install.ps1 -ModelsDir "<path-with-enough-space>\models"'
     if (-not $force) {
         Write-AIError "Insufficient disk space. Free up space and re-run, or use --Force to override."
         throw "ODS_INSTALL_ABORTED"
     }
-    Write-AIWarn "--Force specified, continuing with limited disk space."
+    Write-AIWarn "--Force specified, continuing with limited model storage."
 }
