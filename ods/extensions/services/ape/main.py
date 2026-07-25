@@ -583,6 +583,14 @@ def circuit_breaker_blocked(policy: dict, now: float) -> tuple[bool, str]:
                           f"{datetime.fromtimestamp(tripped_until, timezone.utc).isoformat()})")
         if tripped_until and now >= tripped_until:
             _state["breaker"]["tripped_until"] = 0.0
+            # Drop the decisions that caused the trip along with the trip.
+            # window_seconds is longer than cooldown_seconds by design, so
+            # keeping them means the first decision after the cooldown is
+            # re-scored against the same denials and re-trips immediately —
+            # the breaker can never accumulate the min_samples it needs to
+            # prove recovery, and stays open for window_seconds instead of
+            # cooldown_seconds. Reopening has to rest on fresh evidence.
+            _state["breaker"]["decisions"] = []
     return (False, "")
 
 
