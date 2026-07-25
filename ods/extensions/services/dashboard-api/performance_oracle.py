@@ -168,7 +168,7 @@ def _model_aliases(model: dict[str, Any]) -> set[str]:
         str(model.get("gguf_file") or ""),
         str(model.get("llm_model_name") or ""),
     }
-    aliases.update(str(alias or "") for alias in model.get("aliases", []))
+    aliases.update(str(alias or "") for alias in model.get("aliases", []) or [])
     for part in model.get("gguf_parts", []) or []:
         if isinstance(part, dict):
             aliases.add(str(part.get("file") or ""))
