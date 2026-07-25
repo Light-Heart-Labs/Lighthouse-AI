@@ -87,6 +87,10 @@ case "${1:-}" in
         [[ "${1:-}" == "-c" ]] && shift
         cmd="${1:-}"
 
+        if [[ "${ODS_TEST_PS_MODE:-procps}" == "broken" ]]; then
+            exit 1
+        fi
+
         if [[ "$cmd" == *"while read"* ]]; then
             cat >> "$ODS_TEST_KILL_LOG"
             exit 0
@@ -206,6 +210,21 @@ if grep -q "is not running" "$OUT"; then
     pass "stopped container: reports that the container is not running"
 else
     fail "stopped container: reports that the container is not running" "$(cat "$OUT")"
+fi
+
+OUT="$WORKDIR/out7.txt"
+KILL_LOG="$WORKDIR/kill7.txt"; : > "$KILL_LOG"
+rc="$(run_prune broken "$OUT")"
+check_eq "unreadable process table: exits nonzero" "1" "$rc"
+if grep -q "could not read the process table" "$OUT"; then
+    pass "unreadable process table: reports the inspection failure"
+else
+    fail "unreadable process table: reports the inspection failure" "$(cat "$OUT")"
+fi
+if grep -q "no Hermes slash workers found" "$OUT"; then
+    fail "unreadable process table: never claims that no workers exist" "$(cat "$OUT")"
+else
+    pass "unreadable process table: never claims that no workers exist"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────

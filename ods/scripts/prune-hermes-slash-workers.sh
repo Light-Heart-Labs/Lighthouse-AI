@@ -134,7 +134,7 @@ collect_workers() {
     fi
 
     echo "[WARN] could not read the process table inside $CONTAINER" >&2
-    return 0
+    return 1
 }
 
 WORKERS_FILE="$(mktemp)"
