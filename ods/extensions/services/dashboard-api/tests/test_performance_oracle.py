@@ -851,6 +851,7 @@ def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
     tower = model_app_compatibility(model, runtime_context={"hosts": ["tower2"]})
     halo = model_app_compatibility(model, runtime_context={"hosts": ["strix-halo"]})
     spark = model_app_compatibility(model, runtime_context={"hosts": ["spark"]})
+    m5_mbp = model_app_compatibility(model, runtime_context={"hosts": ["m5-mbp"]})
     windows = model_app_compatibility(model, runtime_context={"hosts": ["windows-laptop"]})
 
     assert tower["hermesTalk"]["status"] == "unsupported_until_revalidated"
@@ -862,9 +863,15 @@ def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
     assert spark["hermesTalk"]["status"] == "unknown"
     assert spark["opencode"]["status"] == "unsupported_until_revalidated"
     assert spark["agentViability"]["status"] == "unknown"
+    assert m5_mbp["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert "cycle-005/m5-mbp" in m5_mbp["hermesTalk"]["evidence"]
+    assert m5_mbp["opencode"]["status"] == "unknown"
+    assert m5_mbp["agentViability"]["status"] == "unknown"
+    assert any(_compatibility_blocks_release_coverage(entry) for entry in m5_mbp.values())
     assert windows["hermesTalk"]["status"] == "unknown"
     assert windows["opencode"]["status"] == "unknown"
     assert windows["agentViability"]["status"] == "verified"
+    assert not any(_compatibility_blocks_release_coverage(entry) for entry in windows.values())
 
 
 def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):

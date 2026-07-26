@@ -560,8 +560,11 @@ def test_qwen25_coder_3b_is_verified_on_windows_and_host_failures_are_scoped():
     assert compatibility["agent_viability"]["hostScope"] == ["windows-laptop"]
     assert "18-23-guardrail-fullapp" in compatibility["agent_viability"]["evidence"]
     assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
-    assert compatibility["hermes_talk"]["hostScope"] == ["tower2"]
+    assert compatibility["hermes_talk"]["hostScope"] == ["tower2", "m5-mbp"]
     assert "23-54-27Z-release" in compatibility["hermes_talk"]["evidence"]
+    assert "Final15" in compatibility["hermes_talk"]["reason"]
+    assert "cycle-005/m5-mbp" in compatibility["hermes_talk"]["evidence"]
+    assert "ODSVAL-8DB490CA32-3FC971DE20" in compatibility["hermes_talk"]["reason"]
     assert "acknowledged" in compatibility["hermes_talk"]["reason"]
     assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
     assert compatibility["opencode"]["hostScope"] == ["strix-halo", "spark"]
@@ -574,6 +577,7 @@ def test_qwen25_coder_3b_is_verified_on_windows_and_host_failures_are_scoped():
     assert not _agent_viable_for_release(model, host="tower2")
     assert not _agent_viable_for_release(model, host="strix-halo")
     assert not _agent_viable_for_release(model, host="spark")
+    assert not _agent_viable_for_release(model, host="m5-mbp")
 
 
 def test_falcon_h1_15b_is_not_talk_or_opencode_agent_viable_until_revalidated():

@@ -1116,13 +1116,13 @@
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
-          "label": "ODS Talk revalidation required on Tower2",
-          "reason": "Fresh exact-commit release coverage on tower2 loaded Qwen 2.5 Coder 3B 128K through the browser switchboard, but ODS Talk acknowledged that the verification phrase was correct without returning the challenge token. Keep this model out of Tower2 all-app release coverage until its literal-response behavior is revalidated. The prior windows-laptop full-app pass remains recorded by the host-scoped agent-viability verdict.",
-          "evidence": "fleet-test/runs/2026-07-24T23-54-27Z-release-product-b77641dd064f-harness-3930eeed3597-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/tower2",
-          "recordedAt": "2026-07-25T01:05:25Z",
-          "productSha": "b77641dd064ff573c419f9bf06d1d5d9b357b5d0",
-          "harnessSha": "3930eeed3597593c50a897533902ff6ce740bb32",
-          "hostScope": ["tower2"],
+          "label": "ODS Talk revalidation required on Tower2 and M5",
+          "reason": "Fresh exact-commit release coverage on tower2 loaded Qwen 2.5 Coder 3B 128K through the browser switchboard, but ODS Talk acknowledged that the verification phrase was correct without returning the challenge token. Final15 fresh exact-commit release coverage on m5-mbp loaded the same model in cycle 5, but ODS Talk returned reasoning/probe prose instead of the exact ODSVAL-8DB490CA32-3FC971DE20 verification phrase; cleanup succeeded, the original baseline was restored, the test model was deleted, and cycle 6 passed. Keep this model out of Tower2 and M5 ODS Talk release coverage until its literal-response behavior is revalidated. The prior windows-laptop full-app pass remains recorded by the host-scoped agent-viability verdict.",
+          "evidence": "fleet-test/runs/2026-07-24T23-54-27Z-release-product-b77641dd064f-harness-3930eeed3597-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-25T18-19-44Z-release-product-d5ef0b7ddfc8-harness-8b9f1a38027e-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp",
+          "recordedAt": "2026-07-25T18:19:44Z",
+          "productSha": "d5ef0b7ddfc8207600ec60813e5574dc516c5918",
+          "harnessSha": "8b9f1a38027ebafaad074eb7964ff65e7aa1e731",
+          "hostScope": ["tower2", "m5-mbp"],
           "expiresAt": "2026-08-25T00:00:00Z"
         },
         "opencode": {
