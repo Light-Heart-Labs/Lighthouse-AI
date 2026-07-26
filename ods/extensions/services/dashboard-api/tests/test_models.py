@@ -2191,3 +2191,12 @@ def test_safe_float_env_handles_invalid_and_non_positive_values(monkeypatch):
 
     monkeypatch.setenv("TEST_FLOAT_ENV", "-5.0")
     assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "inf")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "1e309")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "30.0")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 30.0

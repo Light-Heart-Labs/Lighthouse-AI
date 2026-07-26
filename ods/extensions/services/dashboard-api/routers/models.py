@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -85,7 +86,7 @@ _IMPORTED_MODELS_LOCK = threading.Lock()
 def _safe_float_env(key: str, default: float) -> float:
     try:
         val = float(os.environ.get(key, str(default)))
-        return val if val > 0 else default
+        return val if (math.isfinite(val) and val > 0) else default
     except (ValueError, TypeError):
         return default
 
