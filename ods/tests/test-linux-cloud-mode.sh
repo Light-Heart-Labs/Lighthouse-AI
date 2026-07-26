@@ -59,6 +59,23 @@ contains "$mesh_flags" "extensions/services/litellm/compose.yaml" "mesh mode inc
 contains "$mesh_flags" "compose.local.yaml" "mesh mode includes local dependency overlays"
 rejects "$mesh_flags" "docker-compose.cloud.yml" "mesh mode does not layer the cloud overlay"
 
+# Cloud-to-mesh transition: an existing cloud install carries TIER=CLOUD.
+# Switching it to mesh must override the persisted CLOUD tier and resolve
+# local-family (keep a local llama-server overlay, drop the cloud overlay) so it
+# does not land in the exact state ods-doctor flags as ODS-RUNTIME-MESH-CLOUD-OVERLAY.
+mesh_cloud_tier_flags="$(ODS_PYTHON_CMD="$PY" ./scripts/resolve-compose-stack.sh \
+    --script-dir "$ROOT_DIR" \
+    --tier CLOUD \
+    --gpu-backend cpu \
+    --gpu-count 0 \
+    --ods-mode mesh)"
+mesh_cloud_tier_flags="${mesh_cloud_tier_flags//\\//}"
+
+contains "$mesh_cloud_tier_flags" "docker-compose.base.yml" "mesh at CLOUD tier keeps base stack"
+contains "$mesh_cloud_tier_flags" "docker-compose.cpu.yml" "mesh at CLOUD tier keeps a local llama-server overlay"
+contains "$mesh_cloud_tier_flags" "extensions/services/litellm/compose.yaml" "mesh at CLOUD tier includes the LiteLLM gateway"
+rejects "$mesh_cloud_tier_flags" "docker-compose.cloud.yml" "mesh overrides the CLOUD tier and does not layer the cloud overlay"
+
 lemonade_flags="$(LEMONADE_EXTERNAL=true AMD_INFERENCE_RUNTIME=lemonade AMD_INFERENCE_MANAGED=false ODS_PYTHON_CMD="$PY" ./scripts/resolve-compose-stack.sh \
     --script-dir "$ROOT_DIR" \
     --tier CLOUD \

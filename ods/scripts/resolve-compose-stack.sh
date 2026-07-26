@@ -125,7 +125,12 @@ elif lemonade_external and ods_mode == "lemonade":
     elif existing(["docker-compose.base.yml"]):
         resolved = ["docker-compose.base.yml"]
         primary = "docker-compose.base.yml"
-elif ods_mode == "cloud" or tier == "CLOUD":
+# mesh is local-family and must override a persisted CLOUD tier. A cloud
+# install carries tier == "CLOUD"; switching it to mesh must not keep taking
+# the cloud branch, or it would render docker-compose.cloud.yml and profile out
+# the local llama-server a mesh node contributes (the state ods-doctor flags as
+# ODS-RUNTIME-MESH-CLOUD-OVERLAY). Let mesh fall through to the local overlays.
+elif ods_mode == "cloud" or (tier == "CLOUD" and ods_mode != "mesh"):
     if existing(["docker-compose.base.yml", "docker-compose.cloud.yml"]):
         resolved = ["docker-compose.base.yml", "docker-compose.cloud.yml"]
         primary = "docker-compose.cloud.yml"
