@@ -597,3 +597,34 @@ def test_circuit_breaker_retrips_on_fresh_denials_after_cooldown(make_client):
 
     _trip_breaker(client, "cb-retrip")
     assert client.get("/metrics").json()["circuit_breaker_open"] is True
+
+
+def test_circuit_breaker_cooldown_served_across_restart(make_client):
+    """A cooldown that expires while the process is down must also reopen.
+
+    load_state() prunes before any request reaches circuit_breaker_blocked(),
+    so the prune path is the only thing that sees the expired trip on a
+    restart. If it drops the trip but keeps the denials behind it, the
+    restarted process re-scores that stale history on its first decision and
+    slams the breaker shut again.
+    """
+    client, main = make_client(policy_yaml=CB_POLICY)
+    _trip_breaker(client, "cb-restart")
+    with main._STATE_LOCK:
+        main._state["breaker"]["tripped_until"] = time.time() - 1
+    main.save_state()
+
+    # Fresh import + load_state() off the same state file: a real restart.
+    restarted, main2 = make_client(policy_yaml=CB_POLICY)
+    with main2._STATE_LOCK:
+        assert main2._state["breaker"]["decisions"] == []
+        assert main2._state["breaker"]["tripped_until"] == 0.0
+
+    first = restarted.post("/verify", json={"tool_name": "noop", "args": {},
+                                            "session_id": "cb-restart"})
+    assert first.json()["allowed"] is True, first.json()["reason"]
+    second = restarted.post("/verify", json={"tool_name": "noop", "args": {},
+                                             "session_id": "cb-restart"})
+    assert second.json()["allowed"] is True, second.json()["reason"]
+    assert "circuit breaker" not in second.json()["reason"].lower()
+    assert restarted.get("/metrics").json()["circuit_breaker_open"] is False
