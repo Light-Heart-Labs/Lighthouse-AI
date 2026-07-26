@@ -84,6 +84,13 @@ def test_get_active_persona_prompt_handles_directory_persona_file(setup_config_d
     assert prompt == PERSONAS["general"]["system_prompt"]
 
 
+def test_get_active_persona_prompt_handles_unicode_decode_error(setup_config_dir):
+    from routers.setup import get_active_persona_prompt, PERSONAS
+    (setup_config_dir / "persona.json").write_bytes(b"\x80\xff\xfe invalid unicode")
+    prompt = get_active_persona_prompt()
+    assert prompt == PERSONAS["general"]["system_prompt"]
+
+
 def test_setup_status_already_complete(test_client, setup_config_dir):
     """When setup-complete.json exists, first_run is False."""
     (setup_config_dir / "setup-complete.json").write_text(
