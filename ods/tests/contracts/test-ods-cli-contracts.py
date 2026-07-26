@@ -27,6 +27,10 @@ COMMANDS = {
     "preset": ("cmd_preset", "preset <action>"),
     "mode": ("cmd_mode", "mode [local|cloud|hybrid]"),
     "model": ("cmd_model", "model [current|list|swap]"),
+    "remote-provider": (
+        "cmd_remote_provider",
+        "remote-provider [status|plan|configure|test|disable|remove]",
+    ),
     "stt": ("cmd_stt", "stt [current|status|download]"),
     "backup": ("cmd_backup", "backup [options]"),
     "restore": ("cmd_restore", "restore [backup_id]"),
