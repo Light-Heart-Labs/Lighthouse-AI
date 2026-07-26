@@ -239,4 +239,3 @@ def test_rewrites_build_context_atomically_without_temp_leftover(tmp_path, monke
     assert replaced_sources[0].name.endswith(".tmp")
     assert not list(tmp_path.glob("*.tmp"))
     assert not list(tmp_path.glob(".*.tmp"))
-
