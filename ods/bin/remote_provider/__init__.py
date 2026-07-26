@@ -49,6 +49,12 @@ from .egress import (  # noqa: F401
     sanitize_forward_headers,
     validate_direct_provider_resolution,
 )
+from .lifecycle import (  # noqa: F401
+    LIFECYCLE_ACTIONS,
+    LIFECYCLE_OPERATION_SCHEMA,
+    LifecycleError,
+    plan_lifecycle_operation,
+)
 
 __all__ = [
     "ACTIVATION_RECEIPT_SCHEMA",
@@ -63,12 +69,15 @@ __all__ = [
     "FORBIDDEN_PUBLIC_SECRET_ENV",
     "FORWARD_PATHS",
     "INTERNAL_EGRESS_BASE_URL",
+    "LIFECYCLE_ACTIONS",
+    "LIFECYCLE_OPERATION_SCHEMA",
     "PUBLIC_MODEL_ALIAS",
     "REDACTED",
     "REMOTE_ROUTE_SCHEMA",
     "ROUTING_STATE_SCHEMA",
     "SCHEMA",
     "EgressError",
+    "LifecycleError",
     "PolicyError",
     "SshTunnelSpec",
     "TransportError",
@@ -79,6 +88,7 @@ __all__ = [
     "load_route_state",
     "normalize_provider_base_url",
     "plan_route",
+    "plan_lifecycle_operation",
     "prepare_upstream_request",
     "provider_secret_status",
     "public_activation_receipt",

@@ -40,6 +40,11 @@ from remote_provider.reconciler import (  # noqa: E402
     result,
     run_activation_transaction,
 )
+from remote_provider.lifecycle import (  # noqa: E402
+    LIFECYCLE_OPERATION_SCHEMA,
+    LifecycleError,
+    plan_lifecycle_operation,
+)
 
 
 POLICY_PATH = ROOT / "config" / "remote-provider-egress-policy.json"
@@ -62,6 +67,14 @@ def assert_raises_transport_error(func, message: str) -> str:
     try:
         func()
     except TransportError as exc:
+        return str(exc)
+    raise AssertionError(message)
+
+
+def assert_raises_lifecycle_error(func, message: str) -> str:
+    try:
+        func()
+    except LifecycleError as exc:
         return str(exc)
     raise AssertionError(message)
 
@@ -367,6 +380,156 @@ def test_activation_transaction_fails_closed_and_rolls_back_after_commit() -> No
     )
 
 
+def test_lifecycle_configure_operation_is_redacted_and_typed() -> None:
+    operation = plan_lifecycle_operation(
+        {
+            "action": "configure",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://GPU.example.test",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+    )
+    dumped = json.dumps(operation, sort_keys=True)
+    assert_true(operation["schema"] == LIFECYCLE_OPERATION_SCHEMA, "lifecycle schema drifted")
+    assert_true(operation["action"] == "configure", "configure action drifted")
+    assert_true(operation["route"]["provider"]["baseUrl"] == "https://gpu.example.test/v1", "base URL not normalized")
+    assert_true(operation["writes"]["routingState"] is True, "configure must write routing state")
+    assert_true(operation["writes"]["providerSecret"] is True, "configure must write provider secret")
+    assert_true(operation["writes"]["removesSecrets"] is False, "configure must not delete secrets")
+    assert_true("REMOTE_LLM_API_KEY" in operation["secretRefs"], "provider secret ref missing")
+    assert_true(operation["secretRefs"]["REMOTE_LLM_API_KEY"]["value"] == REDACTED, "provider secret not redacted")
+    assert_true(operation["receipt"]["secretRefs"]["REMOTE_LLM_API_KEY"]["value"] == REDACTED, "receipt secret not redacted")
+    assert_true("unit-test-provider-token" not in dumped, "provider secret leaked into lifecycle operation")
+
+
+def test_lifecycle_test_disable_and_remove_write_intent() -> None:
+    validate = plan_lifecycle_operation(
+        {
+            "action": "test",
+            "REMOTE_LLM_TRANSPORT": "direct",
+            "REMOTE_LLM_BASE_URL": "https://gpu.example.test/v1",
+            "REMOTE_LLM_MODEL": "qwen/remote:latest",
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+    )
+    assert_true(validate["receipt"]["phase"] == "validate", "test action should map to validate phase")
+    assert_true(
+        validate["writes"] == {
+            "routingState": False,
+            "providerSecret": False,
+            "sshIdentity": False,
+            "sshKnownHosts": False,
+            "removesRoutingState": False,
+            "removesSecrets": False,
+        },
+        "test action must not persist state",
+    )
+
+    disabled = plan_lifecycle_operation({"action": "disable"})
+    assert_true(disabled["route"]["enabled"] is False, "disable must produce a disabled route")
+    assert_true(disabled["writes"]["routingState"] is True, "disable must write routing state")
+    assert_true(disabled["writes"]["removesSecrets"] is False, "disable must preserve secrets")
+
+    removed = plan_lifecycle_operation({"action": "remove"})
+    assert_true(removed["route"]["enabled"] is False, "remove must produce a disabled public route")
+    assert_true(removed["writes"]["routingState"] is False, "remove should delete, not rewrite, route state")
+    assert_true(removed["writes"]["removesRoutingState"] is True, "remove must delete route state")
+    assert_true(removed["writes"]["removesSecrets"] is True, "remove must delete secret custody files")
+
+
+def test_lifecycle_ssh_operation_tracks_secret_custody_without_leaks() -> None:
+    operation = plan_lifecycle_operation(
+        {
+            "action": "configure",
+            "provider": {
+                "transport": "ssh",
+                "baseUrl": "http://127.0.0.1:8000/v1",
+                "model": "qwen/remote:latest",
+            },
+            "ssh": {
+                "host": "gpu.example.test",
+                "user": "ods",
+                "port": "22",
+                "inferenceHost": "127.0.0.1",
+                "inferencePort": "8000",
+            },
+            "secrets": {
+                "apiKey": "unit-test-provider-token",
+                "sshPrivateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nunit-test-key\n-----END OPENSSH PRIVATE KEY-----",
+                "sshKnownHosts": "gpu.example.test ssh-ed25519 AAAATEST",
+            },
+        }
+    )
+    dumped = json.dumps(operation, sort_keys=True)
+    assert_true(operation["route"]["transport"] == "ssh", "SSH operation transport drifted")
+    assert_true(operation["route"]["ssh"]["host"] == "gpu.example.test", "SSH metadata missing")
+    assert_true(operation["writes"]["sshIdentity"] is True, "SSH configure must write identity custody")
+    assert_true(operation["writes"]["sshKnownHosts"] is True, "SSH configure must write known_hosts custody")
+    for ref in (
+        "REMOTE_LLM_API_KEY",
+        "REMOTE_LLM_SSH_PRIVATE_KEY",
+        "REMOTE_LLM_SSH_KNOWN_HOSTS",
+    ):
+        assert_true(ref in operation["secretRefs"], f"{ref} secret ref missing")
+        assert_true(operation["secretRefs"][ref]["value"] == REDACTED, f"{ref} not redacted")
+    assert_true("unit-test-provider-token" not in dumped, "provider token leaked")
+    assert_true("unit-test-key" not in dumped, "SSH private key leaked")
+    assert_true("AAAATEST" not in dumped, "SSH known_hosts leaked")
+
+
+def test_lifecycle_rejects_unsafe_or_secret_public_inputs() -> None:
+    detail = assert_raises_lifecycle_error(
+        lambda: plan_lifecycle_operation(
+            {
+                "action": "configure",
+                "provider": {
+                    "transport": "direct",
+                    "baseUrl": "https://gpu.example.test/v1",
+                    "model": "qwen/remote:latest",
+                },
+            }
+        ),
+        "configure accepted a missing provider secret",
+    )
+    assert_true("secrets.apiKey" in detail, "missing API key failure should name secrets.apiKey")
+    assert_raises_lifecycle_error(
+        lambda: plan_lifecycle_operation({"action": "rotate"}),
+        "unsupported lifecycle action accepted",
+    )
+    assert_raises_lifecycle_error(
+        lambda: plan_lifecycle_operation(
+            {
+                "action": "configure",
+                "REMOTE_LLM_API_KEY": "unit-test-provider-token",
+                "provider": {
+                    "transport": "direct",
+                    "baseUrl": "https://gpu.example.test/v1",
+                    "model": "qwen/remote:latest",
+                },
+                "secrets": {"apiKey": "unit-test-provider-token"},
+            }
+        ),
+        "public secret env key accepted in lifecycle payload",
+    )
+    assert_raises_policy_error(
+        lambda: plan_lifecycle_operation(
+            {
+                "action": "configure",
+                "provider": {
+                    "transport": "direct",
+                    "baseUrl": "https://127.0.0.1:8000/v1",
+                    "model": "qwen/remote:latest",
+                },
+                "secrets": {"apiKey": "unit-test-provider-token"},
+            }
+        ),
+        "unsafe direct lifecycle provider URL accepted",
+    )
+
+
 def main() -> int:
     tests = [
         test_policy_document_shape,
@@ -380,6 +543,10 @@ def main() -> int:
         test_activation_receipt_redacts_secret_references,
         test_activation_transaction_orders_phases,
         test_activation_transaction_fails_closed_and_rolls_back_after_commit,
+        test_lifecycle_configure_operation_is_redacted_and_typed,
+        test_lifecycle_test_disable_and_remove_write_intent,
+        test_lifecycle_ssh_operation_tracks_secret_custody_without_leaks,
+        test_lifecycle_rejects_unsafe_or_secret_public_inputs,
     ]
     for test in tests:
         test()
