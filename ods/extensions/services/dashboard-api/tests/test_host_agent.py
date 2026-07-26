@@ -5662,4 +5662,3 @@ class TestHostAgentPidFile:
 
         assert pid_file.exists()
         assert pid_file.read_text(encoding="utf-8") == f"{os.getpid()}\n"
-
