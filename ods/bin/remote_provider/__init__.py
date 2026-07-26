@@ -58,6 +58,10 @@ from .egress import (  # noqa: F401
     upstream_base_url_for_route,
     validate_direct_provider_resolution,
 )
+from .egress_probe import (  # noqa: F401
+    PROBE_RESPONSE_SCHEMA,
+    probe_route_response,
+)
 from .lifecycle import (  # noqa: F401
     LIFECYCLE_ACTIONS,
     LIFECYCLE_OPERATION_SCHEMA,
@@ -95,6 +99,7 @@ __all__ = [
     "MAX_PROBE_RESPONSE_BYTES",
     "PUBLIC_MODEL_ALIAS",
     "PROBE_RECEIPT_SCHEMA",
+    "PROBE_RESPONSE_SCHEMA",
     "REDACTED",
     "REMOTE_ROUTE_SCHEMA",
     "ROUTING_STATE_SCHEMA",
@@ -116,6 +121,7 @@ __all__ = [
     "plan_lifecycle_operation",
     "probe_direct_provider",
     "probe_provider_route",
+    "probe_route_response",
     "prepare_upstream_request",
     "provider_secret_status",
     "public_activation_receipt",

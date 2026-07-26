@@ -27,12 +27,11 @@ from remote_provider.egress import (
     route_from_state,
     validate_direct_provider_resolution,
 )
+from remote_provider.egress_probe import probe_route_response
 from remote_provider.policy import DEFAULT_POLICY_PATH, load_policy
 from remote_provider.probe import (
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     ProbeError,
-    probe_provider_route,
-    public_probe_receipt,
 )
 
 
@@ -67,8 +66,6 @@ PROBE_TIMEOUT_SECONDS = float(
         str(DEFAULT_PROBE_TIMEOUT_SECONDS),
     )
 )
-PROBE_RESPONSE_SCHEMA = "ods.remote-provider-egress-probe.v1"
-
 app = FastAPI(title="ODS Remote Provider Egress", docs_url=None, redoc_url=None, openapi_url=None)
 
 _HOP_BY_HOP_RESPONSE_HEADERS = {
@@ -304,14 +301,12 @@ async def probe() -> Response:
         route = _load_route()
         if route.get("transport") == "ssh":
             tunnel = await _ssh_tunnel_status()
-            if tunnel["ready"] is not True:
-                return _error_response(
-                    EgressError(503, "ssh_tunnel_not_ready", "SSH tunnel is not ready")
-                )
         secret = read_provider_secret(SECRET_PATH)
-        probe_result = probe_provider_route(
+        payload = probe_route_response(
             route,
             provider_secret=secret,
+            verified_at=_iso_now(),
+            tunnel=tunnel,
             timeout=PROBE_TIMEOUT_SECONDS,
         )
     except EgressError as exc:
@@ -319,15 +314,7 @@ async def probe() -> Response:
     except ProbeError as exc:
         return _probe_error_response(exc)
 
-    return JSONResponse(
-        {
-            "schema": PROBE_RESPONSE_SCHEMA,
-            "ok": True,
-            "transport": route.get("transport"),
-            "probe": public_probe_receipt(probe_result, verified_at=_iso_now()),
-            "tunnel": tunnel,
-        }
-    )
+    return JSONResponse(payload)
 
 
 @app.api_route(

@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import os
 import socket
 import sys
 import tempfile
@@ -14,7 +12,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "bin"))
-sys.path.insert(0, str(ROOT / "extensions" / "services" / "remote-provider-egress"))
 
 from remote_provider.egress import (  # noqa: E402
     EgressError,
@@ -23,6 +20,10 @@ from remote_provider.egress import (  # noqa: E402
     route_from_state,
     upstream_base_url_for_route,
     validate_direct_provider_resolution,
+)
+from remote_provider.egress_probe import (  # noqa: E402
+    PROBE_RESPONSE_SCHEMA,
+    probe_route_response,
 )
 
 
@@ -49,24 +50,6 @@ def assert_egress_error(func, code: str) -> EgressError:
         assert_true(exc.code == code, f"expected {code}, got {exc.code}")
         return exc
     raise AssertionError(f"expected EgressError {code}")
-
-
-class patched_env:
-    def __init__(self, **values: str) -> None:
-        self.values = values
-        self.previous: dict[str, str | None] = {}
-
-    def __enter__(self) -> None:
-        for key, value in self.values.items():
-            self.previous[key] = os.environ.get(key)
-            os.environ[key] = value
-
-    def __exit__(self, *_args: object) -> None:
-        for key, value in self.previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def ssh_metadata(**overrides: object) -> dict[str, object]:
@@ -127,41 +110,6 @@ def resolver_for(*addresses: str):
         return results
 
     return _resolver
-
-
-def _egress_app(route_path: Path, secret_path: Path):
-    for name in ("app.main", "app"):
-        sys.modules.pop(name, None)
-    with patched_env(
-        ODS_REMOTE_PROVIDER_ROUTE_PATH=str(route_path),
-        ODS_REMOTE_PROVIDER_API_KEY_FILE=str(secret_path),
-    ):
-        return importlib.import_module("app.main")
-
-
-def _probe_fixture(
-    root: Path,
-    *,
-    transport: str = "ssh",
-) -> tuple[Path, Path]:
-    route_path = root / "routing-state.json"
-    secret_path = root / "secrets" / "provider-api-key"
-    secret_path.parent.mkdir(parents=True)
-    route_path.write_text(
-        json.dumps(
-            route_state(
-                transport=transport,
-                baseUrl=(
-                    "http://127.0.0.1:8000/v1"
-                    if transport == "ssh"
-                    else "https://gpu.example.test/v1"
-                ),
-            )
-        ),
-        encoding="utf-8",
-    )
-    secret_path.write_text("unit-test-provider-token\n", encoding="utf-8")
-    return route_path, secret_path
 
 
 def test_compose_service_is_internal_only_and_hardened() -> None:
@@ -320,104 +268,92 @@ def test_secret_file_status_is_support_bundle_safe() -> None:
         assert_true("unit-test-provider-token" not in dumped, "secret status must not include secret value")
 
 
-def test_probe_endpoint_returns_redacted_ssh_receipt_through_tunnel_boundary() -> None:
-    from fastapi.testclient import TestClient
+def test_probe_response_returns_redacted_ssh_receipt_through_tunnel_boundary() -> None:
+    route = route_from_state(
+        route_state(transport="ssh", baseUrl="http://127.0.0.1:8000/v1")
+    )
+    calls: list[dict[str, object]] = []
 
-    with tempfile.TemporaryDirectory() as tmp:
-        route_path, secret_path = _probe_fixture(Path(tmp), transport="ssh")
-        app_mod = _egress_app(route_path, secret_path)
-        calls: list[dict[str, object]] = []
-
-        async def fake_tunnel() -> dict[str, object]:
-            return app_mod._safe_tunnel_summary(
-                {
-                    "ready": True,
-                    "status": "running",
-                    "reason": "ready",
-                    "process": {
-                        "status": "running",
-                        "pid": 4242,
-                        "argv": ["ssh", "-i", "/state/remote-provider/secrets/ssh-identity"],
-                    },
-                    "secretValue": "unit-test-ssh-key",
-                }
-            )
-
-        def fake_probe(route, *, provider_secret, timeout):
-            calls.append(
-                {
-                    "route": route,
-                    "provider_secret": provider_secret,
-                    "timeout": timeout,
-                }
-            )
-            return {
-                "ok": True,
-                "status": 200,
-                "endpoint": "/v1/models",
-                "transport": "ssh",
-                "contentType": "application/json",
-                "modelCount": 1,
-                "resolution": {"ok": True, "addressCount": 0, "raw": "127.0.0.1"},
-                "value": "unit-test-provider-token",
+    def fake_probe(route, *, provider_secret, timeout):
+        calls.append(
+            {
+                "route": route,
+                "provider_secret": provider_secret,
+                "timeout": timeout,
             }
-
-        app_mod._ssh_tunnel_status = fake_tunnel
-        app_mod.probe_provider_route = fake_probe
-        app_mod._iso_now = lambda: "2026-07-26T00:00:00+00:00"
-
-        response = TestClient(app_mod.app).post("/probe")
-
-        body = response.json()
-        dumped = json.dumps(body, sort_keys=True)
-        assert_true(response.status_code == 200, "probe endpoint should succeed")
-        assert_true(body["schema"] == "ods.remote-provider-egress-probe.v1", "probe schema drifted")
-        assert_true(body["transport"] == "ssh", "probe should report SSH transport")
-        assert_true(body["probe"] == {
-            "schema": "ods.remote-provider-probe-receipt.v1",
+        )
+        return {
             "ok": True,
-            "verifiedAt": "2026-07-26T00:00:00+00:00",
+            "status": 200,
             "endpoint": "/v1/models",
-            "httpStatus": 200,
-            "modelCount": 1,
-            "resolution": {"ok": True, "addressCount": 0},
+            "transport": "ssh",
             "contentType": "application/json",
-        }, "probe receipt must be public and stable")
-        assert_true(body["tunnel"]["process"] == {"status": "running", "pid": 4242}, "tunnel process summary drifted")
-        assert_true(calls[0]["provider_secret"] == "unit-test-provider-token", "probe must use private secret custody")
-        assert_true(calls[0]["route"]["transport"] == "ssh", "probe must run against SSH route")
-        assert_true("unit-test-provider-token" not in dumped, "probe response must not leak provider secret")
-        assert_true("unit-test-ssh-key" not in dumped, "probe response must not leak SSH material")
-        assert_true("ssh-identity" not in dumped, "probe response must not leak secret paths")
+            "modelCount": 1,
+            "resolution": {"ok": True, "addressCount": 0, "raw": "127.0.0.1"},
+            "value": "unit-test-provider-token",
+        }
+
+    body = probe_route_response(
+        route,
+        provider_secret="unit-test-provider-token",
+        verified_at="2026-07-26T00:00:00+00:00",
+        tunnel={
+            "ok": True,
+            "ready": True,
+            "status": "running",
+            "reason": "ready",
+            "process": {"status": "running", "pid": 4242},
+        },
+        timeout=7.0,
+        probe=fake_probe,
+    )
+
+    dumped = json.dumps(body, sort_keys=True)
+    assert_true(body["schema"] == PROBE_RESPONSE_SCHEMA, "probe schema drifted")
+    assert_true(body["transport"] == "ssh", "probe should report SSH transport")
+    assert_true(body["probe"] == {
+        "schema": "ods.remote-provider-probe-receipt.v1",
+        "ok": True,
+        "verifiedAt": "2026-07-26T00:00:00+00:00",
+        "endpoint": "/v1/models",
+        "httpStatus": 200,
+        "modelCount": 1,
+        "resolution": {"ok": True, "addressCount": 0},
+        "contentType": "application/json",
+    }, "probe receipt must be public and stable")
+    assert_true(body["tunnel"]["process"] == {"status": "running", "pid": 4242}, "tunnel process summary drifted")
+    assert_true(calls[0]["provider_secret"] == "unit-test-provider-token", "probe must use private secret custody")
+    assert_true(calls[0]["route"]["transport"] == "ssh", "probe must run against SSH route")
+    assert_true(calls[0]["timeout"] == 7.0, "probe timeout should be forwarded")
+    assert_true("unit-test-provider-token" not in dumped, "probe response must not leak provider secret")
+    assert_true("raw" not in dumped, "probe response must not leak raw resolver output")
 
 
-def test_probe_endpoint_fails_closed_when_ssh_tunnel_is_not_ready() -> None:
-    from fastapi.testclient import TestClient
+def test_probe_response_fails_closed_when_ssh_tunnel_is_not_ready() -> None:
+    route = route_from_state(
+        route_state(transport="ssh", baseUrl="http://127.0.0.1:8000/v1")
+    )
 
-    with tempfile.TemporaryDirectory() as tmp:
-        route_path, secret_path = _probe_fixture(Path(tmp), transport="ssh")
-        app_mod = _egress_app(route_path, secret_path)
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("probe must not run before SSH tunnel is ready")
 
-        async def fake_tunnel() -> dict[str, object]:
-            return {
+    exc = assert_egress_error(
+        lambda: probe_route_response(
+            route,
+            provider_secret="unit-test-provider-token",
+            verified_at="2026-07-26T00:00:00+00:00",
+            tunnel={
                 "ok": False,
                 "ready": False,
                 "status": "planned",
                 "reason": "tunnel_process_not_started",
                 "process": {"status": "stopped", "pid": None},
-            }
-
-        def fail_if_called(*_args, **_kwargs):
-            raise AssertionError("probe must not run before SSH tunnel is ready")
-
-        app_mod._ssh_tunnel_status = fake_tunnel
-        app_mod.probe_provider_route = fail_if_called
-
-        response = TestClient(app_mod.app).post("/probe")
-
-        body = response.json()
-        assert_true(response.status_code == 503, "probe must fail closed when tunnel is down")
-        assert_true(body["error"]["type"] == "ssh_tunnel_not_ready", "tunnel readiness error drifted")
+            },
+            probe=fail_if_called,
+        ),
+        "ssh_tunnel_not_ready",
+    )
+    assert_true(exc.status == 503, "tunnel readiness failure should be a 503")
 
 
 def test_service_source_avoids_public_env_secret_names() -> None:
@@ -428,8 +364,7 @@ def test_service_source_avoids_public_env_secret_names() -> None:
     assert_true("validate_direct_provider_resolution" in text, "app must enforce runtime DNS/address policy")
     assert_true("ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_URL" in text, "app must check SSH tunnel readiness")
     assert_true('@app.post("/probe")' in text, "app must expose an internal probe endpoint")
-    assert_true("probe_provider_route" in text, "probe endpoint must use the shared route probe helper")
-    assert_true("public_probe_receipt" in text, "probe endpoint must return a redacted public receipt")
+    assert_true("probe_route_response" in text, "probe endpoint must use the shared egress probe helper")
     assert_true("ssh_tunnel_not_ready" in text, "app must fail closed when the SSH tunnel is down")
     assert_true(POLICY.exists(), "policy document must exist for mounted service config")
 
@@ -445,8 +380,8 @@ def main() -> int:
         test_ssh_route_uses_internal_tunnel_without_direct_dns,
         test_egress_fails_closed_without_secret_or_supported_transport,
         test_secret_file_status_is_support_bundle_safe,
-        test_probe_endpoint_returns_redacted_ssh_receipt_through_tunnel_boundary,
-        test_probe_endpoint_fails_closed_when_ssh_tunnel_is_not_ready,
+        test_probe_response_returns_redacted_ssh_receipt_through_tunnel_boundary,
+        test_probe_response_fails_closed_when_ssh_tunnel_is_not_ready,
         test_service_source_avoids_public_env_secret_names,
     ]
     for test in tests:
