@@ -31,6 +31,21 @@ EGRESS_TIMEOUT_SECONDS = 3.0
 _SAFE_PROVIDER_KEYS = {"capability", "baseUrl", "model", "transport"}
 _SAFE_PROJECTION_KEYS = {"publicModel", "gateway", "egressBaseUrl", "consumerRoute"}
 _SSH_SUPERVISOR_SCHEMA = "ods.remote-provider-ssh-supervisor-plan.v1"
+_EGRESS_PROBE_SCHEMA = "ods.remote-provider-egress-probe.v1"
+_EGRESS_ERROR_MESSAGES = {
+    "invalid_route": "Remote provider route is invalid",
+    "invalid_route_state": "Remote provider route state is invalid",
+    "missing_provider_secret": "Remote provider secret is missing",
+    "provider_http_error": "Remote provider probe returned an HTTP error",
+    "provider_probe_too_large": "Remote provider probe response exceeded the safety limit",
+    "provider_resolution_empty": "Remote provider DNS resolution returned no addresses",
+    "provider_resolution_rejected": "Remote provider DNS resolution was rejected",
+    "provider_unreachable": "Remote provider is unreachable",
+    "remote_route_disabled": "Remote provider route is disabled",
+    "route_policy_rejected": "Remote provider route was rejected by policy",
+    "ssh_tunnel_not_ready": "SSH tunnel is not ready",
+    "transport_probe_unavailable": "Remote provider test is unavailable for this transport",
+}
 
 
 def _state_path() -> Path:
@@ -353,6 +368,37 @@ def _sanitize_egress_health(payload: Any) -> dict[str, Any]:
     }
 
 
+def _safe_egress_error(payload: Any, status_code: int) -> dict[str, str]:
+    error = payload.get("error") if isinstance(payload, Mapping) else None
+    if not isinstance(error, Mapping):
+        error = {}
+    error_type = _safe_text(error.get("type"), max_length=128) or "egress_probe_failed"
+    return {
+        "type": error_type,
+        "message": _EGRESS_ERROR_MESSAGES.get(
+            error_type,
+            f"remote-provider egress returned HTTP {status_code}",
+        ),
+        "code": str(status_code),
+    }
+
+
+def _sanitize_egress_probe_response(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid_egress_probe_response")
+    schema = _safe_text(payload.get("schema"), max_length=80)
+    probe = _safe_probe_receipt(payload.get("probe"))
+    if schema != _EGRESS_PROBE_SCHEMA or probe is None:
+        raise ValueError("invalid_egress_probe_response")
+    return {
+        "schema": schema,
+        "ok": bool(payload.get("ok")),
+        "transport": _safe_text(payload.get("transport"), max_length=32),
+        "probe": probe,
+        "tunnel": _safe_egress_tunnel(payload.get("tunnel")),
+    }
+
+
 async def _fetch_egress_health() -> dict[str, Any]:
     url = f"{EGRESS_URL.rstrip('/')}/health"
     try:
@@ -399,6 +445,62 @@ async def _fetch_egress_health() -> dict[str, Any]:
     except ValueError:
         payload = None
     return _sanitize_egress_health(payload)
+
+
+async def _post_egress_probe() -> dict[str, Any]:
+    url = f"{EGRESS_URL.rstrip('/')}/probe"
+    try:
+        async with httpx.AsyncClient(timeout=EGRESS_TIMEOUT_SECONDS) as client:
+            response = await client.post(url)
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        logger.debug("remote-provider-egress probe unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "type": "egress_unreachable",
+                "message": "Remote provider egress is unreachable",
+                "code": "503",
+            },
+        ) from exc
+    except httpx.HTTPError as exc:
+        logger.debug("remote-provider-egress probe request failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "type": "egress_request_failed",
+                "message": "Remote provider egress probe request failed",
+                "code": "502",
+            },
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "type": "invalid_egress_probe_response",
+                "message": "Remote provider egress returned an invalid probe response",
+                "code": "502",
+            },
+        ) from exc
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=_safe_egress_error(payload, response.status_code),
+        )
+    try:
+        return _sanitize_egress_probe_response(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "type": "invalid_egress_probe_response",
+                "message": "Remote provider egress returned an invalid probe response",
+                "code": "502",
+            },
+        ) from exc
 
 
 def _overall_status(route_state: Mapping[str, Any], egress: Mapping[str, Any]) -> str:
@@ -451,6 +553,12 @@ async def remote_provider_plan(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}") from exc
     except AgentProtocolError as exc:
         raise HTTPException(status_code=502, detail=f"Invalid host agent response: {exc}") from exc
+
+
+@router.post("/api/remote-provider/probe", dependencies=[Depends(verify_api_key)])
+async def remote_provider_probe() -> dict[str, Any]:
+    """Probe the configured remote provider through the internal egress boundary."""
+    return await _post_egress_probe()
 
 
 @router.post("/api/remote-provider/apply", dependencies=[Depends(verify_api_key)])

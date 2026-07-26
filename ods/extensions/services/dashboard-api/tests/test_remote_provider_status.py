@@ -581,6 +581,166 @@ def test_remote_provider_plan_preserves_host_agent_validation_errors(
     assert resp.json()["detail"] == "remote provider base URL is required"
 
 
+def test_remote_provider_probe_requires_auth(test_client):
+    resp = test_client.post("/api/remote-provider/probe")
+    assert resp.status_code == 401
+
+
+def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "schema": "ods.remote-provider-egress-probe.v1",
+                "ok": True,
+                "transport": "ssh",
+                "probe": {
+                    "schema": "ods.remote-provider-probe-receipt.v1",
+                    "ok": True,
+                    "verifiedAt": "2026-07-26T00:00:00+00:00",
+                    "endpoint": "/v1/models",
+                    "httpStatus": 200,
+                    "contentType": "application/json",
+                    "modelCount": 1,
+                    "resolution": {
+                        "ok": True,
+                        "addressCount": 0,
+                        "raw": "127.0.0.1",
+                    },
+                    "value": "unit-test-provider-token",
+                },
+                "tunnel": {
+                    "ok": True,
+                    "ready": True,
+                    "status": "running",
+                    "reason": "ready",
+                    "process": {
+                        "status": "running",
+                        "pid": 4242,
+                        "argv": ["ssh", "-i", "/state/remote-provider/secrets/ssh-identity"],
+                    },
+                    "secretValue": "unit-test-ssh-key",
+                },
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            calls.append(("timeout", kwargs.get("timeout")))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url):
+            calls.append(("post", url))
+            return FakeResponse()
+
+    monkeypatch.setattr(rps, "EGRESS_URL", "http://egress.internal:8091/")
+    monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
+
+    resp = test_client.post(
+        "/api/remote-provider/probe",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert resp.status_code == 200
+    assert body == {
+        "schema": "ods.remote-provider-egress-probe.v1",
+        "ok": True,
+        "transport": "ssh",
+        "probe": {
+            "schema": "ods.remote-provider-probe-receipt.v1",
+            "ok": True,
+            "verifiedAt": "2026-07-26T00:00:00+00:00",
+            "endpoint": "/v1/models",
+            "httpStatus": 200,
+            "contentType": "application/json",
+            "modelCount": 1,
+            "resolution": {"ok": True, "addressCount": 0},
+        },
+        "tunnel": {
+            "ok": True,
+            "ready": True,
+            "status": "running",
+            "reason": "ready",
+            "process": {"status": "running", "pid": 4242},
+        },
+    }
+    assert calls == [
+        ("timeout", 3.0),
+        ("post", "http://egress.internal:8091/probe"),
+    ]
+    assert "unit-test-provider-token" not in dumped
+    assert "unit-test-ssh-key" not in dumped
+    assert "ssh-identity" not in dumped
+    assert "127.0.0.1" not in dumped
+
+
+def test_remote_provider_probe_preserves_sanitized_egress_errors(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    class FakeResponse:
+        status_code = 503
+
+        def json(self):
+            return {
+                "error": {
+                    "type": "ssh_tunnel_not_ready",
+                    "message": (
+                        "SSH tunnel is not ready: unit-test-provider-token "
+                        "/state/remote-provider/secrets/ssh-identity"
+                    ),
+                    "code": "503",
+                }
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, _url):
+            return FakeResponse()
+
+    monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
+
+    resp = test_client.post(
+        "/api/remote-provider/probe",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert resp.status_code == 503
+    assert body["detail"] == {
+        "type": "ssh_tunnel_not_ready",
+        "message": "SSH tunnel is not ready",
+        "code": "503",
+    }
+    assert "unit-test-provider-token" not in dumped
+    assert "ssh-identity" not in dumped
+
+
 def test_remote_provider_apply_requires_auth(test_client):
     resp = test_client.post("/api/remote-provider/apply", json=_lifecycle_payload())
     assert resp.status_code == 401
