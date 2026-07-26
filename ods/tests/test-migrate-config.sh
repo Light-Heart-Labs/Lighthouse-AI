@@ -245,21 +245,33 @@ if [[ -f "$MIGRATION_V241_SCRIPT" ]]; then
     TEST_ENV="$TEMP_DIR/test_v241_empty.env"
     echo "EXISTING_VAR=1" > "$TEST_ENV"
     echo "SHIELD_API_KEY=" >> "$TEST_ENV"
+    chmod 0600 "$TEST_ENV"
     INSTALL_DIR="$TEMP_DIR" ENV_FILE="$TEST_ENV" bash "$MIGRATION_V241_SCRIPT" >/dev/null 2>&1 || true
-    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_ENV"; then
-        pass "Migration v2.4.1: backfills empty SHIELD_API_KEY= atomically"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        EMPTY_MODE=$(stat -f "%Lp" "$TEST_ENV" 2>/dev/null || echo "")
     else
-        fail "Migration v2.4.1: failed to backfill empty SHIELD_API_KEY="
+        EMPTY_MODE=$(stat -c "%a" "$TEST_ENV" 2>/dev/null || echo "")
+    fi
+    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_ENV" && [[ "$EMPTY_MODE" == "600" ]]; then
+        pass "Migration v2.4.1: backfills empty SHIELD_API_KEY= atomically and preserves 0600 mode"
+    else
+        fail "Migration v2.4.1: failed to backfill empty SHIELD_API_KEY= or preserve mode (mode: $EMPTY_MODE)"
     fi
 
     # Test 14: v2.4.1 migration appends missing SHIELD_API_KEY atomically
     TEST_MISSING_ENV="$TEMP_DIR/test_v241_missing.env"
     echo "EXISTING_VAR=1" > "$TEST_MISSING_ENV"
+    chmod 0600 "$TEST_MISSING_ENV"
     INSTALL_DIR="$TEMP_DIR" ENV_FILE="$TEST_MISSING_ENV" bash "$MIGRATION_V241_SCRIPT" >/dev/null 2>&1 || true
-    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_MISSING_ENV" && grep -q "EXISTING_VAR=1" "$TEST_MISSING_ENV"; then
-        pass "Migration v2.4.1: appends missing SHIELD_API_KEY atomically via temp replacement"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        MISSING_MODE=$(stat -f "%Lp" "$TEST_MISSING_ENV" 2>/dev/null || echo "")
     else
-        fail "Migration v2.4.1: failed to append missing SHIELD_API_KEY atomically"
+        MISSING_MODE=$(stat -c "%a" "$TEST_MISSING_ENV" 2>/dev/null || echo "")
+    fi
+    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_MISSING_ENV" && grep -q "EXISTING_VAR=1" "$TEST_MISSING_ENV" && [[ "$MISSING_MODE" == "600" ]]; then
+        pass "Migration v2.4.1: appends missing SHIELD_API_KEY atomically and preserves 0600 mode"
+    else
+        fail "Migration v2.4.1: failed to append missing SHIELD_API_KEY atomically or preserve mode (mode: $MISSING_MODE)"
     fi
 fi
 

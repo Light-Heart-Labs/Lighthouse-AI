@@ -34,6 +34,19 @@ if [[ -z "$existing" ]]; then
             echo "SHIELD_API_KEY=${new_key}"
         } > "${ENV_FILE}.tmp"
     fi
+    # Preserve .env mode and owner/group permissions before atomic replacement
+    if [[ -f "$ENV_FILE" ]]; then
+        if chmod --reference="$ENV_FILE" "${ENV_FILE}.tmp" 2>/dev/null; then
+            :
+        elif [ "$(uname -s)" = "Darwin" ]; then
+            mode=$(stat -f "%Lp" "$ENV_FILE" 2>/dev/null || echo "600")
+            chmod "$mode" "${ENV_FILE}.tmp" 2>/dev/null || true
+        else
+            mode=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || echo "600")
+            chmod "$mode" "${ENV_FILE}.tmp" 2>/dev/null || true
+        fi
+        chown --reference="$ENV_FILE" "${ENV_FILE}.tmp" 2>/dev/null || true
+    fi
     mv -f "${ENV_FILE}.tmp" "$ENV_FILE"
     echo "Added SHIELD_API_KEY to .env"
 fi
