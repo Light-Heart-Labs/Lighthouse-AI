@@ -125,7 +125,7 @@ elif lemonade_external and ods_mode == "lemonade":
     elif existing(["docker-compose.base.yml"]):
         resolved = ["docker-compose.base.yml"]
         primary = "docker-compose.base.yml"
-elif ods_mode in ("cloud", "mesh") or tier == "CLOUD":
+elif ods_mode == "cloud" or tier == "CLOUD":
     if existing(["docker-compose.base.yml", "docker-compose.cloud.yml"]):
         resolved = ["docker-compose.base.yml", "docker-compose.cloud.yml"]
         primary = "docker-compose.cloud.yml"
@@ -574,7 +574,7 @@ if ext_dir.exists():
             # cloud overlay to profile out ODS's managed llama-server, so
             # local-mode overlays that wait on `llama-server: service_healthy`
             # would point at a disabled service and break lifecycle commands.
-            if ods_mode in ("local", "hybrid", "lemonade") and tier != "CLOUD" and gpu_backend != "apple" and not lemonade_external and not external_llm:
+            if ods_mode in ("local", "hybrid", "lemonade", "mesh") and tier != "CLOUD" and gpu_backend != "apple" and not lemonade_external and not external_llm:
                 local_mode_overlay = service_dir / "compose.local.yaml"
                 if local_mode_overlay.exists():
                     resolved.append(str(local_mode_overlay.relative_to(script_dir)))
@@ -679,7 +679,7 @@ if user_ext_dir.exists():
                 # overlay to disable ODS's managed llama-server, so user-local
                 # overlays must not add local llama-server health dependencies.
                 # Mirrors the same guard in the built-in loop above (PR #1004).
-                if ods_mode in ("local", "hybrid", "lemonade") and tier != "CLOUD" and gpu_backend != "apple" and not lemonade_external and not external_llm:
+                if ods_mode in ("local", "hybrid", "lemonade", "mesh") and tier != "CLOUD" and gpu_backend != "apple" and not lemonade_external and not external_llm:
                     local_mode_overlay = service_dir / "compose.local.yaml"
                     if local_mode_overlay.exists():
                         # Same content scan as compose.yaml/gpu overlay above —

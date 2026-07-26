@@ -850,7 +850,7 @@ get_compose_flags() {
                     _external_lemonade_active="true"
                 fi
             fi
-            if [[ "$_ods_mode" == "cloud" || "$_ods_mode" == "mesh" ]] && \
+            if [[ "$_ods_mode" == "cloud" ]] && \
                { [[ "$cached" == *"docker-compose.cpu.yml"* ]] || [[ "$cached" == *"compose.local.yaml"* ]] || [[ "$cached" != *"docker-compose.cloud.yml"* ]]; }; then
                 stale=1
             fi
@@ -858,7 +858,7 @@ get_compose_flags() {
                { [[ "$cached" == *"compose.local.yaml"* ]] || [[ "$cached" == *"docker-compose.amd.yml"* ]] || [[ "$cached" != *"docker-compose.cloud.yml"* ]] || [[ "$cached" != *"docker-compose.lemonade-external.yml"* ]]; }; then
                 stale=1
             fi
-            if [[ "$_ods_mode" != "cloud" ]] && [[ "$_ods_mode" != "mesh" ]] && [[ "$_external_lemonade_active" != "true" ]] && \
+            if [[ "$_ods_mode" != "cloud" ]] && [[ "$_external_lemonade_active" != "true" ]] && \
                [[ "$cached" == *"docker-compose.cloud.yml"* ]]; then
                 stale=1
             fi
@@ -3485,7 +3485,7 @@ cmd_mode() {
         echo "  local   — Local inference via llama-server (requires GPU/CPU)"
         echo "  cloud   — Cloud APIs via LiteLLM (requires API keys)"
         echo "  hybrid  — Local primary, cloud fallback"
-        echo "  mesh    — Distributed inference via LiteLLM (experimental)"
+        echo "  mesh    — Distributed reasoning across local nodes (experimental)"
         echo ""
         echo "Usage: ods mode <local|cloud|hybrid|mesh>"
         return 0
@@ -6339,8 +6339,8 @@ ${CYAN}Commands:${NC}
   disable <service>   Disable an extension service
   purge <service>     Permanently delete service data
   preset <action>     Save/load/list/delete/export/import presets
-  mode [local|cloud|hybrid]
-                      Switch between local/cloud/hybrid modes
+  mode [local|cloud|hybrid|mesh]
+                      Switch between local/cloud/hybrid/mesh modes
   model [current|list|swap]
                       View or change the local LLM model tier
   remote-provider [status|plan|configure|test|disable|remove|peer-models]

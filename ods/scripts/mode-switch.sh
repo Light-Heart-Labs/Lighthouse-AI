@@ -54,7 +54,7 @@ show_status() {
     echo "  local   — Local inference via llama-server (requires GPU/CPU)"
     echo "  cloud   — Cloud APIs via LiteLLM (requires API keys)"
     echo "  hybrid  — Local primary, cloud fallback"
-    echo "  mesh    — Distributed inference via LiteLLM (experimental)"
+    echo "  mesh    — Distributed reasoning across local nodes (experimental)"
 }
 
 switch_mode() {
