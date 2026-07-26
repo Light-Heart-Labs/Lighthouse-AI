@@ -537,6 +537,9 @@ class TestApiStorage:
 
     def test_returns_storage_breakdown(self, test_client, monkeypatch):
         from models import DiskUsage
+        from main import _cache
+
+        _cache.invalidate("storage")
         monkeypatch.setattr("main.get_disk_usage", lambda: DiskUsage(
             path="/tmp", used_gb=100.0, total_gb=500.0, percent=20.0,
         ))
