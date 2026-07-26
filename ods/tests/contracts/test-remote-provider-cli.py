@@ -68,12 +68,45 @@ def main() -> int:
         "CLI must reject raw provider API keys in command arguments",
     )
     require(
+        r"Raw --ssh-private-key is not supported",
+        text,
+        "CLI must reject raw SSH private keys in command arguments",
+    )
+    require(
+        r"Raw --ssh-known-hosts is not supported",
+        text,
+        "CLI must reject raw SSH known_hosts content in command arguments",
+    )
+    require(
+        r"--transport direct\|ssh",
+        text,
+        "remote-provider help must advertise SSH transport",
+    )
+    for option in (
+        "--ssh-host HOST",
+        "--ssh-user USER",
+        "--ssh-inference-host HOST",
+        "--ssh-inference-port PORT",
+        "--ssh-private-key-file PATH",
+        "--ssh-private-key-env NAME",
+        "--ssh-known-hosts-file PATH",
+        "--ssh-known-hosts-env NAME",
+    ):
+        if option not in text:
+            fail(f"remote-provider help missing SSH option: {option}")
+    require(
         r"remote-provider \$action does not accept provider or secret options",
         text,
         "disable/remove must reject irrelevant provider or secret options",
     )
     if "--api-key VALUE" in text or "--api-key <" in text:
         fail("remote-provider help must not advertise raw --api-key values")
+    if "--ssh-private-key VALUE" in text or "--ssh-known-hosts VALUE" in text:
+        fail("remote-provider help must not advertise raw SSH secret values")
+    if "Only direct remote-provider CLI transport is available" in text:
+        fail("remote-provider CLI must not reject SSH transport")
+    if "--arg ssh_private_key" in text or "--arg ssh_known_hosts" in text:
+        fail("SSH secrets must not be passed to jq as process arguments")
     if '"$REMOTE_LLM_API_KEY"' in text:
         fail("top-level help must escape REMOTE_LLM_API_KEY under set -u")
 
@@ -86,6 +119,26 @@ def main() -> int:
         fail("remote-provider secret reader could not be parsed")
     if "_env_get_raw" in secret_reader.group("body"):
         fail("provider API keys must not be read from public .env keys")
+    require(
+        r"^_remote_provider_read_multiline_secret\(\) \{",
+        text,
+        "remote-provider CLI must provide a multiline SSH secret reader",
+    )
+    require(
+        r"printf '%s\\0%s\\0%s' \"\$api_key\" \"\$ssh_private_key\" \"\$ssh_known_hosts\" \| jq -Rs",
+        text,
+        "SSH lifecycle payload must stream secrets through stdin",
+    )
+    require(
+        r"sshPrivateKey: \$secrets\[1\]",
+        text,
+        "SSH private key must come from streamed secret payload",
+    )
+    require(
+        r"sshKnownHosts: \$secrets\[2\]",
+        text,
+        "SSH known_hosts must come from streamed secret payload",
+    )
 
     remote_provider_function = re.search(
         r"^cmd_remote_provider\(\) \{(?P<body>[\s\S]*?)^\}\s*$",
@@ -122,6 +175,11 @@ def main() -> int:
         r"if \[\[ \"\$use_configured_probe\" == \"true\" \]\]; then[\s\S]*_remote_provider_probe_configured \"\$@\"",
         body,
         "remote-provider test must use configured-route probe when provider options are absent",
+    )
+    require(
+        r"--ssh-private-key-file[\s\S]*--ssh-known-hosts-env",
+        body,
+        "remote-provider test must treat SSH options as one-shot lifecycle probes",
     )
 
     print("[PASS] remote-provider CLI static contract")

@@ -3609,28 +3609,47 @@ Commands:
   plan <configure|test|disable|remove> [options]
       Print the redacted lifecycle plan without mutating state.
   configure --base-url URL --model MODEL [secret options]
-      Persist a direct OpenAI-compatible provider route and provider API key.
+      Persist an OpenAI-compatible provider route and provider API key.
   test [--json]
       Probe the configured provider route through the internal egress service.
   test --base-url URL --model MODEL [secret options]
-      Probe a direct provider without writing route state or secrets.
+      Probe a provider without writing route state or secrets.
   disable
       Disable the remote-provider route while keeping stored secrets.
   remove
       Delete remote-provider route state and stored secrets.
 
 Provider options for configure/test/plan configure/plan test:
-  --transport direct      Direct HTTPS provider transport (default)
+  --transport direct|ssh  Provider transport (default direct)
   --base-url URL          OpenAI-compatible base URL, for example https://gpu.example/v1
   --model MODEL           Provider model id
+  --ssh-host HOST         SSH server host for ssh transport
+  --ssh-user USER         SSH server user for ssh transport
+  --ssh-port PORT         SSH server port for ssh transport (default 22)
+  --ssh-inference-host HOST
+      Remote-side inference host reached through the SSH tunnel
+  --ssh-inference-port PORT
+      Remote-side inference port reached through the SSH tunnel
+  --ssh-control-host HOST
+      Optional remote-side ODS control host reached through the SSH tunnel
+  --ssh-control-port PORT
+      Optional remote-side ODS control port reached through the SSH tunnel
 
 Secret options for configure/test/plan configure/plan test:
   --api-key-stdin         Read the provider API key from the first stdin line
   --api-key-file PATH     Read the provider API key from a local file
   --api-key-env NAME      Read the provider API key from the process environment (default REMOTE_LLM_API_KEY)
+  --ssh-private-key-file PATH
+      Read the SSH private key from a local file for ssh transport
+  --ssh-private-key-env NAME
+      Read the SSH private key from the process environment (default REMOTE_LLM_SSH_PRIVATE_KEY)
+  --ssh-known-hosts-file PATH
+      Read SSH known_hosts content from a local file for ssh transport
+  --ssh-known-hosts-env NAME
+      Read SSH known_hosts content from the process environment (default REMOTE_LLM_SSH_KNOWN_HOSTS)
 
-Raw --api-key arguments are intentionally unsupported so secrets do not appear
-in process listings or shell history.
+Raw secret arguments are intentionally unsupported so secrets do not appear in
+process listings or shell history.
 EOF
 }
 
@@ -3713,11 +3732,30 @@ _remote_provider_read_secret() {
     printf '%s' "$api_key"
 }
 
+_remote_provider_read_multiline_secret() {
+    local label="$1" file="$2" env_name="$3" file_option="$4" env_option="$5" value=""
+    if [[ -n "$file" ]]; then
+        [[ -f "$file" ]] || error "$label file not found: $file"
+        value="$(cat "$file")"
+    else
+        [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || \
+            error "$env_option must be a valid environment variable name"
+        value="${!env_name:-}"
+    fi
+    value="$(_strip_outer_quotes "$value")"
+    [[ -n "$value" ]] || error "$label is required; use $file_option or $env_option"
+    printf '%s' "$value"
+}
+
 _remote_provider_write_payload() {
     local action="$1" payload_file="$2"
     shift 2
     local transport="direct" base_url="" model="" json_mode="false"
     local api_key_env="REMOTE_LLM_API_KEY" api_key_env_explicit="false" api_key_file="" api_key_stdin="false"
+    local ssh_host="" ssh_user="" ssh_port="22" ssh_inference_host="" ssh_inference_port=""
+    local ssh_control_host="" ssh_control_port="" ssh_option_seen="false"
+    local ssh_private_key_env="REMOTE_LLM_SSH_PRIVATE_KEY" ssh_private_key_env_explicit="false" ssh_private_key_file=""
+    local ssh_known_hosts_env="REMOTE_LLM_SSH_KNOWN_HOSTS" ssh_known_hosts_env_explicit="false" ssh_known_hosts_file=""
     local provider_option_seen="false" secret_option_seen="false"
 
     while [[ $# -gt 0 ]]; do
@@ -3734,6 +3772,34 @@ _remote_provider_write_payload() {
                 [[ $# -ge 2 ]] || error "--model requires a value"
                 provider_option_seen="true"
                 model="${2:-}"; shift 2 ;;
+            --ssh-host)
+                [[ $# -ge 2 ]] || error "--ssh-host requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_host="${2:-}"; shift 2 ;;
+            --ssh-user)
+                [[ $# -ge 2 ]] || error "--ssh-user requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_user="${2:-}"; shift 2 ;;
+            --ssh-port)
+                [[ $# -ge 2 ]] || error "--ssh-port requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_port="${2:-}"; shift 2 ;;
+            --ssh-inference-host)
+                [[ $# -ge 2 ]] || error "--ssh-inference-host requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_inference_host="${2:-}"; shift 2 ;;
+            --ssh-inference-port)
+                [[ $# -ge 2 ]] || error "--ssh-inference-port requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_inference_port="${2:-}"; shift 2 ;;
+            --ssh-control-host)
+                [[ $# -ge 2 ]] || error "--ssh-control-host requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_control_host="${2:-}"; shift 2 ;;
+            --ssh-control-port)
+                [[ $# -ge 2 ]] || error "--ssh-control-port requires a value"
+                provider_option_seen="true"; ssh_option_seen="true"
+                ssh_control_port="${2:-}"; shift 2 ;;
             --api-key-stdin)
                 secret_option_seen="true"
                 api_key_stdin="true"; shift ;;
@@ -3747,6 +3813,26 @@ _remote_provider_write_payload() {
                 api_key_env="${2:-}"; api_key_env_explicit="true"; shift 2 ;;
             --api-key)
                 error "Raw --api-key is not supported; use --api-key-stdin, --api-key-file, or --api-key-env" ;;
+            --ssh-private-key-file)
+                [[ $# -ge 2 ]] || error "--ssh-private-key-file requires a value"
+                secret_option_seen="true"; ssh_option_seen="true"
+                ssh_private_key_file="${2:-}"; shift 2 ;;
+            --ssh-private-key-env)
+                [[ $# -ge 2 ]] || error "--ssh-private-key-env requires a value"
+                secret_option_seen="true"; ssh_option_seen="true"
+                ssh_private_key_env="${2:-}"; ssh_private_key_env_explicit="true"; shift 2 ;;
+            --ssh-known-hosts-file)
+                [[ $# -ge 2 ]] || error "--ssh-known-hosts-file requires a value"
+                secret_option_seen="true"; ssh_option_seen="true"
+                ssh_known_hosts_file="${2:-}"; shift 2 ;;
+            --ssh-known-hosts-env)
+                [[ $# -ge 2 ]] || error "--ssh-known-hosts-env requires a value"
+                secret_option_seen="true"; ssh_option_seen="true"
+                ssh_known_hosts_env="${2:-}"; ssh_known_hosts_env_explicit="true"; shift 2 ;;
+            --ssh-private-key)
+                error "Raw --ssh-private-key is not supported; use --ssh-private-key-file or --ssh-private-key-env" ;;
+            --ssh-known-hosts)
+                error "Raw --ssh-known-hosts is not supported; use --ssh-known-hosts-file or --ssh-known-hosts-env" ;;
             --json)
                 json_mode="true"; shift ;;
             --help|-h)
@@ -3766,9 +3852,22 @@ _remote_provider_write_payload() {
     fi
 
     transport="$(printf '%s' "$transport" | tr '[:upper:]' '[:lower:]')"
-    [[ "$transport" == "direct" ]] || error "Only direct remote-provider CLI transport is available in this release"
+    case "$transport" in
+        direct|ssh) ;;
+        *) error "--transport must be direct or ssh" ;;
+    esac
     [[ -n "$base_url" ]] || error "--base-url is required"
     [[ -n "$model" ]] || error "--model is required"
+    if [[ "$transport" == "direct" && "$ssh_option_seen" == "true" ]]; then
+        error "direct remote-provider transport does not accept SSH options"
+    fi
+    if [[ "$transport" == "ssh" ]]; then
+        [[ -n "$ssh_host" ]] || error "--ssh-host is required for SSH remote-provider transport"
+        [[ -n "$ssh_user" ]] || error "--ssh-user is required for SSH remote-provider transport"
+        [[ -n "$ssh_port" ]] || error "--ssh-port is required for SSH remote-provider transport"
+        [[ -n "$ssh_inference_host" ]] || error "--ssh-inference-host is required for SSH remote-provider transport"
+        [[ -n "$ssh_inference_port" ]] || error "--ssh-inference-port is required for SSH remote-provider transport"
+    fi
 
     local secret_sources=0 api_key
     [[ "$api_key_stdin" == "true" ]] && secret_sources=$((secret_sources + 1))
@@ -3777,6 +3876,61 @@ _remote_provider_write_payload() {
     (( secret_sources > 1 )) && error "Choose only one provider API key source"
 
     api_key="$(_remote_provider_read_secret "$api_key_stdin" "$api_key_file" "$api_key_env")"
+    if [[ "$transport" == "ssh" ]]; then
+        local ssh_key_sources=0 ssh_known_hosts_sources=0 ssh_private_key ssh_known_hosts
+        [[ -n "$ssh_private_key_file" ]] && ssh_key_sources=$((ssh_key_sources + 1))
+        [[ "$ssh_private_key_env_explicit" == "true" ]] && ssh_key_sources=$((ssh_key_sources + 1))
+        [[ -n "$ssh_known_hosts_file" ]] && ssh_known_hosts_sources=$((ssh_known_hosts_sources + 1))
+        [[ "$ssh_known_hosts_env_explicit" == "true" ]] && ssh_known_hosts_sources=$((ssh_known_hosts_sources + 1))
+        (( ssh_key_sources > 1 )) && error "Choose only one SSH private key source"
+        (( ssh_known_hosts_sources > 1 )) && error "Choose only one SSH known_hosts source"
+        ssh_private_key="$(_remote_provider_read_multiline_secret \
+            "SSH private key" "$ssh_private_key_file" "$ssh_private_key_env" \
+            "--ssh-private-key-file" "--ssh-private-key-env")"
+        ssh_known_hosts="$(_remote_provider_read_multiline_secret \
+            "SSH known_hosts" "$ssh_known_hosts_file" "$ssh_known_hosts_env" \
+            "--ssh-known-hosts-file" "--ssh-known-hosts-env")"
+        printf '%s\0%s\0%s' "$api_key" "$ssh_private_key" "$ssh_known_hosts" | jq -Rs \
+            --arg action "$action" \
+            --arg transport "$transport" \
+            --arg base_url "$base_url" \
+            --arg model "$model" \
+            --arg ssh_host "$ssh_host" \
+            --arg ssh_user "$ssh_user" \
+            --arg ssh_port "$ssh_port" \
+            --arg ssh_inference_host "$ssh_inference_host" \
+            --arg ssh_inference_port "$ssh_inference_port" \
+            --arg ssh_control_host "$ssh_control_host" \
+            --arg ssh_control_port "$ssh_control_port" \
+            'split("\u0000") as $secrets |
+            {
+                action: $action,
+                provider: {
+                    transport: $transport,
+                    baseUrl: $base_url,
+                    model: $model
+                },
+                ssh: {
+                    host: $ssh_host,
+                    user: $ssh_user,
+                    port: $ssh_port,
+                    inferenceHost: $ssh_inference_host,
+                    inferencePort: $ssh_inference_port
+                },
+                secrets: {
+                    apiKey: $secrets[0],
+                    sshPrivateKey: $secrets[1],
+                    sshKnownHosts: $secrets[2]
+                }
+            }
+            | if ($ssh_control_host != "" or $ssh_control_port != "") then
+                .ssh += {
+                    controlHost: $ssh_control_host,
+                    controlPort: $ssh_control_port
+                }
+              else . end' > "$payload_file" || error "Could not build remote-provider lifecycle request"
+        return 0
+    fi
     printf '%s' "$api_key" | jq -Rs \
         --arg action "$action" \
         --arg transport "$transport" \
@@ -3986,6 +4140,18 @@ cmd_remote_provider() {
                 for arg in "$@"; do
                     case "$arg" in
                         --transport|--base-url|--model|--api-key|--api-key-stdin|--api-key-file|--api-key-env)
+                            use_configured_probe="false"
+                            break
+                            ;;
+                        --ssh-host|--ssh-user|--ssh-port|--ssh-inference-host|--ssh-inference-port)
+                            use_configured_probe="false"
+                            break
+                            ;;
+                        --ssh-control-host|--ssh-control-port|--ssh-private-key|--ssh-private-key-file)
+                            use_configured_probe="false"
+                            break
+                            ;;
+                        --ssh-private-key-env|--ssh-known-hosts|--ssh-known-hosts-file|--ssh-known-hosts-env)
                             use_configured_probe="false"
                             break
                             ;;
