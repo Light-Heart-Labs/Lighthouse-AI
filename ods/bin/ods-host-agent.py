@@ -64,11 +64,17 @@ try:
         plan_lifecycle_operation as _plan_remote_provider_lifecycle_operation,
     )
     from remote_provider.policy import PolicyError as _RemoteProviderPolicyError
+    from remote_provider.probe import (
+        ProbeError as _RemoteProviderProbeError,
+        probe_direct_provider as _probe_remote_provider_direct,
+    )
 except Exception:  # pragma: no cover - import environment dependent
     _RemoteProviderLifecycleError = ValueError
     _RemoteProviderPolicyError = ValueError
+    _RemoteProviderProbeError = RuntimeError
     _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA = "ods.remote-routing-state.v1"
     _plan_remote_provider_lifecycle_operation = None
+    _probe_remote_provider_direct = None
 
 VERSION = "1.0.0"
 ODS_VERSION = VERSION
@@ -1490,6 +1496,17 @@ def _remote_provider_secret_values(payload: dict, plan: dict) -> dict[str, str]:
     return values
 
 
+def _remote_provider_probe_lifecycle_test(payload: dict, plan: dict) -> dict:
+    if _probe_remote_provider_direct is None:
+        raise RuntimeError("Remote provider probe helper is unavailable")
+    route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
+    secret_values = _remote_provider_secret_values(payload, plan)
+    return _probe_remote_provider_direct(
+        route,
+        provider_secret=secret_values.get("REMOTE_LLM_API_KEY", ""),
+    )
+
+
 def _write_remote_provider_route_state(plan: dict) -> None:
     state = _remote_provider_route_state_from_plan(plan)
     _atomic_write_text(
@@ -1538,6 +1555,7 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     result["mutated"] = action in {"configure", "disable", "remove"}
     result["rollback"] = {"attempted": False, "ok": None}
     if action == "test":
+        result["probe"] = _remote_provider_probe_lifecycle_test(payload, plan)
         return result
 
     if action not in {"configure", "disable", "remove"}:
@@ -3854,6 +3872,16 @@ class AgentHandler(BaseHTTPRequestHandler):
             result = _apply_remote_provider_lifecycle_operation(body, plan)
         except (_RemoteProviderLifecycleError, _RemoteProviderPolicyError) as exc:
             json_response(self, 400, {"error": str(exc)})
+            return
+        except _RemoteProviderProbeError as exc:
+            json_response(
+                self,
+                getattr(exc, "status", 502),
+                {
+                    "error": getattr(exc, "message", str(exc)),
+                    "code": getattr(exc, "code", "provider_probe_failed"),
+                },
+            )
             return
         except _RemoteProviderApplyError as exc:
             logger.exception("remote-provider lifecycle apply failed")

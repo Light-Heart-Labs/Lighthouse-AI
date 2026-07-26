@@ -45,6 +45,10 @@ from remote_provider.lifecycle import (  # noqa: E402
     LifecycleError,
     plan_lifecycle_operation,
 )
+from remote_provider.probe import (  # noqa: E402
+    ProbeError,
+    probe_direct_provider,
+)
 
 
 POLICY_PATH = ROOT / "config" / "remote-provider-egress-policy.json"
@@ -79,6 +83,14 @@ def assert_raises_lifecycle_error(func, message: str) -> str:
     raise AssertionError(message)
 
 
+def assert_raises_probe_error(func, message: str) -> ProbeError:
+    try:
+        func()
+    except ProbeError as exc:
+        return exc
+    raise AssertionError(message)
+
+
 def cloud_direct_env(**overrides: str) -> dict[str, str]:
     env = {
         "ODS_MODE": "cloud",
@@ -103,6 +115,31 @@ def cloud_ssh_env(**overrides: str) -> dict[str, str]:
     )
     env.update(overrides)
     return env
+
+
+class _ProbeResponse:
+    status = 200
+    headers = {"content-type": "application/json"}
+
+    def __init__(self, body: bytes = b'{"data":[{"id":"qwen"}]}') -> None:
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _limit: int) -> bytes:
+        return self.body
+
+
+def _public_resolver(*_args, **_kwargs):
+    return [(None, None, None, None, ("93.184.216.34", 443))]
+
+
+def _private_resolver(*_args, **_kwargs):
+    return [(None, None, None, None, ("10.0.0.5", 443))]
 
 
 def test_policy_document_shape() -> None:
@@ -530,6 +567,70 @@ def test_lifecycle_rejects_unsafe_or_secret_public_inputs() -> None:
     )
 
 
+def test_direct_provider_probe_is_bounded_and_redacted() -> None:
+    route = plan_route(cloud_direct_env())
+    calls = []
+
+    def opener(request, *, timeout: float):
+        calls.append((request, timeout))
+        return _ProbeResponse()
+
+    result = probe_direct_provider(
+        route,
+        provider_secret="unit-test-provider-token",
+        resolver=_public_resolver,
+        opener=opener,
+    )
+    dumped = json.dumps(result, sort_keys=True)
+    assert_true(result["ok"] is True, "direct provider probe should pass")
+    assert_true(result["endpoint"] == "/v1/models", "probe endpoint drifted")
+    assert_true(result["modelCount"] == 1, "probe should count model-list payloads")
+    assert_true(result["resolution"]["addressCount"] == 1, "probe should report DNS count")
+    assert_true("unit-test-provider-token" not in dumped, "probe result leaked token")
+    assert_true(len(calls) == 1, "probe should perform one bounded HTTP request")
+    request, timeout = calls[0]
+    assert_true(timeout == 10.0, "probe timeout drifted")
+    assert_true(request.full_url == "https://gpu.example.test/v1/models", "probe URL drifted")
+    assert_true(
+        request.headers.get("Authorization") == "Bearer unit-test-provider-token",
+        "probe must send provider auth at the request boundary",
+    )
+
+
+def test_direct_provider_probe_fails_closed_before_unsafe_dns_request() -> None:
+    route = plan_route(cloud_direct_env())
+
+    def opener(*_args, **_kwargs):
+        raise AssertionError("unsafe DNS result must prevent provider HTTP")
+
+    error = assert_raises_probe_error(
+        lambda: probe_direct_provider(
+            route,
+            provider_secret="unit-test-provider-token",
+            resolver=_private_resolver,
+            opener=opener,
+        ),
+        "unsafe DNS resolution should reject direct provider probe",
+    )
+    assert_true(error.code == "provider_resolution_rejected", "unsafe DNS error code drifted")
+    assert_true("private" in error.message, "unsafe DNS failure should explain address class")
+
+
+def test_ssh_provider_probe_is_deferred_until_tunnel_supervisor() -> None:
+    route = plan_route(cloud_ssh_env())
+    error = assert_raises_probe_error(
+        lambda: probe_direct_provider(
+            route,
+            provider_secret="unit-test-provider-token",
+            resolver=_public_resolver,
+            opener=lambda *_args, **_kwargs: _ProbeResponse(),
+        ),
+        "SSH probe should fail closed before tunnel supervisor lands",
+    )
+    assert_true(error.status == 501, "SSH probe should report unavailable transport")
+    assert_true(error.code == "transport_probe_unavailable", "SSH probe error code drifted")
+
+
 def main() -> int:
     tests = [
         test_policy_document_shape,
@@ -547,6 +648,9 @@ def main() -> int:
         test_lifecycle_test_disable_and_remove_write_intent,
         test_lifecycle_ssh_operation_tracks_secret_custody_without_leaks,
         test_lifecycle_rejects_unsafe_or_secret_public_inputs,
+        test_direct_provider_probe_is_bounded_and_redacted,
+        test_direct_provider_probe_fails_closed_before_unsafe_dns_request,
+        test_ssh_provider_probe_is_deferred_until_tunnel_supervisor,
     ]
     for test in tests:
         test()

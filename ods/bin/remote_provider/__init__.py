@@ -55,11 +55,18 @@ from .lifecycle import (  # noqa: F401
     LifecycleError,
     plan_lifecycle_operation,
 )
+from .probe import (  # noqa: F401
+    DEFAULT_PROBE_TIMEOUT_SECONDS,
+    MAX_PROBE_RESPONSE_BYTES,
+    ProbeError,
+    probe_direct_provider,
+)
 
 __all__ = [
     "ACTIVATION_RECEIPT_SCHEMA",
     "DEFAULT_MAX_BODY_BYTES",
     "DEFAULT_POLICY_PATH",
+    "DEFAULT_PROBE_TIMEOUT_SECONDS",
     "DEFAULT_SECRET_PATH",
     "DEFAULT_SSH_CONTROL_LISTEN_PORT",
     "DEFAULT_SSH_IDENTITY_PATH",
@@ -71,6 +78,7 @@ __all__ = [
     "INTERNAL_EGRESS_BASE_URL",
     "LIFECYCLE_ACTIONS",
     "LIFECYCLE_OPERATION_SCHEMA",
+    "MAX_PROBE_RESPONSE_BYTES",
     "PUBLIC_MODEL_ALIAS",
     "REDACTED",
     "REMOTE_ROUTE_SCHEMA",
@@ -79,6 +87,7 @@ __all__ = [
     "EgressError",
     "LifecycleError",
     "PolicyError",
+    "ProbeError",
     "SshTunnelSpec",
     "TransportError",
     "UpstreamRequest",
@@ -89,6 +98,7 @@ __all__ = [
     "normalize_provider_base_url",
     "plan_route",
     "plan_lifecycle_operation",
+    "probe_direct_provider",
     "prepare_upstream_request",
     "provider_secret_status",
     "public_activation_receipt",

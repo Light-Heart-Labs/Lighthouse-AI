@@ -2101,6 +2101,18 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        probes = []
+
+        def fake_probe(route, *, provider_secret):
+            probes.append((route, provider_secret))
+            return {
+                "ok": True,
+                "status": 200,
+                "endpoint": "/v1/models",
+                "modelCount": 1,
+            }
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", fake_probe)
         payload = self._configure_payload()
         payload["action"] = "test"
         handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
@@ -2108,9 +2120,46 @@ class TestRemoteProviderLifecycle:
         _mod.AgentHandler._handle_remote_provider_apply(handler)
 
         body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
         assert handler.response_code == 200
         assert body["applied"] is True
         assert body["mutated"] is False
+        assert body["probe"]["ok"] is True
+        assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert probes[0][1] == "unit-test-provider-token"
+        assert "unit-test-provider-token" not in dumped
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_test_probe_failure_does_not_write_state_or_leak_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        def failing_probe(_route, *, provider_secret):
+            assert provider_secret == "unit-test-provider-token"
+            raise _mod._RemoteProviderProbeError(
+                502,
+                "provider_unreachable",
+                "remote provider probe failed: no route",
+            )
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", failing_probe)
+        payload = self._configure_payload()
+        payload["action"] = "test"
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 502
+        assert body == {
+            "error": "remote provider probe failed: no route",
+            "code": "provider_unreachable",
+        }
+        assert "unit-test-provider-token" not in dumped
         assert not (tmp_path / "remote-provider").exists()
 
     def test_apply_disable_keeps_existing_secret(
