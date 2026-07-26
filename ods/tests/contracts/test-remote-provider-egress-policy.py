@@ -25,6 +25,15 @@ from remote_provider.policy import (  # noqa: E402
     public_activation_receipt,
     validate_public_env_keys,
 )
+from remote_provider.transport import (  # noqa: E402
+    DEFAULT_SSH_CONTROL_LISTEN_PORT,
+    DEFAULT_SSH_IDENTITY_PATH,
+    DEFAULT_SSH_INFERENCE_LISTEN_PORT,
+    DEFAULT_SSH_KNOWN_HOSTS_PATH,
+    DEFAULT_SSH_LOCAL_BIND_HOST,
+    TransportError,
+    build_ssh_tunnel_specs,
+)
 from remote_provider.reconciler import (  # noqa: E402
     PHASES,
     FakeActivationAdapter,
@@ -45,6 +54,14 @@ def assert_raises_policy_error(func, message: str) -> str:
     try:
         func()
     except PolicyError as exc:
+        return str(exc)
+    raise AssertionError(message)
+
+
+def assert_raises_transport_error(func, message: str) -> str:
+    try:
+        func()
+    except TransportError as exc:
         return str(exc)
     raise AssertionError(message)
 
@@ -101,6 +118,20 @@ def test_policy_document_shape() -> None:
     for key in forbidden:
         assert_true(key not in schema_text, f"{key} must not be in public env schema")
         assert_true(key not in example_text, f"{key} must not be in public env example")
+    direct_forbidden = set(
+        policy["transports"]["direct"]["provider_base_url"]["forbid_ip_literal_classes"]
+    )
+    assert_true("non_global" in direct_forbidden, "direct policy must reject non-global IPs")
+    tunnel = policy["transports"]["ssh"]["tunnel"]
+    assert_true(tunnel["service_id"] == "remote-provider-ssh-tunnel", "SSH tunnel service id drifted")
+    assert_true(tunnel["local_bind_host"] == DEFAULT_SSH_LOCAL_BIND_HOST, "SSH tunnel bind host drifted")
+    assert_true(tunnel["inference_listen_port"] == DEFAULT_SSH_INFERENCE_LISTEN_PORT, "SSH inference port drifted")
+    assert_true(tunnel["control_listen_port"] == DEFAULT_SSH_CONTROL_LISTEN_PORT, "SSH control port drifted")
+    assert_true(tunnel["identity_file"] == str(DEFAULT_SSH_IDENTITY_PATH), "SSH identity path drifted")
+    assert_true(tunnel["known_hosts_file"] == str(DEFAULT_SSH_KNOWN_HOSTS_PATH), "SSH known_hosts path drifted")
+    assert_true(tunnel["forbid_user_ssh_config"] is True, "SSH transport must ignore user config")
+    assert_true(tunnel["strict_host_key_checking"] is True, "SSH transport must enforce known_hosts")
+    assert_true(tunnel["forward_agent"] is False, "SSH transport must forbid agent forwarding")
 
 
 def test_direct_normalizes_public_https_roots() -> None:
@@ -183,6 +214,71 @@ def test_ssh_requires_transport_metadata() -> None:
     assert_raises_policy_error(
         lambda: plan_route(cloud_ssh_env(REMOTE_LLM_SSH_PORT="70000")),
         "SSH transport accepted an out-of-range SSH port",
+    )
+
+
+def test_ssh_transport_specs_are_structured_and_hardened() -> None:
+    route = plan_route(
+        cloud_ssh_env(
+            REMOTE_LLM_SSH_CONTROL_HOST="127.0.0.1",
+            REMOTE_LLM_SSH_CONTROL_PORT="8091",
+        )
+    )
+    specs = build_ssh_tunnel_specs(route)
+    assert_true(len(specs) == 2, "SSH route should build inference and control tunnels")
+    inference, control = specs
+    assert_true(inference.name == "inference", "first tunnel should be inference")
+    assert_true(control.name == "control", "second tunnel should be control")
+    assert_true(inference.listen_host == DEFAULT_SSH_LOCAL_BIND_HOST, "inference bind host drifted")
+    assert_true(inference.listen_port == DEFAULT_SSH_INFERENCE_LISTEN_PORT, "inference bind port drifted")
+    assert_true(control.listen_port == DEFAULT_SSH_CONTROL_LISTEN_PORT, "control bind port drifted")
+    assert_true(
+        "0.0.0.0:18091:127.0.0.1:8000" in inference.args,
+        "inference forward must be explicit and internal",
+    )
+    assert_true(
+        "0.0.0.0:18092:127.0.0.1:8091" in control.args,
+        "control forward must be explicit and internal",
+    )
+    for spec in specs:
+        assert_true(all(isinstance(arg, str) for arg in spec.args), "SSH command must be an argv list")
+        assert_true("-F" in spec.args and "/dev/null" in spec.args, "SSH must ignore user config")
+        assert_true("BatchMode=yes" in spec.args, "SSH must run in batch mode")
+        assert_true("ExitOnForwardFailure=yes" in spec.args, "SSH must fail on forward failure")
+        assert_true("ForwardAgent=no" in spec.args, "SSH must disable agent forwarding")
+        assert_true("PermitLocalCommand=no" in spec.args, "SSH must disable local commands")
+        assert_true("StrictHostKeyChecking=yes" in spec.args, "SSH must enforce known_hosts")
+        assert_true(
+            f"UserKnownHostsFile={DEFAULT_SSH_KNOWN_HOSTS_PATH}" in spec.args,
+            "SSH must use the transport-owned known_hosts file",
+        )
+        assert_true(
+            f"IdentityFile={DEFAULT_SSH_IDENTITY_PATH}" in spec.args,
+            "SSH must use the transport-owned identity file",
+        )
+        joined = " ".join(spec.args)
+        assert_true("ProxyCommand" not in joined, "SSH transport must not use ProxyCommand")
+        assert_true("REMOTE_LLM_SSH_PRIVATE_KEY" not in joined, "SSH private key env must not be projected")
+        assert_true(";" not in joined and "\n" not in joined, "SSH argv must not contain shell separators")
+
+
+def test_ssh_transport_specs_reject_unsafe_tokens() -> None:
+    route = plan_route(cloud_ssh_env())
+    assert_raises_transport_error(
+        lambda: build_ssh_tunnel_specs({**route, "transport": "direct"}),
+        "direct routes should not build SSH specs",
+    )
+    unsafe_user = json.loads(json.dumps(route))
+    unsafe_user["ssh"]["user"] = "ods;rm"
+    assert_raises_transport_error(
+        lambda: build_ssh_tunnel_specs(unsafe_user),
+        "unsafe SSH user was accepted",
+    )
+    unsafe_host = json.loads(json.dumps(route))
+    unsafe_host["ssh"]["host"] = "-oProxyCommand=sh"
+    assert_raises_transport_error(
+        lambda: build_ssh_tunnel_specs(unsafe_host),
+        "unsafe SSH host was accepted",
     )
 
 
@@ -278,6 +374,8 @@ def main() -> int:
         test_direct_rejects_unsafe_urls,
         test_ssh_allows_remote_side_http_with_required_metadata,
         test_ssh_requires_transport_metadata,
+        test_ssh_transport_specs_are_structured_and_hardened,
+        test_ssh_transport_specs_reject_unsafe_tokens,
         test_public_env_forbids_remote_secrets,
         test_activation_receipt_redacts_secret_references,
         test_activation_transaction_orders_phases,

@@ -30,6 +30,7 @@
           "link_local",
           "loopback",
           "multicast",
+          "non_global",
           "private",
           "reserved",
           "unspecified"
@@ -60,6 +61,19 @@
         "forbid_query": true,
         "forbid_fragment": true,
         "remote_side_loopback_allowed": true
+      },
+      "tunnel": {
+        "service_id": "remote-provider-ssh-tunnel",
+        "local_bind_host": "0.0.0.0",
+        "inference_listen_port": 18091,
+        "control_listen_port": 18092,
+        "identity_file": "/state/remote-provider/secrets/ssh-identity",
+        "known_hosts_file": "/state/remote-provider/secrets/known_hosts",
+        "forbid_user_ssh_config": true,
+        "strict_host_key_checking": true,
+        "batch_mode": true,
+        "exit_on_forward_failure": true,
+        "forward_agent": false
       }
     }
   },
