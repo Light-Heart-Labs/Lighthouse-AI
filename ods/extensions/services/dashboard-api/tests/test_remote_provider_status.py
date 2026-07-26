@@ -26,6 +26,18 @@ def _route_state(model: str = "qwen/remote:latest") -> dict[str, object]:
     }
 
 
+def _lifecycle_payload() -> dict[str, object]:
+    return {
+        "action": "test",
+        "provider": {
+            "transport": "direct",
+            "baseUrl": "https://gpu.example.test",
+            "model": "qwen/remote:latest",
+        },
+        "secrets": {"apiKey": "unit-test-provider-token"},
+    }
+
+
 def _patch_state_path(monkeypatch, path):
     from routers import remote_provider_status as rps
 
@@ -187,3 +199,76 @@ def test_remote_provider_status_reports_unreachable_egress(
     assert body["status"] == "degraded"
     assert body["egress"]["reachable"] is False
     assert body["egress"]["reason"] == "egress_unreachable"
+
+
+def test_remote_provider_plan_requires_auth(test_client):
+    resp = test_client.post("/api/remote-provider/plan", json=_lifecycle_payload())
+    assert resp.status_code == 401
+
+
+def test_remote_provider_plan_proxies_to_host_agent(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    calls = []
+
+    async def fake_request(method, path, *, payload, timeout):
+        calls.append((method, path, payload, timeout))
+        return {
+            "schema": "ods.remote-provider-lifecycle-operation.v1",
+            "action": "test",
+            "ok": True,
+            "route": {
+                "enabled": True,
+                "provider": {
+                    "baseUrl": "https://gpu.example.test/v1",
+                    "model": "qwen/remote:latest",
+                    "transport": "direct",
+                },
+            },
+            "writes": {"routingState": False},
+            "secretRefs": {
+                "REMOTE_LLM_API_KEY": {"present": True, "value": "[REDACTED]"}
+            },
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+
+    resp = test_client.post(
+        "/api/remote-provider/plan",
+        json=_lifecycle_payload(),
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert body["action"] == "test"
+    assert body["secretRefs"]["REMOTE_LLM_API_KEY"]["value"] == "[REDACTED]"
+    assert "unit-test-provider-token" not in dumped
+    assert calls == [
+        ("POST", "/v1/remote-provider/plan", _lifecycle_payload(), 10)
+    ]
+
+
+def test_remote_provider_plan_preserves_host_agent_validation_errors(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    async def fake_request(*_args, **_kwargs):
+        raise rps.AgentHTTPError(400, "remote provider base URL is required")
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+
+    resp = test_client.post(
+        "/api/remote-provider/plan",
+        json={"action": "configure"},
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "remote provider base URL is required"

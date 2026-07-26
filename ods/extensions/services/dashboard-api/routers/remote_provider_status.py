@@ -9,9 +9,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from config import DATA_DIR
+from host_agent_client import (
+    AgentHTTPError,
+    AgentProtocolError,
+    AgentUnavailable,
+    async_request_json as async_request_agent_json,
+)
 from security import verify_api_key
 
 logger = logging.getLogger(__name__)
@@ -225,3 +231,21 @@ async def remote_provider_status() -> dict[str, Any]:
             "remove": bool(route_state.get("exists")),
         },
     }
+
+
+@router.post("/api/remote-provider/plan", dependencies=[Depends(verify_api_key)])
+async def remote_provider_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a remote-provider lifecycle request through the host agent."""
+    try:
+        return await async_request_agent_json(
+            "POST",
+            "/v1/remote-provider/plan",
+            payload=payload,
+            timeout=10,
+        )
+    except AgentHTTPError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}") from exc
+    except AgentProtocolError as exc:
+        raise HTTPException(status_code=502, detail=f"Invalid host agent response: {exc}") from exc

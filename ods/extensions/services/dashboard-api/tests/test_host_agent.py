@@ -1995,6 +1995,65 @@ class _FakeHandler:
         return json.loads(self.wfile.getvalue().decode("utf-8"))
 
 
+class TestRemoteProviderLifecyclePlan:
+    """Direct host-agent tests for remote-provider lifecycle planning."""
+
+    @pytest.fixture(autouse=True)
+    def _auth(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+    def test_plans_redacted_lifecycle_operation(self):
+        payload = {
+            "action": "test",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://gpu.example.test",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 200
+        assert body["action"] == "test"
+        assert body["route"]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert body["writes"]["routingState"] is False
+        assert "REMOTE_LLM_API_KEY" in body["secretRefs"]
+        assert "unit-test-provider-token" not in dumped
+
+    def test_rejects_invalid_lifecycle_payload(self):
+        payload = {
+            "action": "configure",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://127.0.0.1:8000/v1",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        body = handler.parse_response()
+        assert handler.response_code == 400
+        assert "loopback" in body["error"]
+
+    def test_requires_auth(self):
+        handler = _FakeHandler(
+            json.dumps({"action": "disable"}).encode("utf-8"),
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        assert handler.response_code == 403
+
+
 class TestTailscaleStatus:
     """Direct host-agent tests for /v1/tailscale/status behavior."""
 

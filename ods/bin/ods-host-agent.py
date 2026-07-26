@@ -55,6 +55,16 @@ try:
 except Exception:  # pragma: no cover - import environment dependent
     _switchboard_adapters = None
     _switchboard_reconciler = None
+try:
+    from remote_provider.lifecycle import (
+        LifecycleError as _RemoteProviderLifecycleError,
+        plan_lifecycle_operation as _plan_remote_provider_lifecycle_operation,
+    )
+    from remote_provider.policy import PolicyError as _RemoteProviderPolicyError
+except Exception:  # pragma: no cover - import environment dependent
+    _RemoteProviderLifecycleError = ValueError
+    _RemoteProviderPolicyError = ValueError
+    _plan_remote_provider_lifecycle_operation = None
 
 VERSION = "1.0.0"
 ODS_VERSION = VERSION
@@ -3580,6 +3590,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_model_download_cancel()
         elif self.path == "/v1/model/activate":
             self._handle_model_activate()
+        elif self.path == "/v1/remote-provider/plan":
+            self._handle_remote_provider_plan()
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
         elif self.path == "/v1/model/delete":
@@ -3596,6 +3608,31 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_network_wifi_forget()
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_remote_provider_plan(self):
+        """Validate a remote-provider lifecycle request without side effects."""
+        if not check_auth(self):
+            return
+        body = read_optional_json_body(self)
+        if body is None:
+            return
+        if _plan_remote_provider_lifecycle_operation is None:
+            json_response(
+                self,
+                501,
+                {"error": "Remote provider lifecycle planner is unavailable"},
+            )
+            return
+        try:
+            plan = _plan_remote_provider_lifecycle_operation(body)
+        except (_RemoteProviderLifecycleError, _RemoteProviderPolicyError) as exc:
+            json_response(self, 400, {"error": str(exc)})
+            return
+        except Exception as exc:
+            logger.exception("remote-provider lifecycle planning failed")
+            json_response(self, 500, {"error": f"Remote provider planning failed: {exc}"})
+            return
+        json_response(self, 200, plan)
 
     def _handle_invalidate_compose_cache(self):
         """Drop the .compose-flags cache file so the next CLI call re-resolves it."""
