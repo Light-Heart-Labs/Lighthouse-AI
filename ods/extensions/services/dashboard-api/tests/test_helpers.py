@@ -102,6 +102,14 @@ class TestGetModelInfo:
         assert info is not None
         assert info.context_length == 32768
 
+    def test_non_positive_context_falls_back_to_default(self, install_dir):
+        env_file = install_dir / ".env"
+        env_file.write_text('LLM_MODEL=Qwen2.5-7B-Instruct\nCTX_SIZE=0\n')
+
+        info = get_model_info()
+        assert info is not None
+        assert info.context_length == 32768
+
     def test_returns_none_when_no_env(self, install_dir):
         # No .env file created
         assert get_model_info() is None
