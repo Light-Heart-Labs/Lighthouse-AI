@@ -192,6 +192,18 @@ def _model_aliases(model: dict[str, Any]) -> set[str]:
     return {alias for alias in aliases if alias}
 
 
+def _install_recommendation_flag(raw: dict[str, Any]) -> bool:
+    """Return whether the catalog still offers this entry as an install pick.
+
+    The library keeps superseded models so an existing install keeps working
+    and the UI can still describe what is on disk, but marks them
+    ``install_recommendation: false`` so nothing steers a new user onto them.
+    Absent means recommendable. Mirrors ``value_enabled`` in
+    scripts/select-model.py so a string "false" reads the same in both.
+    """
+    return normalize_key(raw.get("install_recommendation", True)) not in {"", "0", "false", "off", "no"}
+
+
 def normalize_catalog_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
     """Convert config/model-library.json entries to the oracle shape."""
     if not isinstance(raw, dict):
@@ -252,6 +264,7 @@ def normalize_catalog_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
         "context_limit_known": context_limit_known,
         "specialty": raw.get("specialty", "General"),
         "description": raw.get("description", ""),
+        "install_recommendation": _install_recommendation_flag(raw),
         "quantization": raw.get("quantization"),
         "architecture": raw.get("architecture", "dense"),
         "active_params_b": raw.get("active_params_b"),
@@ -1182,6 +1195,8 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
     for model in catalog:
         if installable_only and not model.get("gguf_url"):
             continue
+        if not model.get("install_recommendation", True):
+            continue
         if not _family_allowed_for_profile(model, normalized_profile):
             continue
         runtime_profile = _matching_runtime_profile(model, gpu_info, system_ram_gb)
@@ -1196,7 +1211,15 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
         })
 
     if not candidates:
+        # Degrade in the same order as scripts/select-model.py: relax the fit
+        # first, then the retirement flag, and only then the profile -- a host
+        # that fits nothing still gets a concrete suggestion.
         fallback_pool = [
+            model for model in catalog
+            if (not installable_only or model.get("gguf_url"))
+            and model.get("install_recommendation", True)
+            and _family_allowed_for_profile(model, normalized_profile)
+        ] or [
             model for model in catalog
             if (not installable_only or model.get("gguf_url")) and _family_allowed_for_profile(model, normalized_profile)
         ] or catalog
