@@ -34,6 +34,7 @@ bash tests/contracts/test-installer-hardening.sh
 bash tests/test-uninstall-compose-flags.sh
 bash tests/test-windows-missing-service-hints.sh
 "$PYTHON_CMD" tests/contracts/test-network-exposure-contracts.py
+"$PYTHON_CMD" tests/contracts/test-remote-provider-egress-policy.py
 
 echo "[gate] smoke"
 bash tests/smoke/linux-amd.sh
