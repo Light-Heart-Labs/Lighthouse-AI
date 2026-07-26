@@ -203,7 +203,7 @@ if PRE_ODS_INSTALL_DIR="" ODS_ALLOW_LEGACY_PARALLEL="" \
 fi
 grep -qF 'related install directory' "$_pre_ods_guard_tmp/auto-symlink.log" \
   || { echo "[FAIL] symlinked related-install rejection must identify the directory"; rm -rf "$_pre_ods_guard_tmp"; exit 1; }
-rm -f "$_pre_ods_guard_tmp/home/related-link"
+rm -rf "$_pre_ods_guard_tmp/home/related-link"
 
 cat > "$_pre_ods_guard_tmp/docker-rows" <<'ROWS'
 stack-llm|stack|llama-server

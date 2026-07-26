@@ -92,6 +92,12 @@
       "value": "python:3.11-slim"
     },
     {
+      "id": "remote-provider-egress.python",
+      "type": "image",
+      "path": "extensions/services/remote-provider-egress/Dockerfile",
+      "value": "python:3.11-slim"
+    },
+    {
       "id": "ods-proxy.caddy",
       "type": "image",
       "path": "extensions/services/ods-proxy/compose.yaml",
@@ -280,6 +286,11 @@
       "path": "extensions/services/brave-search/compose.yaml",
       "value": "ods-brave-search:local",
       "reason": "Local extension image built from the adjacent Dockerfile."
+    },
+    {
+      "path": "docker-compose.base.yml",
+      "value": "ods-remote-provider-egress:local",
+      "reason": "Core internal egress service image is built from extensions/services/remote-provider-egress/Dockerfile."
     }
   ],
   "allow_variable_refs": [
