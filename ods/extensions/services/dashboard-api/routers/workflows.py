@@ -31,8 +31,7 @@ def load_workflow_catalog() -> dict:
     if not WORKFLOW_CATALOG_FILE.is_file():
         return DEFAULT_WORKFLOW_CATALOG
     try:
-        with open(WORKFLOW_CATALOG_FILE) as f:
-            data = json.load(f)
+        data = json.loads(WORKFLOW_CATALOG_FILE.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             logger.warning("Workflow catalog must be a JSON object: %s", WORKFLOW_CATALOG_FILE)
             return DEFAULT_WORKFLOW_CATALOG
@@ -43,7 +42,7 @@ def load_workflow_catalog() -> dict:
         if not isinstance(categories, dict):
             categories = {}
         return {"workflows": workflows, "categories": categories}
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeError) as e:
         logger.debug("Failed to read workflow catalog %s: %s", WORKFLOW_CATALOG_FILE, e)
         return DEFAULT_WORKFLOW_CATALOG
 

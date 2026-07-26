@@ -25,14 +25,20 @@ def test_workflows_authenticated(test_client):
     assert isinstance(data["categories"], dict)
 
 
-def test_load_workflow_catalog_directory_path_degrades(tmp_path, monkeypatch):
+def test_load_workflow_catalog_handles_directory_and_unicode_error(tmp_path, monkeypatch):
     import routers.workflows as wf_mod
-    d = tmp_path / "workflows.json"
+
+    # Directory path
+    d = tmp_path / "workflows_dir.json"
     d.mkdir()
     monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", d)
+    assert wf_mod.load_workflow_catalog() == wf_mod.DEFAULT_WORKFLOW_CATALOG
 
-    cat = wf_mod.load_workflow_catalog()
-    assert cat == wf_mod.DEFAULT_WORKFLOW_CATALOG
+    # Non-UTF8 binary data file
+    f = tmp_path / "binary_workflows.json"
+    f.write_bytes(b"\x80\xff\xfe invalid unicode")
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", f)
+    assert wf_mod.load_workflow_catalog() == wf_mod.DEFAULT_WORKFLOW_CATALOG
 
 
 def test_workflow_enable_requires_auth(test_client):
