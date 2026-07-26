@@ -82,16 +82,18 @@ _HF_AVATAR_CACHE_MAX_ENTRIES = 512
 _HF_AVATAR_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
 _HF_AVATAR_CACHE_LOCK = threading.Lock()
 _IMPORTED_MODELS_LOCK = threading.Lock()
-_MODEL_DISCOVERY_TIMEOUT_SECONDS = float(os.environ.get("DASHBOARD_MODEL_DISCOVERY_TIMEOUT", "15.0"))
-_AGENT_MODEL_STATUS_CACHE_TTL_SECONDS = float(
-    os.environ.get("DASHBOARD_AGENT_MODEL_STATUS_CACHE_TTL", "0.5")
-)
-_STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS = float(
-    os.environ.get("DASHBOARD_STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS", "1800")
-)
-_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS = float(
-    os.environ.get("DASHBOARD_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", "900")
-)
+def _safe_float_env(key: str, default: float) -> float:
+    try:
+        val = float(os.environ.get(key, str(default)))
+        return val if val > 0 else default
+    except (ValueError, TypeError):
+        return default
+
+
+_MODEL_DISCOVERY_TIMEOUT_SECONDS = _safe_float_env("DASHBOARD_MODEL_DISCOVERY_TIMEOUT", 15.0)
+_AGENT_MODEL_STATUS_CACHE_TTL_SECONDS = _safe_float_env("DASHBOARD_AGENT_MODEL_STATUS_CACHE_TTL", 0.5)
+_STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS = _safe_float_env("DASHBOARD_STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS", 1800.0)
+_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS = _safe_float_env("DASHBOARD_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", 900.0)
 _ACTIVE_BOOTSTRAP_STATUSES = {"starting", "downloading", "verifying", "swapping"}
 _agent_model_status_cache_lock = threading.Lock()
 _agent_model_status_cache_at = 0.0
