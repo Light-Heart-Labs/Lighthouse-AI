@@ -845,6 +845,8 @@ def get_model_info() -> Optional[ModelInfo]:
                 # the guard already used in routers/models.py.
                 try:
                     context = int(env_values.get("MAX_CONTEXT") or env_values.get("CTX_SIZE") or 32768)
+                    if context <= 0:
+                        context = 32768
                 except (TypeError, ValueError):
                     context = 32768
 
