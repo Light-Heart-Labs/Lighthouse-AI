@@ -322,6 +322,37 @@
       ]
     },
     {
+      "id": "remote-routing-state",
+      "label": "Remote provider routing receipt",
+      "target_paths": [
+        "data/remote-provider/routing-state.json"
+      ],
+      "writers": [
+        {
+          "platform": "canonical-renderer",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "renderer-emits-remote-routing-state",
+          "type": "file_contains",
+          "path": "scripts/render-runtime-configs.py",
+          "needle": "def render_remote_routing_state"
+        },
+        {
+          "id": "schema-covers-remote-switch",
+          "type": "json_path_enum_contains",
+          "path": ".env.schema.json",
+          "json_path": "properties.REMOTE_LLM_ENABLED.enum",
+          "values": [
+            "true",
+            "false"
+          ]
+        }
+      ]
+    },
+    {
       "id": "perplexica",
       "label": "Perplexica settings and default chat model",
       "target_paths": [

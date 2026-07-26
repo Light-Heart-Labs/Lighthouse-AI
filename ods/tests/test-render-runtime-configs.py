@@ -109,6 +109,127 @@ def test_cloud_enabled_never_renders_local_switchboard() -> None:
     assert "model-router" not in cloud
 
 
+def test_remote_cloud_projection_uses_internal_egress_and_state_receipt() -> None:
+    payload = run_renderer(
+        "--surface",
+        "all",
+        "--ods-mode",
+        "cloud",
+        "--remote-llm-enabled",
+        "true",
+        "--remote-llm-transport",
+        "direct",
+        "--remote-llm-base-url",
+        "https://gpu.example.test",
+        "--remote-llm-model",
+        "qwen/remote:latest",
+    )
+    surfaces = {item["surface"] for item in payload["files"]}
+    assert "litellm-cloud" in surfaces
+    assert "remote-routing-state" in surfaces
+    assert "litellm-switchboard" not in surfaces
+
+    cloud = file_by_surface(payload, "litellm-cloud")["content"]
+    assert "model_name: ods/current" in cloud
+    assert 'model: "openai/qwen/remote:latest"' in cloud
+    assert 'model_name: "qwen/remote:latest"' in cloud
+    assert 'api_base: "http://remote-provider-egress:8091/v1"' in cloud
+    assert "api_key: not-needed" in cloud
+    assert "https://gpu.example.test" not in cloud
+    assert "REMOTE_LLM_API_KEY" not in cloud
+
+    env_content = file_by_surface(payload, "env")["content"]
+    assert "REMOTE_LLM_ENABLED=true" in env_content
+    assert "REMOTE_LLM_TRANSPORT=direct" in env_content
+    assert "REMOTE_LLM_BASE_URL=https://gpu.example.test/v1" in env_content
+    assert "REMOTE_LLM_MODEL=qwen/remote:latest" in env_content
+
+    state = json.loads(file_by_surface(payload, "remote-routing-state")["content"])
+    assert state["schema"] == "ods.remote-routing-state.v1"
+    assert state["enabled"] is True
+    assert state["mode"] == "cloud"
+    assert state["provider"] == {
+        "baseUrl": "https://gpu.example.test/v1",
+        "capability": "openai-compatible",
+        "model": "qwen/remote:latest",
+        "transport": "direct",
+    }
+    assert state["projection"] == {
+        "consumerRoute": "gateway",
+        "egressBaseUrl": "http://remote-provider-egress:8091/v1",
+        "gateway": "litellm-cloud",
+        "publicModel": "ods/current",
+    }
+    assert state["status"] == {
+        "proven": False,
+        "reason": "pending-provider-handshake",
+    }
+    assert "key" not in json.dumps(state).lower()
+
+
+def test_remote_routing_state_disabled_receipt_has_no_provider() -> None:
+    payload = run_renderer("--surface", "remote-routing-state")
+    state = json.loads(file_by_surface(payload, "remote-routing-state")["content"])
+    assert state["enabled"] is False
+    assert state["provider"] is None
+    assert state["status"] == {"proven": False, "reason": "disabled"}
+    assert "REMOTE_LLM_API_KEY" not in json.dumps(state)
+
+
+def test_remote_projection_requires_cloud_mode() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--surface",
+            "all",
+            "--ods-mode",
+            "local",
+            "--remote-llm-enabled",
+            "true",
+            "--remote-llm-transport",
+            "direct",
+            "--remote-llm-base-url",
+            "https://gpu.example.test/v1",
+            "--remote-llm-model",
+            "qwen-remote",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.returncode == 2
+    assert "ODS_MODE=cloud" in proc.stderr
+
+
+def test_remote_projection_rejects_unsafe_model_id() -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--surface",
+            "all",
+            "--ods-mode",
+            "cloud",
+            "--remote-llm-enabled",
+            "true",
+            "--remote-llm-transport",
+            "direct",
+            "--remote-llm-base-url",
+            "https://gpu.example.test/v1",
+            "--remote-llm-model",
+            "bad model; touch nope",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.returncode == 2
+    assert "model id without spaces" in proc.stderr
+
+
 def test_explicit_cloud_switchboard_render_fails_closed() -> None:
     proc = subprocess.run(
         [
@@ -432,6 +553,10 @@ def main() -> int:
         test_switchboard_surface_gated_on_enabled_mode,
         test_all_selects_one_mode_config,
         test_cloud_enabled_never_renders_local_switchboard,
+        test_remote_cloud_projection_uses_internal_egress_and_state_receipt,
+        test_remote_routing_state_disabled_receipt_has_no_provider,
+        test_remote_projection_requires_cloud_mode,
+        test_remote_projection_rejects_unsafe_model_id,
         test_explicit_cloud_switchboard_render_fails_closed,
         test_native_local_projection_uses_host_route_and_concrete_model,
         test_checked_in_mode_configs_match_renderer,

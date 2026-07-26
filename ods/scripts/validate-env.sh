@@ -318,6 +318,153 @@ _valid_http_endpoint() {
     }
 }
 
+_http_authority() {
+    local value="$1" remainder
+    remainder="${value#*://}"
+    printf '%s' "${remainder%%[/?]*}"
+}
+
+_http_host() {
+    local authority="$1" host
+    if [[ "$authority" =~ ^\[([^]]+)\](:[0-9]+)?$ ]]; then
+        host="${BASH_REMATCH[1]}"
+    else
+        host="${authority%%:*}"
+    fi
+    printf '%s' "${host,,}"
+}
+
+_remote_base_path_allowed() {
+    local value="$1" remainder path
+    [[ "$value" != *"?"* ]] || return 1
+    remainder="${value#*://}"
+    if [[ "$remainder" == */* ]]; then
+        path="/${remainder#*/}"
+    else
+        path="/"
+    fi
+    while [[ "$path" == */ && "$path" != "/" ]]; do
+        path="${path%/}"
+    done
+    [[ "$path" == "/" || "$path" == "/v1" || "$path" == "/api/v1" ]]
+}
+
+_remote_direct_host_allowed() {
+    local host="$1"
+    case "$host" in
+        localhost|localhost.*|0|0.0.0.0|127.*|169.254.*)
+            return 1
+            ;;
+    esac
+    [[ "$host" != "::" && "$host" != "::1" && "$host" != fe80:* ]]
+}
+
+remote_text_keys=(
+    REMOTE_LLM_TRANSPORT
+    REMOTE_LLM_BASE_URL
+    REMOTE_LLM_MODEL
+    REMOTE_LLM_TLS_CA_FILE
+    REMOTE_LLM_SSH_HOST
+    REMOTE_LLM_SSH_USER
+    REMOTE_LLM_SSH_INFERENCE_HOST
+    REMOTE_LLM_SSH_CONTROL_HOST
+    REMOTE_ODS_PEER_URL
+)
+for key in "${remote_text_keys[@]}"; do
+    val="${ENV_MAP[$key]-}"
+    if [[ -n "$val" && "$val" =~ [[:cntrl:]] ]]; then
+        contract_errors+=(
+          "$key: control characters are not allowed in remote provider metadata (line ${ENV_LINE[$key]:-?})"
+        )
+    fi
+done
+
+remote_enabled="${ENV_MAP[REMOTE_LLM_ENABLED]-}"
+remote_transport="${ENV_MAP[REMOTE_LLM_TRANSPORT]-}"
+remote_base="${ENV_MAP[REMOTE_LLM_BASE_URL]-}"
+remote_base_lc="${remote_base,,}"
+while [[ "$remote_base_lc" == */ ]]; do
+    remote_base_lc="${remote_base_lc%/}"
+done
+remote_model="${ENV_MAP[REMOTE_LLM_MODEL]-}"
+
+if [[ -n "$remote_base" ]]; then
+    if ! _valid_http_endpoint "$remote_base_lc"; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: expected an HTTP(S) OpenAI-compatible provider base URL (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    elif ! _remote_base_path_allowed "$remote_base_lc"; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: expected a provider root, /v1, or /api/v1 base path without query parameters (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    fi
+fi
+
+if [[ -n "${ENV_MAP[REMOTE_ODS_PEER_URL]-}" ]]; then
+    remote_peer_lc="${ENV_MAP[REMOTE_ODS_PEER_URL],,}"
+    while [[ "$remote_peer_lc" == */ ]]; do
+        remote_peer_lc="${remote_peer_lc%/}"
+    done
+    if ! _valid_http_endpoint "$remote_peer_lc"; then
+        contract_errors+=(
+          "REMOTE_ODS_PEER_URL: expected an HTTP(S) ODS peer control-plane root (line ${ENV_LINE[REMOTE_ODS_PEER_URL]:-?})"
+        )
+    fi
+fi
+
+if [[ -n "$remote_model" && ! "$remote_model" =~ ^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$ ]]; then
+    contract_errors+=(
+      "REMOTE_LLM_MODEL: expected a concrete provider model id without spaces or shell metacharacters (line ${ENV_LINE[REMOTE_LLM_MODEL]:-?})"
+    )
+fi
+
+if [[ "$remote_enabled" == "true" ]]; then
+    if [[ "${ENV_MAP[ODS_MODE]-local}" != "cloud" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_ENABLED: remote routing is active only when ODS_MODE=cloud (line ${ENV_LINE[REMOTE_LLM_ENABLED]:-?})"
+        )
+    fi
+    if [[ "$remote_transport" != "direct" && "$remote_transport" != "ssh" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_TRANSPORT: remote routing requires direct or ssh transport (line ${ENV_LINE[REMOTE_LLM_TRANSPORT]:-?})"
+        )
+    fi
+    if [[ -z "$remote_base" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: remote routing requires a provider base URL (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    fi
+    if [[ -z "$remote_model" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_MODEL: remote routing requires a concrete provider model id (line ${ENV_LINE[REMOTE_LLM_MODEL]:-?})"
+        )
+    fi
+
+    if [[ "$remote_transport" == "direct" && -n "$remote_base" ]]; then
+        if [[ "$remote_base_lc" != https://* ]]; then
+            contract_errors+=(
+              "REMOTE_LLM_BASE_URL: direct remote transport requires HTTPS in this provider slice (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+            )
+        fi
+        remote_host="$(_http_host "$(_http_authority "$remote_base_lc")")"
+        if ! _remote_direct_host_allowed "$remote_host"; then
+            contract_errors+=(
+              "REMOTE_LLM_BASE_URL: direct remote transport must not target loopback or link-local addresses from LiteLLM's container namespace (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+            )
+        fi
+    fi
+
+    if [[ "$remote_transport" == "ssh" ]]; then
+        for key in REMOTE_LLM_SSH_HOST REMOTE_LLM_SSH_USER REMOTE_LLM_SSH_PORT REMOTE_LLM_SSH_INFERENCE_HOST REMOTE_LLM_SSH_INFERENCE_PORT; do
+            if [[ -z "${ENV_MAP[$key]-}" ]]; then
+                contract_errors+=(
+                  "$key: SSH remote transport requires this value (line ${ENV_LINE[REMOTE_LLM_TRANSPORT]:-?})"
+                )
+            fi
+        done
+    fi
+fi
+
 embedding_model="${ENV_MAP[EMBEDDING_MODEL]-BAAI/bge-base-en-v1.5}"
 embedding_model_lower="${embedding_model,,}"
 embedding_artifact_name="${embedding_model_lower##*/}"

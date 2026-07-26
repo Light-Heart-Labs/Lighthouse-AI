@@ -325,6 +325,109 @@ for quantized_model in 'someone/bge-m3-Q4_K_M' 'someone/bge-m3-q8_0' 'someone/bg
     fi
 done
 
+# 16. Remote provider metadata is valid only as an explicit cloud-mode route.
+cp "$TMP_DIR/valid.env" "$TMP_DIR/remote-direct.env"
+cat >> "$TMP_DIR/remote-direct.env" <<'EOF'
+ODS_MODE=cloud
+REMOTE_LLM_ENABLED=true
+REMOTE_LLM_TRANSPORT=direct
+REMOTE_LLM_BASE_URL=https://gpu.example.test
+REMOTE_LLM_MODEL=qwen/remote:latest
+EOF
+set +e
+out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/remote-direct.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+r=$?
+set -e
+if [[ $r -eq 0 ]]; then
+    pass "Remote direct provider metadata is valid in cloud mode"
+else
+    fail "Remote direct provider metadata should be valid in cloud mode"
+fi
+
+cp "$TMP_DIR/valid.env" "$TMP_DIR/remote-local.env"
+cat >> "$TMP_DIR/remote-local.env" <<'EOF'
+ODS_MODE=local
+REMOTE_LLM_ENABLED=true
+REMOTE_LLM_TRANSPORT=direct
+REMOTE_LLM_BASE_URL=https://gpu.example.test/v1
+REMOTE_LLM_MODEL=qwen-remote
+EOF
+set +e
+out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/remote-local.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+r=$?
+set -e
+if [[ $r -eq 2 ]] && echo "$out" | grep -q "ODS_MODE=cloud"; then
+    pass "Remote provider activation is rejected outside cloud mode"
+else
+    fail "Remote provider activation should be rejected outside cloud mode"
+fi
+
+# 17. Direct remote URLs fail closed for plaintext, loopback, credentials,
+# query strings, and unexpected base paths.
+for invalid_remote_url in 'http://gpu.example.test/v1' 'https://127.0.0.1:8000/v1' 'https://user:secret@gpu.example.test/v1' 'https://gpu.example.test/v1?tenant=ods' 'https://gpu.example.test/proxy'; do
+    cp "$TMP_DIR/valid.env" "$TMP_DIR/invalid-remote-url.env"
+    cat >> "$TMP_DIR/invalid-remote-url.env" <<EOF
+ODS_MODE=cloud
+REMOTE_LLM_ENABLED=true
+REMOTE_LLM_TRANSPORT=direct
+REMOTE_LLM_BASE_URL=$invalid_remote_url
+REMOTE_LLM_MODEL=qwen-remote
+EOF
+    set +e
+    out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/invalid-remote-url.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+    r=$?
+    set -e
+    if [[ $r -eq 2 ]] && echo "$out" | grep -q "REMOTE_LLM_BASE_URL"; then
+        pass "Unsafe direct remote URL is rejected: $invalid_remote_url"
+    else
+        fail "Unsafe direct remote URL should be rejected: $invalid_remote_url"
+    fi
+done
+
+# 18. SSH transport requires explicit host/user/port and inference endpoint
+# metadata, while allowing the remote-side provider URL to be plain HTTP.
+cp "$TMP_DIR/valid.env" "$TMP_DIR/remote-ssh.env"
+cat >> "$TMP_DIR/remote-ssh.env" <<'EOF'
+ODS_MODE=cloud
+REMOTE_LLM_ENABLED=true
+REMOTE_LLM_TRANSPORT=ssh
+REMOTE_LLM_BASE_URL=http://remote-inference.internal:8000/v1
+REMOTE_LLM_MODEL=qwen-remote
+REMOTE_LLM_SSH_HOST=gpu.example.test
+REMOTE_LLM_SSH_USER=ods
+REMOTE_LLM_SSH_PORT=22
+REMOTE_LLM_SSH_INFERENCE_HOST=127.0.0.1
+REMOTE_LLM_SSH_INFERENCE_PORT=8000
+EOF
+set +e
+out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/remote-ssh.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+r=$?
+set -e
+if [[ $r -eq 0 ]]; then
+    pass "Remote SSH transport metadata is valid with required fields"
+else
+    fail "Remote SSH transport metadata should be valid with required fields"
+fi
+
+cp "$TMP_DIR/remote-ssh.env" "$TMP_DIR/remote-ssh-missing.env"
+sed -i.bak '/REMOTE_LLM_SSH_INFERENCE_PORT=/d' "$TMP_DIR/remote-ssh-missing.env"
+set +e
+out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/remote-ssh-missing.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+r=$?
+set -e
+if [[ $r -eq 2 ]] && echo "$out" | grep -q "REMOTE_LLM_SSH_INFERENCE_PORT"; then
+    pass "Remote SSH transport rejects missing inference port"
+else
+    fail "Remote SSH transport should reject missing inference port"
+fi
+
+# 19. Remote provider secrets are not ordinary env settings in this slice.
+if ! grep -q "REMOTE_LLM_API_KEY" "$ROOT_DIR/.env.schema.json" "$ROOT_DIR/.env.example"; then
+    pass "Remote provider API key is absent from schema and .env.example"
+else
+    fail "Remote provider API key must not be added as an ordinary .env field"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
