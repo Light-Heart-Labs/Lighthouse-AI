@@ -214,4 +214,32 @@ describe('Settings', () => {
     expect(screen.getByDisplayValue('192.168.1.10')).toBeInTheDocument()
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/settings/env')).toHaveLength(3)
   })
+
+  test('routing table links open the service UI path, not the bare port root', async () => {
+    renderSettings((url) => (
+      url === '/api/settings/summary'
+        ? response({
+            ...summary,
+            services: [
+              // /api/status resolves manifest ui_path into url/href against 127.0.0.1.
+              { id: 'qdrant', name: 'Qdrant', status: 'healthy', port: 6333, url: 'http://127.0.0.1:6333/dashboard', href: 'http://127.0.0.1:6333/dashboard' },
+              { id: 'litellm', name: 'LiteLLM', status: 'healthy', port: 4000, url: 'http://127.0.0.1:4000/ui/', href: 'http://127.0.0.1:4000/ui/' },
+              { id: 'open-webui', name: 'Open WebUI', status: 'healthy', port: 3000, url: 'http://127.0.0.1:3000/', href: 'http://127.0.0.1:3000/' },
+              { id: 'internal-only', name: 'Internal Only', status: 'healthy', port: 0 },
+            ],
+          })
+        : null
+    ))
+
+    const host = window.location.hostname
+    expect(await screen.findByRole('link', { name: /Qdrant/ }))
+      .toHaveAttribute('href', `http://${host}:6333/dashboard`)
+    expect(screen.getByRole('link', { name: /LiteLLM/ }))
+      .toHaveAttribute('href', `http://${host}:4000/ui/`)
+    // A root ui_path must not gain a trailing path segment.
+    expect(screen.getByRole('link', { name: /Open WebUI/ }))
+      .toHaveAttribute('href', `http://${host}:3000`)
+    // Portless services stay unlinked.
+    expect(screen.queryByRole('link', { name: /Internal Only/ })).not.toBeInTheDocument()
+  })
 })

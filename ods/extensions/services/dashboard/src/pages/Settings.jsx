@@ -95,6 +95,21 @@ const getErrorText = (err) => (
 const getDashboardHost = () => (typeof window !== 'undefined' ? window.location.hostname : 'localhost')
 const getExternalUrl = (port) => (port ? `http://${getDashboardHost()}:${port}` : null)
 
+// /api/status already resolves each service's manifest ui_path into `url`, but
+// against 127.0.0.1. Take the path from there and keep the browser's hostname
+// so a service whose UI is not at the port root (LiteLLM /ui/, Qdrant and
+// Token Spy /dashboard) opens its UI instead of the bare API root.
+const getServiceUiPath = (service) => {
+  const declared = service?.url || service?.href
+  if (!declared) return ''
+  try {
+    const { pathname, search } = new URL(declared)
+    return `${pathname === '/' ? '' : pathname}${search}`
+  } catch {
+    return ''
+  }
+}
+
 const todayKey = () => {
   const now = new Date()
   const month = String(now.getMonth() + 1).padStart(2, '0')
@@ -861,7 +876,8 @@ function RouteStatusCard({ tone, label, count, description }) {
 }
 
 function RouteRow({ service }) {
-  const href = getExternalUrl(service.port)
+  const base = getExternalUrl(service.port)
+  const href = base ? `${base}${getServiceUiPath(service)}` : null
   const healthy = service.status === 'healthy'
   const degraded = service.status === 'degraded'
   const dot = healthy ? 'bg-emerald-400' : degraded ? 'bg-amber-400' : 'bg-red-400'
