@@ -42,6 +42,7 @@ def main() -> int:
     for endpoint in (
         "/api/remote-provider/status",
         "/api/remote-provider/plan",
+        "/api/remote-provider/probe",
         "/api/remote-provider/apply",
     ):
         require(re.escape(endpoint), text, f"CLI must call {endpoint}")
@@ -97,6 +98,21 @@ def main() -> int:
     for subcommand in ("status", "plan", "configure", "test", "disable", "remove"):
         if subcommand not in body:
             fail(f"remote-provider CLI missing subcommand: {subcommand}")
+    require(
+        r"^_remote_provider_probe_configured\(\) \{",
+        text,
+        "remote-provider CLI must support configured-route egress probes",
+    )
+    require(
+        r"_remote_provider_request POST /api/remote-provider/probe",
+        text,
+        "configured remote-provider test must call the egress probe endpoint",
+    )
+    require(
+        r"if \[\[ \"\$use_configured_probe\" == \"true\" \]\]; then[\s\S]*_remote_provider_probe_configured \"\$@\"",
+        body,
+        "remote-provider test must use configured-route probe when provider options are absent",
+    )
 
     print("[PASS] remote-provider CLI static contract")
     return 0

@@ -3610,6 +3610,8 @@ Commands:
       Print the redacted lifecycle plan without mutating state.
   configure --base-url URL --model MODEL [secret options]
       Persist a direct OpenAI-compatible provider route and provider API key.
+  test [--json]
+      Probe the configured provider route through the internal egress service.
   test --base-url URL --model MODEL [secret options]
       Probe a direct provider without writing route state or secrets.
   disable
@@ -3673,7 +3675,17 @@ _remote_provider_request() {
 _remote_provider_response_error() {
     local response_file="$1"
     local detail=""
-    detail="$(jq -r '.detail // .error // empty' "$response_file" 2>/dev/null || true)"
+    detail="$(jq -r '
+        if (.detail | type) == "object" then
+            .detail.message // .detail.type // (.detail | tojson)
+        elif (.detail // "") != "" then
+            .detail
+        elif (.error | type) == "object" then
+            .error.message // .error.type // (.error | tojson)
+        else
+            .error // empty
+        end
+    ' "$response_file" 2>/dev/null || true)"
     if [[ -z "$detail" ]]; then
         detail="$(head -c 500 "$response_file" 2>/dev/null || true)"
     fi
@@ -3816,6 +3828,60 @@ _remote_provider_print_apply_result() {
     ' "$response_file"
 }
 
+_remote_provider_print_probe_result() {
+    local response_file="$1"
+    jq -r '
+        "Remote provider probe: " + (if .ok == true then "ok" else "failed" end),
+        "Transport: \(.transport // "unknown")",
+        (if .probe then
+            "Probe: HTTP \(.probe.httpStatus // "unknown") at \(.probe.endpoint // "/v1/models")" +
+            (if (.probe.modelCount // null) != null then " (\(.probe.modelCount) models)" else "" end)
+         else empty end),
+        (if .tunnel then
+            "Tunnel: \(.tunnel.status // "unknown")" +
+            (if (.tunnel.reason // "") != "" then " (\(.tunnel.reason))" else "" end)
+         else empty end)
+    ' "$response_file"
+}
+
+_remote_provider_probe_configured() {
+    local json_mode="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_mode="true"; shift ;;
+            --help|-h) _remote_provider_usage; return 0 ;;
+            *) error "Unknown remote-provider test option for configured route: $1" ;;
+        esac
+    done
+
+    local response_file http_code curl_status
+    response_file=$(mktemp "${TMPDIR:-/tmp}/ods-remote-provider-probe.XXXXXX") || \
+        error "Could not create a remote-provider response file"
+    chmod 600 "$response_file"
+    trap 'rm -f "$response_file"' INT TERM HUP
+    if http_code="$(_remote_provider_request POST /api/remote-provider/probe "$response_file" "" 20)"; then
+        curl_status=0
+    else
+        curl_status=$?
+    fi
+    if [[ $curl_status -ne 0 ]]; then
+        rm -f "$response_file"; trap - INT TERM HUP
+        error "Remote-provider test request failed before Dashboard API completed"
+    fi
+    if [[ "$http_code" != "200" ]]; then
+        local detail
+        detail="$(_remote_provider_response_error "$response_file")"
+        rm -f "$response_file"; trap - INT TERM HUP
+        error "Remote-provider test failed (HTTP $http_code): $detail"
+    fi
+    if [[ "$json_mode" == "true" ]]; then
+        jq . "$response_file"
+    else
+        _remote_provider_print_probe_result "$response_file"
+    fi
+    rm -f "$response_file"; trap - INT TERM HUP
+}
+
 cmd_remote_provider() {
     local subcmd="${1:-status}"
     shift || true
@@ -3905,6 +3971,21 @@ cmd_remote_provider() {
             rm -f "$response_file"; trap - INT TERM HUP
             ;;
         configure|test|disable|remove)
+            if [[ "$subcmd" == "test" ]]; then
+                local use_configured_probe="true" arg
+                for arg in "$@"; do
+                    case "$arg" in
+                        --transport|--base-url|--model|--api-key|--api-key-stdin|--api-key-file|--api-key-env)
+                            use_configured_probe="false"
+                            break
+                            ;;
+                    esac
+                done
+                if [[ "$use_configured_probe" == "true" ]]; then
+                    _remote_provider_probe_configured "$@"
+                    return 0
+                fi
+            fi
             local payload_file response_file http_code curl_status
             payload_file=$(mktemp "${TMPDIR:-/tmp}/ods-remote-provider-payload.XXXXXX") || \
                 error "Could not create a remote-provider request file"
@@ -5449,6 +5530,8 @@ ${CYAN}Remote Provider Commands:${NC}
                       Preview configure/test/disable/remove as redacted JSON
   remote-provider configure --base-url URL --model MODEL --api-key-stdin
                       Persist a direct OpenAI-compatible remote GPU provider
+  remote-provider test [--json]
+                      Probe the configured provider through egress
   remote-provider test --base-url URL --model MODEL --api-key-stdin
                       Probe a provider without writing state or secrets
 
@@ -5483,6 +5566,7 @@ ${CYAN}Examples:${NC}
   ods enable n8n                # Enable the n8n extension
   ods disable whisper           # Disable Whisper STT
   ods mode local                # Switch to local mode
+  ods remote-provider test      # Probe the configured remote provider route
   printf '%s\n' "\$REMOTE_LLM_API_KEY" | ods remote-provider test --base-url https://gpu.example/v1 --model qwen/remote:latest --api-key-stdin
                                   # Test a remote provider without persisting secrets
   ods preset save my-setup      # Snapshot your config
