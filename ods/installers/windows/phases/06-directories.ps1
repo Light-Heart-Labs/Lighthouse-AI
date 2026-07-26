@@ -96,6 +96,8 @@ $_expectedRegularFiles = @(
     "config\litellm\lemonade.yaml",
     "config\litellm\switchboard.yaml",
     "data\.extensions-lock",
+    "extensions\services\litellm\select-config.sh",
+    "extensions\services\litellm\ods_token_spy_callback.py",
     "extensions\services\hermes\cli-config.yaml.template",
     "extensions\services\hermes\SOUL.md.template",
     "extensions\services\hermes-proxy\Caddyfile",
