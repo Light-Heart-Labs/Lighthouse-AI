@@ -244,7 +244,7 @@ def _read_json_file(path: Path, default):
     try:
         if path.is_file():
             return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeError) as e:
         logger.debug("Failed to read JSON file %s: %s", path, e)
     return default
 
