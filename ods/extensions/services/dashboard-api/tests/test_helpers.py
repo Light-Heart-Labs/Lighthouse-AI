@@ -1583,3 +1583,11 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+def test_read_json_file_returns_default_for_directory_path(tmp_path):
+    from helpers import _read_json_file
+    d = tmp_path / "test_dir"
+    d.mkdir()
+
+    assert _read_json_file(d, {"default": True}) == {"default": True}
