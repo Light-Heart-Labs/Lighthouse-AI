@@ -7,15 +7,19 @@ request preparation small and easy to test without sockets.
 from __future__ import annotations
 
 import json
+import socket
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from .policy import (
     DEFAULT_POLICY_PATH,
     INTERNAL_EGRESS_BASE_URL,
     PUBLIC_MODEL_ALIAS,
     PolicyError,
+    classify_forbidden_ip_address,
     load_policy,
     plan_route,
 )
@@ -29,6 +33,7 @@ FORWARD_PATHS = {
 }
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_SECRET_PATH = Path("/state/remote-provider/secrets/provider-api-key")
+AddressResolver = Callable[..., list[tuple[Any, ...]]]
 HOP_BY_HOP_HEADERS = {
     "authorization",
     "connection",
@@ -192,6 +197,85 @@ def _join_openai_path(base_url: str, path: str) -> str:
     return f"{base}{suffix}"
 
 
+def _provider_host_port(base_url: str) -> tuple[str, int]:
+    try:
+        parts = urlsplit(base_url)
+        port = parts.port
+    except ValueError as exc:
+        raise EgressError(503, "invalid_route", f"provider URL is invalid: {exc}") from exc
+    host = parts.hostname or ""
+    if not host:
+        raise EgressError(503, "invalid_route", "provider route is missing a host")
+    if port is None:
+        port = 443 if parts.scheme == "https" else 80
+    return host, port
+
+
+def resolve_direct_provider_addresses(
+    base_url: str,
+    *,
+    resolver: AddressResolver = socket.getaddrinfo,
+) -> list[str]:
+    """Resolve a direct provider URL to unique IP addresses for policy checks."""
+    host, port = _provider_host_port(base_url)
+    try:
+        results = resolver(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise EgressError(
+            503,
+            "provider_resolution_failed",
+            f"remote provider host could not be resolved: {exc}",
+        ) from exc
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for result in results:
+        if len(result) < 5 or not isinstance(result[4], tuple) or not result[4]:
+            continue
+        address = str(result[4][0])
+        if address and address not in seen:
+            seen.add(address)
+            addresses.append(address)
+    if not addresses:
+        raise EgressError(
+            503,
+            "provider_resolution_empty",
+            "remote provider host did not resolve to any usable addresses",
+        )
+    return addresses
+
+
+def validate_direct_provider_resolution(
+    route: Mapping[str, Any],
+    *,
+    resolver: AddressResolver = socket.getaddrinfo,
+) -> list[str]:
+    """Fail closed when a direct provider resolves to unsafe address space."""
+    if route.get("enabled") is not True or route.get("transport") != "direct":
+        return []
+    provider = route.get("provider")
+    if not isinstance(provider, Mapping):
+        raise EgressError(503, "invalid_route", "provider route is missing")
+    base_url = str(provider.get("baseUrl") or "")
+    host, _port = _provider_host_port(base_url)
+    literal_reason = classify_forbidden_ip_address(host)
+    if literal_reason:
+        raise EgressError(
+            503,
+            "provider_resolution_rejected",
+            f"remote provider URL targets {literal_reason} address space",
+        )
+    addresses = resolve_direct_provider_addresses(base_url, resolver=resolver)
+    for address in addresses:
+        reason = classify_forbidden_ip_address(address)
+        if reason:
+            raise EgressError(
+                503,
+                "provider_resolution_rejected",
+                f"remote provider host resolves to {reason} address space",
+            )
+    return addresses
+
+
 def prepare_upstream_request(
     *,
     method: str,
@@ -263,4 +347,6 @@ __all__ = [
     "read_provider_secret",
     "route_from_state",
     "sanitize_forward_headers",
+    "resolve_direct_provider_addresses",
+    "validate_direct_provider_resolution",
 ]

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -17,6 +18,7 @@ from remote_provider.egress import (  # noqa: E402
     prepare_upstream_request,
     provider_secret_status,
     route_from_state,
+    validate_direct_provider_resolution,
 )
 
 
@@ -66,6 +68,29 @@ def route_state(**provider_overrides: str) -> dict[str, object]:
         },
         "status": {"proven": False, "reason": "pending-provider-handshake"},
     }
+
+
+def resolver_for(*addresses: str):
+    def _resolver(host: str, port: int, *args, **kwargs):
+        results = []
+        for address in addresses:
+            if ":" in address:
+                results.append(
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_STREAM,
+                        6,
+                        "",
+                        (address, port, 0, 0),
+                    )
+                )
+            else:
+                results.append(
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))
+                )
+        return results
+
+    return _resolver
 
 
 def test_compose_service_is_internal_only_and_hardened() -> None:
@@ -123,6 +148,34 @@ def test_route_state_prepares_direct_provider_request_without_client_auth() -> N
     assert_true("connection" not in {key.lower() for key in upstream.headers}, "hop-by-hop headers must be stripped")
 
 
+def test_direct_resolution_allows_only_global_provider_addresses() -> None:
+    route = route_from_state(route_state())
+    addresses = validate_direct_provider_resolution(
+        route,
+        resolver=resolver_for("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"),
+    )
+    assert_true(addresses == ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"], "global addresses should be accepted")
+
+
+def test_direct_resolution_rejects_unsafe_dns_answers() -> None:
+    route = route_from_state(route_state())
+    for address in ("10.0.0.5", "127.0.0.1", "169.254.1.10", "224.0.0.1"):
+        assert_egress_error(
+            lambda address=address: validate_direct_provider_resolution(
+                route,
+                resolver=resolver_for(address),
+            ),
+            "provider_resolution_rejected",
+        )
+    assert_egress_error(
+        lambda: validate_direct_provider_resolution(
+            route,
+            resolver=lambda *_args, **_kwargs: [],
+        ),
+        "provider_resolution_empty",
+    )
+
+
 def test_egress_fails_closed_without_secret_or_supported_transport() -> None:
     route = route_from_state(route_state())
     assert_egress_error(
@@ -158,6 +211,7 @@ def test_service_source_avoids_public_env_secret_names() -> None:
     assert_true("REMOTE_LLM_API_KEY" not in text, "app must not read provider key from public env")
     assert_true("ODS_REMOTE_PROVIDER_API_KEY_FILE" in text, "app must read only the provider key file path")
     assert_true("read_provider_secret" in text, "app must use shared secret-file helper")
+    assert_true("validate_direct_provider_resolution" in text, "app must enforce runtime DNS/address policy")
     assert_true(POLICY.exists(), "policy document must exist for mounted service config")
 
 
@@ -167,6 +221,8 @@ def main() -> int:
         test_manifest_and_network_policy_mark_no_lan_exposure,
         test_image_copies_shared_policy_package,
         test_route_state_prepares_direct_provider_request_without_client_auth,
+        test_direct_resolution_allows_only_global_provider_addresses,
+        test_direct_resolution_rejects_unsafe_dns_answers,
         test_egress_fails_closed_without_secret_or_supported_transport,
         test_secret_file_status_is_support_bundle_safe,
         test_service_source_avoids_public_env_secret_names,

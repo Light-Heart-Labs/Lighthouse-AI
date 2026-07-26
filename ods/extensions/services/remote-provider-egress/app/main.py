@@ -24,6 +24,7 @@ from remote_provider.egress import (
     provider_secret_status,
     read_provider_secret,
     route_from_state,
+    validate_direct_provider_resolution,
 )
 from remote_provider.policy import DEFAULT_POLICY_PATH, load_policy
 
@@ -120,12 +121,24 @@ async def health() -> dict[str, Any]:
             "route": _safe_route_summary(route),
             "secret": secret,
         }
+    try:
+        resolved_addresses = validate_direct_provider_resolution(route)
+    except EgressError as exc:
+        return {
+            "status": "degraded",
+            "ready": False,
+            "reason": exc.code,
+            "route": _safe_route_summary(route),
+            "resolution": {"ok": False, "reason": exc.code},
+            "secret": secret,
+        }
     if route.get("transport") == "direct" and not secret["configured"]:
         return {
             "status": "degraded",
             "ready": False,
             "reason": "missing_provider_secret",
             "route": _safe_route_summary(route),
+            "resolution": {"ok": True, "addressCount": len(resolved_addresses)},
             "secret": secret,
         }
     return {
@@ -133,6 +146,7 @@ async def health() -> dict[str, Any]:
         "ready": True,
         "reason": "ready",
         "route": _safe_route_summary(route),
+        "resolution": {"ok": True, "addressCount": len(resolved_addresses)},
         "secret": secret,
     }
 
@@ -164,6 +178,7 @@ async def forward(full_path: str, request: Request) -> Response:
     path = "/" + full_path
     try:
         route = _load_route()
+        validate_direct_provider_resolution(route)
         secret = read_provider_secret(SECRET_PATH)
         upstream_request = prepare_upstream_request(
             method=request.method,

@@ -14,6 +14,7 @@ from .policy import (  # noqa: F401
     REMOTE_ROUTE_SCHEMA,
     SCHEMA,
     PolicyError,
+    classify_forbidden_ip_address,
     load_policy,
     normalize_provider_base_url,
     plan_route,
@@ -33,8 +34,10 @@ from .egress import (  # noqa: F401
     prepare_upstream_request,
     provider_secret_status,
     read_provider_secret,
+    resolve_direct_provider_addresses,
     route_from_state,
     sanitize_forward_headers,
+    validate_direct_provider_resolution,
 )
 
 __all__ = [
@@ -53,6 +56,7 @@ __all__ = [
     "EgressError",
     "PolicyError",
     "UpstreamRequest",
+    "classify_forbidden_ip_address",
     "load_policy",
     "load_route_state",
     "normalize_provider_base_url",
@@ -62,8 +66,10 @@ __all__ = [
     "public_activation_receipt",
     "read_provider_secret",
     "redacted_secret_refs",
+    "resolve_direct_provider_addresses",
     "route_from_state",
     "sanitize_forward_headers",
+    "validate_direct_provider_resolution",
     "validate_public_env_keys",
     "validate_remote_model_id",
 ]

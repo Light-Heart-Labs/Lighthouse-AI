@@ -97,7 +97,7 @@ def _transport_url_policy(policy: Mapping[str, Any], transport: str) -> Mapping[
     return url_policy
 
 
-def _classify_forbidden_ip(host: str) -> str:
+def classify_forbidden_ip_address(host: str) -> str:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
@@ -116,6 +116,8 @@ def _classify_forbidden_ip(host: str) -> str:
         return "private"
     if address.is_reserved:
         return "reserved"
+    if not address.is_global:
+        return "non_global"
     return ""
 
 
@@ -180,7 +182,7 @@ def normalize_provider_base_url(
     if transport_name == "direct":
         if lower_host in LOCAL_HOSTNAMES or lower_host.endswith(".localhost"):
             raise PolicyError("direct remote provider URL must not target local hostnames")
-        forbidden_class = _classify_forbidden_ip(lower_host)
+        forbidden_class = classify_forbidden_ip_address(lower_host)
         if forbidden_class:
             raise PolicyError(
                 f"direct remote provider URL must not use {forbidden_class} IP literals"
