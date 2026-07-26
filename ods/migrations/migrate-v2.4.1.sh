@@ -12,7 +12,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-$SCRIPT_DIR/..}"
-ENV_FILE="${INSTALL_DIR}/.env"
+ENV_FILE="${ENV_FILE:-${INSTALL_DIR}/.env}"
 
 [[ -f "$ENV_FILE" ]] || { echo "Migration v2.4.1: no .env at $ENV_FILE — skipping"; exit 0; }
 
@@ -24,12 +24,17 @@ if [[ -z "$existing" ]]; then
         # Update empty value in place. Use awk to dodge sed delimiter pitfalls.
         awk -v v="$new_key" '
             { if (index($0, "SHIELD_API_KEY=") == 1) print "SHIELD_API_KEY=" v; else print }
-        ' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv -f "${ENV_FILE}.tmp" "$ENV_FILE"
+        ' "$ENV_FILE" > "${ENV_FILE}.tmp"
     else
-        echo "" >> "$ENV_FILE"
-        echo "# Privacy Shield cross-service auth (PR #1069)" >> "$ENV_FILE"
-        echo "SHIELD_API_KEY=${new_key}" >> "$ENV_FILE"
+        # Append missing key block atomically via temp file.
+        {
+            cat "$ENV_FILE"
+            echo ""
+            echo "# Privacy Shield cross-service auth (PR #1069)"
+            echo "SHIELD_API_KEY=${new_key}"
+        } > "${ENV_FILE}.tmp"
     fi
+    mv -f "${ENV_FILE}.tmp" "$ENV_FILE"
     echo "Added SHIELD_API_KEY to .env"
 fi
 

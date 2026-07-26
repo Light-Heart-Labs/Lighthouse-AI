@@ -238,6 +238,32 @@ else
 fi
 
 # ============================================================================
+# Test 13: v2.4.1 migration backfills empty SHIELD_API_KEY= atomically
+# ============================================================================
+MIGRATION_V241_SCRIPT="$SCRIPT_DIR/migrations/migrate-v2.4.1.sh"
+if [[ -f "$MIGRATION_V241_SCRIPT" ]]; then
+    TEST_ENV="$TEMP_DIR/test_v241_empty.env"
+    echo "EXISTING_VAR=1" > "$TEST_ENV"
+    echo "SHIELD_API_KEY=" >> "$TEST_ENV"
+    INSTALL_DIR="$TEMP_DIR" ENV_FILE="$TEST_ENV" bash "$MIGRATION_V241_SCRIPT" >/dev/null 2>&1 || true
+    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_ENV"; then
+        pass "Migration v2.4.1: backfills empty SHIELD_API_KEY= atomically"
+    else
+        fail "Migration v2.4.1: failed to backfill empty SHIELD_API_KEY="
+    fi
+
+    # Test 14: v2.4.1 migration appends missing SHIELD_API_KEY atomically
+    TEST_MISSING_ENV="$TEMP_DIR/test_v241_missing.env"
+    echo "EXISTING_VAR=1" > "$TEST_MISSING_ENV"
+    INSTALL_DIR="$TEMP_DIR" ENV_FILE="$TEST_MISSING_ENV" bash "$MIGRATION_V241_SCRIPT" >/dev/null 2>&1 || true
+    if grep -qE '^SHIELD_API_KEY=[0-9a-f]{64}' "$TEST_MISSING_ENV" && grep -q "EXISTING_VAR=1" "$TEST_MISSING_ENV"; then
+        pass "Migration v2.4.1: appends missing SHIELD_API_KEY atomically via temp replacement"
+    else
+        fail "Migration v2.4.1: failed to append missing SHIELD_API_KEY atomically"
+    fi
+fi
+
+# ============================================================================
 # Summary
 # ============================================================================
 echo ""
