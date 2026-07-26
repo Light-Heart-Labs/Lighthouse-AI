@@ -283,6 +283,17 @@ def patch_config(
             f.write(updated)
             f.flush()
             os.fsync(f.fileno())
+        if path.exists():
+            try:
+                st = os.stat(path)
+                os.chmod(tmp_path, st.st_mode)
+                if hasattr(os, "chown"):
+                    try:
+                        os.chown(tmp_path, st.st_uid, st.st_gid)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
         os.replace(tmp_path, str(path))
     except BaseException:
         try:

@@ -167,6 +167,17 @@ try:
         json.dump(data, f, indent=2)
         f.flush()
         os.fsync(f.fileno())
+    if os.path.exists(sessions_file):
+        try:
+            st = os.stat(sessions_file)
+            os.chmod(tmp_path, st.st_mode)
+            if hasattr(os, 'chown'):
+                try:
+                    os.chown(tmp_path, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
+        except OSError:
+            pass
     os.replace(tmp_path, sessions_file)
 except BaseException:
     try:

@@ -246,6 +246,38 @@ else
 fi
 
 # ============================================================================
+# Test 11: Mode metadata is preserved across atomic replacement
+# ============================================================================
+MODE_DIR="$TEMP_DIR/mode_test"
+mkdir -p "$MODE_DIR"
+cat > "$MODE_DIR/sessions.json" <<'EOF'
+{
+  "session1": { "sessionId": "bloated-mode", "createdAt": "2024-01-01T00:00:00Z" }
+}
+EOF
+cat > "$MODE_DIR/bloated-mode.jsonl" <<'EOF'
+line1
+EOF
+# Truncate and write > 10 bytes to trigger cleanup with MAX_SIZE=5
+head -c 20 /dev/zero > "$MODE_DIR/bloated-mode.jsonl"
+chmod 0640 "$MODE_DIR/sessions.json"
+
+SESSIONS_DIR="$MODE_DIR" MAX_SIZE=5 bash "$SESSION_CLEANUP_SCRIPT" >/dev/null 2>&1 || true
+
+# Stat check portable: macOS vs Linux
+if [ "$(uname -s)" = "Darwin" ]; then
+    AFTER_MODE=$(stat -f "%Lp" "$MODE_DIR/sessions.json" 2>/dev/null || echo "")
+else
+    AFTER_MODE=$(stat -c "%a" "$MODE_DIR/sessions.json" 2>/dev/null || echo "")
+fi
+
+if [[ "$AFTER_MODE" == "640" ]]; then
+    pass "Mode metadata (0640) preserved across atomic sessions.json replacement"
+else
+    fail "Mode metadata not preserved (expected 640, got $AFTER_MODE)"
+fi
+
+# ============================================================================
 # Summary
 # ============================================================================
 echo ""
