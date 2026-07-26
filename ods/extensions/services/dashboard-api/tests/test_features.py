@@ -324,6 +324,9 @@ class TestFeatureEnableInstructions:
         assert data["featureId"] == "chat"
         assert "instructions" in data
         assert "steps" in data["instructions"]
+        steps = " ".join(data["instructions"]["steps"])
+        assert "configured model provider" in steps
+        assert "llama-server is running" not in steps
 
     def test_instruction_links_use_request_host(self, test_client, monkeypatch):
         test_features = [
@@ -408,3 +411,243 @@ class TestFeatureEnableInstructions:
             headers=test_client.auth_headers,
         )
         assert resp.status_code == 404
+
+
+class TestFeatureReadinessAndLaunchContracts:
+    @staticmethod
+    def _service(service_id, status="healthy"):
+        from models import ServiceStatus
+
+        return ServiceStatus(
+            id=service_id,
+            name=service_id,
+            port=8080,
+            external_port=8080,
+            status=status,
+        )
+
+    @staticmethod
+    def _feature(
+        *,
+        services=None,
+        services_any=None,
+        enabled_all=None,
+        enabled_any=None,
+        launch_marker=True,
+    ):
+        feature = {
+            "id": "test-feature",
+            "name": "Test Feature",
+            "requirements": {
+                "vram_gb": 0,
+                "services": services or [],
+                "services_any": services_any or [],
+            },
+            "enabled_services_all": enabled_all if enabled_all is not None else (services or []),
+            "enabled_services_any": enabled_any if enabled_any is not None else (services_any or []),
+        }
+        if launch_marker:
+            feature["launch"] = {"type": "none"}
+        return feature
+
+    @staticmethod
+    def _manifest_feature(manifest_name, feature_id):
+        from pathlib import Path
+
+        import yaml
+
+        services_dir = Path(__file__).resolve().parents[2]
+        manifest = yaml.safe_load(
+            (services_dir / manifest_name / "manifest.yaml").read_text(encoding="utf-8")
+        )
+        return next(feature for feature in manifest["features"] if feature["id"] == feature_id)
+
+    @staticmethod
+    def _gpu():
+        from models import GPUInfo
+
+        return GPUInfo(
+            name="Test GPU",
+            memory_used_mb=1024,
+            memory_total_mb=24576,
+            memory_percent=4.2,
+            utilization_percent=0,
+            temperature_c=40,
+            gpu_backend="nvidia",
+        )
+
+    def test_enabled_service_does_not_mask_unavailable_runtime_dependency(self):
+        feature = self._feature(
+            services=["runtime-dependency"],
+            enabled_all=["feature-service"],
+        )
+
+        result = calculate_feature_status(
+            feature,
+            [self._service("feature-service")],
+            None,
+        )
+
+        assert result["enabled"] is False
+        assert result["status"] == "services_needed"
+        assert result["requirements"]["servicesAllMissing"] == ["runtime-dependency"]
+
+    def test_missing_launch_metadata_remains_non_interactive(self):
+        feature = self._feature(
+            services=["feature-service"],
+            enabled_all=["feature-service"],
+            launch_marker=False,
+        )
+
+        result = calculate_feature_status(
+            feature,
+            [self._service("feature-service")],
+            None,
+        )
+
+        assert result["status"] == "enabled"
+        assert result["launch"] is None
+
+    def test_satisfied_any_group_does_not_report_unused_alternative_missing(self):
+        feature = self._feature(
+            services=["web-ui"],
+            services_any=["llama-server", "litellm"],
+            enabled_all=["web-ui"],
+            enabled_any=["llama-server", "litellm"],
+        )
+
+        result = calculate_feature_status(
+            feature,
+            [self._service("web-ui"), self._service("litellm")],
+            None,
+        )
+
+        assert result["requirements"]["servicesOk"] is True
+        assert result["requirements"]["servicesAllMissing"] == []
+        assert result["requirements"]["servicesAnyMissing"] == ["llama-server"]
+        assert result["requirements"]["servicesMissing"] == []
+
+    def test_external_lemonade_prefers_configured_litellm_route(self):
+        feature = self._feature(
+            services=["open-webui"],
+            services_any=["llama-server", "litellm"],
+            enabled_all=["open-webui"],
+            enabled_any=["llama-server", "litellm"],
+        )
+        environment = {
+            "OLLAMA_URL": "http://host.docker.internal:13305",
+            "LLM_URL": "http://litellm:4000",
+        }
+
+        with patch.dict(os.environ, environment, clear=True):
+            result = calculate_feature_status(
+                feature,
+                [self._service("open-webui"), self._service("litellm")],
+                None,
+            )
+
+        assert result["status"] == "enabled"
+        assert result["requirements"]["servicesAnySelected"] == ["litellm"]
+
+    def test_local_route_is_not_masked_by_healthy_unselected_litellm(self):
+        feature = self._feature(
+            services=["open-webui"],
+            services_any=["llama-server", "litellm"],
+            enabled_all=["open-webui"],
+            enabled_any=["llama-server", "litellm"],
+        )
+
+        with patch.dict(os.environ, {"LLM_URL": "http://llama-server:8080"}, clear=True):
+            result = calculate_feature_status(
+                feature,
+                [self._service("open-webui"), self._service("litellm")],
+                None,
+            )
+
+        assert result["status"] == "services_needed"
+        assert result["requirements"]["servicesAnySelected"] == ["llama-server"]
+        assert result["requirements"]["servicesAnyMissing"] == ["llama-server"]
+
+    def test_chat_requires_user_interface_and_configured_provider(self):
+        feature = self._manifest_feature("llama-server", "chat")
+        services = [self._service("litellm")]
+
+        with patch.dict(os.environ, {"LLM_URL": "http://litellm:4000"}, clear=True):
+            result = calculate_feature_status(feature, services, self._gpu())
+
+        assert result["status"] == "services_needed"
+        assert result["enabled"] is False
+        assert result["requirements"]["servicesAllMissing"] == ["open-webui"]
+
+    def test_documents_require_interface_vector_store_and_provider(self):
+        feature = self._manifest_feature("llama-server", "documents")
+        services = [
+            self._service("open-webui"),
+            self._service("litellm"),
+        ]
+
+        with patch.dict(os.environ, {"LLM_URL": "http://litellm:4000"}, clear=True):
+            result = calculate_feature_status(feature, services, self._gpu())
+
+        assert result["status"] == "services_needed"
+        assert result["requirements"]["servicesAllMissing"] == ["qdrant"]
+
+    def test_voice_is_unavailable_without_its_user_interface(self):
+        feature = self._manifest_feature("whisper", "voice")
+        services = [
+            self._service("whisper"),
+            self._service("tts"),
+        ]
+
+        result = calculate_feature_status(feature, services, self._gpu())
+
+        assert result["status"] == "services_needed"
+        assert result["requirements"]["servicesAllMissing"] == ["open-webui"]
+
+    def test_governance_is_unavailable_until_ape_is_healthy(self):
+        feature = self._manifest_feature("ape", "agent-governance")
+
+        result = calculate_feature_status(feature, [], self._gpu())
+
+        assert result["status"] == "services_needed"
+        assert result["requirements"]["servicesAllMissing"] == ["ape"]
+
+    def test_fresh_install_keeps_all_built_in_features_unavailable(self):
+        from pathlib import Path
+
+        import yaml
+
+        services_dir = Path(__file__).resolve().parents[2]
+        checked = []
+        with patch.dict(os.environ, {"LLM_URL": "http://litellm:4000"}, clear=True):
+            for manifest_path in sorted(services_dir.glob("*/manifest.yaml")):
+                manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+                for feature in manifest.get("features", []):
+                    result = calculate_feature_status(feature, [], self._gpu())
+                    checked.append(feature["id"])
+                    assert result["enabled"] is False, feature["id"]
+                    assert result["status"] == "services_needed", feature["id"]
+                    assert result["requirements"]["servicesMissing"], feature["id"]
+
+        assert {"chat", "voice", "documents", "lan-web", "observability"} <= set(checked)
+
+    def test_service_launch_targets_are_mandatory_readiness_dependencies(self):
+        from pathlib import Path
+
+        import yaml
+
+        services_dir = Path(__file__).resolve().parents[2]
+        checked = []
+        for manifest_path in sorted(services_dir.glob("*/manifest.yaml")):
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            for feature in manifest.get("features", []):
+                launch = feature.get("launch") or {}
+                if launch.get("type") != "service":
+                    continue
+                requirements = feature.get("requirements", {})
+                required = set(requirements.get("services", []))
+                required.update(requirements.get("services_any", []))
+                checked.append(feature["id"])
+                assert launch["service"] in required, feature["id"]
+
+        assert {"chat", "voice", "documents", "lan-web", "observability"} <= set(checked)

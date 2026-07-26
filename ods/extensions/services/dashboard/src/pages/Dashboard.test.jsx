@@ -436,6 +436,62 @@ describe('Dashboard system overview', () => {
     expect(screen.queryByRole('link', { name: /Hermes Agent/ })).not.toHaveAttribute('href', 'http://localhost:11434')
   })
 
+  it('does not invent a link for an extension that omits launch metadata', async () => {
+    mockFeatures = [
+      {
+        id: 'custom-automation',
+        name: 'Custom Automation',
+        description: 'Extension without a browser surface',
+        icon: 'Workflow',
+        status: 'enabled',
+        requirements: { servicesAll: ['n8n'], servicesMissing: [] },
+        enabledServicesAll: ['n8n'],
+      },
+    ]
+
+    await renderDashboard({
+      ...baseStatus,
+      services: [
+        {
+          id: 'n8n',
+          name: 'n8n (Workflows)',
+          status: 'healthy',
+          port: 5678,
+          uptime: 14400,
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Custom Automation')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Custom Automation/ })).not.toBeInTheDocument()
+  })
+
+  it('explains all-of and any-of requirements without requiring both providers', async () => {
+    mockFeatures = [
+      {
+        id: 'chat',
+        name: 'AI Chat',
+        description: 'Chat with the configured model',
+        icon: 'MessageSquare',
+        status: 'services_needed',
+        launch: { type: 'service', service: 'open-webui' },
+        requirements: {
+          servicesAll: ['open-webui'],
+          servicesAny: ['llama-server', 'litellm'],
+          servicesAnySelected: ['llama-server', 'litellm'],
+          servicesMissing: ['open-webui', 'llama-server', 'litellm'],
+          servicesAllMissing: ['open-webui'],
+          servicesAnyMissing: ['llama-server', 'litellm'],
+        },
+      },
+    ]
+
+    await renderDashboard({ ...baseStatus, services: [] })
+
+    expect(screen.getByText('Needs: open-webui; one of llama-server or litellm')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /AI Chat/ })).not.toBeInTheDocument()
+  })
+
   it('renders real service CPU and RAM metrics from the resources endpoint', async () => {
     mockResources = {
       services: [
