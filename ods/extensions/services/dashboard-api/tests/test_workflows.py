@@ -25,6 +25,16 @@ def test_workflows_authenticated(test_client):
     assert isinstance(data["categories"], dict)
 
 
+def test_load_workflow_catalog_directory_path_degrades(tmp_path, monkeypatch):
+    import routers.workflows as wf_mod
+    d = tmp_path / "workflows.json"
+    d.mkdir()
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", d)
+
+    cat = wf_mod.load_workflow_catalog()
+    assert cat == wf_mod.DEFAULT_WORKFLOW_CATALOG
+
+
 def test_workflow_enable_requires_auth(test_client):
     """POST /api/workflows/{id}/enable without auth → 401."""
     resp = test_client.post("/api/workflows/test-workflow/enable")
