@@ -58,8 +58,10 @@ from .lifecycle import (  # noqa: F401
 from .probe import (  # noqa: F401
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     MAX_PROBE_RESPONSE_BYTES,
+    PROBE_RECEIPT_SCHEMA,
     ProbeError,
     probe_direct_provider,
+    public_probe_receipt,
 )
 
 __all__ = [
@@ -80,6 +82,7 @@ __all__ = [
     "LIFECYCLE_OPERATION_SCHEMA",
     "MAX_PROBE_RESPONSE_BYTES",
     "PUBLIC_MODEL_ALIAS",
+    "PROBE_RECEIPT_SCHEMA",
     "REDACTED",
     "REMOTE_ROUTE_SCHEMA",
     "ROUTING_STATE_SCHEMA",
@@ -102,6 +105,7 @@ __all__ = [
     "prepare_upstream_request",
     "provider_secret_status",
     "public_activation_receipt",
+    "public_probe_receipt",
     "read_provider_secret",
     "redacted_secret_refs",
     "resolve_direct_provider_addresses",

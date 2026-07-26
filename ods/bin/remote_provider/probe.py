@@ -18,6 +18,7 @@ from .egress import EgressError, validate_direct_provider_resolution
 
 DEFAULT_PROBE_TIMEOUT_SECONDS = 10.0
 MAX_PROBE_RESPONSE_BYTES = 64 * 1024
+PROBE_RECEIPT_SCHEMA = "ods.remote-provider-probe-receipt.v1"
 UrlOpener = Callable[..., Any]
 
 
@@ -67,6 +68,49 @@ def _model_count(body: bytes) -> int | None:
     if not isinstance(models, list):
         return None
     return len(models)
+
+
+def _safe_int(value: Any) -> int | None:
+    return value if type(value) is int else None
+
+
+def _safe_text(value: Any, *, max_length: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        return ""
+    return text[:max_length]
+
+
+def public_probe_receipt(
+    probe_result: Mapping[str, Any],
+    *,
+    verified_at: str,
+) -> dict[str, Any]:
+    """Return a support-bundle-safe provider probe receipt."""
+    result = probe_result if isinstance(probe_result, Mapping) else {}
+    resolution = result.get("resolution")
+    clean_resolution = None
+    if isinstance(resolution, Mapping):
+        clean_resolution = {
+            "ok": bool(resolution.get("ok")),
+            "addressCount": _safe_int(resolution.get("addressCount")),
+        }
+
+    receipt: dict[str, Any] = {
+        "schema": PROBE_RECEIPT_SCHEMA,
+        "ok": bool(result.get("ok")),
+        "verifiedAt": _safe_text(verified_at, max_length=64),
+        "endpoint": _safe_text(result.get("endpoint"), max_length=32),
+        "httpStatus": _safe_int(result.get("status")),
+        "modelCount": _safe_int(result.get("modelCount")),
+        "resolution": clean_resolution,
+    }
+    content_type = _safe_text(result.get("contentType"), max_length=128)
+    if content_type:
+        receipt["contentType"] = content_type
+    return receipt
 
 
 def probe_direct_provider(
@@ -145,6 +189,8 @@ def probe_direct_provider(
 __all__ = [
     "DEFAULT_PROBE_TIMEOUT_SECONDS",
     "MAX_PROBE_RESPONSE_BYTES",
+    "PROBE_RECEIPT_SCHEMA",
     "ProbeError",
     "probe_direct_provider",
+    "public_probe_receipt",
 ]

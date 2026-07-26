@@ -50,6 +50,56 @@ def _safe_string_map(value: Any, keys: set[str]) -> dict[str, str]:
     return clean
 
 
+def _safe_text(value: Any, *, max_length: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        return ""
+    return text[:max_length]
+
+
+def _safe_int(value: Any) -> int | None:
+    return value if type(value) is int else None
+
+
+def _safe_probe_receipt(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    resolution = value.get("resolution")
+    clean_resolution = None
+    if isinstance(resolution, Mapping):
+        clean_resolution = {
+            "ok": bool(resolution.get("ok")),
+            "addressCount": _safe_int(resolution.get("addressCount")),
+        }
+    receipt: dict[str, Any] = {
+        "schema": _safe_text(value.get("schema"), max_length=64),
+        "ok": bool(value.get("ok")),
+        "verifiedAt": _safe_text(value.get("verifiedAt"), max_length=64),
+        "endpoint": _safe_text(value.get("endpoint"), max_length=32),
+        "httpStatus": _safe_int(value.get("httpStatus")),
+        "modelCount": _safe_int(value.get("modelCount")),
+        "resolution": clean_resolution,
+    }
+    content_type = _safe_text(value.get("contentType"), max_length=128)
+    if content_type:
+        receipt["contentType"] = content_type
+    return receipt
+
+
+def _safe_route_status(value: Any) -> dict[str, Any]:
+    status = value if isinstance(value, Mapping) else {}
+    clean: dict[str, Any] = {
+        "proven": bool(status.get("proven")),
+        "reason": _safe_text(status.get("reason"), max_length=128) or "disabled",
+    }
+    last_probe = _safe_probe_receipt(status.get("lastProbe"))
+    if last_probe is not None:
+        clean["lastProbe"] = last_probe
+    return clean
+
+
 def _state_response(
     *,
     exists: bool,
@@ -68,10 +118,7 @@ def _state_response(
         "mode": mode,
         "provider": _safe_string_map(provider, _SAFE_PROVIDER_KEYS) if enabled else None,
         "projection": _safe_string_map(projection, _SAFE_PROJECTION_KEYS),
-        "status": {
-            "proven": bool((status or {}).get("proven")),
-            "reason": str((status or {}).get("reason") or "disabled"),
-        },
+        "status": _safe_route_status(status),
         "errors": errors or [],
     }
 

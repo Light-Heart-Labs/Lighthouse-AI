@@ -67,6 +67,7 @@ try:
     from remote_provider.probe import (
         ProbeError as _RemoteProviderProbeError,
         probe_direct_provider as _probe_remote_provider_direct,
+        public_probe_receipt as _remote_provider_public_probe_receipt,
     )
 except Exception:  # pragma: no cover - import environment dependent
     _RemoteProviderLifecycleError = ValueError
@@ -75,6 +76,7 @@ except Exception:  # pragma: no cover - import environment dependent
     _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA = "ods.remote-routing-state.v1"
     _plan_remote_provider_lifecycle_operation = None
     _probe_remote_provider_direct = None
+    _remote_provider_public_probe_receipt = None
 
 VERSION = "1.0.0"
 ODS_VERSION = VERSION
@@ -1468,7 +1470,27 @@ def _remote_provider_projection(route: dict) -> dict:
     }
 
 
-def _remote_provider_route_state_from_plan(plan: dict) -> dict:
+def _remote_provider_route_status(
+    *,
+    enabled: bool,
+    probe_receipt: dict | None = None,
+) -> dict:
+    if not enabled:
+        return {"proven": False, "reason": "disabled"}
+    if isinstance(probe_receipt, dict) and probe_receipt.get("ok") is True:
+        return {
+            "proven": True,
+            "reason": "provider-handshake-ok",
+            "lastProbe": probe_receipt,
+        }
+    return {"proven": False, "reason": "pending-provider-handshake"}
+
+
+def _remote_provider_route_state_from_plan(
+    plan: dict,
+    *,
+    probe_receipt: dict | None = None,
+) -> dict:
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     enabled = route.get("enabled") is True
     return {
@@ -1477,10 +1499,10 @@ def _remote_provider_route_state_from_plan(plan: dict) -> dict:
         "mode": str(route.get("mode") or "cloud"),
         "provider": route.get("provider") if enabled else None,
         "projection": _remote_provider_projection(route),
-        "status": {
-            "proven": False,
-            "reason": "pending-provider-handshake" if enabled else "disabled",
-        },
+        "status": _remote_provider_route_status(
+            enabled=enabled,
+            probe_receipt=probe_receipt,
+        ),
     }
 
 
@@ -1499,16 +1521,29 @@ def _remote_provider_secret_values(payload: dict, plan: dict) -> dict[str, str]:
 def _remote_provider_probe_lifecycle_test(payload: dict, plan: dict) -> dict:
     if _probe_remote_provider_direct is None:
         raise RuntimeError("Remote provider probe helper is unavailable")
+    if _remote_provider_public_probe_receipt is None:
+        raise RuntimeError("Remote provider probe receipt helper is unavailable")
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     secret_values = _remote_provider_secret_values(payload, plan)
-    return _probe_remote_provider_direct(
+    probe_result = _probe_remote_provider_direct(
         route,
         provider_secret=secret_values.get("REMOTE_LLM_API_KEY", ""),
     )
+    return _remote_provider_public_probe_receipt(
+        probe_result,
+        verified_at=_iso_now(),
+    )
 
 
-def _write_remote_provider_route_state(plan: dict) -> None:
-    state = _remote_provider_route_state_from_plan(plan)
+def _write_remote_provider_route_state(
+    plan: dict,
+    *,
+    probe_receipt: dict | None = None,
+) -> None:
+    state = _remote_provider_route_state_from_plan(
+        plan,
+        probe_receipt=probe_receipt,
+    )
     _atomic_write_text(
         _remote_provider_route_state_path(),
         json.dumps(state, indent=2, sort_keys=True) + "\n",
@@ -1554,8 +1589,11 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     result["applied"] = True
     result["mutated"] = action in {"configure", "disable", "remove"}
     result["rollback"] = {"attempted": False, "ok": None}
+    probe_receipt = None
+    if action in {"configure", "test"}:
+        probe_receipt = _remote_provider_probe_lifecycle_test(payload, plan)
+        result["probe"] = probe_receipt
     if action == "test":
-        result["probe"] = _remote_provider_probe_lifecycle_test(payload, plan)
         return result
 
     if action not in {"configure", "disable", "remove"}:
@@ -1577,13 +1615,15 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     mutation_started = False
     try:
         snapshots = {path: _snapshot_text_file(path) for path in mutation_paths}
-        if action in {"configure", "disable"}:
-            _write_remote_provider_route_state(plan)
-            mutation_started = True
         if action == "configure":
             for ref, secret in secret_values.items():
                 _write_remote_provider_secret(ref, secret)
                 mutation_started = True
+            _write_remote_provider_route_state(plan, probe_receipt=probe_receipt)
+            mutation_started = True
+        elif action == "disable":
+            _write_remote_provider_route_state(plan)
+            mutation_started = True
         elif action == "remove":
             for path in mutation_paths:
                 _remove_remote_provider_file(path)

@@ -46,8 +46,10 @@ from remote_provider.lifecycle import (  # noqa: E402
     plan_lifecycle_operation,
 )
 from remote_provider.probe import (  # noqa: E402
+    PROBE_RECEIPT_SCHEMA,
     ProbeError,
     probe_direct_provider,
+    public_probe_receipt,
 )
 
 
@@ -597,6 +599,31 @@ def test_direct_provider_probe_is_bounded_and_redacted() -> None:
     )
 
 
+def test_public_probe_receipt_is_redacted_and_typed() -> None:
+    receipt = public_probe_receipt(
+        {
+            "ok": True,
+            "status": 200,
+            "endpoint": "/v1/models",
+            "contentType": "application/json",
+            "modelCount": 1,
+            "resolution": {"ok": True, "addressCount": 1, "raw": "93.184.216.34"},
+            "authorization": "Bearer unit-test-provider-token",
+        },
+        verified_at="2026-07-26T00:00:00+00:00",
+    )
+    dumped = json.dumps(receipt, sort_keys=True)
+    assert_true(receipt["schema"] == PROBE_RECEIPT_SCHEMA, "probe receipt schema drifted")
+    assert_true(receipt["ok"] is True, "probe receipt should keep success status")
+    assert_true(receipt["httpStatus"] == 200, "probe HTTP status not retained")
+    assert_true(
+        receipt["resolution"] == {"ok": True, "addressCount": 1},
+        "probe DNS receipt not sanitized",
+    )
+    assert_true("unit-test-provider-token" not in dumped, "probe receipt leaked provider auth")
+    assert_true("93.184.216.34" not in dumped, "probe receipt should not expose raw DNS answers")
+
+
 def test_direct_provider_probe_fails_closed_before_unsafe_dns_request() -> None:
     route = plan_route(cloud_direct_env())
 
@@ -649,6 +676,7 @@ def main() -> int:
         test_lifecycle_ssh_operation_tracks_secret_custody_without_leaks,
         test_lifecycle_rejects_unsafe_or_secret_public_inputs,
         test_direct_provider_probe_is_bounded_and_redacted,
+        test_public_probe_receipt_is_redacted_and_typed,
         test_direct_provider_probe_fails_closed_before_unsafe_dns_request,
         test_ssh_provider_probe_is_deferred_until_tunnel_supervisor,
     ]

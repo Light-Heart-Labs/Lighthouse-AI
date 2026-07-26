@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 
 
-def _route_state(model: str = "qwen/remote:latest") -> dict[str, object]:
+def _route_state(
+    model: str = "qwen/remote:latest",
+    *,
+    status: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "schema": "ods.remote-routing-state.v1",
         "enabled": True,
@@ -22,7 +26,7 @@ def _route_state(model: str = "qwen/remote:latest") -> dict[str, object]:
             "egressBaseUrl": "http://remote-provider-egress:8091/v1",
             "consumerRoute": "gateway",
         },
-        "status": {"proven": False, "reason": "pending-provider-handshake"},
+        "status": status or {"proven": False, "reason": "pending-provider-handshake"},
     }
 
 
@@ -132,6 +136,70 @@ def test_remote_provider_status_sanitizes_egress_secret_health(
     assert "unit-test-provider-token" not in dumped
     assert "provider-api-key" not in dumped
     assert body["capabilities"]["odsPeerLifecycle"] is False
+
+
+def test_remote_provider_status_exposes_sanitized_probe_receipt(
+    test_client,
+    monkeypatch,
+    tmp_path,
+):
+    status = {
+        "proven": True,
+        "reason": "provider-handshake-ok",
+        "lastProbe": {
+            "schema": "ods.remote-provider-probe-receipt.v1",
+            "ok": True,
+            "verifiedAt": "2026-07-26T00:00:00+00:00",
+            "endpoint": "/v1/models",
+            "httpStatus": 200,
+            "contentType": "application/json",
+            "modelCount": 1,
+            "resolution": {"ok": True, "addressCount": 1, "raw": "93.184.216.34"},
+            "value": "unit-test-provider-token",
+        },
+    }
+    state_path = tmp_path / "routing-state.json"
+    state_path.write_text(json.dumps(_route_state(status=status)), encoding="utf-8")
+    rps = _patch_state_path(monkeypatch, state_path)
+
+    async def fake_fetch():
+        return {
+            "reachable": True,
+            "valid": True,
+            "ready": True,
+            "status": "ok",
+            "reason": "ready",
+            "secret": {"configured": True, "bytes": 24},
+            "resolution": {"ok": True, "addressCount": 1},
+        }
+
+    monkeypatch.setattr(rps, "_fetch_egress_health", fake_fetch)
+
+    resp = test_client.get(
+        "/api/remote-provider/status",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert resp.status_code == 200
+    assert body["status"] == "ready"
+    assert body["routeState"]["status"] == {
+        "proven": True,
+        "reason": "provider-handshake-ok",
+        "lastProbe": {
+            "schema": "ods.remote-provider-probe-receipt.v1",
+            "ok": True,
+            "verifiedAt": "2026-07-26T00:00:00+00:00",
+            "endpoint": "/v1/models",
+            "httpStatus": 200,
+            "contentType": "application/json",
+            "modelCount": 1,
+            "resolution": {"ok": True, "addressCount": 1},
+        },
+    }
+    assert "unit-test-provider-token" not in dumped
+    assert "93.184.216.34" not in dumped
 
 
 def test_remote_provider_status_invalid_state_is_diagnostic(

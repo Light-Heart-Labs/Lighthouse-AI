@@ -2013,6 +2013,28 @@ class TestRemoteProviderLifecycle:
             "secrets": {"apiKey": "unit-test-provider-token"},
         }
 
+    def _patch_successful_probe(self, monkeypatch):
+        probes = []
+
+        def fake_probe(route, *, provider_secret):
+            probes.append((route, provider_secret))
+            return {
+                "ok": True,
+                "status": 200,
+                "endpoint": "/v1/models",
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {"ok": True, "addressCount": 1},
+            }
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", fake_probe)
+        monkeypatch.setattr(
+            _mod,
+            "_iso_now",
+            lambda: "2026-07-26T00:00:00+00:00",
+        )
+        return probes
+
     def test_plans_redacted_lifecycle_operation(self):
         payload = {
             "action": "test",
@@ -2070,6 +2092,7 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        probes = self._patch_successful_probe(monkeypatch)
         payload = self._configure_payload()
         handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
 
@@ -2084,14 +2107,19 @@ class TestRemoteProviderLifecycle:
         assert body["applied"] is True
         assert body["mutated"] is True
         assert body["rollback"] == {"attempted": False, "ok": None}
+        assert body["probe"]["schema"] == "ods.remote-provider-probe-receipt.v1"
+        assert body["probe"]["verifiedAt"] == "2026-07-26T00:00:00+00:00"
         assert state["schema"] == "ods.remote-routing-state.v1"
         assert state["enabled"] is True
         assert state["provider"]["baseUrl"] == "https://gpu.example.test/v1"
         assert state["projection"]["egressBaseUrl"] == "http://remote-provider-egress:8091/v1"
         assert state["status"] == {
-            "proven": False,
-            "reason": "pending-provider-handshake",
+            "proven": True,
+            "reason": "provider-handshake-ok",
+            "lastProbe": body["probe"],
         }
+        assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert probes[0][1] == "unit-test-provider-token"
         assert secret_path.read_text(encoding="utf-8") == "unit-test-provider-token\n"
         assert "unit-test-provider-token" not in dumped
 
@@ -2101,18 +2129,7 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
-        probes = []
-
-        def fake_probe(route, *, provider_secret):
-            probes.append((route, provider_secret))
-            return {
-                "ok": True,
-                "status": 200,
-                "endpoint": "/v1/models",
-                "modelCount": 1,
-            }
-
-        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", fake_probe)
+        probes = self._patch_successful_probe(monkeypatch)
         payload = self._configure_payload()
         payload["action"] = "test"
         handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
@@ -2125,8 +2142,39 @@ class TestRemoteProviderLifecycle:
         assert body["applied"] is True
         assert body["mutated"] is False
         assert body["probe"]["ok"] is True
+        assert body["probe"]["verifiedAt"] == "2026-07-26T00:00:00+00:00"
         assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
         assert probes[0][1] == "unit-test-provider-token"
+        assert "unit-test-provider-token" not in dumped
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_configure_probe_failure_does_not_write_state_or_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        def failing_probe(_route, *, provider_secret):
+            assert provider_secret == "unit-test-provider-token"
+            raise _mod._RemoteProviderProbeError(
+                502,
+                "provider_unreachable",
+                "remote provider probe failed: no route",
+            )
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", failing_probe)
+        handler = _FakeHandler(json.dumps(self._configure_payload()).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 502
+        assert body == {
+            "error": "remote provider probe failed: no route",
+            "code": "provider_unreachable",
+        }
         assert "unit-test-provider-token" not in dumped
         assert not (tmp_path / "remote-provider").exists()
 
@@ -2218,6 +2266,7 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        self._patch_successful_probe(monkeypatch)
         root = tmp_path / "remote-provider"
         secret_path = root / "secrets" / "provider-api-key"
         secret_path.parent.mkdir(parents=True)
@@ -2232,9 +2281,9 @@ class TestRemoteProviderLifecycle:
         failed_once = {"value": False}
 
         def flaky_atomic_write(path, text, *args, **kwargs):
-            if path.name == "provider-api-key" and not failed_once["value"]:
+            if path.name == "routing-state.json" and not failed_once["value"]:
                 failed_once["value"] = True
-                raise RuntimeError("simulated secret write failure")
+                raise RuntimeError("simulated route-state write failure")
             return real_atomic_write(path, text, *args, **kwargs)
 
         monkeypatch.setattr(_mod, "_atomic_write_text", flaky_atomic_write)
@@ -3289,6 +3338,12 @@ class TestModelActivationLemonadePersistence:
             _mod,
             "_capture_container_state",
             lambda _name: {"exists": False, "running": False},
+        )
+        monkeypatch.setattr(_mod, "_opencode_installed", lambda: False)
+        monkeypatch.setattr(
+            _mod,
+            "_capture_managed_opencode_state",
+            lambda: {"system": "Linux", "active": False},
         )
         handler = _FakeHandler(b"")
 
