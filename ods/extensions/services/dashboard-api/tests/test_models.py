@@ -2181,3 +2181,22 @@ def test_load_model_rejects_local_gguf_path_separators(test_client, monkeypatch,
     )
 
     assert resp.status_code == 404
+
+
+def test_safe_float_env_handles_invalid_and_non_positive_values(monkeypatch):
+    import routers.models as models_router
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "invalid")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "-5.0")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "inf")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "1e309")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 15.0
+
+    monkeypatch.setenv("TEST_FLOAT_ENV", "30.0")
+    assert models_router._safe_float_env("TEST_FLOAT_ENV", 15.0) == 30.0
