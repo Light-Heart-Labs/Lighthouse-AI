@@ -81,6 +81,7 @@ def test_remote_provider_status_missing_state_is_disabled(
     assert body["routeState"]["exists"] is False
     assert body["routeState"]["valid"] is True
     assert body["routeState"]["provider"] is None
+    assert body["availableActions"]["configure"] is True
     assert body["availableActions"]["test"] is False
 
 
@@ -272,3 +273,70 @@ def test_remote_provider_plan_preserves_host_agent_validation_errors(
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "remote provider base URL is required"
+
+
+def test_remote_provider_apply_requires_auth(test_client):
+    resp = test_client.post("/api/remote-provider/apply", json=_lifecycle_payload())
+    assert resp.status_code == 401
+
+
+def test_remote_provider_apply_proxies_to_host_agent(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    calls = []
+
+    async def fake_request(method, path, *, payload, timeout):
+        calls.append((method, path, payload, timeout))
+        return {
+            "schema": "ods.remote-provider-lifecycle-operation.v1",
+            "action": "configure",
+            "ok": True,
+            "applied": True,
+            "mutated": True,
+            "rollback": {"attempted": False, "ok": None},
+            "secretRefs": {
+                "REMOTE_LLM_API_KEY": {"present": True, "value": "[REDACTED]"}
+            },
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+    payload = _lifecycle_payload()
+    payload["action"] = "configure"
+
+    resp = test_client.post(
+        "/api/remote-provider/apply",
+        json=payload,
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert resp.status_code == 200
+    assert body["action"] == "configure"
+    assert body["mutated"] is True
+    assert "unit-test-provider-token" not in dumped
+    assert calls == [("POST", "/v1/remote-provider/apply", payload, 10)]
+
+
+def test_remote_provider_apply_preserves_host_agent_validation_errors(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    async def fake_request(*_args, **_kwargs):
+        raise rps.AgentHTTPError(500, "Remote provider apply failed: disk full")
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+
+    resp = test_client.post(
+        "/api/remote-provider/apply",
+        json=_lifecycle_payload(),
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Remote provider apply failed: disk full"

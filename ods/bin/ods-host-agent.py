@@ -56,6 +56,9 @@ except Exception:  # pragma: no cover - import environment dependent
     _switchboard_adapters = None
     _switchboard_reconciler = None
 try:
+    from remote_provider.egress import (
+        ROUTING_STATE_SCHEMA as _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA,
+    )
     from remote_provider.lifecycle import (
         LifecycleError as _RemoteProviderLifecycleError,
         plan_lifecycle_operation as _plan_remote_provider_lifecycle_operation,
@@ -64,6 +67,7 @@ try:
 except Exception:  # pragma: no cover - import environment dependent
     _RemoteProviderLifecycleError = ValueError
     _RemoteProviderPolicyError = ValueError
+    _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA = "ods.remote-routing-state.v1"
     _plan_remote_provider_lifecycle_operation = None
 
 VERSION = "1.0.0"
@@ -105,6 +109,26 @@ STARTUP_ODS_MODE: str | None = None
 TIER: str = "1"
 GPU_COUNT: str = "1"
 CORE_SERVICE_IDS: set = set()
+_REMOTE_PROVIDER_EGRESS_UID = 10778
+_REMOTE_PROVIDER_EGRESS_GID = 10778
+_REMOTE_PROVIDER_SECRET_FIELD_TO_REF = {
+    "apiKey": "REMOTE_LLM_API_KEY",
+    "peerToken": "REMOTE_ODS_PEER_TOKEN",
+    "sshPrivateKey": "REMOTE_LLM_SSH_PRIVATE_KEY",
+    "sshKnownHosts": "REMOTE_LLM_SSH_KNOWN_HOSTS",
+    "tlsCaPem": "REMOTE_LLM_TLS_CA_PEM",
+    "tlsClientCert": "REMOTE_LLM_TLS_CLIENT_CERT",
+    "tlsClientKey": "REMOTE_LLM_TLS_CLIENT_KEY",
+}
+_REMOTE_PROVIDER_SECRET_REF_TO_FILENAME = {
+    "REMOTE_LLM_API_KEY": "provider-api-key",
+    "REMOTE_ODS_PEER_TOKEN": "peer-token",
+    "REMOTE_LLM_SSH_PRIVATE_KEY": "ssh-identity",
+    "REMOTE_LLM_SSH_KNOWN_HOSTS": "known_hosts",
+    "REMOTE_LLM_TLS_CA_PEM": "tls-ca.pem",
+    "REMOTE_LLM_TLS_CLIENT_CERT": "tls-client-cert.pem",
+    "REMOTE_LLM_TLS_CLIENT_KEY": "tls-client-key.pem",
+}
 _windows_gpu_metrics_cache: tuple[float, dict | None] = (0.0, None)
 _windows_dxgi_adapters_cache: tuple[float, list[dict]] = (0.0, [])
 _windows_llm_status_cache: tuple[float, dict | None] = (0.0, None)
@@ -1390,6 +1414,181 @@ def _restore_text_file(path: Path, snapshot: dict) -> None:
         if path.is_symlink():
             raise RuntimeError(f"Refusing to remove unexpected symlink during rollback: {path}")
         path.unlink(missing_ok=True)
+
+
+class _RemoteProviderApplyError(RuntimeError):
+    """Lifecycle apply failure with support-bundle-safe rollback metadata."""
+
+    def __init__(self, message: str, rollback: dict) -> None:
+        super().__init__(message)
+        self.rollback = rollback
+
+
+def _remote_provider_root() -> Path:
+    return DATA_DIR / "remote-provider"
+
+
+def _remote_provider_route_state_path() -> Path:
+    return _remote_provider_root() / "routing-state.json"
+
+
+def _remote_provider_secret_path(ref: str) -> Path:
+    filename = _REMOTE_PROVIDER_SECRET_REF_TO_FILENAME.get(ref)
+    if not filename:
+        raise RuntimeError(f"Unsupported remote-provider secret reference: {ref}")
+    return _remote_provider_root() / "secrets" / filename
+
+
+def _remote_provider_secret_owner() -> tuple[int | None, int | None]:
+    if os.name == "nt" or not hasattr(os, "geteuid"):
+        return None, None
+    try:
+        if os.geteuid() == 0:
+            return _REMOTE_PROVIDER_EGRESS_UID, _REMOTE_PROVIDER_EGRESS_GID
+    except OSError:
+        pass
+    return None, None
+
+
+def _remote_provider_projection(route: dict) -> dict:
+    egress = route.get("egress") if isinstance(route.get("egress"), dict) else {}
+    return {
+        "publicModel": str(egress.get("publicModel") or "ods/current"),
+        "gateway": "litellm-cloud",
+        "egressBaseUrl": str(
+            egress.get("internalBaseUrl") or "http://remote-provider-egress:8091/v1"
+        ),
+        "consumerRoute": str(egress.get("consumerRoute") or "gateway"),
+    }
+
+
+def _remote_provider_route_state_from_plan(plan: dict) -> dict:
+    route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
+    enabled = route.get("enabled") is True
+    return {
+        "schema": _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA,
+        "enabled": enabled,
+        "mode": str(route.get("mode") or "cloud"),
+        "provider": route.get("provider") if enabled else None,
+        "projection": _remote_provider_projection(route),
+        "status": {
+            "proven": False,
+            "reason": "pending-provider-handshake" if enabled else "disabled",
+        },
+    }
+
+
+def _remote_provider_secret_values(payload: dict, plan: dict) -> dict[str, str]:
+    secrets_payload = payload.get("secrets")
+    secrets_map = secrets_payload if isinstance(secrets_payload, dict) else {}
+    refs = plan.get("secretRefs") if isinstance(plan.get("secretRefs"), dict) else {}
+    values: dict[str, str] = {}
+    for field, ref in _REMOTE_PROVIDER_SECRET_FIELD_TO_REF.items():
+        if ref not in refs or field not in secrets_map:
+            continue
+        values[ref] = str(secrets_map[field]).strip()
+    return values
+
+
+def _write_remote_provider_route_state(plan: dict) -> None:
+    state = _remote_provider_route_state_from_plan(plan)
+    _atomic_write_text(
+        _remote_provider_route_state_path(),
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+        0o644,
+    )
+
+
+def _write_remote_provider_secret(ref: str, value: str) -> None:
+    uid, gid = _remote_provider_secret_owner()
+    _atomic_write_text(
+        _remote_provider_secret_path(ref),
+        value.rstrip("\r\n") + "\n",
+        0o600,
+        uid,
+        gid,
+    )
+
+
+def _remove_remote_provider_file(path: Path) -> None:
+    if path.is_symlink():
+        raise RuntimeError(f"Refusing to remove symlinked remote-provider file: {path}")
+    path.unlink(missing_ok=True)
+
+
+def _remote_provider_mutation_paths(action: str) -> list[Path]:
+    paths = [_remote_provider_route_state_path()]
+    if action == "remove":
+        paths.extend(
+            _remote_provider_secret_path(ref)
+            for ref in _REMOTE_PROVIDER_SECRET_REF_TO_FILENAME
+        )
+    return list(dict.fromkeys(paths))
+
+
+def _restore_remote_provider_snapshots(snapshots: dict[Path, dict]) -> None:
+    for path, snapshot in reversed(list(snapshots.items())):
+        _restore_text_file(path, snapshot)
+
+
+def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dict:
+    action = str(plan.get("action") or "")
+    result = json.loads(json.dumps(plan))
+    result["applied"] = True
+    result["mutated"] = action in {"configure", "disable", "remove"}
+    result["rollback"] = {"attempted": False, "ok": None}
+    if action == "test":
+        return result
+
+    if action not in {"configure", "disable", "remove"}:
+        raise _RemoteProviderApplyError(
+            f"Unsupported remote-provider lifecycle action: {action}",
+            result["rollback"],
+        )
+
+    if action == "configure":
+        secret_values = _remote_provider_secret_values(payload, plan)
+        mutation_paths = [_remote_provider_route_state_path()]
+        mutation_paths.extend(_remote_provider_secret_path(ref) for ref in secret_values)
+        mutation_paths = list(dict.fromkeys(mutation_paths))
+    else:
+        secret_values = {}
+        mutation_paths = _remote_provider_mutation_paths(action)
+
+    snapshots: dict[Path, dict] = {}
+    mutation_started = False
+    try:
+        snapshots = {path: _snapshot_text_file(path) for path in mutation_paths}
+        if action in {"configure", "disable"}:
+            _write_remote_provider_route_state(plan)
+            mutation_started = True
+        if action == "configure":
+            for ref, secret in secret_values.items():
+                _write_remote_provider_secret(ref, secret)
+                mutation_started = True
+        elif action == "remove":
+            for path in mutation_paths:
+                _remove_remote_provider_file(path)
+                mutation_started = True
+    except Exception as exc:
+        rollback = {"attempted": False, "ok": None}
+        if mutation_started and snapshots:
+            rollback["attempted"] = True
+            try:
+                _restore_remote_provider_snapshots(snapshots)
+            except Exception as rollback_exc:
+                rollback["ok"] = False
+                raise _RemoteProviderApplyError(
+                    f"Remote provider apply failed: {exc}; rollback failed: {rollback_exc}",
+                    rollback,
+                ) from exc
+            rollback["ok"] = True
+        raise _RemoteProviderApplyError(
+            f"Remote provider apply failed: {exc}",
+            rollback,
+        ) from exc
+
+    return result
 
 
 def _assert_text_file_matches_snapshot(path: Path, snapshot: dict) -> None:
@@ -3592,6 +3791,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_model_activate()
         elif self.path == "/v1/remote-provider/plan":
             self._handle_remote_provider_plan()
+        elif self.path == "/v1/remote-provider/apply":
+            self._handle_remote_provider_apply()
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
         elif self.path == "/v1/model/delete":
@@ -3633,6 +3834,36 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 500, {"error": f"Remote provider planning failed: {exc}"})
             return
         json_response(self, 200, plan)
+
+    def _handle_remote_provider_apply(self):
+        """Apply a remote-provider lifecycle request through host-owned state."""
+        if not check_auth(self):
+            return
+        body = read_optional_json_body(self)
+        if body is None:
+            return
+        if _plan_remote_provider_lifecycle_operation is None:
+            json_response(
+                self,
+                501,
+                {"error": "Remote provider lifecycle planner is unavailable"},
+            )
+            return
+        try:
+            plan = _plan_remote_provider_lifecycle_operation(body)
+            result = _apply_remote_provider_lifecycle_operation(body, plan)
+        except (_RemoteProviderLifecycleError, _RemoteProviderPolicyError) as exc:
+            json_response(self, 400, {"error": str(exc)})
+            return
+        except _RemoteProviderApplyError as exc:
+            logger.exception("remote-provider lifecycle apply failed")
+            json_response(self, 500, {"error": str(exc), "rollback": exc.rollback})
+            return
+        except Exception as exc:
+            logger.exception("remote-provider lifecycle apply failed")
+            json_response(self, 500, {"error": f"Remote provider apply failed: {exc}"})
+            return
+        json_response(self, 200, result)
 
     def _handle_invalidate_compose_cache(self):
         """Drop the .compose-flags cache file so the next CLI call re-resolves it."""

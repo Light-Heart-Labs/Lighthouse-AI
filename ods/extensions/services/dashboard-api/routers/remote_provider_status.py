@@ -225,7 +225,7 @@ async def remote_provider_status() -> dict[str, Any]:
             "odsPeerLifecycle": False,
         },
         "availableActions": {
-            "configure": False,
+            "configure": True,
             "test": bool(route_state.get("enabled")),
             "disable": bool(route_state.get("enabled")),
             "remove": bool(route_state.get("exists")),
@@ -240,6 +240,24 @@ async def remote_provider_plan(payload: dict[str, Any]) -> dict[str, Any]:
         return await async_request_agent_json(
             "POST",
             "/v1/remote-provider/plan",
+            payload=payload,
+            timeout=10,
+        )
+    except AgentHTTPError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}") from exc
+    except AgentProtocolError as exc:
+        raise HTTPException(status_code=502, detail=f"Invalid host agent response: {exc}") from exc
+
+
+@router.post("/api/remote-provider/apply", dependencies=[Depends(verify_api_key)])
+async def remote_provider_apply(payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply a remote-provider lifecycle request through the host agent."""
+    try:
+        return await async_request_agent_json(
+            "POST",
+            "/v1/remote-provider/apply",
             payload=payload,
             timeout=10,
         )

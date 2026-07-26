@@ -1995,12 +1995,23 @@ class _FakeHandler:
         return json.loads(self.wfile.getvalue().decode("utf-8"))
 
 
-class TestRemoteProviderLifecyclePlan:
-    """Direct host-agent tests for remote-provider lifecycle planning."""
+class TestRemoteProviderLifecycle:
+    """Direct host-agent tests for remote-provider lifecycle planning/apply."""
 
     @pytest.fixture(autouse=True)
     def _auth(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+    def _configure_payload(self):
+        return {
+            "action": "configure",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://gpu.example.test",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
 
     def test_plans_redacted_lifecycle_operation(self):
         payload = {
@@ -2052,6 +2063,144 @@ class TestRemoteProviderLifecyclePlan:
         _mod.AgentHandler._handle_remote_provider_plan(handler)
 
         assert handler.response_code == 403
+
+    def test_apply_configure_writes_route_state_and_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        payload = self._configure_payload()
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        state_path = tmp_path / "remote-provider" / "routing-state.json"
+        secret_path = tmp_path / "remote-provider" / "secrets" / "provider-api-key"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert handler.response_code == 200
+        assert body["applied"] is True
+        assert body["mutated"] is True
+        assert body["rollback"] == {"attempted": False, "ok": None}
+        assert state["schema"] == "ods.remote-routing-state.v1"
+        assert state["enabled"] is True
+        assert state["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert state["projection"]["egressBaseUrl"] == "http://remote-provider-egress:8091/v1"
+        assert state["status"] == {
+            "proven": False,
+            "reason": "pending-provider-handshake",
+        }
+        assert secret_path.read_text(encoding="utf-8") == "unit-test-provider-token\n"
+        assert "unit-test-provider-token" not in dumped
+
+    def test_apply_test_does_not_write_state(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        payload = self._configure_payload()
+        payload["action"] = "test"
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        assert handler.response_code == 200
+        assert body["applied"] is True
+        assert body["mutated"] is False
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_disable_keeps_existing_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_path = root / "secrets" / "provider-api-key"
+        secret_path.parent.mkdir(parents=True)
+        secret_path.write_text("old-provider-token\n", encoding="utf-8")
+        (root / "routing-state.json").write_text(
+            json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
+            encoding="utf-8",
+        )
+        handler = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert handler.response_code == 200
+        assert state["enabled"] is False
+        assert state["provider"] is None
+        assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+
+    def test_apply_remove_deletes_route_state_and_secrets(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_dir = root / "secrets"
+        secret_dir.mkdir(parents=True)
+        (root / "routing-state.json").write_text(
+            json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
+            encoding="utf-8",
+        )
+        for filename in ("provider-api-key", "peer-token", "ssh-identity", "known_hosts"):
+            (secret_dir / filename).write_text(f"{filename}\n", encoding="utf-8")
+        handler = _FakeHandler(json.dumps({"action": "remove"}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        assert handler.response_code == 200
+        assert not (root / "routing-state.json").exists()
+        assert not (secret_dir / "provider-api-key").exists()
+        assert not (secret_dir / "peer-token").exists()
+        assert not (secret_dir / "ssh-identity").exists()
+        assert not (secret_dir / "known_hosts").exists()
+
+    def test_apply_rolls_back_partial_write_failure(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_path = root / "secrets" / "provider-api-key"
+        secret_path.parent.mkdir(parents=True)
+        old_state = {
+            "schema": "ods.remote-routing-state.v1",
+            "enabled": True,
+            "provider": {"baseUrl": "https://old.example.test/v1"},
+        }
+        (root / "routing-state.json").write_text(json.dumps(old_state), encoding="utf-8")
+        secret_path.write_text("old-provider-token\n", encoding="utf-8")
+        real_atomic_write = _mod._atomic_write_text
+        failed_once = {"value": False}
+
+        def flaky_atomic_write(path, text, *args, **kwargs):
+            if path.name == "provider-api-key" and not failed_once["value"]:
+                failed_once["value"] = True
+                raise RuntimeError("simulated secret write failure")
+            return real_atomic_write(path, text, *args, **kwargs)
+
+        monkeypatch.setattr(_mod, "_atomic_write_text", flaky_atomic_write)
+        handler = _FakeHandler(json.dumps(self._configure_payload()).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert handler.response_code == 500
+        assert body["rollback"] == {"attempted": True, "ok": True}
+        assert state == old_state
+        assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+        assert "unit-test-provider-token" not in dumped
 
 
 class TestTailscaleStatus:
