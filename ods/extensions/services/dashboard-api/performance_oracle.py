@@ -685,6 +685,20 @@ def _selector_required_memory_gb(model: dict[str, Any]) -> float:
     return round(max(declared, size_gb + context_kv_gb), 2)
 
 
+# qwen3-coder-next Q4_K_M decodes every token as `?` on unified-memory
+# backends: verified on DGX Spark / GB10 aarch64 and again on Strix Halo, with
+# Qwen3.6-35B-A3B serving cleanly on the same build and hardware. See the
+# NV_ULTRA and SH_LARGE blocks in installers/lib/tier-map.sh for the full
+# write-up. The installer routes around it in scripts/select-model.py; keep it
+# out of the dashboard's recommendations too rather than pointing a user at a
+# 48.5GB download that cannot produce readable output on their machine.
+_UNIFIED_MEMORY_EXCLUDED_MODELS = frozenset({"qwen3-coder-next"})
+
+
+def _excluded_on_unified_memory(model: dict[str, Any]) -> bool:
+    return normalize_key(model.get("llm_model_name")) in _UNIFIED_MEMORY_EXCLUDED_MODELS
+
+
 def _has_unified_memory(gpu_info: Optional[GPUInfo]) -> bool:
     """Return whether the detected GPU shares its memory pool with the host.
 
@@ -1134,10 +1148,13 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
 
     normalized_profile = _model_profile(explicit_profile=profile)
     capacity_gb = _usable_model_memory_gb(gpu_info) if gpu_info else 4.0
+    unified_memory = _has_unified_memory(gpu_info)
 
     candidates = []
     for model in catalog:
         if installable_only and not model.get("gguf_url"):
+            continue
+        if unified_memory and _excluded_on_unified_memory(model):
             continue
         if not _family_allowed_for_profile(model, normalized_profile):
             continue
@@ -1155,7 +1172,12 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
     if not candidates:
         fallback_pool = [
             model for model in catalog
-            if (not installable_only or model.get("gguf_url")) and _family_allowed_for_profile(model, normalized_profile)
+            if (not installable_only or model.get("gguf_url"))
+            and not (unified_memory and _excluded_on_unified_memory(model))
+            and _family_allowed_for_profile(model, normalized_profile)
+        ] or [
+            model for model in catalog
+            if not (unified_memory and _excluded_on_unified_memory(model))
         ] or catalog
         fallback = min(fallback_pool, key=lambda m: float(m.get("vram_required_gb") or 999))
         candidates = [{"model": fallback, "score": -1.0}]

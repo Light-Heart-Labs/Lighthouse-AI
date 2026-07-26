@@ -1037,6 +1037,60 @@ def test_pre_download_ranker_uses_full_pool_for_discrete_memory(data_dir):
     assert ranked[0]["id"] == "qwen3.5-32b-q4"
 
 
+def _unified_host_gpu(backend, name):
+    return _gpu(name=name, total_mb=126976, backend=backend, memory_type="unified")
+
+
+def test_real_catalog_never_recommends_coder_next_on_unified_memory(data_dir):
+    # qwen3-coder-next Q4_K_M decodes every token as `?` on unified-memory
+    # backends -- see the NV_ULTRA and SH_LARGE blocks in tier-map.sh. The
+    # installer substitutes it away; the dashboard must not offer it either.
+    catalog = [entry for entry in (normalize_catalog_entry(raw) for raw in _official_model_catalog()) if entry]
+
+    for backend, name in (("amd", "AMD Radeon Graphics"), ("nvidia", "NVIDIA GB10")):
+        ranked = rank_pre_download_models(
+            catalog, _unified_host_gpu(backend, name), profile="qwen", limit=3, system_ram_gb=128
+        )
+        offered = [model["llm_model_name"] for model in ranked]
+
+        assert "qwen3-coder-next" not in offered, f"{name} was offered coder-next: {offered}"
+
+
+def test_real_catalog_still_recommends_coder_next_on_discrete_vram(data_dir):
+    # The exclusion is unified-memory-specific: coder-next serves correctly on
+    # a discrete card with the VRAM to hold it.
+    catalog = [entry for entry in (normalize_catalog_entry(raw) for raw in _official_model_catalog()) if entry]
+
+    ranked = rank_pre_download_models(
+        catalog, _gpu(name="NVIDIA RTX 6000 Ada", total_mb=98304), profile="qwen", limit=3, system_ram_gb=128
+    )
+
+    assert "qwen3-coder-next" in [model["llm_model_name"] for model in ranked]
+
+
+def test_unified_memory_exclusion_still_returns_a_fallback(data_dir):
+    # An excluded model must never leave the ranker with nothing to say.
+    catalog = [normalize_catalog_entry({
+        "id": "qwen3-coder-next-q4",
+        "name": "Qwen 3 Coder Next",
+        "family": "qwen",
+        "gguf_file": "qwen3-coder-next-Q4_K_M.gguf",
+        "gguf_url": "https://example.invalid/coder-next.gguf",
+        "size_mb": 48500,
+        "vram_required_gb": 52,
+        "context_length": 131072,
+        "quantization": "Q4_K_M",
+        "specialty": "Code",
+        "llm_model_name": "qwen3-coder-next",
+    })]
+
+    ranked = rank_pre_download_models(
+        catalog, _unified_host_gpu("amd", "AMD Radeon Graphics"), profile="qwen", limit=3, system_ram_gb=128
+    )
+
+    assert [model["id"] for model in ranked] == ["qwen3-coder-next-q4"]
+
+
 def test_pre_download_ranker_accounts_for_long_context_kv_on_4gb_gpu(data_dir, tmp_path):
     catalog = [
         {
