@@ -109,6 +109,16 @@ def main() -> int:
         "configured remote-provider test must call the egress probe endpoint",
     )
     require(
+        r"Route proof: ",
+        text,
+        "configured remote-provider test output must show route proof recording status",
+    )
+    require(
+        r"\.routeProof\.recorded",
+        text,
+        "configured remote-provider test output must inspect the routeProof result",
+    )
+    require(
         r"if \[\[ \"\$use_configured_probe\" == \"true\" \]\]; then[\s\S]*_remote_provider_probe_configured \"\$@\"",
         body,
         "remote-provider test must use configured-route probe when provider options are absent",

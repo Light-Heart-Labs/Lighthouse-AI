@@ -65,6 +65,7 @@ try:
     )
     from remote_provider.policy import PolicyError as _RemoteProviderPolicyError
     from remote_provider.probe import (
+        PROBE_RECEIPT_SCHEMA as _REMOTE_PROVIDER_PROBE_RECEIPT_SCHEMA,
         ProbeError as _RemoteProviderProbeError,
         probe_direct_provider as _probe_remote_provider_direct,
         public_probe_receipt as _remote_provider_public_probe_receipt,
@@ -77,6 +78,7 @@ except Exception:  # pragma: no cover - import environment dependent
     _RemoteProviderLifecycleError = ValueError
     _RemoteProviderPolicyError = ValueError
     _RemoteProviderProbeError = RuntimeError
+    _REMOTE_PROVIDER_PROBE_RECEIPT_SCHEMA = "ods.remote-provider-probe-receipt.v1"
     _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA = "ods.remote-routing-state.v1"
     _REMOTE_PROVIDER_SSH_SUPERVISOR_PLAN_SCHEMA = "ods.remote-provider-ssh-supervisor-plan.v1"
     _plan_remote_provider_lifecycle_operation = None
@@ -126,6 +128,8 @@ GPU_COUNT: str = "1"
 CORE_SERVICE_IDS: set = set()
 _REMOTE_PROVIDER_EGRESS_UID = 10778
 _REMOTE_PROVIDER_EGRESS_GID = 10778
+_REMOTE_PROVIDER_EGRESS_PROBE_SCHEMA = "ods.remote-provider-egress-probe.v1"
+_REMOTE_PROVIDER_PROOF_RECORD_SCHEMA = "ods.remote-provider-proof-record.v1"
 _REMOTE_PROVIDER_SECRET_FIELD_TO_REF = {
     "apiKey": "REMOTE_LLM_API_KEY",
     "peerToken": "REMOTE_ODS_PEER_TOKEN",
@@ -1542,6 +1546,108 @@ def _remote_provider_route_state_from_plan(
             pending_reason=pending_reason,
             probe_receipt=probe_receipt,
         ),
+    }
+
+
+def _remote_provider_safe_text(value, *, max_length: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        return ""
+    return text[:max_length]
+
+
+def _remote_provider_safe_int(value) -> int | None:
+    return value if type(value) is int else None
+
+
+def _remote_provider_sanitize_probe_receipt(value) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("probe receipt must be an object")
+    schema = _remote_provider_safe_text(value.get("schema"), max_length=80)
+    if schema != _REMOTE_PROVIDER_PROBE_RECEIPT_SCHEMA:
+        raise ValueError("unsupported probe receipt schema")
+    if value.get("ok") is not True:
+        raise ValueError("probe receipt must be successful")
+    verified_at = _remote_provider_safe_text(value.get("verifiedAt"), max_length=64)
+    if not verified_at:
+        raise ValueError("probe receipt is missing verifiedAt")
+    resolution = value.get("resolution")
+    clean_resolution = None
+    if isinstance(resolution, dict):
+        clean_resolution = {
+            "ok": bool(resolution.get("ok")),
+            "addressCount": _remote_provider_safe_int(resolution.get("addressCount")),
+        }
+    receipt = {
+        "schema": schema,
+        "ok": True,
+        "verifiedAt": verified_at,
+        "endpoint": _remote_provider_safe_text(value.get("endpoint"), max_length=32),
+        "httpStatus": _remote_provider_safe_int(value.get("httpStatus")),
+        "modelCount": _remote_provider_safe_int(value.get("modelCount")),
+        "resolution": clean_resolution,
+    }
+    content_type = _remote_provider_safe_text(value.get("contentType"), max_length=128)
+    if content_type:
+        receipt["contentType"] = content_type
+    return receipt
+
+
+def _remote_provider_probe_receipt_from_egress(payload: dict) -> dict:
+    schema = _remote_provider_safe_text(payload.get("schema"), max_length=80)
+    if schema != _REMOTE_PROVIDER_EGRESS_PROBE_SCHEMA:
+        raise ValueError("unsupported egress probe schema")
+    if payload.get("ok") is not True:
+        raise ValueError("egress probe must be successful")
+    return _remote_provider_sanitize_probe_receipt(payload.get("probe"))
+
+
+def _read_remote_provider_route_state_for_update() -> dict:
+    path = _remote_provider_route_state_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError("remote-provider route state is missing") from exc
+    except OSError as exc:
+        raise RuntimeError(f"remote-provider route state is unreadable: {exc}") from exc
+    try:
+        state = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"remote-provider route state is not valid JSON: {exc}") from exc
+    if not isinstance(state, dict):
+        raise RuntimeError("remote-provider route state root must be an object")
+    if state.get("schema") != _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA:
+        raise RuntimeError("remote-provider route state schema is unsupported")
+    if state.get("enabled") is not True:
+        raise RuntimeError("remote-provider route is disabled")
+    if not isinstance(state.get("provider"), dict):
+        raise RuntimeError("remote-provider route state is missing provider metadata")
+    return state
+
+
+def _record_remote_provider_egress_probe(payload: dict) -> dict:
+    probe_receipt = _remote_provider_probe_receipt_from_egress(payload)
+    state = _read_remote_provider_route_state_for_update()
+    provider = state.get("provider") if isinstance(state.get("provider"), dict) else {}
+    payload_transport = _remote_provider_safe_text(payload.get("transport"), max_length=32)
+    active_transport = str(provider.get("transport") or "direct")
+    if payload_transport != active_transport:
+        raise RuntimeError("remote-provider proof transport does not match active route")
+    state["status"] = _remote_provider_route_status(
+        enabled=True,
+        probe_receipt=probe_receipt,
+    )
+    _atomic_write_text(
+        _remote_provider_route_state_path(),
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+        0o644,
+    )
+    return {
+        "schema": _REMOTE_PROVIDER_PROOF_RECORD_SCHEMA,
+        "recorded": True,
+        "status": state["status"],
     }
 
 
@@ -3966,6 +4072,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_plan()
         elif self.path == "/v1/remote-provider/apply":
             self._handle_remote_provider_apply()
+        elif self.path == "/v1/remote-provider/proof":
+            self._handle_remote_provider_proof()
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
         elif self.path == "/v1/model/delete":
@@ -4045,6 +4153,27 @@ class AgentHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception("remote-provider lifecycle apply failed")
             json_response(self, 500, {"error": f"Remote provider apply failed: {exc}"})
+            return
+        json_response(self, 200, result)
+
+    def _handle_remote_provider_proof(self):
+        """Record a successful egress-owned remote-provider probe in host state."""
+        if not check_auth(self):
+            return
+        body = read_optional_json_body(self)
+        if body is None:
+            return
+        try:
+            result = _record_remote_provider_egress_probe(body)
+        except ValueError as exc:
+            json_response(self, 400, {"error": str(exc)})
+            return
+        except RuntimeError as exc:
+            json_response(self, 409, {"error": str(exc)})
+            return
+        except Exception as exc:
+            logger.exception("remote-provider proof recording failed")
+            json_response(self, 500, {"error": f"Remote provider proof recording failed: {exc}"})
             return
         json_response(self, 200, result)
 

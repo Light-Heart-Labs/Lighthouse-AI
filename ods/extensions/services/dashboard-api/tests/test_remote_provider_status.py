@@ -593,6 +593,7 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
     from routers import remote_provider_status as rps
 
     calls = []
+    agent_calls = []
 
     class FakeResponse:
         status_code = 200
@@ -647,6 +648,19 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
 
     monkeypatch.setattr(rps, "EGRESS_URL", "http://egress.internal:8091/")
     monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
+    async def fake_agent_request(method, path, *, payload, timeout):
+        agent_calls.append((method, path, payload, timeout))
+        return {
+            "schema": "ods.remote-provider-proof-record.v1",
+            "recorded": True,
+            "status": {
+                "proven": True,
+                "reason": "provider-handshake-ok",
+                "lastProbe": payload["probe"],
+            },
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_agent_request)
 
     resp = test_client.post(
         "/api/remote-provider/probe",
@@ -677,15 +691,127 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
             "reason": "ready",
             "process": {"status": "running", "pid": 4242},
         },
+        "routeProof": {
+            "recorded": True,
+            "reachable": True,
+            "schema": "ods.remote-provider-proof-record.v1",
+            "status": {
+                "proven": True,
+                "reason": "provider-handshake-ok",
+                "lastProbe": {
+                    "schema": "ods.remote-provider-probe-receipt.v1",
+                    "ok": True,
+                    "verifiedAt": "2026-07-26T00:00:00+00:00",
+                    "endpoint": "/v1/models",
+                    "httpStatus": 200,
+                    "contentType": "application/json",
+                    "modelCount": 1,
+                    "resolution": {"ok": True, "addressCount": 0},
+                },
+            },
+        },
     }
     assert calls == [
         ("timeout", 3.0),
         ("post", "http://egress.internal:8091/probe"),
     ]
+    assert agent_calls == [
+        (
+            "POST",
+            "/v1/remote-provider/proof",
+            {
+                "schema": "ods.remote-provider-egress-probe.v1",
+                "ok": True,
+                "transport": "ssh",
+                "probe": {
+                    "schema": "ods.remote-provider-probe-receipt.v1",
+                    "ok": True,
+                    "verifiedAt": "2026-07-26T00:00:00+00:00",
+                    "endpoint": "/v1/models",
+                    "httpStatus": 200,
+                    "contentType": "application/json",
+                    "modelCount": 1,
+                    "resolution": {"ok": True, "addressCount": 0},
+                },
+                "tunnel": {
+                    "ok": True,
+                    "ready": True,
+                    "status": "running",
+                    "reason": "ready",
+                    "process": {"status": "running", "pid": 4242},
+                },
+            },
+            5,
+        )
+    ]
     assert "unit-test-provider-token" not in dumped
     assert "unit-test-ssh-key" not in dumped
     assert "ssh-identity" not in dumped
     assert "127.0.0.1" not in dumped
+
+
+def test_remote_provider_probe_reports_nonfatal_proof_record_failure(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "schema": "ods.remote-provider-egress-probe.v1",
+                "ok": True,
+                "transport": "ssh",
+                "probe": {
+                    "schema": "ods.remote-provider-probe-receipt.v1",
+                    "ok": True,
+                    "verifiedAt": "2026-07-26T00:00:00+00:00",
+                    "endpoint": "/v1/models",
+                    "httpStatus": 200,
+                    "modelCount": 1,
+                    "resolution": {"ok": True, "addressCount": 0},
+                },
+                "tunnel": {"ok": True, "ready": True, "status": "running", "reason": "ready"},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, _url):
+            return FakeResponse()
+
+    async def fake_agent_request(*_args, **_kwargs):
+        raise rps.AgentHTTPError(409, "unit-test-provider-token ssh-identity")
+
+    monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_agent_request)
+
+    resp = test_client.post(
+        "/api/remote-provider/probe",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    dumped = json.dumps(body, sort_keys=True)
+    assert resp.status_code == 200
+    assert body["ok"] is True
+    assert body["routeProof"] == {
+        "recorded": False,
+        "reachable": True,
+        "reason": "host_agent_http_409",
+        "statusCode": 409,
+    }
+    assert "unit-test-provider-token" not in dumped
+    assert "ssh-identity" not in dumped
 
 
 def test_remote_provider_probe_preserves_sanitized_egress_errors(

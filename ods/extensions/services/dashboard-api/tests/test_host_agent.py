@@ -2057,6 +2057,35 @@ class TestRemoteProviderLifecycle:
         )
         return probes
 
+    def _egress_probe_response(self):
+        return {
+            "schema": "ods.remote-provider-egress-probe.v1",
+            "ok": True,
+            "transport": "ssh",
+            "probe": {
+                "schema": "ods.remote-provider-probe-receipt.v1",
+                "ok": True,
+                "verifiedAt": "2026-07-26T00:00:00+00:00",
+                "endpoint": "/v1/models",
+                "httpStatus": 200,
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {
+                    "ok": True,
+                    "addressCount": 0,
+                    "raw": "127.0.0.1",
+                },
+                "value": "unit-test-provider-token",
+            },
+            "tunnel": {
+                "ok": True,
+                "ready": True,
+                "status": "running",
+                "reason": "ready",
+                "secretValue": "unit-test-ssh-key",
+            },
+        }
+
     def test_plans_redacted_lifecycle_operation(self):
         payload = {
             "action": "test",
@@ -2251,6 +2280,117 @@ class TestRemoteProviderLifecycle:
         assert "unit-test-provider-token" not in dumped
         assert "unit-test-key" not in dumped
         assert "AAAATEST" not in dumped
+
+    def test_records_egress_probe_as_route_proof(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        handler = _FakeHandler(
+            json.dumps(self._egress_probe_response()).encode("utf-8")
+        )
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        dumped = json.dumps({"body": body, "state": recorded_state}, sort_keys=True)
+        expected_status = {
+            "proven": True,
+            "reason": "provider-handshake-ok",
+            "lastProbe": {
+                "schema": "ods.remote-provider-probe-receipt.v1",
+                "ok": True,
+                "verifiedAt": "2026-07-26T00:00:00+00:00",
+                "endpoint": "/v1/models",
+                "httpStatus": 200,
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {"ok": True, "addressCount": 0},
+            },
+        }
+        assert handler.response_code == 200
+        assert body == {
+            "schema": "ods.remote-provider-proof-record.v1",
+            "recorded": True,
+            "status": expected_status,
+        }
+        assert recorded_state["provider"]["transport"] == "ssh"
+        assert recorded_state["ssh"]["host"] == "gpu.example.test"
+        assert recorded_state["status"] == expected_status
+        assert "unit-test-provider-token" not in dumped
+        assert "unit-test-ssh-key" not in dumped
+        assert '"raw"' not in dumped
+
+    def test_rejects_failed_egress_probe_without_overwriting_route_proof(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        proof_payload = self._egress_probe_response()
+        proof_payload["probe"]["ok"] = False
+        proof_payload["probe"]["value"] = "unit-test-provider-token"
+        handler = _FakeHandler(json.dumps(proof_payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        dumped = json.dumps({"body": body, "state": recorded_state}, sort_keys=True)
+        assert handler.response_code == 400
+        assert body["error"] == "probe receipt must be successful"
+        assert recorded_state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
+        assert "unit-test-provider-token" not in dumped
+
+    def test_rejects_mismatched_egress_probe_transport(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        proof_payload = self._egress_probe_response()
+        proof_payload["transport"] = "direct"
+        handler = _FakeHandler(json.dumps(proof_payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        assert handler.response_code == 409
+        assert body["error"] == "remote-provider proof transport does not match active route"
+        assert recorded_state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
 
     def test_apply_test_does_not_write_state(
         self,

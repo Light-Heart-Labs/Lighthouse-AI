@@ -3840,6 +3840,16 @@ _remote_provider_print_probe_result() {
         (if .tunnel then
             "Tunnel: \(.tunnel.status // "unknown")" +
             (if (.tunnel.reason // "") != "" then " (\(.tunnel.reason))" else "" end)
+         else empty end),
+        (if .routeProof then
+            "Route proof: " +
+            (if .routeProof.recorded == true then
+                "recorded" +
+                (if (.routeProof.status.reason // "") != "" then " (\(.routeProof.status.reason))" else "" end)
+             else
+                "not recorded" +
+                (if (.routeProof.reason // "") != "" then " (\(.routeProof.reason))" else "" end)
+             end)
          else empty end)
     ' "$response_file"
 }

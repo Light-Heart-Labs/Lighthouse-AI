@@ -32,6 +32,7 @@ _SAFE_PROVIDER_KEYS = {"capability", "baseUrl", "model", "transport"}
 _SAFE_PROJECTION_KEYS = {"publicModel", "gateway", "egressBaseUrl", "consumerRoute"}
 _SSH_SUPERVISOR_SCHEMA = "ods.remote-provider-ssh-supervisor-plan.v1"
 _EGRESS_PROBE_SCHEMA = "ods.remote-provider-egress-probe.v1"
+_PROOF_RECORD_SCHEMA = "ods.remote-provider-proof-record.v1"
 _EGRESS_ERROR_MESSAGES = {
     "invalid_route": "Remote provider route is invalid",
     "invalid_route_state": "Remote provider route state is invalid",
@@ -399,6 +400,60 @@ def _sanitize_egress_probe_response(payload: Any) -> dict[str, Any]:
     }
 
 
+def _proof_record_failure(
+    reason: str,
+    *,
+    reachable: bool,
+    status_code: int | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "recorded": False,
+        "reachable": reachable,
+        "reason": reason,
+    }
+    if status_code is not None:
+        result["statusCode"] = status_code
+    return result
+
+
+def _safe_proof_record(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return _proof_record_failure("invalid_host_agent_response", reachable=True)
+    schema = _safe_text(payload.get("schema"), max_length=80)
+    if schema != _PROOF_RECORD_SCHEMA or payload.get("recorded") is not True:
+        return _proof_record_failure("invalid_host_agent_response", reachable=True)
+    return {
+        "recorded": True,
+        "reachable": True,
+        "schema": schema,
+        "status": _safe_route_status(payload.get("status")),
+    }
+
+
+async def _record_egress_probe_proof(probe_response: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        payload = await async_request_agent_json(
+            "POST",
+            "/v1/remote-provider/proof",
+            payload=dict(probe_response),
+            timeout=5,
+        )
+    except AgentHTTPError as exc:
+        logger.debug(
+            "remote-provider proof recording returned HTTP %s",
+            exc.status_code,
+        )
+        return _proof_record_failure(
+            f"host_agent_http_{exc.status_code}",
+            reachable=True,
+            status_code=exc.status_code,
+        )
+    except (AgentUnavailable, AgentProtocolError):
+        logger.debug("remote-provider proof recording unavailable")
+        return _proof_record_failure("host_agent_unavailable", reachable=False)
+    return _safe_proof_record(payload)
+
+
 async def _fetch_egress_health() -> dict[str, Any]:
     url = f"{EGRESS_URL.rstrip('/')}/health"
     try:
@@ -558,7 +613,9 @@ async def remote_provider_plan(payload: dict[str, Any]) -> dict[str, Any]:
 @router.post("/api/remote-provider/probe", dependencies=[Depends(verify_api_key)])
 async def remote_provider_probe() -> dict[str, Any]:
     """Probe the configured remote provider through the internal egress boundary."""
-    return await _post_egress_probe()
+    result = await _post_egress_probe()
+    result["routeProof"] = await _record_egress_probe_proof(result)
+    return result
 
 
 @router.post("/api/remote-provider/apply", dependencies=[Depends(verify_api_key)])
