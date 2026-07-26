@@ -112,6 +112,112 @@ const probePayload = {
   },
 }
 
+const configurePlanPayload = {
+  schema: 'ods.remote-provider-lifecycle-operation.v1',
+  action: 'configure',
+  ok: true,
+  route: {
+    enabled: true,
+    provider: {
+      capability: 'openai-compatible',
+      baseUrl: 'https://gpu.example.test/v1',
+      model: 'qwen/remote:latest',
+      transport: 'direct',
+    },
+  },
+  writes: {
+    routingState: true,
+    providerSecret: true,
+    sshIdentity: false,
+    sshKnownHosts: false,
+    removesRoutingState: false,
+    removesSecrets: false,
+  },
+  secretRefs: {
+    REMOTE_LLM_API_KEY: { present: true, value: '[REDACTED]' },
+  },
+}
+
+const configureApplyPayload = {
+  ...configurePlanPayload,
+  applied: true,
+  mutated: true,
+  rollback: { attempted: false, ok: null },
+  probe: {
+    ok: true,
+    endpoint: '/v1/models',
+    httpStatus: 200,
+    modelCount: 2,
+  },
+}
+
+const disabledStatusPayload = {
+  ...statusPayload,
+  status: 'disabled',
+  routeState: {
+    ...statusPayload.routeState,
+    enabled: false,
+    provider: null,
+    status: { proven: false, reason: 'disabled' },
+  },
+  capabilities: {
+    inference: false,
+    odsPeerLifecycle: false,
+  },
+  availableActions: {
+    configure: true,
+    test: false,
+    disable: false,
+    remove: true,
+  },
+}
+
+const disableApplyPayload = {
+  schema: 'ods.remote-provider-lifecycle-operation.v1',
+  action: 'disable',
+  ok: true,
+  applied: true,
+  mutated: true,
+  rollback: { attempted: false, ok: null },
+  route: { enabled: false },
+  writes: {
+    routingState: true,
+    providerSecret: false,
+    removesRoutingState: false,
+    removesSecrets: false,
+  },
+  secretRefs: {},
+}
+
+const removeApplyPayload = {
+  ...disableApplyPayload,
+  action: 'remove',
+  route: { enabled: false },
+  writes: {
+    routingState: false,
+    providerSecret: false,
+    removesRoutingState: true,
+    removesSecrets: true,
+  },
+}
+
+async function fillConfigureForm() {
+  await screen.findByRole('heading', { name: 'Remote GPU' })
+  fireEvent.change(screen.getByLabelText('Base URL'), {
+    target: { value: 'https://gpu.example.test/v1' },
+  })
+  fireEvent.change(screen.getByLabelText('Model'), {
+    target: { value: 'qwen/remote:latest' },
+  })
+  fireEvent.change(screen.getByLabelText('API key'), {
+    target: { value: 'unit-test-provider-token' },
+  })
+}
+
+function requestBody(callIndex) {
+  return JSON.parse(globalThis.fetch.mock.calls[callIndex][1].body)
+}
+
 beforeEach(() => {
   globalThis.fetch = vi.fn()
 })
@@ -151,4 +257,103 @@ test('runs configured route probe and shows proof recording result', async () =>
   })
   expect(screen.getByText('Route proof recorded')).toBeInTheDocument()
   expect(screen.getByText('2026-07-26T00:05:00+00:00')).toBeInTheDocument()
+})
+
+test('plans direct provider configuration without rendering secret material', async () => {
+  globalThis.fetch
+    .mockResolvedValueOnce(response(statusPayload))
+    .mockResolvedValueOnce(response(configurePlanPayload))
+
+  render(createElement(RemoteProvider))
+  await fillConfigureForm()
+
+  fireEvent.click(screen.getByRole('button', { name: /plan/i }))
+
+  await waitFor(() => {
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+  })
+  expect(globalThis.fetch.mock.calls[1][0]).toBe('/api/remote-provider/plan')
+  expect(requestBody(1)).toEqual({
+    action: 'configure',
+    provider: {
+      transport: 'direct',
+      baseUrl: 'https://gpu.example.test/v1',
+      model: 'qwen/remote:latest',
+    },
+    secrets: {
+      apiKey: 'unit-test-provider-token',
+    },
+  })
+  expect(await screen.findByText('Configure plan ready')).toBeInTheDocument()
+  expect(screen.getByText('REMOTE_LLM_API_KEY')).toBeInTheDocument()
+  expect(screen.queryByText('unit-test-provider-token')).not.toBeInTheDocument()
+})
+
+test('applies direct provider configuration and clears the secret input', async () => {
+  globalThis.fetch
+    .mockResolvedValueOnce(response(statusPayload))
+    .mockResolvedValueOnce(response(configureApplyPayload))
+    .mockResolvedValueOnce(response(statusPayload))
+
+  render(createElement(RemoteProvider))
+  await fillConfigureForm()
+  const apiKeyInput = screen.getByLabelText('API key')
+
+  fireEvent.click(screen.getByRole('button', { name: /^configure$/i }))
+
+  await waitFor(() => {
+    expect(globalThis.fetch.mock.calls.map(call => call[0])).toEqual([
+      '/api/remote-provider/status',
+      '/api/remote-provider/apply',
+      '/api/remote-provider/status',
+    ])
+  })
+  expect(requestBody(1).secrets.apiKey).toBe('unit-test-provider-token')
+  expect(await screen.findByText('Configure applied')).toBeInTheDocument()
+  expect(apiKeyInput).toHaveValue('')
+  expect(screen.queryByText('unit-test-provider-token')).not.toBeInTheDocument()
+})
+
+test('applies disable lifecycle action and refreshes status', async () => {
+  globalThis.fetch
+    .mockResolvedValueOnce(response(statusPayload))
+    .mockResolvedValueOnce(response(disableApplyPayload))
+    .mockResolvedValueOnce(response(disabledStatusPayload))
+
+  render(createElement(RemoteProvider))
+
+  fireEvent.click(await screen.findByRole('button', { name: /^disable$/i }))
+
+  await waitFor(() => {
+    expect(globalThis.fetch.mock.calls.map(call => call[0])).toEqual([
+      '/api/remote-provider/status',
+      '/api/remote-provider/apply',
+      '/api/remote-provider/status',
+    ])
+  })
+  expect(requestBody(1)).toEqual({ action: 'disable' })
+  expect(screen.getByText('Disable applied')).toBeInTheDocument()
+})
+
+test('confirms remove before deleting route state and stored secrets', async () => {
+  const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+  globalThis.fetch
+    .mockResolvedValueOnce(response(statusPayload))
+    .mockResolvedValueOnce(response(removeApplyPayload))
+    .mockResolvedValueOnce(response(disabledStatusPayload))
+
+  render(createElement(RemoteProvider))
+
+  fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }))
+
+  await waitFor(() => {
+    expect(globalThis.fetch.mock.calls.map(call => call[0])).toEqual([
+      '/api/remote-provider/status',
+      '/api/remote-provider/apply',
+      '/api/remote-provider/status',
+    ])
+  })
+  expect(confirmSpy).toHaveBeenCalledWith('Remove remote GPU route and stored secrets?')
+  expect(requestBody(1)).toEqual({ action: 'remove' })
+  expect(screen.getByText('Remove applied')).toBeInTheDocument()
 })
