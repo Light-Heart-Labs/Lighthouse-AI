@@ -64,6 +64,7 @@ SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # never contain a path separator or ".." and escape BACKUP_DIR.
 BACKUP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_BODY = 16384
+MAX_TELEMETRY_RESPONSE_BYTES = 1024 * 1024
 SUBPROCESS_TIMEOUT_START = 600  # 10 min — image pulls can be slow
 SUBPROCESS_TIMEOUT_STOP = 120   # 2 min — stop should be fast
 HOOK_TIMEOUT = 120              # 2 min — hook execution timeout
@@ -80,7 +81,7 @@ _MACOS_HOST_AGENT_BRIDGE_LABEL = "com.ods.host-agent-bridge"
 # Prevents fail-open: without this, a missing JSON file would allow anyone with
 # the API key to stop core services like llama-server or dashboard-api.
 _FALLBACK_CORE_IDS = frozenset({
-    "dashboard-api", "dashboard", "llama-server", "open-webui",
+    "dashboard-api", "dashboard", "llama-server", "model-router", "open-webui",
     "litellm", "langfuse", "hermes", "hermes-proxy", "n8n", "openclaw", "opencode",
     "perplexica", "searxng", "qdrant", "tts", "whisper",
     "embeddings", "token-spy", "comfyui", "ape", "privacy-shield",
@@ -94,10 +95,19 @@ STARTUP_ODS_MODE: str | None = None
 TIER: str = "1"
 GPU_COUNT: str = "1"
 CORE_SERVICE_IDS: set = set()
+_windows_gpu_metrics_cache: tuple[float, dict | None] = (0.0, None)
+_windows_dxgi_adapters_cache: tuple[float, list[dict]] = (0.0, [])
+_windows_llm_status_cache: tuple[float, dict | None] = (0.0, None)
+_service_health_cache: tuple[float, dict | None] = (0.0, None)
+_windows_gpu_metrics_lock = threading.Lock()
+_windows_llm_status_lock = threading.Lock()
+_service_health_lock = threading.Lock()
 WINDOWS_WHISPER_CUDA_MIN_DRIVER_MAJOR = 575
 # Always-on services defined in docker-compose.base.yml — never stoppable via API.
 # Distinct from CORE_SERVICE_IDS (which is the allowlist of known service IDs).
-ALWAYS_ON_SERVICES: frozenset = frozenset({"llama-server", "open-webui", "dashboard", "dashboard-api"})
+ALWAYS_ON_SERVICES: frozenset = frozenset({
+    "llama-server", "model-router", "open-webui", "dashboard", "dashboard-api",
+})
 USER_EXTENSIONS_DIR: Path = Path()
 EXTENSIONS_DIR: Path = Path()
 _ODS_MODES = frozenset({"local", "cloud", "hybrid", "lemonade"})
@@ -116,7 +126,7 @@ _ALLOWED_CORE_RECREATE_IDS = frozenset({
     "llama-server", "open-webui", "litellm", "langfuse", "n8n",
     "hermes", "hermes-proxy", "openclaw", "opencode", "perplexica", "searxng", "qdrant",
     "tts", "whisper", "embeddings", "token-spy", "comfyui",
-    "ape", "privacy-shield",
+    "ape", "privacy-shield", "model-router",
 })
 
 
@@ -292,6 +302,8 @@ _model_lifecycle_operation: str | None = None
 _model_lifecycle_target: str | None = None
 _model_activation_target: str | None = None
 _model_status_verify_thread: threading.Thread | None = None
+_switchboard_initial_verify_lock = threading.Lock()
+_switchboard_initial_verify_thread: threading.Thread | None = None
 # Update lock/state: only one background ods-update run at a time.
 _update_lock = threading.Lock()
 _update_status_lock = threading.Lock()
@@ -344,6 +356,26 @@ def _model_lifecycle_conflict(requested_operation: str, active: dict) -> dict:
         "activeOperation": active.get("operation"),
         "activeTarget": active.get("target"),
     }
+    return payload
+
+
+def _model_lifecycle_status() -> dict:
+    """Return the currently-owned model lifecycle operation, if any."""
+    with _model_lifecycle_state_lock:
+        operation = _model_lifecycle_operation
+        target = _model_lifecycle_target
+        activation_target = _model_activation_target
+    if not operation:
+        return {}
+    payload = {
+        "lifecycleActive": True,
+        "activeOperation": operation,
+        "activeTarget": target,
+    }
+    if operation == "model_activation":
+        payload["activeModelId"] = activation_target or target
+    else:
+        payload["activeModelId"] = None
     return payload
 
 
@@ -402,7 +434,31 @@ def _parse_huggingface_resolve_url(url: object) -> tuple[str, str, str] | None:
     return repo_id, revision, filename
 
 
-def _download_huggingface_artifact(part_url: str, part_tmp: Path, cancel_event: threading.Event) -> tuple[bool, str]:
+def _positive_int_env(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value < minimum:
+        return minimum
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
+def _download_huggingface_artifact(
+    part_url: str,
+    part_tmp: Path,
+    cancel_event: threading.Event,
+    *,
+    status_path: Path | None = None,
+    status_label: str = "",
+    part_total: int = 0,
+    status_error: str = "",
+) -> tuple[bool, str]:
     """Download a Hugging Face artifact with huggingface_hub for Xet-backed files."""
     global _model_download_proc
     parsed = _parse_huggingface_resolve_url(part_url)
@@ -411,6 +467,24 @@ def _download_huggingface_artifact(part_url: str, part_tmp: Path, cancel_event: 
 
     repo_id, revision, filename = parsed
     cache_dir = INSTALL_DIR / "data" / "hf-cache"
+    fallback_timeout = _positive_int_env(
+        "ODS_HF_HUB_FALLBACK_TIMEOUT_SECONDS",
+        2700,
+        minimum=30,
+        maximum=14400,
+    )
+    heartbeat_seconds = _positive_int_env(
+        "ODS_HF_HUB_FALLBACK_STATUS_SECONDS",
+        10,
+        minimum=2,
+        maximum=120,
+    )
+    response_timeout = _positive_int_env(
+        "ODS_HF_HUB_RESPONSE_TIMEOUT_SECONDS",
+        30,
+        minimum=10,
+        maximum=300,
+    )
     code = r'''
 import shutil
 import sys
@@ -449,30 +523,83 @@ shutil.copyfile(path, dest_path)
         str(cache_dir),
     ]
     try:
+        child_env = os.environ.copy()
+        child_env.setdefault("HF_HUB_ETAG_TIMEOUT", str(response_timeout))
+        child_env.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", str(response_timeout))
+        logger.info(
+            "Model download falling back to Hugging Face Hub for %s from %s",
+            filename,
+            repo_id,
+        )
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=child_env,
         )
         _model_download_proc = proc
+        stop_status = threading.Event()
+        heartbeat_thread = None
+
+        if status_path is not None:
+            label = status_label or Path(filename).name
+            status_message = (
+                f"{status_error}; Hugging Face Hub fallback active"
+                if status_error
+                else "Hugging Face Hub fallback active"
+            )
+
+            def _heartbeat_status() -> None:
+                while not stop_status.is_set():
+                    if cancel_event.is_set():
+                        try:
+                            proc.kill()
+                        except (OSError, AttributeError):
+                            pass
+                    try:
+                        current = part_tmp.stat().st_size if part_tmp.exists() else 0
+                    except OSError:
+                        current = 0
+                    _write_model_status(
+                        status_path,
+                        "downloading",
+                        label,
+                        current,
+                        part_total,
+                        status_message,
+                    )
+                    stop_status.wait(heartbeat_seconds)
+
+            heartbeat_thread = threading.Thread(target=_heartbeat_status, daemon=True)
+            heartbeat_thread.start()
+        timed_out = False
         try:
-            stdout_text, stderr_text = proc.communicate(timeout=14400)
+            stdout_text, stderr_text = proc.communicate(timeout=fallback_timeout)
         except subprocess.TimeoutExpired:
+            timed_out = True
             proc.kill()
+            timeout_error = f"Hugging Face Hub fallback timed out after {fallback_timeout}s"
             try:
                 stdout_text, stderr_text = proc.communicate(timeout=5)
+                stderr_text = stderr_text or timeout_error
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
-                stdout_text, stderr_text = "", "Hugging Face Hub download timed out"
+                stdout_text, stderr_text = "", timeout_error
         finally:
+            stop_status.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=1)
             _model_download_proc = None
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"Hugging Face Hub fallback could not start: {exc}"
 
     if cancel_event.is_set():
         return False, "Download cancelled by user"
+    if timed_out:
+        logger.warning("Model download Hugging Face Hub fallback timed out for %s", filename)
+        return False, stderr_text or f"Hugging Face Hub fallback timed out after {fallback_timeout}s"
     if proc.returncode == 0 and _model_file_ready(part_tmp):
         return True, ""
     details = stderr_text or stdout_text
@@ -749,6 +876,272 @@ def load_env(env_path: Path) -> dict:
     return env
 
 
+def _switchboard_state_path() -> Path:
+    return INSTALL_DIR / "data" / "model-state.json"
+
+
+def _switchboard_state_needs_initial_verification(path: Path) -> bool:
+    if _switchboard_state is None:
+        return False
+    doc, errors = _switchboard_state.read_state(path)
+    if errors or not isinstance(doc, dict):
+        return False
+    active = doc.get("active")
+    if not isinstance(active, dict):
+        return False
+    proof = active.get("proof")
+    return (
+        active.get("reconstructed") is True
+        or not isinstance(active.get("verifiedAt"), str)
+        or not active.get("verifiedAt")
+        or not isinstance(proof, dict)
+        or proof.get("completion") is not True
+    )
+
+
+def _switchboard_state_needs_current_env_verification(
+    path: Path,
+    env: dict | None = None,
+) -> bool:
+    """Return True when the verified route is absent or stale versus .env."""
+    if _switchboard_state is None:
+        return False
+    if env is None:
+        env = load_env(INSTALL_DIR / ".env")
+    identity = _switchboard_state.migrate_env_identity(env)
+    if not identity:
+        return False
+    doc, errors = _switchboard_state.read_state(path)
+    if errors or not isinstance(doc, dict):
+        return False
+    active = doc.get("active")
+    if not isinstance(active, dict):
+        return True
+    proof = active.get("proof")
+    if (
+        active.get("reconstructed") is True
+        or not isinstance(active.get("verifiedAt"), str)
+        or not active.get("verifiedAt")
+        or not isinstance(proof, dict)
+        or proof.get("completion") is not True
+    ):
+        return True
+
+    gguf_file = str(env.get("GGUF_FILE") or identity["runtimeModelId"])
+    llm_model_name = str(env.get("LLM_MODEL") or identity["catalogId"])
+    model_id, _model = _catalog_model_for_current_env(env)
+    if not _runtime_model_identity_matches(
+        active.get("runtimeModelId"),
+        model_id=model_id or identity["catalogId"],
+        gguf_file=gguf_file,
+        llm_model_name=llm_model_name,
+    ):
+        return True
+
+    backend_kind, endpoint_id, _native_route = _initial_switchboard_backend(env)
+    backend = active.get("backend")
+    return not (
+        isinstance(backend, dict)
+        and backend.get("kind") == backend_kind
+        and backend.get("endpointId") == endpoint_id
+    )
+
+
+def _catalog_model_for_current_env(env: dict) -> tuple[str, dict]:
+    gguf_file = str(env.get("GGUF_FILE") or "").strip()
+    llm_model_name = str(env.get("LLM_MODEL") or "").strip()
+    library_path = INSTALL_DIR / "config" / "model-library.json"
+    if library_path.exists():
+        try:
+            library = json.loads(library_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            library = {}
+        for entry in library.get("models", []) if isinstance(library, dict) else []:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id") or "")
+            entry_gguf = str(entry.get("gguf_file") or "")
+            entry_llm = str(entry.get("llm_model_name") or entry_id)
+            if (
+                (llm_model_name and entry_id == llm_model_name)
+                or (llm_model_name and entry_llm == llm_model_name)
+                or (gguf_file and entry_gguf == gguf_file)
+            ):
+                return entry_id or llm_model_name or gguf_file, entry
+    return llm_model_name or gguf_file, {}
+
+
+def _initial_switchboard_backend(env: dict) -> tuple[str, str, str | None]:
+    gpu_backend = str(env.get("GPU_BACKEND") or "nvidia").lower()
+    windows_native_llama = _is_windows_host_llama_server(env)
+    if gpu_backend == "amd" and not windows_native_llama:
+        lemonade_model_id = str(env.get("LEMONADE_MODEL") or "").strip()
+        if not lemonade_model_id:
+            lemonade_model_id = _resolve_lemonade_model_id(
+                env,
+                str(env.get("GGUF_FILE") or ""),
+            )
+        return "lemonade", "lemonade-default", lemonade_model_id or None
+    return "llama-server", "llama-server-default", None
+
+
+def _publish_verified_initial_switchboard_route(
+    *,
+    reason: str,
+    attempts: int = 180,
+    initial_delay: float = 0,
+    interval: float = 10,
+) -> bool:
+    """Promote current .env route only after runtime proof succeeds."""
+    if _switchboard_state is None:
+        return False
+    state_path = _switchboard_state_path()
+    env = load_env(INSTALL_DIR / ".env")
+    if not _switchboard_state_needs_current_env_verification(state_path, env):
+        return False
+
+    identity = _switchboard_state.migrate_env_identity(env)
+    if not identity:
+        return False
+
+    gguf_file = str(env.get("GGUF_FILE") or identity["runtimeModelId"])
+    llm_model_name = str(env.get("LLM_MODEL") or identity["catalogId"])
+    if not gguf_file:
+        return False
+
+    model_id, model = _catalog_model_for_current_env(env)
+    backend_kind, endpoint_id, native_route = _initial_switchboard_backend(env)
+    proof = _wait_for_model_readiness(
+        env,
+        model_id=model_id or llm_model_name or gguf_file,
+        gguf_file=gguf_file,
+        llm_model_name=llm_model_name,
+        lemonade_model_id=native_route or "",
+        attempts=attempts,
+        initial_delay=initial_delay,
+        interval=interval,
+        return_proof=True,
+    )
+    if not isinstance(proof, dict) or not proof.get("identity"):
+        logger.info("switchboard initial route proof deferred (%s)", reason)
+        return False
+
+    fresh_env = load_env(INSTALL_DIR / ".env")
+    if (
+        str(fresh_env.get("GGUF_FILE") or "") != str(env.get("GGUF_FILE") or "")
+        or str(fresh_env.get("LLM_MODEL") or "") != str(env.get("LLM_MODEL") or "")
+    ):
+        logger.info("switchboard initial route proof discarded after env changed")
+        return False
+    if not _switchboard_state_needs_current_env_verification(state_path, fresh_env):
+        return False
+
+    runtime_identity = str(proof["identity"])
+    if not _runtime_model_identity_matches(
+        runtime_identity,
+        model_id=model_id,
+        gguf_file=gguf_file,
+        llm_model_name=llm_model_name,
+    ):
+        logger.warning(
+            "switchboard initial route proof identity %s did not match %s",
+            runtime_identity,
+            gguf_file,
+        )
+        return False
+
+    context_length = int(proof.get("contextLength") or identity.get("contextLength") or 0)
+    if backend_kind == "lemonade":
+        native_route = runtime_identity
+    capabilities = {
+        "chat": True,
+        "tools": bool(model.get("tools")),
+        "vision": bool(model.get("vision")),
+        "agentViable": _model_agent_viable(model, context_length),
+    }
+    _switchboard_state.record_verified_route(
+        state_path,
+        catalog_id=model_id or llm_model_name or gguf_file,
+        runtime_model_id=runtime_identity,
+        backend_kind=backend_kind,
+        endpoint_id=endpoint_id,
+        native_route=native_route,
+        context_length=context_length,
+        capabilities=capabilities,
+        proof_identity=runtime_identity,
+    )
+    logger.info(
+        "switchboard initial route verified (%s): %s",
+        reason,
+        runtime_identity,
+    )
+    return True
+
+
+def _schedule_initial_switchboard_verification(reason: str) -> None:
+    global _switchboard_initial_verify_thread
+    if _switchboard_state is None:
+        return
+    state_path = _switchboard_state_path()
+    if not _switchboard_state_needs_current_env_verification(state_path):
+        return
+    with _switchboard_initial_verify_lock:
+        thread = _switchboard_initial_verify_thread
+        if thread is not None and thread.is_alive():
+            return
+
+        def _run() -> None:
+            try:
+                _publish_verified_initial_switchboard_route(reason=reason)
+            except Exception as exc:
+                logger.warning("switchboard initial route verification failed: %s", exc)
+
+        _switchboard_initial_verify_thread = threading.Thread(
+            target=_run,
+            name="ods-switchboard-initial-verify",
+            daemon=True,
+        )
+        _switchboard_initial_verify_thread.start()
+
+
+def _bootstrap_status_indicates_complete() -> bool:
+    status_path = INSTALL_DIR / "data" / "bootstrap-status.json"
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return str(data.get("status") or "").strip().casefold() == "complete"
+
+
+def _model_status_allows_route_proof(data: dict) -> bool:
+    status = str(data.get("status") or "").strip().casefold()
+    if status in {"already_downloaded", "complete"}:
+        return True
+    return _bootstrap_status_indicates_complete()
+
+
+def _verify_switchboard_route_for_status(data: dict, reason: str) -> None:
+    if _switchboard_state is None:
+        return
+    state_path = _switchboard_state_path()
+    if not _switchboard_state_needs_current_env_verification(state_path):
+        return
+    if _model_status_allows_route_proof(data):
+        try:
+            if _publish_verified_initial_switchboard_route(
+                reason=reason,
+                attempts=1,
+                initial_delay=0,
+                interval=0,
+            ):
+                return
+        except Exception as exc:
+            logger.warning("switchboard route status proof failed: %s", exc)
+    _schedule_initial_switchboard_verification(reason)
+
+
 def _atomic_write_bytes(
     path: Path,
     content: bytes,
@@ -801,7 +1194,21 @@ def _atomic_write_bytes(
                     target_gid,
                 ):
                     os.chown(tmp_path, target_uid, target_gid)
-        os.replace(tmp_path, path)
+        last_error: PermissionError | None = None
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, path)
+                last_error = None
+                break
+            except PermissionError as exc:
+                last_error = exc
+                if attempt == 9:
+                    break
+                # Windows can briefly hold configuration files open while
+                # dashboard-api polls host-agent during model activation.
+                time.sleep(0.05 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
         if os.name != "nt":
             directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
             try:
@@ -1472,6 +1879,442 @@ def _parse_mem_value(s: str) -> float:
             except ValueError:
                 return 0.0
     return 0.0
+
+
+def _normalize_gpu_name(value: str) -> str:
+    value = re.sub(r"\s*[x\u00d7]\s*\d+$", "", str(value or "").strip(), flags=re.IGNORECASE)
+    value = re.sub(r"^(amd|nvidia)\s+", "", value, flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _is_windows_amd_integrated_gpu_name(value: str) -> bool:
+    """Mirror the installer classifier used to exclude display-only iGPUs."""
+    name = str(value or "").strip()
+    return any(re.search(pattern, name, re.IGNORECASE) for pattern in (
+        r"\bRadeon(?:\(TM\))?\s+Graphics$",
+        r"\bRadeon(?:\(TM\))?\s+\d{3,4}[MS](?:\s+Graphics)?$",
+        r"\bRadeon(?:\(TM\))?\s+(?:RX\s+)?Vega\s+\d{1,2}\s+Graphics$",
+        r"\bStrix\s+Halo\b",
+    ))
+
+
+def _is_windows_amd_discrete_gpu_name(value: str) -> bool:
+    name = str(value or "").strip()
+    if _is_windows_amd_integrated_gpu_name(name):
+        return False
+    return bool(re.search(r"\b(?:AMD\s+)?Radeon\b|\bFirePro\b", name, re.IGNORECASE))
+
+
+def _select_windows_gpu_adapters(adapters: list[dict], configured_name: str = "") -> list[dict]:
+    """Select the configured hardware GPU without accidentally choosing an iGPU."""
+    hardware = [item for item in adapters if not item.get("software")]
+    backend = str(GPU_BACKEND or "").casefold()
+    vendor_id = 0x1002 if backend == "amd" else 0x10DE if backend == "nvidia" else None
+    vendor_matches = [item for item in hardware if item.get("vendor_id") == vendor_id]
+    candidates = vendor_matches or hardware
+    if not candidates:
+        return []
+
+    wanted = _normalize_gpu_name(configured_name)
+    # The Windows env historically persisted only the primary AMD name, not
+    # GPU_COUNT. Treat all discrete Radeon adapters as the compute set even if
+    # they are different models; the name still helps on integrated-only hosts.
+    if backend == "amd":
+        discrete = [
+            item for item in candidates
+            if _is_windows_amd_discrete_gpu_name(item.get("name", ""))
+        ]
+        if discrete:
+            return discrete
+        if wanted:
+            named = [
+                item for item in candidates
+                if _normalize_gpu_name(item.get("name", "")) == wanted
+            ]
+            if named:
+                return named
+        return candidates
+
+    if wanted:
+        named = [item for item in candidates if _normalize_gpu_name(item.get("name", "")) == wanted]
+        if named:
+            try:
+                expected_count = max(1, int(GPU_COUNT or "1"))
+            except ValueError:
+                expected_count = 1
+            return sorted(named, key=lambda item: item.get("memory_total_mb", 0), reverse=True)[:expected_count]
+
+    # The Windows env historically omitted GPU_COUNT/HOST_GPU_NAME. Infer the
+    # compute set from hardware rather than silently collapsing dual Radeon
+    # systems to one adapter. On hybrid laptops, integrated Radeon Graphics is
+    # display hardware and must not become a peer when a discrete Radeon exists.
+    try:
+        expected_count = max(1, int(GPU_COUNT or "1"))
+    except ValueError:
+        expected_count = 1
+    return sorted(
+        candidates, key=lambda item: item.get("memory_total_mb", 0), reverse=True,
+    )[:expected_count]
+
+
+def _windows_dxgi_adapters() -> list[dict]:
+    """Enumerate Windows hardware adapters with stable DXGI LUIDs."""
+    if platform.system() != "Windows":
+        return []
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class DXGIAdapterDesc1(ctypes.Structure):
+            _fields_ = [
+                ("Description", wintypes.WCHAR * 128),
+                ("VendorId", wintypes.UINT), ("DeviceId", wintypes.UINT),
+                ("SubSysId", wintypes.UINT), ("Revision", wintypes.UINT),
+                ("DedicatedVideoMemory", ctypes.c_size_t),
+                ("DedicatedSystemMemory", ctypes.c_size_t),
+                ("SharedSystemMemory", ctypes.c_size_t),
+                ("AdapterLuid", LUID), ("Flags", wintypes.UINT),
+            ]
+
+        def make_guid(value: str) -> GUID:
+            return GUID.from_buffer_copy(uuid.UUID(value).bytes_le)
+
+        def com_method(obj, index, restype, *argtypes):
+            vtable = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtable[index])
+
+        factory = ctypes.c_void_p()
+        iid = make_guid("770AAE78-F26F-4DBA-A829-253C83D1B387")
+        create_factory = ctypes.windll.dxgi.CreateDXGIFactory1
+        create_factory.argtypes = [ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
+        if create_factory(ctypes.byref(iid), ctypes.byref(factory)) < 0:
+            return []
+
+        adapters: list[dict] = []
+        try:
+            for index in range(32):
+                adapter = ctypes.c_void_p()
+                result = com_method(
+                    factory, 12, ctypes.c_long, wintypes.UINT,
+                    ctypes.POINTER(ctypes.c_void_p),
+                )(factory, index, ctypes.byref(adapter))
+                if result < 0:
+                    break
+                try:
+                    desc = DXGIAdapterDesc1()
+                    if com_method(
+                        adapter, 10, ctypes.c_long, ctypes.POINTER(DXGIAdapterDesc1)
+                    )(adapter, ctypes.byref(desc)) >= 0:
+                        adapters.append({
+                            "name": desc.Description.strip(),
+                            "vendor_id": int(desc.VendorId),
+                            "memory_total_mb": int(desc.DedicatedVideoMemory // (1024 * 1024)),
+                            "shared_memory_total_mb": int(desc.SharedSystemMemory // (1024 * 1024)),
+                            "luid_high": int(desc.AdapterLuid.HighPart),
+                            "luid_low": int(desc.AdapterLuid.LowPart),
+                            "software": bool(desc.Flags & 2),
+                        })
+                finally:
+                    com_method(adapter, 2, wintypes.ULONG)(adapter)
+        finally:
+            com_method(factory, 2, wintypes.ULONG)(factory)
+        return adapters
+    except (AttributeError, OSError, TypeError, ValueError):
+        logger.debug("DXGI GPU enumeration failed", exc_info=True)
+        return []
+
+
+def _windows_gpu_metrics() -> dict | None:
+    """Collect real per-adapter Windows GPU utilization and memory use."""
+    global _windows_gpu_metrics_cache, _windows_dxgi_adapters_cache
+    if platform.system() != "Windows":
+        return None
+    with _windows_gpu_metrics_lock:
+        cached_at, cached = _windows_gpu_metrics_cache
+        if time.monotonic() - cached_at < 4.0:
+            return cached
+
+        env = load_env(INSTALL_DIR / ".env")
+        adapters_cached_at, all_adapters = _windows_dxgi_adapters_cache
+        if not all_adapters or time.monotonic() - adapters_cached_at >= 300.0:
+            all_adapters = _windows_dxgi_adapters()
+            _windows_dxgi_adapters_cache = (time.monotonic(), all_adapters)
+        adapters = _select_windows_gpu_adapters(
+            all_adapters, env.get("HOST_GPU_NAME", ""),
+        )
+        if not adapters:
+            _windows_gpu_metrics_cache = (time.monotonic(), None)
+            return None
+
+        prefixes = [
+            f"luid_0x{item['luid_high'] & 0xffffffff:08x}_0x{item['luid_low'] & 0xffffffff:08x}"
+            for item in adapters
+        ]
+        powershell_prefixes = ",".join(f"'{prefix}'" for prefix in prefixes)
+        script = rf"""
+$ErrorActionPreference = 'Stop'
+$prefixes = @({powershell_prefixes})
+$metrics = @()
+foreach ($prefix in $prefixes) {{
+  $engineTotals = @{{}}
+  Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine |
+    Where-Object {{ $_.Name -like "*$prefix*" }} |
+    ForEach-Object {{
+      if ($_.Name -match '_eng_([0-9]+)_engtype_(.+)$') {{
+        $key = "$($Matches[1])|$($Matches[2])"
+        $engineTotals[$key] = [double]($engineTotals[$key] + $_.UtilizationPercentage)
+      }}
+    }}
+  $adapterUtil = 0
+  if ($engineTotals.Count -gt 0) {{
+    $adapterUtil = [Math]::Min(100, ($engineTotals.Values | Measure-Object -Maximum).Maximum)
+  }}
+  $memoryRows = @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory |
+    Where-Object {{ $_.Name -like "$prefix*" }})
+  $dedicated = ($memoryRows | Measure-Object -Property DedicatedUsage -Sum).Sum
+  $shared = ($memoryRows | Measure-Object -Property SharedUsage -Sum).Sum
+  $metrics += [pscustomobject]@{{
+    prefix = $prefix
+    utilization_percent = [int][Math]::Round($adapterUtil)
+    utilization_available = ($engineTotals.Count -gt 0)
+    dedicated_used_bytes = [int64]$(if ($null -ne $dedicated) {{ $dedicated }} else {{ 0 }})
+    shared_used_bytes = [int64]$(if ($null -ne $shared) {{ $shared }} else {{ 0 }})
+    memory_usage_available = ($memoryRows.Count -gt 0)
+  }}
+}}
+[pscustomobject]@{{ adapters = @($metrics) }} |
+  ConvertTo-Json -Compress
+"""
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, text=True, timeout=8,
+            )
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or result.stdout).strip())
+            counters = json.loads(result.stdout)
+            counter_rows = counters.get("adapters")
+            if not isinstance(counter_rows, list):
+                raise ValueError("GPU counter response did not contain an adapter list")
+            rows_by_prefix = {
+                str(row.get("prefix") or "").casefold(): row
+                for row in counter_rows if isinstance(row, dict)
+            }
+            try:
+                system_ram_gb = max(0, int(float(
+                    env.get("SYSTEM_RAM_GB") or env.get("HOST_RAM_GB") or 0
+                )))
+            except (TypeError, ValueError):
+                system_ram_gb = 0
+
+            gpu_rows = []
+            for index, (adapter, prefix) in enumerate(zip(adapters, prefixes)):
+                row = rows_by_prefix.get(prefix.casefold(), {})
+                dedicated_total_mb = max(0, int(adapter.get("memory_total_mb") or 0))
+                unified = (
+                    _is_windows_amd_integrated_gpu_name(adapter.get("name", ""))
+                    and dedicated_total_mb <= 4096
+                    and system_ram_gb >= 32
+                )
+                memory_type = "unified" if unified else "discrete"
+                total_mb = (
+                    int(system_ram_gb * 0.75 * 1024)
+                    if unified else dedicated_total_mb
+                )
+                dedicated_used = max(0, int(row.get("dedicated_used_bytes") or 0))
+                shared_used = max(0, int(row.get("shared_used_bytes") or 0))
+                used_bytes = dedicated_used + shared_used if unified else dedicated_used
+                used_mb = min(total_mb, used_bytes // (1024 * 1024))
+                gpu_rows.append({
+                    "index": index,
+                    "uuid": f"luid-{adapter['luid_high'] & 0xffffffff:08x}-{adapter['luid_low'] & 0xffffffff:08x}",
+                    "name": str(adapter["name"]),
+                    "memory_type": memory_type,
+                    "memory_total_mb": total_mb,
+                    "memory_used_mb": used_mb,
+                    "memory_usage_available": bool(row.get("memory_usage_available", False)),
+                    "utilization_percent": max(0, min(100, int(row.get("utilization_percent") or 0))),
+                    "utilization_available": bool(row.get("utilization_available", False)),
+                    "temperature_c": None,
+                    "temperature_available": False,
+                })
+
+            total_mb = sum(item["memory_total_mb"] for item in gpu_rows)
+            used_mb = sum(item["memory_used_mb"] for item in gpu_rows)
+            available_util = [
+                item["utilization_percent"] for item in gpu_rows
+                if item["utilization_available"]
+            ]
+            names = [item["name"] for item in gpu_rows]
+            display_name = f"{names[0]} \u00d7 {len(names)}" if len(set(names)) == 1 and len(names) > 1 else " + ".join(names)
+            payload = {
+                "schema_version": "ods.host-gpu-metrics.v1",
+                "name": display_name,
+                "gpu_count": len(gpu_rows),
+                "memory_type": "unified" if all(item["memory_type"] == "unified" for item in gpu_rows) else "discrete",
+                "memory_total_mb": total_mb,
+                "memory_used_mb": used_mb,
+                "memory_usage_available": all(item["memory_usage_available"] for item in gpu_rows),
+                "utilization_percent": round(sum(available_util) / len(available_util)) if available_util else 0,
+                "utilization_available": bool(available_util),
+                "temperature_c": None,
+                "temperature_available": False,
+                "source": "windows-dxgi-performance-counters",
+                "sampled_at": _iso_now(),
+                "gpus": gpu_rows,
+            }
+        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired,
+                ValueError, TypeError, RuntimeError):
+            logger.debug("Windows GPU performance counters unavailable", exc_info=True)
+            payload = None
+        _windows_gpu_metrics_cache = (time.monotonic(), payload)
+        return payload
+
+
+def _windows_llm_status() -> dict | None:
+    """Read host-native Lemonade health and optional stats over loopback."""
+    global _windows_llm_status_cache
+    if platform.system() != "Windows":
+        return None
+    with _windows_llm_status_lock:
+        cached_at, cached = _windows_llm_status_cache
+        if time.monotonic() - cached_at < 1.0:
+            return cached
+
+        env = load_env(INSTALL_DIR / ".env")
+        try:
+            port = int(env.get("AMD_INFERENCE_PORT") or "8080")
+        except ValueError:
+            port = 8080
+        if port < 1 or port > 65535:
+            port = 8080
+        base = f"http://127.0.0.1:{port}"
+        api_key = str(env.get("LEMONADE_API_KEY") or "").strip()
+
+        def fetch_json(name: str) -> dict:
+            last_error: Exception | None = None
+            # ODS currently ships the /api/v1 compatibility route; newer
+            # Lemonade releases document /v1. Accept both during upgrades.
+            for prefix in ("/api/v1", "/v1"):
+                path = f"{prefix}/{name}"
+                try:
+                    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                    request = urllib_request.Request(f"{base}{path}", headers=headers)
+                    with urllib_request.urlopen(request, timeout=4) as response:
+                        raw = response.read(MAX_TELEMETRY_RESPONSE_BYTES + 1)
+                    if len(raw) > MAX_TELEMETRY_RESPONSE_BYTES:
+                        raise ValueError(f"{path} exceeded the telemetry response limit")
+                    payload = json.loads(raw.decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise ValueError(f"{path} returned non-object JSON")
+                    return payload
+                except (OSError, ValueError, json.JSONDecodeError, urllib_error.URLError) as exc:
+                    last_error = exc
+            raise OSError(f"Lemonade {name} endpoint is unavailable: {last_error}")
+
+        try:
+            raw_health = fetch_json("health")
+        except (OSError, ValueError, json.JSONDecodeError, urllib_error.URLError):
+            logger.debug("Windows host inference health unavailable", exc_info=True)
+            _windows_llm_status_cache = (time.monotonic(), None)
+            return None
+
+        stats = None
+        try:
+            raw_stats = fetch_json("stats")
+            stats = {
+                key: raw_stats.get(key)
+                for key in (
+                    "time_to_first_token", "tokens_per_second", "input_tokens",
+                    "output_tokens", "prompt_tokens",
+                )
+            }
+        except (OSError, ValueError, json.JSONDecodeError, urllib_error.URLError):
+            logger.debug("Windows host inference stats unavailable", exc_info=True)
+        model_loaded = raw_health.get("model_loaded")
+        if isinstance(model_loaded, str):
+            # Runtime releases may expose an absolute checkpoint path here.
+            # The dashboard needs an identity, never the host directory layout.
+            model_loaded = re.split(r"[\\/]", model_loaded.strip())[-1] or None
+        elif model_loaded is not None:
+            model_loaded = None
+        health = {
+            "status": raw_health.get("status"),
+            "version": raw_health.get("version"),
+            "model_loaded": model_loaded,
+        }
+        payload = {
+            "schema_version": "ods.host-llm-status.v1",
+            "health": health,
+            "stats": stats,
+            "source": "windows-loopback",
+            "sampled_at": _iso_now(),
+        }
+        _windows_llm_status_cache = (time.monotonic(), payload)
+        return payload
+
+
+def _docker_service_health_snapshot() -> dict:
+    """Return a cached, read-only Docker lifecycle and healthcheck snapshot."""
+    global _service_health_cache
+    with _service_health_lock:
+        cached_at, cached = _service_health_cache
+        if cached is not None and time.monotonic() - cached_at < 3.0:
+            return cached
+
+        names_result = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=8,
+        )
+        if names_result.returncode != 0:
+            raise RuntimeError((names_result.stderr or names_result.stdout).strip())
+        names = [
+            name.strip() for name in names_result.stdout.splitlines()
+            if name.strip().startswith("ods-")
+        ]
+        containers: list[dict] = []
+        if names:
+            inspect_result = subprocess.run(
+                ["docker", "inspect", *names], capture_output=True, text=True, timeout=12,
+            )
+            if inspect_result.returncode != 0:
+                raise RuntimeError((inspect_result.stderr or inspect_result.stdout).strip())
+            inspected = json.loads(inspect_result.stdout)
+            if not isinstance(inspected, list):
+                raise ValueError("docker inspect returned non-list JSON")
+            for item in inspected:
+                if not isinstance(item, dict):
+                    continue
+                state = item.get("State") if isinstance(item.get("State"), dict) else {}
+                health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+                labels = (item.get("Config") or {}).get("Labels") or {}
+                service_id = labels.get("com.docker.compose.service")
+                container_name = str(item.get("Name") or "").lstrip("/")
+                if not service_id and container_name.startswith("ods-"):
+                    service_id = container_name.removeprefix("ods-")
+                containers.append({
+                    "service_id": str(service_id or ""),
+                    "container_name": container_name,
+                    "state": str(state.get("Status") or "unknown"),
+                    "health": str(health.get("Status") or "none"),
+                })
+        payload = {
+            "schema_version": "ods.host-service-health.v1",
+            "containers": containers,
+            "sampled_at": _iso_now(),
+        }
+        _service_health_cache = (time.monotonic(), payload)
+        return payload
 
 
 def _iso_now() -> str:
@@ -2268,6 +3111,12 @@ class AgentHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/health":
             json_response(self, 200, {"status": "ok", "version": VERSION})
+        elif path == "/v1/gpu/metrics":
+            self._handle_gpu_metrics()
+        elif path == "/v1/llm/status":
+            self._handle_llm_status()
+        elif path == "/v1/service/health":
+            self._handle_service_health()
         elif path == "/v1/service/stats":
             self._handle_service_stats()
         elif path == "/v1/model/list":
@@ -2568,6 +3417,36 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 503, {"error": "docker stats timed out"})
         except Exception as exc:
             json_response(self, 500, {"error": f"Failed to fetch stats: {exc}"})
+
+    def _handle_service_health(self):
+        """Return Docker's lifecycle and container-health snapshot."""
+        if not check_auth(self):
+            return
+        try:
+            json_response(self, 200, _docker_service_health_snapshot())
+        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired,
+                ValueError, TypeError, RuntimeError) as exc:
+            json_response(self, 503, {"error": f"Docker health snapshot failed: {exc}"})
+
+    def _handle_llm_status(self):
+        """Bridge Windows host-native inference without Docker DNS/NAT."""
+        if not check_auth(self):
+            return
+        status = _windows_llm_status()
+        if status is None:
+            json_response(self, 503, {"error": "Host inference telemetry is unavailable"})
+            return
+        json_response(self, 200, status)
+
+    def _handle_gpu_metrics(self):
+        """Return host GPU counters that Docker Desktop cannot expose."""
+        if not check_auth(self):
+            return
+        metrics = _windows_gpu_metrics()
+        if metrics is None:
+            json_response(self, 503, {"error": "Host GPU telemetry is unavailable"})
+            return
+        json_response(self, 200, metrics)
 
     def do_POST(self):
         # Several legacy endpoints intentionally ignore an optional body, and
@@ -4138,14 +5017,22 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
         status_path = INSTALL_DIR / "data" / "model-download-status.json"
         if not status_path.exists():
-            json_response(self, 200, {"status": "idle"})
+            data = {"status": "idle"}
+            data.update(_model_lifecycle_status())
+            _verify_switchboard_route_for_status(data, "model-status")
+            json_response(self, 200, data)
             return
         try:
             data = _read_model_status(status_path)
             data = _normalize_model_download_status(status_path, data)
+            data.update(_model_lifecycle_status())
+            _verify_switchboard_route_for_status(data, "model-status")
             json_response(self, 200, data)
         except (json.JSONDecodeError, OSError):
-            json_response(self, 200, {"status": "idle"})
+            data = {"status": "idle"}
+            data.update(_model_lifecycle_status())
+            _verify_switchboard_route_for_status(data, "model-status")
+            json_response(self, 200, data)
 
     def _handle_model_download(self):
         """Start async model download. Only one download at a time.
@@ -4474,6 +5361,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                                             part_url,
                                             part_tmp,
                                             _model_download_cancel,
+                                            status_path=status_path,
+                                            status_label=part_label,
+                                            part_total=part_total,
+                                            status_error=f"Retry {attempt}/3: {curl_error}",
                                         )
                                         downloaded = hub_ok
                                         if not hub_ok:
@@ -4800,6 +5691,15 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 400, {"error": f"Model file not downloaded or empty: {target_gguf}"})
             return
 
+        llm_model_name = str(model_id or _local_model_name_from_gguf(target_gguf)).strip()
+        if not llm_model_name:
+            json_response(self, 400, {"error": "model_id could not be resolved"})
+            return
+        env["GGUF_FILE"] = target_gguf
+        env["LLM_MODEL"] = llm_model_name
+        _upsert_env_value(env_path, "GGUF_FILE", target_gguf)
+        _upsert_env_value(env_path, "LLM_MODEL", llm_model_name)
+
         if _live_runtime_has_model(env, target_gguf) is not True:
             _restart_windows_lemonade(env)
 
@@ -4818,7 +5718,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             )
             return
 
-        llm_model_name = str(env.get("LLM_MODEL") or model_id or _local_model_name_from_gguf(target_gguf))
+        env["LEMONADE_MODEL"] = lemonade_model_id
         _upsert_env_value(env_path, "LEMONADE_MODEL", lemonade_model_id)
         _write_lemonade_config(INSTALL_DIR, target_gguf, lemonade_model_id)
         json_response(
@@ -5049,6 +5949,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         models_ini = INSTALL_DIR / "config" / "llama-server" / "models.ini"
         lemonade_yaml = INSTALL_DIR / "config" / "litellm" / "lemonade.yaml"
         litellm_local_yaml = INSTALL_DIR / "config" / "litellm" / "local.yaml"
+        litellm_switchboard_yaml = INSTALL_DIR / "config" / "litellm" / "switchboard.yaml"
+        model_router_endpoints = INSTALL_DIR / "config" / "model-router" / "endpoints.json"
         hermes_live_config = INSTALL_DIR / "data" / "hermes" / "config.yaml"
         hermes_template_config = INSTALL_DIR / "extensions" / "services" / "hermes" / "cli-config.yaml.template"
 
@@ -5058,6 +5960,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         ini_snapshot: dict | None = None
         lemonade_snapshot: dict | None = None
         litellm_local_snapshot: dict | None = None
+        litellm_switchboard_snapshot: dict | None = None
+        model_router_endpoints_snapshot: dict | None = None
         hermes_live_snapshot: dict | None = None
         hermes_template_snapshot: dict | None = None
         opencode_snapshot: dict | None = None
@@ -5079,6 +5983,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         apple_llama_log: Path | None = None
         apple_pid_file: Path | None = None
         switchboard_run: dict | None = None
+        final_runtime_proof: dict[str, object] | None = None
 
         def restore_backups():
             if env_snapshot is not None:
@@ -5089,6 +5994,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 _restore_text_file(lemonade_yaml, lemonade_snapshot)
             if litellm_local_snapshot is not None:
                 _restore_text_file(litellm_local_yaml, litellm_local_snapshot)
+            if litellm_switchboard_snapshot is not None:
+                _restore_text_file(litellm_switchboard_yaml, litellm_switchboard_snapshot)
+            if model_router_endpoints_snapshot is not None:
+                _restore_text_file(model_router_endpoints, model_router_endpoints_snapshot)
             if hermes_template_snapshot is not None:
                 _restore_text_file(hermes_template_config, hermes_template_snapshot)
             if hermes_live_snapshot and hermes_live_snapshot.get("exists"):
@@ -5293,6 +6202,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             ini_snapshot = _snapshot_text_file(models_ini)
             lemonade_snapshot = _snapshot_text_file(lemonade_yaml)
             litellm_local_snapshot = _snapshot_text_file(litellm_local_yaml)
+            litellm_switchboard_snapshot = _snapshot_text_file(litellm_switchboard_yaml)
+            model_router_endpoints_snapshot = _snapshot_text_file(model_router_endpoints)
             # Persisted Hermes state is commonly UID-10000-owned. Capture it
             # through the running container when host permissions deny access;
             # activation must never claim success with an unpatched live route.
@@ -5343,6 +6254,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 (models_ini, ini_snapshot),
                 (lemonade_yaml, lemonade_snapshot),
                 (litellm_local_yaml, litellm_local_snapshot),
+                (litellm_switchboard_yaml, litellm_switchboard_snapshot),
+                (model_router_endpoints, model_router_endpoints_snapshot),
                 (hermes_template_config, hermes_template_snapshot),
             ):
                 _assert_text_file_matches_snapshot(path, snapshot)
@@ -5621,6 +6534,15 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if windows_native_llama:
                     _write_windows_native_litellm_config(INSTALL_DIR, gguf_file, env)
 
+                _render_model_router_runtime_configs(
+                    INSTALL_DIR,
+                    env,
+                    model=llm_model_name,
+                    gguf_file=gguf_file,
+                    lemonade_model_id=lemonade_model_id,
+                    context_length=int(context_length),
+                )
+
                 hermes_live_exists = bool(
                     hermes_live_snapshot and hermes_live_snapshot.get("exists")
                 )
@@ -5714,25 +6636,41 @@ class AgentHandler(BaseHTTPRequestHandler):
                     _wait_for_container_health("ods-openclaw")
                 if opencode_snapshot is not None and opencode_runtime_state is not None:
                     opencode_restarted = _restart_managed_opencode(opencode_runtime_state)
+
+                final_runtime_proof = _wait_for_model_readiness(
+                    env,
+                    model_id=model_id,
+                    gguf_file=gguf_file,
+                    llm_model_name=llm_model_name,
+                    lemonade_model_id=lemonade_model_id,
+                    attempts=6,
+                    initial_delay=0,
+                    interval=5,
+                    return_proof=True,
+                )
+                if not final_runtime_proof:
+                    raise RuntimeError(
+                        "Final runtime proof failed for activated model "
+                        f"{gguf_file}; rolling back to previous model"
+                    )
                 committed = True  # system state is committed before the response write
                 if (
                     _switchboard_state is not None
-                    and switchboard_run
-                    and switchboard_run.get("ok")
-                    and switchboard_run.get("contextVerified") is True
+                    and final_runtime_proof
+                    and final_runtime_proof.get("contextVerified") is True
                 ):
                     # Observe mode: record the proven route after the existing
                     # transaction committed. Failures are logged, never fatal,
                     # and never alter activation behavior.
                     try:
                         verified_runtime_identity = str(
-                            switchboard_run.get("identity") or ""
+                            final_runtime_proof.get("identity") or ""
                         )
                         verified_context_length = int(
-                            switchboard_run.get("contextLength") or 0
+                            final_runtime_proof.get("contextLength") or 0
                         )
                         verified_capabilities = (
-                            switchboard_run.get("capabilities") or {}
+                            (switchboard_run or {}).get("capabilities") or {}
                         )
                         _switchboard_state.record_verified_route(
                             INSTALL_DIR / "data" / "model-state.json",
@@ -6082,12 +7020,12 @@ def _resolve_lemonade_model_id(
         return ""
     stem = filename.rsplit(".", 1)[0] if "." in filename else filename
     persisted = str(env.get("LEMONADE_MODEL") or "").strip()
-    configured_gguf = str(env.get("GGUF_FILE") or "").strip()
     persisted_matches_target = bool(
         persisted
         and _runtime_model_identity_matches(
-            configured_gguf,
+            persisted,
             gguf_file=filename,
+            llm_model_name=stem,
         )
     )
     if host is None or port is None:
@@ -6793,10 +7731,15 @@ def _wait_for_model_readiness(
                     runtime_context = _llama_runtime_context_length(host, port)
                     if expected_context and runtime_context < expected_context:
                         runtime_identity = ""
+            completion_request_model = (
+                str(runtime_identity)
+                if is_lemonade and runtime_identity
+                else str(completion_model)
+            )
             if runtime_identity and _chat_completion_ready(
                 host,
                 port,
-                str(completion_model),
+                completion_request_model,
                 completion_prefix,
                 expected_model_id=str(runtime_identity),
                 expected_gguf_file=gguf_file,
@@ -7241,12 +8184,16 @@ def _render_runtime_config(
     install_dir: Path,
     surface: str,
     *,
+    model: str = "",
     gguf_file: str,
     lemonade_model_id: str,
     lemonade_api_key: str,
     lemonade_api_base: str,
+    llm_base_url: str = "",
     ods_mode: str,
     gpu_backend: str,
+    context_length: int | None = None,
+    switchboard_mode: str = "observe",
 ) -> bool:
     renderer = install_dir / "scripts" / "render-runtime-configs.py"
     if not renderer.exists():
@@ -7256,22 +8203,30 @@ def _render_runtime_config(
         str(renderer),
         "--surface",
         surface,
+        "--switchboard-mode",
+        switchboard_mode,
         "--ods-mode",
         ods_mode,
         "--gpu-backend",
         gpu_backend,
+        "--model",
+        model or _local_model_name_from_gguf(gguf_file),
         "--gguf-file",
         gguf_file,
         "--lemonade-model-id",
         lemonade_model_id,
         "--lemonade-api-base",
         lemonade_api_base,
+        "--llm-base-url",
+        llm_base_url or "http://llama-server:8080/v1",
         "--litellm-key",
         lemonade_api_key,
         "--output-root",
         str(install_dir),
         "--write",
     ]
+    if context_length is not None:
+        cmd.extend(["--context-length", str(context_length)])
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -7285,6 +8240,68 @@ def _render_runtime_config(
         )
         return False
     return True
+
+
+def _normal_switchboard_mode(env: dict) -> str:
+    value = str(env.get("ODS_MODEL_SWITCHBOARD") or "observe").strip().lower()
+    return value if value in {"legacy", "observe", "enabled"} else "observe"
+
+
+def _runtime_lemonade_api_base(env: dict) -> str:
+    base = "http://llama-server:8080/api/v1"
+    if str(env.get("AMD_INFERENCE_LOCATION") or "").lower() == "host":
+        lemonade_port = env.get("AMD_INFERENCE_PORT", "8080") or "8080"
+        base = f"http://host.docker.internal:{lemonade_port}/api/v1"
+    return base
+
+
+def _runtime_llama_api_base(env: dict) -> str:
+    if _is_windows_host_llama_server(env):
+        port = env.get("AMD_INFERENCE_PORT") or env.get("OLLAMA_PORT") or "8080"
+        return f"http://host.docker.internal:{port}/v1"
+    configured = str(env.get("LLM_API_URL") or "").strip()
+    if configured and "litellm" not in configured.lower():
+        return configured
+    return "http://llama-server:8080/v1"
+
+
+def _render_model_router_runtime_configs(
+    install_dir: Path,
+    env: dict,
+    *,
+    model: str,
+    gguf_file: str,
+    lemonade_model_id: str,
+    context_length: int,
+) -> None:
+    """Render router/LiteLLM switchboard inputs before dependent restarts."""
+    switchboard_mode = _normal_switchboard_mode(env)
+    enabled = switchboard_mode == "enabled"
+    api_key = (
+        env.get("LITELLM_LEMONADE_API_KEY")
+        or env.get("LITELLM_KEY")
+        or env.get("LITELLM_MASTER_KEY")
+        or "sk-lemonade"
+    )
+    common = {
+        "model": model,
+        "gguf_file": gguf_file,
+        "lemonade_model_id": lemonade_model_id,
+        "lemonade_api_key": api_key,
+        "lemonade_api_base": _runtime_lemonade_api_base(env),
+        "llm_base_url": _runtime_llama_api_base(env),
+        "ods_mode": env.get("ODS_MODE", "local"),
+        "gpu_backend": env.get("GPU_BACKEND", "nvidia"),
+        "context_length": int(context_length),
+        "switchboard_mode": switchboard_mode,
+    }
+    for surface in ("model-router-endpoints", "litellm-switchboard"):
+        if _render_runtime_config(install_dir, surface, **common):
+            continue
+        message = f"Failed to render required {surface} config"
+        if enabled:
+            raise RuntimeError(message)
+        logger.warning("%s; switchboard mode is %s", message, switchboard_mode)
 
 
 def _write_lemonade_config(
@@ -7847,6 +8864,13 @@ def _atomic_write_json(path: Path, value: dict, mode: int = 0o600) -> None:
 
 def _opencode_route(env: dict) -> tuple[str, str]:
     """Return the host-visible OpenAI-compatible endpoint and API key."""
+    if _normal_switchboard_mode(env) == "enabled":
+        port = str(env.get("LITELLM_PORT") or "4000")
+        api_key = str(env.get("LITELLM_KEY") or "")
+        if not api_key:
+            raise RuntimeError("LITELLM_KEY is required to update the OpenCode switchboard route")
+        return f"http://127.0.0.1:{port}/v1", api_key
+
     gpu_backend = str(env.get("GPU_BACKEND") or "nvidia").lower()
     if _is_windows_host_lemonade(env):
         port = str(env.get("AMD_INFERENCE_PORT") or env.get("OLLAMA_PORT") or "8080")
@@ -7871,9 +8895,17 @@ def _opencode_route(env: dict) -> tuple[str, str]:
     return f"http://{host}:{port}/v1", "no-key"
 
 
+def _opencode_model_route(env: dict, model_id: str) -> tuple[str, str, str]:
+    provider_id = "llama-server"
+    if _normal_switchboard_mode(env) == "enabled":
+        return provider_id, "ods/current", "ods/current"
+    return provider_id, model_id, model_id
+
+
 def _opencode_config_matches(
     config: object,
-    model_name: str,
+    provider_id: str,
+    model_id: str,
     base_url: str,
     api_key: str,
     context_length: int,
@@ -7881,14 +8913,15 @@ def _opencode_config_matches(
     if not isinstance(config, dict):
         return False
     provider = config.get("provider")
-    llama_provider = provider.get("llama-server") if isinstance(provider, dict) else None
+    llama_provider = provider.get(provider_id) if isinstance(provider, dict) else None
     options = llama_provider.get("options") if isinstance(llama_provider, dict) else None
     models = llama_provider.get("models") if isinstance(llama_provider, dict) else None
-    model = models.get(model_name) if isinstance(models, dict) else None
+    model = models.get(model_id) if isinstance(models, dict) else None
     limit = model.get("limit") if isinstance(model, dict) else None
+    model_ref = f"{provider_id}/{model_id}"
     return bool(
-        config.get("model") == f"llama-server/{model_name}"
-        and config.get("small_model") == f"llama-server/{model_name}"
+        config.get("model") == model_ref
+        and config.get("small_model") == model_ref
         and isinstance(options, dict)
         and options.get("baseURL") == base_url
         and options.get("apiKey") == api_key
@@ -7906,7 +8939,9 @@ def _update_opencode_config(
 ) -> None:
     """Update both OpenCode compatibility files and verify persisted routing."""
     base_url, api_key = _opencode_route(env)
-    display_name = display_name or model_id
+    provider_id, route_model_id, route_display_name = _opencode_model_route(env, model_id)
+    display_name = route_display_name if route_model_id != model_id else (display_name or model_id)
+    model_ref = f"{provider_id}/{route_model_id}"
 
     for path, previous in snapshot["files"].items():
         if not previous.get("write"):
@@ -7914,20 +8949,22 @@ def _update_opencode_config(
         source = previous.get("parsed") or snapshot["source"]
         config = json.loads(json.dumps(source))
         previous_model_ref = config.get("model")
-        config["model"] = f"llama-server/{model_id}"
-        config["small_model"] = f"llama-server/{model_id}"
+        config["model"] = model_ref
+        config["small_model"] = model_ref
         config.setdefault("$schema", "https://opencode.ai/config.json")
 
         providers = config.setdefault("provider", {})
         if not isinstance(providers, dict):
             providers = {}
             config["provider"] = providers
-        provider = providers.setdefault("llama-server", {})
+        provider = providers.setdefault(provider_id, {})
         if not isinstance(provider, dict):
             provider = {}
-            providers["llama-server"] = provider
+            providers[provider_id] = provider
         provider["npm"] = "@ai-sdk/openai-compatible"
-        provider["name"] = "llama-server (local)"
+        provider["name"] = (
+            "ODS switchboard" if route_model_id == "ods/current" else "llama-server (local)"
+        )
         options = provider.setdefault("options", {})
         if not isinstance(options, dict):
             options = {}
@@ -7940,15 +8977,15 @@ def _update_opencode_config(
             provider["models"] = models
         if (
             isinstance(previous_model_ref, str)
-            and previous_model_ref.startswith("llama-server/")
+            and previous_model_ref.startswith(f"{provider_id}/")
         ):
             previous_model_id = previous_model_ref.split("/", 1)[1]
-            if previous_model_id != model_id:
+            if previous_model_id != route_model_id:
                 models.pop(previous_model_id, None)
-        model = models.setdefault(model_id, {})
+        model = models.setdefault(route_model_id, {})
         if not isinstance(model, dict):
             model = {}
-            models[model_id] = model
+            models[route_model_id] = model
         model["name"] = display_name
         limit = model.setdefault("limit", {})
         if not isinstance(limit, dict):
@@ -7963,7 +9000,7 @@ def _update_opencode_config(
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Could not verify OpenCode config {path}: {exc}") from exc
         if not _opencode_config_matches(
-            persisted, model_id, base_url, api_key, context_length
+            persisted, provider_id, route_model_id, base_url, api_key, context_length
         ):
             raise RuntimeError(f"OpenCode persisted model route is stale in {path}")
 
@@ -8221,6 +9258,10 @@ def _perplexica_model_route(
     lemonade_model_id: str = "",
 ) -> tuple[str, str, str]:
     """Return model, container-visible base URL, and key for Perplexica."""
+    if _normal_switchboard_mode(env) == "enabled":
+        api_key = str(env.get("LITELLM_KEY") or env.get("OPENAI_API_KEY") or "no-key")
+        return "ods/current", "http://litellm:4000/v1", api_key
+
     runtime = str(
         env.get("AMD_INFERENCE_RUNTIME")
         or env.get("LLM_BACKEND")
@@ -8527,6 +9568,17 @@ def _capture_hermes_live_config(path: Path) -> dict:
             "bytes": None,
             "mode": None,
             "source": None,
+        }
+    except PermissionError as exc:
+        logger.info("Inspecting container-owned Hermes config through ods-hermes: %s", exc)
+        return {
+            "exists": True,
+            "text": _read_hermes_container_config(),
+            "bytes": None,
+            "mode": None,
+            "uid": None,
+            "gid": None,
+            "source": "container",
         }
     except OSError as exc:
         raise RuntimeError(f"Could not inspect Hermes config {path}: {exc}") from exc
@@ -9500,6 +10552,7 @@ def main():
             )
         except Exception as exc:
             logger.warning("switchboard state init skipped: %s", exc)
+        _schedule_initial_switchboard_verification("startup")
     STARTUP_ODS_MODE = _normalize_ods_mode(env.get("ODS_MODE"))
     TIER = env.get("TIER", "1")
     GPU_COUNT = env.get("GPU_COUNT", "1")

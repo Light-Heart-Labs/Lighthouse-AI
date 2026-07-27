@@ -434,6 +434,26 @@ def test_api_settings_env_apply_allows_hermes_services(test_client, monkeypatch)
     assert captured["service_ids"] == ["hermes", "hermes-proxy"]
 
 
+def test_api_settings_env_apply_allows_model_router(test_client, monkeypatch):
+    captured = {}
+
+    def fake_call(service_ids):
+        captured["service_ids"] = service_ids
+        return {"status": "ok"}
+
+    monkeypatch.setattr("main._call_agent_core_recreate", fake_call)
+
+    response = test_client.post(
+        "/api/settings/env/apply",
+        headers=test_client.auth_headers,
+        json={"service_ids": ["model-router"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert captured["service_ids"] == ["model-router"]
+
+
 def test_api_settings_env_apply_rejects_disallowed_service(test_client):
     response = test_client.post(
         "/api/settings/env/apply",

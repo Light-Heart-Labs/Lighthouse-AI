@@ -92,7 +92,7 @@ services:
       # (ods/current) in enabled mode; default is byte-identical to the prior
       # direct llama-server route for legacy/observe.
       OPENAI_API_BASE_URL: "${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}"
-      OPENAI_API_KEY: ""
+      OPENAI_API_KEY: "${OPEN_WEBUI_LLM_API_KEY:-}"
       # PWA / branding — surfaces as the app title, page title, and PWA install name.
       # When a user adds ODS to their home screen, this is the label they see
       # next to the ODS icon. Defaults to "ODS"; users can override per-install.
@@ -219,6 +219,8 @@ services:
       - N8N_URL=${N8N_URL:-http://n8n:5678}
       - DASHBOARD_API_KEY=${DASHBOARD_API_KEY:-}
       - ODS_AGENT_KEY=${ODS_AGENT_KEY:-}
+      - ODS_ROUTER_INTERNAL_KEY=${ODS_ROUTER_INTERNAL_KEY:-}
+      - MODEL_ROUTER_URL=http://model-router:9099
       - SHIELD_API_KEY=${SHIELD_API_KEY:-}
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-}
       - TOKEN_SPY_URL=${TOKEN_SPY_URL:-http://token-spy:8080}
@@ -310,10 +312,24 @@ services:
       - ODS_MODEL_STATE_PATH=/state/model-state.json
       - ODS_ROUTER_ENDPOINTS_PATH=/config/endpoints.json
       - ODS_ROUTER_INTERNAL_KEY=${ODS_ROUTER_INTERNAL_KEY:-}
+      - DASHBOARD_API_KEY=${DASHBOARD_API_KEY:-}
       - ODS_FLEET_PROBE_KEY=${ODS_FLEET_PROBE_KEY:-}
+      # File-based probe key inside the already-mounted state volume: the
+      # fleet harness can create/rotate/remove it without recreating the
+      # router (a recreate destroys in-memory route evidence). Absent file
+      # means the ODS_FLEET_PROBE_KEY env fallback applies unchanged.
+      - ODS_FLEET_PROBE_KEY_PATH=/state/fleet-probe.key
     volumes:
-      - ${ODS_DATA_DIR:-./data}/model-state.json:/state/model-state.json:ro
+      - ${ODS_DATA_DIR:-./data}:/state:ro
       - ${ODS_CONFIG_DIR:-./config}/model-router/endpoints.json:/config/endpoints.json:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9099/health',timeout=4).status==200 else 1)"]
       interval: 15s

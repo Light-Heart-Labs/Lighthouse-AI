@@ -243,12 +243,29 @@ class TestResolveLemonadeModelId:
         assert _resolve_lemonade_model_id(
             {
                 "GGUF_FILE": "Model.gguf",
-                "LEMONADE_MODEL": "persisted-exact-id",
+                "LEMONADE_MODEL": "Model",
             },
             "Model.gguf",
             host="127.0.0.1",
             port="8080",
-        ) == "persisted-exact-id"
+        ) == "Model"
+
+    def test_stale_persisted_model_does_not_mask_107_stem_fallback(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            body = '{"data":[]}' if cmd[-1].endswith("/models") else '{"version":"10.7.0"}'
+            return subprocess.CompletedProcess(cmd, 0, body, "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _resolve_lemonade_model_id(
+            {
+                "GGUF_FILE": "Model.gguf",
+                "LEMONADE_MODEL": "Old-Model",
+            },
+            "Model.gguf",
+            host="127.0.0.1",
+            port="8080",
+        ) == "Model"
 
     def test_ignores_persisted_model_for_a_different_gguf(self, monkeypatch):
         def fake_run(cmd, **_kwargs):
@@ -453,14 +470,14 @@ class TestLemonadeCompletionReady:
 
         assert _lemonade_completion_ready("127.0.0.1", "8080", "model.gguf") is False
 
-    def test_readiness_uses_persisted_exact_model_for_completion(self, monkeypatch):
+    def test_readiness_uses_runtime_identity_for_lemonade_completion(self, monkeypatch):
         completion_calls = []
 
         def fake_run(cmd, **_kwargs):
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout='{"status":"ok","model_loaded":"Modern-Model"}',
+                stdout='{"status":"ok","version":"10.7.0","model_loaded":"Modern-Model"}',
                 stderr="",
             )
 
@@ -475,12 +492,12 @@ class TestLemonadeCompletionReady:
             {
                 "GPU_BACKEND": "amd",
                 "OLLAMA_PORT": "8080",
-                "GGUF_FILE": "Model.gguf",
-                "LEMONADE_MODEL": "Modern-Model",
+                "GGUF_FILE": "Modern-Model.gguf",
             },
             model_id="catalog-model",
-            gguf_file="Model.gguf",
+            gguf_file="Modern-Model.gguf",
             llm_model_name="model",
+            lemonade_model_id="extra.Modern-Model.gguf",
             attempts=1,
             initial_delay=0,
             interval=0,
@@ -493,7 +510,7 @@ class TestLemonadeCompletionReady:
                 "/api/v1",
                 {
                     "expected_model_id": "Modern-Model",
-                    "expected_gguf_file": "Model.gguf",
+                    "expected_gguf_file": "Modern-Model.gguf",
                     "expected_llm_model_name": "model",
                 },
             ),
@@ -742,6 +759,77 @@ class TestWriteLemonadeConfig:
         assert (litellm_dir / "lemonade.yaml").exists()
 
 
+class TestSwitchboardRuntimeConfig:
+    def test_render_runtime_config_passes_switchboard_and_runtime_args(
+        self, monkeypatch, tmp_path,
+    ):
+        renderer = tmp_path / "scripts" / "render-runtime-configs.py"
+        renderer.parent.mkdir(parents=True)
+        renderer.write_text("# renderer placeholder\n", encoding="utf-8")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._render_runtime_config(
+            tmp_path,
+            "litellm-switchboard",
+            model="qwen",
+            gguf_file="Qwen.gguf",
+            lemonade_model_id="",
+            lemonade_api_key="sk-runtime",
+            lemonade_api_base="http://lemonade:8080/api/v1",
+            llm_base_url="http://runtime:8080/v1",
+            ods_mode="hybrid",
+            gpu_backend="nvidia",
+            context_length=65536,
+            switchboard_mode="enabled",
+        ) is True
+
+        cmd = calls[0][0]
+        assert cmd[cmd.index("--switchboard-mode") + 1] == "enabled"
+        assert cmd[cmd.index("--model") + 1] == "qwen"
+        assert cmd[cmd.index("--llm-base-url") + 1] == "http://runtime:8080/v1"
+        assert cmd[cmd.index("--context-length") + 1] == "65536"
+
+    def test_enabled_mode_renderer_failure_aborts(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake_render(_install_dir, surface, **_kwargs):
+            calls.append(surface)
+            return False
+
+        monkeypatch.setattr(_mod, "_render_runtime_config", fake_render)
+
+        with pytest.raises(RuntimeError, match="model-router-endpoints"):
+            _mod._render_model_router_runtime_configs(
+                tmp_path,
+                {"ODS_MODEL_SWITCHBOARD": "enabled"},
+                model="qwen",
+                gguf_file="Qwen.gguf",
+                lemonade_model_id="",
+                context_length=65536,
+            )
+
+        assert calls == ["model-router-endpoints"]
+
+    def test_router_runtime_base_never_points_to_litellm(self):
+        assert _mod._runtime_llama_api_base({
+            "LLM_API_URL": "http://litellm:4000/v1",
+        }) == "http://llama-server:8080/v1"
+
+    def test_windows_native_runtime_base_uses_host_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_is_windows_host_llama_server", lambda _env: True)
+
+        assert _mod._runtime_llama_api_base({
+            "AMD_INFERENCE_PORT": "9234",
+            "LLM_API_URL": "http://litellm:4000/v1",
+        }) == "http://host.docker.internal:9234/v1"
+
+
 class TestOpenCodeModelRoute:
     def test_lemonade_uses_authenticated_host_litellm_route(self, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
@@ -858,6 +946,23 @@ class TestPerplexicaModelRoute:
         )
 
         assert model == "Modern-Model"
+        assert base_url == "http://litellm:4000/v1"
+        assert api_key == "secret-key"
+
+    def test_switchboard_mode_uses_stable_alias_through_litellm(self):
+        model, base_url, api_key = _mod._perplexica_model_route(
+            {
+                "ODS_MODEL_SWITCHBOARD": "enabled",
+                "GPU_BACKEND": "amd",
+                "AMD_INFERENCE_RUNTIME": "lemonade",
+                "LEMONADE_MODEL": "Modern-Model",
+                "LITELLM_KEY": "secret-key",
+            },
+            "Modern-Model.gguf",
+            lemonade_model_id="Modern-Model",
+        )
+
+        assert model == "ods/current"
         assert base_url == "http://litellm:4000/v1"
         assert api_key == "secret-key"
 
@@ -1938,6 +2043,51 @@ def test_text_snapshot_restores_exact_line_endings(tmp_path):
     assert (path.stat().st_uid, path.stat().st_gid) == original_owner
 
 
+def test_atomic_write_text_retries_windows_replace_race(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("MODEL=old\n", encoding="utf-8")
+    monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+    real_replace = _mod.os.replace
+    calls = []
+
+    def flaky_replace(src, dst):
+        calls.append((src, dst))
+        if len(calls) < 3:
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_mod.os, "replace", flaky_replace)
+
+    _mod._atomic_write_text(path, "MODEL=new\n")
+
+    assert len(calls) == 3
+    assert path.read_text(encoding="utf-8") == "MODEL=new\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_atomic_write_text_cleans_temp_after_replace_race_exhausted(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / ".env"
+    path.write_text("MODEL=old\n", encoding="utf-8")
+    monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    def locked_replace(src, dst):
+        calls.append((src, dst))
+        raise PermissionError("[WinError 5] Access is denied")
+
+    monkeypatch.setattr(_mod.os, "replace", locked_replace)
+
+    with pytest.raises(PermissionError):
+        _mod._atomic_write_text(path, "MODEL=new\n")
+
+    assert len(calls) == 10
+    assert path.read_text(encoding="utf-8") == "MODEL=old\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
 class TestModelActivateRollback:
 
     @pytest.fixture(autouse=True)
@@ -2057,7 +2207,10 @@ class TestModelActivateRollback:
         assert handler.response_code == 200
         assert len(launches) == 1
         curl_calls = [cmd for cmd in calls if cmd and cmd[0] == "curl"]
-        assert [cmd[-1] for cmd in curl_calls] == [expected_identity_url]
+        assert [cmd[-1] for cmd in curl_calls] == [
+            expected_identity_url,
+            expected_identity_url,
+        ]
 
     def test_apple_missing_native_binary_fails_before_config_mutation(
         self,
@@ -2610,6 +2763,117 @@ class TestModelActivateRollback:
             assert "Modern-Model" in models
             assert "Old-Model" not in models
 
+    def test_windows_lemonade_final_runtime_flip_rolls_back_before_state_publish(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, lemonade_yaml, yaml_text = (
+            _write_model_activation_fixture(
+                tmp_path,
+                gpu_backend="amd",
+                lemonade=True,
+            )
+        )
+        env_path.write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=amd\n"
+            "LLM_BACKEND=lemonade\n"
+            "AMD_INFERENCE_RUNTIME=lemonade\n"
+            "AMD_INFERENCE_LOCATION=host\n"
+            "AMD_INFERENCE_PORT=8080\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "LEMONADE_MODEL=Old-Model\n"
+            "CTX_SIZE=2048\n",
+            encoding="utf-8",
+        )
+        state_path = install_dir / "data" / "model-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        old_state = {"active": {"runtimeModelId": "Old-Model"}}
+        state_path.write_text(json.dumps(old_state), encoding="utf-8")
+        states = {
+            "ods-litellm": {"exists": True, "running": True},
+            "ods-hermes": {"exists": False, "running": False},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        events = []
+        target_readiness_attempts = 0
+        state_records = []
+
+        class FakeSwitchboardState:
+            def record_verified_route(self, *_args, **kwargs):
+                state_records.append(kwargs)
+
+        def resolve_model_id(_env, gguf_file, **_kwargs):
+            return "Modern-Model" if gguf_file == "new-model.gguf" else "Old-Model"
+
+        def restart_windows_lemonade(env):
+            events.append(f"runtime:{env['GGUF_FILE']}")
+
+        def readiness(_env, **kwargs):
+            nonlocal target_readiness_attempts
+            gguf_file = kwargs["gguf_file"]
+            events.append(f"ready:{gguf_file}")
+            if gguf_file == "new-model.gguf":
+                target_readiness_attempts += 1
+                if target_readiness_attempts > 1:
+                    if kwargs.get("return_proof"):
+                        return {}
+                    if kwargs.get("return_identity"):
+                        return ""
+                    return False
+            identity = resolve_model_id({}, gguf_file)
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": identity,
+                    "contextLength": 4096,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return identity
+            return True
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod, "_switchboard_state", FakeSwitchboardState())
+        monkeypatch.setattr(_mod, "_resolve_lemonade_model_id", resolve_model_id)
+        monkeypatch.setattr(_mod, "_restart_windows_lemonade", restart_windows_lemonade)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None: events.append(f"restart:{name}") or name == "ods-litellm",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restore_container_state",
+            lambda name, _state, recreate=False: events.append(f"restore:{name}") or True,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_verify_litellm_route",
+            lambda env: events.append(f"litellm:{env['LEMONADE_MODEL']}"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert "Final runtime proof failed" in response["error"]
+        assert _mod.load_env(env_path)["GGUF_FILE"] == "old-model.gguf"
+        assert _mod.load_env(env_path)["LEMONADE_MODEL"] == "Old-Model"
+        assert lemonade_yaml.read_text(encoding="utf-8") == yaml_text
+        assert json.loads(state_path.read_text(encoding="utf-8")) == old_state
+        assert state_records == []
+        first_ready = events.index("ready:new-model.gguf")
+        final_ready = events.index("ready:new-model.gguf", first_ready + 1)
+        assert events.index("restart:ods-litellm") < final_ready
+
     def test_windows_lemonade_rollback_removes_new_litellm_config(
         self, tmp_path, monkeypatch,
     ):
@@ -2767,8 +3031,8 @@ class TestModelActivateRollback:
             "AMD_INFERENCE_RUNTIME=lemonade\n"
             "AMD_INFERENCE_LOCATION=host\n"
             "AMD_INFERENCE_PORT=8080\n"
-            "GGUF_FILE=new-model.gguf\n"
-            "LLM_MODEL=new-model\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
             "LEMONADE_MODEL=Old-Model\n"
             "CTX_SIZE=2048\n"
             "LITELLM_LEMONADE_API_KEY=sk-inline-from-env-file-67890\n",
@@ -2806,7 +3070,10 @@ class TestModelActivateRollback:
             "lemonade_model_id": "Modern-Model",
         }
         assert restarts == ["new-model.gguf"]
-        assert "LEMONADE_MODEL=Modern-Model" in env_path.read_text(encoding="utf-8")
+        updated_env = env_path.read_text(encoding="utf-8")
+        assert "GGUF_FILE=new-model.gguf" in updated_env
+        assert "LLM_MODEL=target-model" in updated_env
+        assert "LEMONADE_MODEL=Modern-Model" in updated_env
         assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
 
     def test_windows_native_llama_activation_uses_plain_health_and_litellm_local(
@@ -3251,6 +3518,28 @@ class TestModelActivateRollback:
         assert '  default: "new-model.gguf"' in hermes_template.read_text(encoding="utf-8")
         assert ["docker", "restart", "ods-hermes"] in calls
 
+    def test_capture_hermes_config_falls_back_when_stat_is_denied(
+        self, tmp_path, monkeypatch,
+    ):
+        hermes_live = tmp_path / "data" / "hermes" / "config.yaml"
+        container_text = "model:\n  default: \"old-live\"\n"
+        original_lstat = Path.lstat
+
+        def fake_lstat(path, *args, **kwargs):
+            if path == hermes_live:
+                raise PermissionError("container-owned directory")
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", fake_lstat)
+        monkeypatch.setattr(_mod, "_container_running", lambda name: name == "ods-hermes")
+        monkeypatch.setattr(_mod, "_read_hermes_container_config", lambda: container_text)
+
+        snapshot = _mod._capture_hermes_live_config(hermes_live)
+
+        assert snapshot["exists"] is True
+        assert snapshot["source"] == "container"
+        assert snapshot["text"] == container_text
+
     def test_activation_repairs_malformed_models_ini_directory(
         self, tmp_path, monkeypatch,
     ):
@@ -3613,6 +3902,70 @@ class TestModelActivateRollback:
         }
         assert primary_config["provider"]["llama-server"]["options"]["timeout"] == 900
         assert compat_config["compat_only"] is True
+
+    def test_switchboard_activation_routes_opencode_through_stable_alias(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.write_text(
+            env_text
+            + "ODS_MODEL_SWITCHBOARD=enabled\n"
+            + "LITELLM_KEY=switchboard-secret\n"
+            + "LITELLM_PORT=4100\n",
+            encoding="utf-8",
+        )
+        config_dir = tmp_path / "home" / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        primary = config_dir / "opencode.json"
+        compat = config_dir / "config.json"
+        stale = {
+            "model": "llama-server/qwen3-coder-next",
+            "small_model": "llama-server/qwen3-coder-next",
+            "theme": "system",
+            "provider": {
+                "llama-server": {
+                    "options": {
+                        "baseURL": "http://127.0.0.1:11434/v1",
+                        "apiKey": "no-key",
+                    },
+                    "models": {
+                        "qwen3-coder-next": {"name": "Qwen 3 Coder Next"},
+                    },
+                },
+            },
+        }
+        primary.write_text(json.dumps(stale), encoding="utf-8")
+        compat.write_text(json.dumps(stale), encoding="utf-8")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
+        monkeypatch.setattr(_mod, "_restart_managed_opencode", lambda _state=None: False)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(_mod, "_render_model_router_runtime_configs", lambda *_a, **_k: None)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        for path in (primary, compat):
+            config = json.loads(path.read_text(encoding="utf-8"))
+            assert config["theme"] == "system"
+            assert config["model"] == "llama-server/ods/current"
+            assert config["small_model"] == "llama-server/ods/current"
+            provider = config["provider"]["llama-server"]
+            assert provider["name"] == "ODS switchboard"
+            assert provider["options"] == {
+                "baseURL": "http://127.0.0.1:4100/v1",
+                "apiKey": "switchboard-secret",
+            }
+            assert "qwen3-coder-next" not in provider["models"]
+            assert provider["models"]["ods/current"]["limit"] == {
+                "context": 4096,
+                "output": 4096,
+            }
 
     def test_opencode_update_failure_restores_exact_files(self, tmp_path, monkeypatch):
         install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (

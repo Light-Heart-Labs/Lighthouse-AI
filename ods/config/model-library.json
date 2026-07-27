@@ -39,6 +39,16 @@
         "openai_chat": {
           "status": "verified",
           "reason": "Fleet diagnostic on m5-mbp at 42b3a95c returned the requested verification code in 4/4 direct OpenAI-compatible chat completions."
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-20T10:45Z on strixy loaded Phi-4 Mini successfully, but ODS Talk returned a corrupted verification phrase during release app probing; keep it out of Talk and all-app release coverage until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-20T10-45-12Z-release-product-6b152663c2e3-harness-ec9ada8148fa-hosts-windows-laptop-strixy/model-ui/cycle-001/strixy"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "ODS Talk release probe failed exact verification after successful Phi-4 Mini load; not agent-viable until a Talk revalidation passes.",
+          "evidence": "fleet-test/runs/2026-07-20T10-45-12Z-release-product-6b152663c2e3-harness-ec9ada8148fa-hosts-windows-laptop-strixy/model-ui/cycle-001/strixy"
         }
       }
     },
@@ -280,8 +290,13 @@
         "perplexica": {
           "status": "unsupported_until_revalidated",
           "label": "Perplexica revalidation required",
-          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model and ODS Talk passed, but the Perplexica app probe answered with a search-style failure instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
-          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "reason": "Fleet model-UI runs on windows-laptop and strixy loaded this model and ODS Talk passed, but the Perplexica app probe failed instead of returning the requested verification phrase; keep it out of all-app release coverage on those hosts until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop; fleet-test/runs/2026-07-22T09-42-12Z-release-product-b5bb39f2c0f2-harness-cc7b6148eb2c-hosts-windows-laptop-strixy-m5-mbp/model-ui/cycle-003/strixy",
+          "recordedAt": "2026-07-22T10:26:21Z",
+          "productSha": "b5bb39f2c0f2a7a3dfa5f98547e469b6eaf0acfd",
+          "harnessSha": "cc7b6148eb2cd6e667e6a9dd3d36dff6f8928052",
+          "hostScope": ["windows-laptop", "strixy"],
+          "expiresAt": "2026-08-22T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -302,6 +317,142 @@
       "tokens_per_sec_estimate": 155,
       "llm_model_name": "granite-4.0-h-1b",
       "llama_server_image": null,
+      "app_compatibility": {
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "Fleet model-UI run 2026-07-22T04:37Z on m5-mbp loaded this model and ODS Talk passed, but the Perplexica app probe emitted only a partial verification phrase while the same cycle on strix-halo passed. Keep it out of all-app release coverage until m5-mbp Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-22T04-37-32Z-release-product-0334416e344c-harness-8bdceb20b959-hosts-m5-mbp-strix-halo-windows-laptop-strixy/model-ui/cycle-003/m5-mbp",
+          "recordedAt": "2026-07-22T05:32:17Z",
+          "productSha": "0334416e344c2cdb9124bed88b7a71b98eea9fc4",
+          "harnessSha": "8bdceb20b9594515dae65f7f66df734ec152e1e4",
+          "hostScope": ["m5-mbp"],
+          "revalidateAgainstSha": "892df74a769cf8aa9530e8e10d319281e063483f"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "falcon-h1-1.5b-instruct-q4",
+      "name": "Falcon H1 1.5B Instruct",
+      "family": "falcon",
+      "gguf_file": "Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/resolve/main/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf",
+      "gguf_sha256": "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f",
+      "size_bytes": 944786656,
+      "size_mb": 945,
+      "vram_required_gb": 3,
+      "context_length": 65536,
+      "quantization": "Q4_K_M",
+      "specialty": "Long Context",
+      "description": "TII's compact Falcon H1 hybrid instruct model. A 64K low-VRAM validation candidate with a 256K-capable base model.",
+      "tokens_per_sec_estimate": 150,
+      "llm_model_name": "Falcon-H1-1.5B-Instruct",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-21T11:18Z on tower2 loaded Falcon H1 1.5B successfully and routed OpenCode through ods/current, but the OpenCode UX reply emitted a skill/tool meta-response instead of the requested verification phrase.",
+          "evidence": "fleet-test/runs/2026-07-21T11-18-01Z-release-product-c43960145c39-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2",
+          "recordedAt": "2026-07-21T12:12:38Z",
+          "productSha": "c43960145c39c5fa24627bf8b0e98b30c362cc85",
+          "harnessSha": "9804e8523a6d11ebeb86eac5f5400cf21fc25b39",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "The same run proved Talk, Open WebUI, LiteLLM, and Perplexica routing, but OpenCode did not complete the required agent verification phrase after the swap; keep Falcon H1 1.5B out of agent-required release coverage until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T11-18-01Z-release-product-c43960145c39-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2",
+          "recordedAt": "2026-07-21T12:12:38Z",
+          "productSha": "c43960145c39c5fa24627bf8b0e98b30c362cc85",
+          "harnessSha": "9804e8523a6d11ebeb86eac5f5400cf21fc25b39",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "falcon-h1-3b-instruct-q4",
+      "name": "Falcon H1 3B Instruct",
+      "family": "falcon",
+      "gguf_file": "Falcon-H1-3B-Instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/tiiuae/Falcon-H1-3B-Instruct-GGUF/resolve/main/Falcon-H1-3B-Instruct-Q4_K_M.gguf",
+      "gguf_sha256": "1926265eab19b0e47f0c2739e499a18e388373a616d71a218b924d5b95bdf702",
+      "size_bytes": 1888612384,
+      "size_mb": 1889,
+      "vram_required_gb": 4,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Long Context",
+      "description": "TII's Falcon H1 3B hybrid instruct model. A long-context low-VRAM validation candidate that preserves the passing Falcon H1 family while replacing Phi-3 Mini in release coverage.",
+      "tokens_per_sec_estimate": 115,
+      "llm_model_name": "Falcon-H1-3B-Instruct",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-21T12:25Z on tower2 loaded Falcon H1 3B and reached ODS Talk through the browser, but Talk emitted a random_uuid tool-call payload instead of the requested verification phrase.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2",
+          "recordedAt": "2026-07-21T14:25:00Z",
+          "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
+          "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "The model loaded and routed, but the browser-driven ODS Talk verification failed with a tool-call payload instead of the required answer; keep Falcon H1 3B out of agent-required release coverage until revalidated with a tool-aware Talk probe or updated model metadata.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2",
+          "recordedAt": "2026-07-21T14:25:00Z",
+          "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
+          "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "granite4.1-3b-q4",
+      "name": "Granite 4.1 3B",
+      "family": "granite",
+      "gguf_file": "granite-4.1-3b-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ibm-granite/granite-4.1-3b-GGUF/resolve/main/granite-4.1-3b-Q4_K_M.gguf",
+      "gguf_sha256": "662b0626cd58f443baea23559b469df6576a81d349649c59413b36a9fb32eb29",
+      "size_bytes": 2099501664,
+      "size_mb": 2100,
+      "vram_required_gb": 4,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Tool Use",
+      "description": "IBM's Granite 4.1 3B long-context instruct model quantized for GGUF. A low-VRAM candidate with improved instruction following, chat, and tool-use behavior for app and agent validation.",
+      "tokens_per_sec_estimate": 115,
+      "llm_model_name": "granite-4.1-3b",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-22T08:31Z on windows-laptop loaded Granite 4.1 3B and ODS Talk accepted the stream request, but the browser stayed in the Thinking state until the 180s inference timeout while dashboard-api reported repeated llama metrics read timeouts.",
+          "evidence": "fleet-test/runs/2026-07-22T08-31-37Z-release-product-52559816f964-harness-ef040aeb79ab-hosts-windows-laptop-strixy-m5-mbp/model-ui/cycle-003/windows-laptop",
+          "recordedAt": "2026-07-22T09:18:55Z",
+          "productSha": "52559816f964364a63bdbc000722dbbccefec4f9",
+          "harnessSha": "ef040aeb79ab1619e8d3d0c7da59baac150e95c6",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-22T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "The model loaded and routed through the browser-managed swap path on windows-laptop, but ODS Talk did not complete a user-facing answer within the release inference window; keep it out of agent-required release coverage on that host until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-22T08-31-37Z-release-product-52559816f964-harness-ef040aeb79ab-hosts-windows-laptop-strixy-m5-mbp/model-ui/cycle-003/windows-laptop",
+          "recordedAt": "2026-07-22T09:18:55Z",
+          "productSha": "52559816f964364a63bdbc000722dbbccefec4f9",
+          "harnessSha": "ef040aeb79ab1619e8d3d0c7da59baac150e95c6",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-22T00:00:00Z"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -387,6 +538,33 @@
       "tokens_per_sec_estimate": 130,
       "llm_model_name": "granite-3.2-2b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "reason": "Targeted windows-laptop repro on 2026-07-20 loaded granite3.2-2b-instruct-q4 and the OpenAI-compatible chat API returned the requested verification phrase, but measured only 0.73 tok/s.",
+          "evidence": "fleet-test/runs/2026-07-20T14-47-35Z-release-product-6b802d2d34a5-harness-d205823ca1d4-hosts-windows-laptop/model-ui/cycle-004/windows-laptop plus targeted repro at 2026-07-20T16:13Z"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-20T14:47Z on windows-laptop loaded this model successfully, but ODS Talk timed out after 180s. A targeted Talk repro on the same host streamed only a session frame and keepalives for 240s while llama-server was still processing a 19,349-token Hermes prompt.",
+          "evidence": "fleet-test/runs/2026-07-20T14-47-35Z-release-product-6b802d2d34a5-harness-d205823ca1d4-hosts-windows-laptop/model-ui/cycle-004/windows-laptop",
+          "recordedAt": "2026-07-20T14:47:35Z",
+          "productSha": "6b802d2d34a5",
+          "harnessSha": "d205823ca1d4",
+          "hostScope": ["windows-laptop"],
+          "revalidateAgainstSha": "c691f060f93cd0a255760e2749a58c5006edb0c4"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "The model can answer direct chat, but its measured 0.73 tok/s response rate and 240s ODS Talk timeout under a 19,349-token Hermes prompt make it too slow for agent-required workflows on this host class until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-20T14-47-35Z-release-product-6b802d2d34a5-harness-d205823ca1d4-hosts-windows-laptop/model-ui/cycle-004/windows-laptop",
+          "recordedAt": "2026-07-20T14:47:35Z",
+          "productSha": "6b802d2d34a5",
+          "harnessSha": "d205823ca1d4",
+          "hostScope": ["windows-laptop"],
+          "revalidateAgainstSha": "c691f060f93cd0a255760e2749a58c5006edb0c4"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -406,6 +584,19 @@
       "tokens_per_sec_estimate": 128,
       "llm_model_name": "granite-3.1-2b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "Fleet model-UI run 2026-07-21T08:59Z on tower2 loaded this model and ODS Talk, LiteLLM, Open WebUI, and OpenCode passed, but the Perplexica app probe answered with prose/search-style content instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T08-59-51Z-targeted-granite31-allapps-product-73762173ae0c-harness-ecd8157a6324-hosts-tower2/cycle-001/tower2",
+          "recordedAt": "2026-07-21T08:59:51Z",
+          "productSha": "73762173ae0c",
+          "harnessSha": "ecd8157a6324",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -425,6 +616,28 @@
       "tokens_per_sec_estimate": 105,
       "llm_model_name": "Phi-3-mini-128k-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-21T09:52Z on tower2 loaded Phi-3 Mini 128K successfully, but ODS Talk returned a generic assistant greeting instead of the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T09-52-42Z-release-product-5d4e805fab79-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2",
+          "recordedAt": "2026-07-21T11:04:41Z",
+          "productSha": "5d4e805fab795bd6c71a805a1c6188852ebb0963",
+          "harnessSha": "9804e8523a6d11ebeb86eac5f5400cf21fc25b39",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "ODS Talk release probe failed exact verification after successful Phi-3 Mini 128K load; not agent-viable until a Talk revalidation passes.",
+          "evidence": "fleet-test/runs/2026-07-21T09-52-42Z-release-product-5d4e805fab79-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2",
+          "recordedAt": "2026-07-21T11:04:41Z",
+          "productSha": "5d4e805fab795bd6c71a805a1c6188852ebb0963",
+          "harnessSha": "9804e8523a6d11ebeb86eac5f5400cf21fc25b39",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -587,6 +800,44 @@
       "install_recommendation": false
     },
     {
+      "id": "qwen3-4b-instruct-2507-q4",
+      "name": "Qwen3 4B Instruct 2507",
+      "family": "qwen",
+      "gguf_file": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "gguf_sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+      "size_bytes": 2497281120,
+      "size_mb": 2497,
+      "vram_required_gb": 5,
+      "context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Chat",
+      "description": "Unsloth's GGUF quant of Qwen3 4B Instruct 2507 with 262K context metadata. A low-VRAM long-context release candidate for app and Talk validation.",
+      "tokens_per_sec_estimate": 105,
+      "llm_model_name": "qwen3-4b-instruct-2507",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
+      "id": "qwen3-4b-128k-q4",
+      "name": "Qwen3 4B 128K",
+      "family": "qwen",
+      "gguf_file": "Qwen3-4B-128K-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3-4B-128K-GGUF/resolve/main/Qwen3-4B-128K-Q4_K_M.gguf",
+      "gguf_sha256": "f145a1bd60fec420ca4d9b7645ebcdf657e301463bc4dd3af4a8c0b548b5eb1a",
+      "size_bytes": 2497281504,
+      "size_mb": 2497,
+      "vram_required_gb": 5,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Chat",
+      "description": "Unsloth's 128K GGUF build of Qwen3 4B in Q4_K_M quantization. A low-VRAM long-context candidate kept separate from the upstream 40K-context Qwen3 4B entry.",
+      "tokens_per_sec_estimate": 105,
+      "llm_model_name": "qwen3-4b-128k",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
       "id": "qwen3-1.7b-q4",
       "name": "Qwen3 1.7B",
       "family": "qwen",
@@ -612,6 +863,47 @@
           "status": "unsupported_until_revalidated",
           "reason": "Default runtime context is below the 64K ODS Talk release floor until a YaRN/runtime policy is implemented and fleet-validated.",
           "evidence": "https://huggingface.co/Qwen/Qwen3-1.7B/blob/main/config.json"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "qwen2.5-coder-1.5b-128k-q4",
+      "name": "Qwen 2.5 Coder 1.5B 128K",
+      "family": "qwen",
+      "gguf_file": "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen2.5-Coder-1.5B-Instruct-128K-GGUF/resolve/main/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf",
+      "gguf_sha256": "0fbff4d39395fab063c51377ba522928af2574b1f998d66012c1caed7b8f91d6",
+      "size_bytes": 986048224,
+      "size_mb": 986,
+      "vram_required_gb": 3,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Code",
+      "description": "Small code-specialized Qwen model with a 128K GGUF context. A low-VRAM OpenCode-oriented release candidate to replace models that route correctly but fail agent UX probes.",
+      "tokens_per_sec_estimate": 145,
+      "llm_model_name": "qwen2.5-coder-1.5b-instruct",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-21T12:25Z on tower2 loaded Qwen 2.5 Coder 1.5B 128K, but ODS Talk answered with generic assistant prose instead of the requested verification phrase.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2",
+          "recordedAt": "2026-07-21T14:25:00Z",
+          "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
+          "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "The model loaded and routed through the browser-managed swap path, but ODS Talk did not follow the required verification instruction; keep it out of agent-required release coverage until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2",
+          "recordedAt": "2026-07-21T14:25:00Z",
+          "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
+          "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
+          "hostScope": ["tower2"],
+          "expiresAt": "2026-08-21T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -784,6 +1076,21 @@
       "tokens_per_sec_estimate": 55,
       "llm_model_name": "mistral-nemo-instruct-2407",
       "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "label": "ODS Talk unavailable on Apple llama-server",
+          "reason": "Fleet model-UI run 2026-07-22T06:12Z on m5-mbp loaded Mistral Nemo 12B successfully through the browser UI, but ODS Talk failed because llama.cpp rejected the Hermes request with the Mistral chat-template role alternation Jinja exception. The same run passed Mistral on strix-halo through Lemonade, so this verdict is scoped to Apple llama-server until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-22T06-12-53Z-release-product-cfe6addc5239-harness-8bdceb20b959-hosts-m5-mbp-strix-halo-windows-laptop-strixy/model-ui/cycle-006/m5-mbp",
+          "recordedAt": "2026-07-22T07:47:48Z",
+          "productSha": "cfe6addc523925adba4e6ab797645e83741759b0",
+          "harnessSha": "8bdceb20b9594515dae65f7f66df734ec152e1e4",
+          "hostScope": ["m5-mbp"],
+          "gpuBackendScope": ["apple"],
+          "llmBackendScope": ["llama-server"],
+          "expiresAt": "2026-08-22T00:00:00Z"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -793,12 +1100,13 @@
       "gguf_file": "Qwen3.5-4B-Q4_K_M.gguf",
       "gguf_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
       "gguf_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
-      "size_mb": 2870,
+      "size_bytes": 2740937888,
+      "size_mb": 2741,
       "vram_required_gb": 5,
-      "context_length": 16384,
+      "context_length": 262144,
       "quantization": "Q4_K_M",
       "specialty": "Balanced",
-      "description": "Good balance of speed and capability for Intel Arc and budget GPUs.",
+      "description": "Unsloth's GGUF quant of Qwen3.5 4B with native 262K context metadata. A low-VRAM long-context release candidate for app and Talk validation.",
       "tokens_per_sec_estimate": 100,
       "llm_model_name": "qwen3.5-4b",
       "llama_server_image": null
@@ -863,7 +1171,7 @@
       "gguf_sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
       "size_mb": 5760,
       "vram_required_gb": 8,
-      "context_length": 32768,
+      "context_length": 65536,
       "quantization": "Q4_K_M",
       "specialty": "General",
       "description": "Excellent general-purpose model. Default for most systems. Great at coding, reasoning, and multilingual tasks.",

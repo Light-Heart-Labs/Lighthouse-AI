@@ -478,15 +478,20 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         $taskAction = New-ODSLemonadeScheduledTaskAction `
             -Contract $modern -EnvPath (Join-Path $probeRoot ".env") `
             -DiagnosticLogPath (Join-Path $probeRoot "lemonade-launch.log")
-        $encodedMatch = [regex]::Match($taskAction.Arguments, "-EncodedCommand\s+(\S+)")
-        if ($taskAction.Execute -ne "powershell.exe" -or -not $encodedMatch.Success) {
-            throw "Modern Lemonade task must use the secure PowerShell wrapper"
+        $launcherMatch = [regex]::Match($taskAction.Arguments, "-File\s+`"([^`"]+)`"")
+        if ($taskAction.Execute -ne "powershell.exe" -or -not $launcherMatch.Success) {
+            throw "Modern Lemonade task must use the secure PowerShell launcher file"
         }
-        $wrapper = [Text.Encoding]::Unicode.GetString(
-            [Convert]::FromBase64String($encodedMatch.Groups[1].Value)
-        )
+        if ($taskAction.Arguments.Length -gt 512) {
+            throw "Modern Lemonade task arguments are too long for standard-user Task Scheduler registration"
+        }
+        $launcherPath = $launcherMatch.Groups[1].Value
+        if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+            throw "Modern Lemonade task launcher file was not written"
+        }
+        $wrapper = Get-Content -LiteralPath $launcherPath -Raw
         if ($wrapper -match [regex]::Escape("contract-admin-key")) {
-            throw "Lemonade admin key leaked into Task Scheduler arguments"
+            throw "Lemonade admin key leaked into the launcher wrapper"
         }
         if ($wrapper -notmatch "LITELLM_LEMONADE_API_KEY" -or
             $wrapper -notmatch "Start-Process -FilePath.*-PassThru") {
@@ -499,6 +504,29 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         )
         if (@($parseErrors).Count -gt 0) {
             throw "Generated Lemonade task wrapper has PowerShell parse errors"
+        }
+
+        $contractText = Get-Content -LiteralPath (Join-Path $env:ROOT_DIR "installers/windows/lib/backend-contract.ps1") -Raw
+        if ($contractText -notmatch "whoami\.exe" -or
+            $contractText -notmatch "Translate\(\[System.Security.Principal.SecurityIdentifier\]\)") {
+            throw "Interactive scheduled task user resolver does not validate a fully qualified account"
+        }
+        function Resolve-ODSInteractiveScheduledTaskUser {
+            return "STRIXY\conta"
+        }
+        function New-ScheduledTaskPrincipal {
+            param($UserId, $LogonType, $RunLevel)
+            return [pscustomobject]@{
+                UserId = $UserId
+                LogonType = $LogonType
+                RunLevel = $RunLevel
+            }
+        }
+        $principal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
+        if ($principal.UserId -ne "STRIXY\conta" -or
+            $principal.LogonType -ne "Interactive" -or
+            $principal.RunLevel -ne "Limited") {
+            throw "Interactive scheduled task principal did not preserve the resolved user and limited token"
         }
     '; then
         pass "backend-contract.ps1: resolves Lemonade and enforces versioned secure launch/config contracts"

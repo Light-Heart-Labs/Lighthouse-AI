@@ -62,7 +62,8 @@ from host_agent_client import (
 from agent_monitor import collect_metrics
 from routers import (
     workflows, features, setup, updates, agents, privacy, extensions,
-    gpu as gpu_router, resources, voice, models as models_router, model_state as model_state_router, templates,
+    gpu as gpu_router, resources, voice, models as models_router, model_state as model_state_router,
+    model_routes as model_routes_router, templates,
     auth as auth_router,
     magic_link,
     oauth_passthrough,
@@ -469,6 +470,9 @@ def _infer_tier(gpu_info) -> str:
 
 def _infer_gpu_count(gpu_info) -> int:
     """Infer GPU count from the GPU_COUNT env var or the display name."""
+    observed_count = int(getattr(gpu_info, "gpu_count", 1) or 1)
+    if observed_count > 1:
+        return observed_count
     gpu_count_env = os.environ.get("GPU_COUNT", "")
     if gpu_count_env.isdigit():
         return int(gpu_count_env)
@@ -490,10 +494,13 @@ def _serialize_gpu(gpu_info) -> Optional[dict]:
 
     gpu_data = {
         "name": gpu_info.name,
-        "vramUsed": round(gpu_info.memory_used_mb / 1024, 1),
+        "vramUsed": (
+            round(gpu_info.memory_used_mb / 1024, 1)
+            if gpu_info.memory_usage_available else None
+        ),
         "vramTotal": round(gpu_info.memory_total_mb / 1024, 1),
-        "utilization": gpu_info.utilization_percent,
-        "temperature": gpu_info.temperature_c,
+        "utilization": gpu_info.utilization_percent if gpu_info.utilization_available else None,
+        "temperature": gpu_info.temperature_c if gpu_info.temperature_available else None,
         "memoryType": gpu_info.memory_type,
         "backend": gpu_info.gpu_backend,
         "gpu_count": gpu_count,
@@ -1036,6 +1043,7 @@ app.include_router(voice.router)
 app.include_router(test.router)
 # Static switchboard state route registers before the dynamic model-ID routes.
 app.include_router(model_state_router.router)
+app.include_router(model_routes_router.router)
 app.include_router(models_router.router)
 app.include_router(templates.router)
 app.include_router(auth_router.router)
@@ -1280,6 +1288,7 @@ async def api_status(api_key: str = Depends(verify_api_key)):
             "disk": {"used_gb": 0, "total_gb": 0, "percent": 0},
             "system": {"uptime": 0, "hostname": os.environ.get("HOSTNAME", "ods")},
             "inference": {"tokensPerSecond": 0, "lifetimeTokens": 0,
+                          "tokenCountMode": "unavailable",
                           "loadedModel": None, "contextSize": None},
             "manifest_errors": MANIFEST_ERRORS,
         }
@@ -1345,21 +1354,7 @@ async def _build_api_status() -> dict:
         get_llama_context_size(model_hint=loaded_model),
     )
 
-    gpu_data = None
-    if gpu_info:
-        gpu_data = {
-            "name": gpu_info.name,
-            "vramUsed": round(gpu_info.memory_used_mb / 1024, 1),
-            "vramTotal": round(gpu_info.memory_total_mb / 1024, 1),
-            "utilization": gpu_info.utilization_percent,
-            "temperature": gpu_info.temperature_c,
-            "memoryType": gpu_info.memory_type,
-            "backend": gpu_info.gpu_backend,
-            "gpu_count": _infer_gpu_count(gpu_info),
-        }
-        if gpu_info.power_w is not None:
-            gpu_data["powerDraw"] = gpu_info.power_w
-        gpu_data["memoryLabel"] = "VRAM Partition" if gpu_info.memory_type == "unified" else "VRAM"
+    gpu_data = _serialize_gpu(gpu_info)
 
     services_data = _serialize_services(service_statuses, uptime)
 
@@ -1402,6 +1397,7 @@ async def _build_api_status() -> dict:
         "inference": {
             "tokensPerSecond": llama_metrics_data.get("tokens_per_second", 0),
             "lifetimeTokens": llama_metrics_data.get("lifetime_tokens", 0),
+            "tokenCountMode": llama_metrics_data.get("token_count_mode", "unavailable"),
             "loadedModel": loaded_model_name,
             "contextSize": context_size or (model_data["contextLength"] if model_data else None),
         },

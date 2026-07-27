@@ -31,11 +31,27 @@ BLOCKING_AGENT_STATUSES = {
 }
 
 
+def _has_runtime_scope(entry):
+    return any(
+        key in entry
+        for key in {
+            "gpuBackendScope",
+            "gpu_backend_scope",
+            "llmBackendScope",
+            "llm_backend_scope",
+            "runtimeScope",
+            "runtime_scope",
+            "odsModeScope",
+            "ods_mode_scope",
+        }
+    )
+
+
 def _agent_viable_for_release(model):
     compatibility = model.get("app_compatibility") or {}
     for entry in compatibility.values():
         status = str((entry or {}).get("status") or "").strip().lower()
-        if status in BLOCKING_AGENT_STATUSES:
+        if status in BLOCKING_AGENT_STATUSES and not _has_runtime_scope(entry or {}):
             return False
     return True
 
@@ -72,6 +88,8 @@ def test_release_model_switchboard_catalog_ids_exist():
         "granite3.3-2b-instruct-q4",
         "smollm3-3b-q4",
         "granite4.0-h-1b-q4",
+        "falcon-h1-1.5b-instruct-q4",
+        "falcon-h1-3b-instruct-q4",
         "granite4.0-1b-q4",
         "granite4.0-h-350m-q4",
         "granite3.2-2b-instruct-q4",
@@ -81,7 +99,10 @@ def test_release_model_switchboard_catalog_ids_exist():
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",
         "qwen3-4b-q4",
+        "qwen3-4b-instruct-2507-q4",
+        "qwen3-4b-128k-q4",
         "qwen3-1.7b-q4",
+        "qwen2.5-coder-1.5b-128k-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",
@@ -114,6 +135,34 @@ def test_llama32_3b_is_not_agent_viable_until_revalidated():
     assert compatibility["agent_viability"]["evidence"]
     assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
     assert not _agent_viable_for_release(by_id["llama3.2-3b-instruct-q4"])
+
+
+def test_phi4_mini_is_not_agent_viable_after_strixy_talk_probe_failure():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["phi4-mini-q4"]["app_compatibility"]
+
+    assert compatibility["openai_chat"]["status"] == "verified"
+    assert "42b3a95c" in compatibility["openai_chat"]["reason"]
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "strixy" in compatibility["agent_viability"]["evidence"]
+    assert "cycle-001" in compatibility["agent_viability"]["evidence"]
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert "strixy" in compatibility["hermes_talk"]["evidence"]
+    assert not _agent_viable_for_release(by_id["phi4-mini-q4"])
+
+
+def test_phi3_mini_128k_is_not_agent_viable_after_tower2_talk_probe_failure():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["phi3-mini-128k-q4"]["app_compatibility"]
+
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "tower2" in compatibility["agent_viability"]["hostScope"]
+    assert "cycle-006" in compatibility["agent_viability"]["evidence"]
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert "generic assistant greeting" in compatibility["hermes_talk"]["reason"]
+    assert not _agent_viable_for_release(by_id["phi3-mini-128k-q4"])
 
 
 def test_llama31_8b_is_not_agent_viable_until_revalidated():
@@ -201,16 +250,53 @@ def test_smollm3_3b_is_not_agent_viable_until_app_revalidated():
     assert not _agent_viable_for_release(by_id["smollm3-3b-q4"])
 
 
-def test_granite4_1b_models_are_low_vram_agent_viable_candidates():
+def test_granite4_h_1b_requires_perplexica_revalidation_after_m5_partial_reply():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
 
     model = by_id["granite4.0-h-1b-q4"]
+    compatibility = model["app_compatibility"]
     assert model["vram_required_gb"] <= 3
     assert model["context_length"] >= HERMES_CONTEXT_FLOOR
     assert model["gguf_sha256"] == "da3d737121a96f3c9a316685212376257a7f167b74380855666dd488d6af3bcb"
     assert model["gguf_url"].startswith("https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/")
-    assert _agent_viable_for_release(model)
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert "m5-mbp" in compatibility["perplexica"]["reason"]
+    assert "Perplexica" in compatibility["perplexica"]["reason"]
+    assert "cycle-003" in compatibility["perplexica"]["evidence"]
+    assert not _agent_viable_for_release(model)
+
+
+def test_falcon_h1_15b_is_not_low_vram_agent_viable_after_opencode_failure():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    model = by_id["falcon-h1-1.5b-instruct-q4"]
+    compatibility = model["app_compatibility"]
+    assert model["vram_required_gb"] <= 3
+    assert model["context_length"] >= HERMES_CONTEXT_FLOOR
+    assert model["gguf_sha256"] == "8b51aa2aa34a0373fd0cd64c02eb91d1bc1da681c09e955ad769d4a9b2d8385f"
+    assert model["gguf_url"].startswith("https://huggingface.co/tiiuae/Falcon-H1-1.5B-Instruct-GGUF/")
+    assert model["size_bytes"] == 944786656
+    assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert not _agent_viable_for_release(model)
+
+
+def test_granite32_2b_is_direct_chat_only_after_windows_talk_timeout():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    model = by_id["granite3.2-2b-instruct-q4"]
+    compatibility = model["app_compatibility"]
+
+    assert compatibility["openai_chat"]["status"] == "verified"
+    assert "0.73 tok/s" in compatibility["openai_chat"]["reason"]
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "19,349-token Hermes prompt" in compatibility["agent_viability"]["reason"]
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert "cycle-004" in compatibility["hermes_talk"]["evidence"]
+    assert not _agent_viable_for_release(model)
 
 
 def test_granite4_h_350m_is_not_agent_viable_after_talk_probe_failure():
@@ -235,9 +321,13 @@ def test_replacement_low_vram_long_context_models_are_cataloged_for_validation()
     by_id = {model["id"]: model for model in catalog["models"]}
 
     expected = {
-        "granite3.2-2b-instruct-q4": (
-            "https://huggingface.co/ibm-research/granite-3.2-2b-instruct-GGUF/",
-            "9bc086149f093169fb8e3e7517cd31752bfd9d70e0e7bb3ab351c0a5386cf8c9",
+        "qwen3-4b-instruct-2507-q4": (
+            "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/",
+            "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+        ),
+        "qwen3-4b-128k-q4": (
+            "https://huggingface.co/unsloth/Qwen3-4B-128K-GGUF/",
+            "f145a1bd60fec420ca4d9b7645ebcdf657e301463bc4dd3af4a8c0b548b5eb1a",
         ),
         "granite3.1-2b-instruct-q4": (
             "https://huggingface.co/bartowski/granite-3.1-2b-instruct-GGUF/",
@@ -251,11 +341,14 @@ def test_replacement_low_vram_long_context_models_are_cataloged_for_validation()
 
     for model_id, (url_prefix, sha256) in expected.items():
         model = by_id[model_id]
-        assert model["vram_required_gb"] <= 4
+        assert model["vram_required_gb"] <= 5
         assert model["context_length"] >= HERMES_CONTEXT_FLOOR
         assert model["gguf_sha256"] == sha256
         assert model["gguf_url"].startswith(url_prefix)
-        assert _agent_viable_for_release(model)
+        if model_id in {"granite3.1-2b-instruct-q4", "phi3-mini-128k-q4"}:
+            assert not _agent_viable_for_release(model)
+        else:
+            assert _agent_viable_for_release(model)
 
 
 def test_granite33_8b_has_visible_nvidia_8gb_release_profile():
@@ -346,6 +439,98 @@ def test_qwen25_coder_3b_is_not_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["qwen2.5-coder-3b-128k-q4"])
 
 
+def test_falcon_h1_15b_is_not_opencode_agent_viable_until_revalidated():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["falcon-h1-1.5b-instruct-q4"]["app_compatibility"]
+
+    assert compatibility["opencode"]["status"] == "unsupported_until_revalidated"
+    assert "OpenCode" in compatibility["opencode"]["reason"]
+    assert "cycle-004" in compatibility["opencode"]["evidence"]
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "OpenCode" in compatibility["agent_viability"]["reason"]
+    assert not _agent_viable_for_release(by_id["falcon-h1-1.5b-instruct-q4"])
+
+
+def test_falcon_h1_3b_is_not_talk_agent_viable_until_revalidated():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["falcon-h1-3b-instruct-q4"]["app_compatibility"]
+
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert "random_uuid" in compatibility["hermes_talk"]["reason"]
+    assert "cycle-004" in compatibility["hermes_talk"]["evidence"]
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "tool-call payload" in compatibility["agent_viability"]["reason"]
+    assert not _agent_viable_for_release(by_id["falcon-h1-3b-instruct-q4"])
+
+
+def test_qwen25_coder_15b_128k_is_not_talk_agent_viable_until_revalidated():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen2.5-coder-1.5b-128k-q4"]
+    compatibility = model["app_compatibility"]
+
+    assert model["gguf_sha256"] == "0fbff4d39395fab063c51377ba522928af2574b1f998d66012c1caed7b8f91d6"
+    assert model["context_length"] >= HERMES_CONTEXT_FLOOR
+    assert model["vram_required_gb"] <= 3
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert "generic assistant prose" in compatibility["hermes_talk"]["reason"]
+    assert "cycle-006" in compatibility["hermes_talk"]["evidence"]
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert not _agent_viable_for_release(model)
+
+
+def test_mistral_nemo_talk_block_is_scoped_to_apple_llama_server():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["mistral-nemo-12b-instruct-q4"]
+    compatibility = model["app_compatibility"]
+
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["hermes_talk"]["gpuBackendScope"] == ["apple"]
+    assert compatibility["hermes_talk"]["llmBackendScope"] == ["llama-server"]
+    assert "m5-mbp" in compatibility["hermes_talk"]["hostScope"]
+    assert "cycle-006" in compatibility["hermes_talk"]["evidence"]
+    assert _agent_viable_for_release(model)
+
+
+def test_qwen3_4b_long_context_replacements_are_release_candidates():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    expected = {
+        "qwen3.5-4b-q4": {
+            "sha": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+            "context": 262144,
+            "size_bytes": 2740937888,
+            "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/",
+        },
+        "qwen3-4b-instruct-2507-q4": {
+            "sha": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+            "context": 262144,
+            "url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/",
+        },
+        "qwen3-4b-128k-q4": {
+            "sha": "f145a1bd60fec420ca4d9b7645ebcdf657e301463bc4dd3af4a8c0b548b5eb1a",
+            "context": 131072,
+            "url": "https://huggingface.co/unsloth/Qwen3-4B-128K-GGUF/",
+        },
+    }
+
+    for model_id, expected_model in expected.items():
+        model = by_id[model_id]
+        assert model["gguf_sha256"] == expected_model["sha"]
+        assert model["context_length"] == expected_model["context"]
+        assert model["vram_required_gb"] <= 5
+        assert model["gguf_url"].startswith(expected_model["url"])
+        if "size_bytes" in expected_model:
+            assert model["size_bytes"] == expected_model["size_bytes"]
+        if model_id != "qwen3.5-4b-q4":
+            assert model.get("install_recommendation") is False
+        assert _agent_viable_for_release(model)
+
+
 def test_qwen25_7b_is_not_agent_viable_on_low_vram_windows_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
@@ -372,6 +557,8 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "granite3.3-2b-instruct-q4",
         "smollm3-3b-q4",
         "granite4.0-h-1b-q4",
+        "falcon-h1-1.5b-instruct-q4",
+        "falcon-h1-3b-instruct-q4",
         "granite4.0-1b-q4",
         "granite4.0-h-350m-q4",
         "granite3.2-2b-instruct-q4",
@@ -381,7 +568,10 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",
         "qwen3-4b-q4",
+        "qwen3-4b-instruct-2507-q4",
+        "qwen3-4b-128k-q4",
         "qwen3-1.7b-q4",
+        "qwen2.5-coder-1.5b-128k-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",

@@ -1270,9 +1270,10 @@ patch_hermes_yaml_with_sed() {
 }
 
 patch_hermes_model_after_swap() {
-    local runtime llm_backend hermes_base_url old_model new_model tpl live live_host_patch_failed hermes_request_timeout
+    local runtime llm_backend switchboard_mode hermes_base_url old_model new_model tpl live live_host_patch_failed hermes_request_timeout
     runtime="$(read_env_value AMD_INFERENCE_RUNTIME | tr '[:upper:]' '[:lower:]')"
     llm_backend="$(read_env_value LLM_BACKEND | tr '[:upper:]' '[:lower:]')"
+    switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD | tr '[:upper:]' '[:lower:]')"
     hermes_base_url="$(read_env_value HERMES_LLM_BASE_URL)"
     old_model="$BOOTSTRAP_GGUF_FILE"
     new_model="$FULL_GGUF_FILE"
@@ -1281,10 +1282,14 @@ patch_hermes_model_after_swap() {
         new_model="$(read_env_value LEMONADE_MODEL)"
         [[ -n "$new_model" ]] || new_model="extra.$FULL_GGUF_FILE"
     fi
+    if [[ "$switchboard_mode" == "enabled" ]]; then
+        new_model="ods/current"
+        [[ -n "$hermes_base_url" ]] || hermes_base_url="http://litellm:4000/v1"
+    fi
 
     log "Patching Hermes config after full-model swap: ${old_model} -> ${new_model}"
     hermes_request_timeout=180
-    if is_windows_bash || [[ "$runtime" == "lemonade" || "$llm_backend" == "lemonade" ]]; then
+    if is_windows_bash || [[ "$switchboard_mode" == "enabled" || "$runtime" == "lemonade" || "$llm_backend" == "lemonade" ]]; then
         hermes_request_timeout=900
     fi
 
@@ -2684,16 +2689,21 @@ LITELLM_UPGRADE_EOF
         _hermes_old_model="$BOOTSTRAP_GGUF_FILE"
         _hermes_new_model="$FULL_GGUF_FILE"
         _hermes_base_url="$(read_env_value HERMES_LLM_BASE_URL)"
+        _hermes_switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD | tr '[:upper:]' '[:lower:]')"
         _gpu_backend_for_hermes=$(grep -E '^GPU_BACKEND=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' || echo "")
         if [[ "$_gpu_backend_for_hermes" == "amd" ]]; then
             _hermes_old_model="extra.$BOOTSTRAP_GGUF_FILE"
             _hermes_new_model="$(read_env_value LEMONADE_MODEL)"
             [[ -n "$_hermes_new_model" ]] || _hermes_new_model="extra.$FULL_GGUF_FILE"
         fi
+        if [[ "$_hermes_switchboard_mode" == "enabled" ]]; then
+            _hermes_new_model="ods/current"
+            [[ -n "$_hermes_base_url" ]] || _hermes_base_url="http://litellm:4000/v1"
+        fi
         log "Patching Hermes config: model.default $_hermes_old_model -> $_hermes_new_model"
         _hermes_request_timeout=180
         _hermes_llm_backend_for_timeout="$(read_env_value LLM_BACKEND | tr '[:upper:]' '[:lower:]')"
-        if is_windows_bash || [[ "$_gpu_backend_for_hermes" == "amd" || "$_hermes_llm_backend_for_timeout" == "lemonade" ]]; then
+        if is_windows_bash || [[ "$_hermes_switchboard_mode" == "enabled" || "$_gpu_backend_for_hermes" == "amd" || "$_hermes_llm_backend_for_timeout" == "lemonade" ]]; then
             _hermes_request_timeout=900
         fi
 
@@ -3000,23 +3010,29 @@ if curl -sf --max-time 3 "${_perplexica_url}/api/config" >/dev/null 2>&1; then
             _py_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
         fi
     if [[ -n "$_py_cmd" ]]; then
-        # On Lemonade, LiteLLM exposes the model id as "extra.<GGUF_FILE>".
-        # On NVIDIA/Apple/CPU, llama.cpp serves under the bare GGUF id.
+        _switchboard_for_perplexica="$(read_env_value ODS_MODEL_SWITCHBOARD | tr '[:upper:]' '[:lower:]')"
         _px_model="$FULL_GGUF_FILE"
         _runtime_for_perplexica=$(grep -E '^AMD_INFERENCE_RUNTIME=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' | tr '[:upper:]' '[:lower:]' || echo "")
         _llm_backend_for_perplexica=$(grep -E '^LLM_BACKEND=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' | tr '[:upper:]' '[:lower:]' || echo "")
-        if [[ "$_runtime_for_perplexica" == "lemonade" || "$_llm_backend_for_perplexica" == "lemonade" ]]; then
-            _px_model="$(read_env_value LEMONADE_MODEL)"
-            [[ -n "$_px_model" ]] || _px_model="extra.$FULL_GGUF_FILE"
-        fi
         _litellm_key=$(grep -E '^LITELLM_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' || echo "no-key")
         : "${_litellm_key:=no-key}"
-        if [[ "$_runtime_for_perplexica" == "lemonade" || "$_llm_backend_for_perplexica" == "lemonade" ]]; then
-            _px_base_url="$(read_env_value HERMES_LLM_BASE_URL)"
-            : "${_px_base_url:=http://litellm:4000/v1}"
+        if [[ "$_switchboard_for_perplexica" == "enabled" ]]; then
+            _px_model="ods/current"
+            _px_base_url="http://litellm:4000/v1"
         else
-            _px_base_url=$(grep -E '^LLM_API_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' || echo "http://llama-server:8080")
-            : "${_px_base_url:=http://llama-server:8080}"
+            # On Lemonade, LiteLLM exposes the model id as "extra.<GGUF_FILE>".
+            # On NVIDIA/Apple/CPU, llama.cpp serves under the bare GGUF id.
+            if [[ "$_runtime_for_perplexica" == "lemonade" || "$_llm_backend_for_perplexica" == "lemonade" ]]; then
+                _px_model="$(read_env_value LEMONADE_MODEL)"
+                [[ -n "$_px_model" ]] || _px_model="extra.$FULL_GGUF_FILE"
+            fi
+            if [[ "$_runtime_for_perplexica" == "lemonade" || "$_llm_backend_for_perplexica" == "lemonade" ]]; then
+                _px_base_url="$(read_env_value HERMES_LLM_BASE_URL)"
+                : "${_px_base_url:=http://litellm:4000/v1}"
+            else
+                _px_base_url=$(grep -E '^LLM_API_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"\047\r' || echo "http://llama-server:8080")
+                : "${_px_base_url:=http://llama-server:8080}"
+            fi
         fi
         case "$_px_base_url" in
             */v1|*/api/v1) ;;
@@ -3086,5 +3102,82 @@ elif [[ -f "$HOME/Library/LaunchAgents/com.ods.host-agent.plist" ]]; then
         log "WARNING: Could not restart host agent (non-fatal)"
 fi
 
+notify_host_agent_model_status() {
+    local key port bind host attempt url_host
+    local -a hosts=()
+
+    add_notify_host() {
+        local candidate="$1"
+        [[ -n "$candidate" ]] || return 0
+        candidate="${candidate#http://}"
+        candidate="${candidate#https://}"
+        candidate="${candidate%%/*}"
+        if [[ "$candidate" =~ ^\[(.*)\]:[0-9]+$ ]]; then
+            candidate="${BASH_REMATCH[1]}"
+        elif [[ "$candidate" == *":$port" ]]; then
+            candidate="${candidate%:$port}"
+        fi
+        candidate="${candidate#[}"
+        candidate="${candidate%]}"
+        case "$candidate" in
+            ""|"*"|"0.0.0.0"|"::")
+                candidate="127.0.0.1"
+                ;;
+        esac
+        for host in "${hosts[@]}"; do
+            [[ "$host" != "$candidate" ]] || return 0
+        done
+        hosts+=("$candidate")
+    }
+
+    discover_host_agent_hosts() {
+        local endpoint
+        if command -v ss >/dev/null 2>&1; then
+            while IFS= read -r endpoint; do
+                add_notify_host "$endpoint"
+            done < <(ss -ltnH 2>/dev/null | awk -v port=":$port" '$4 ~ port "$" { print $4 }' || true)
+        fi
+        if command -v ip >/dev/null 2>&1; then
+            while IFS= read -r endpoint; do
+                add_notify_host "$endpoint"
+            done < <(ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(docker|br-|ods)/ { split($4, ip, "/"); print ip[1] }' || true)
+        fi
+    }
+
+    key="$(read_env_value ODS_AGENT_KEY)"
+    [[ -n "$key" ]] || key="$(read_env_value DASHBOARD_API_KEY)"
+    if [[ -z "$key" ]]; then
+        log "WARNING: ODS agent key missing; cannot notify host agent about full-model route"
+        return 1
+    fi
+    port="$(read_env_value ODS_AGENT_PORT)"
+    [[ -n "$port" ]] || port="7710"
+    bind="$(read_env_value ODS_AGENT_BIND)"
+    add_notify_host "$bind"
+    discover_host_agent_hosts
+    add_notify_host "127.0.0.1"
+    add_notify_host "localhost"
+    add_notify_host "172.17.0.1"
+
+    for attempt in {1..10}; do
+        for host in "${hosts[@]}"; do
+            url_host="$host"
+            if [[ "$url_host" == *:* && "$url_host" != \[*\] ]]; then
+                url_host="[$url_host]"
+            fi
+            if curl -fsS --max-time 20 \
+                -H "Authorization: Bearer $key" \
+                "http://${url_host}:${port}/v1/model/status" >/dev/null 2>&1; then
+                log "Host agent accepted full-model route reconciliation."
+                return 0
+            fi
+        done
+        sleep 2
+    done
+    log "WARNING: Host agent did not accept full-model route reconciliation (non-fatal)"
+    return 1
+}
+
 write_status "complete" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 ""
+notify_host_agent_model_status || true
 log "Bootstrap upgrade complete."

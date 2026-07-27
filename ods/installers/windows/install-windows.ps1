@@ -234,16 +234,23 @@ function Set-ODSWindowsHermesRuntimeModel {
     if (-not $enableHermes) { return $true }
 
     $runtimeEnv = Get-WindowsODSEnvMap -InstallDir $installDir
+    $switchboardMode = Get-WindowsODSEnvValue `
+        -EnvMap $runtimeEnv -Keys @("ODS_MODEL_SWITCHBOARD") `
+        -Default "observe"
+    $switchboardEnabled = ($switchboardMode.Trim().ToLowerInvariant() -eq "enabled")
+    if ($switchboardEnabled) {
+        $ModelId = "ods/current"
+    }
     $hermesBaseUrl = Get-WindowsODSEnvValue `
         -EnvMap $runtimeEnv -Keys @("HERMES_LLM_BASE_URL") `
-        -Default $(if ($cloudMode -or $gpuInfo.Backend -eq "amd") {
+        -Default $(if ($cloudMode -or $gpuInfo.Backend -eq "amd" -or $switchboardEnabled) {
             "http://litellm:4000/v1"
         } else {
             "http://llama-server:8080/v1"
         })
     $hermesTemplate = Join-Path (Join-Path (Join-Path $installDir "extensions") "services\hermes") "cli-config.yaml.template"
     $hermesLive = Join-Path (Join-Path $installDir "data\hermes") "config.yaml"
-    $hermesRequestTimeout = $(if ($cloudMode) { 180 } else { 900 })
+    $hermesRequestTimeout = $(if ($cloudMode -and -not $switchboardEnabled) { 180 } else { 900 })
     $templateUpdated = Update-HermesConfigFile -Path $hermesTemplate -Model $ModelId -BaseUrl $hermesBaseUrl -ContextLength ([int]$tierConfig.MaxContext) `
         -RequestTimeoutSeconds $hermesRequestTimeout `
         -LemonadeCompact:($gpuInfo.Backend -eq "amd")
@@ -533,7 +540,7 @@ if ($dryRun) {
                     $lemonadeSettings = New-ScheduledTaskSettingsSet `
                         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                         -ExecutionTimeLimit ([TimeSpan]::Zero)
-                    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+                    $principal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
                     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $lemonadeSettings -Principal $principal -Force -ErrorAction Stop | Out-Null
                     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
                 } catch {
@@ -724,8 +731,7 @@ if ($dryRun) {
                 $nativeLlamaSettings = New-ScheduledTaskSettingsSet `
                     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                     -ExecutionTimeLimit ([TimeSpan]::Zero)
-                $nativeLlamaPrincipal = New-ScheduledTaskPrincipal `
-                    -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+                $nativeLlamaPrincipal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
                 Register-ScheduledTask -TaskName $nativeLlamaTaskName `
                     -Action $nativeLlamaAction `
                     -Trigger $nativeLlamaTrigger `
@@ -1865,7 +1871,7 @@ exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($full
                         # The upgrade owns the native llama-server hot-swap. It
                         # must run at the same limited integrity level as the
                         # host agent so later UI model swaps can stop the child.
-                        $upgradePrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+                        $upgradePrincipal = New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited
                         Register-ScheduledTask -TaskName $upgradeTaskName `
                             -Action $upgradeAction `
                             -Trigger $upgradeTrigger `
