@@ -31,9 +31,10 @@ extract_installer_function() {
     sed -n "/^${1}() {/,/^}$/p" "$INSTALLER"
 }
 
-python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-[[ -n "$python_cmd" ]] || fail "python is required"
-"$python_cmd" -c 'import yaml' 2>/dev/null || fail "PyYAML is required"
+# shellcheck source=lib/python-cmd.sh
+. "$ROOT_DIR/lib/python-cmd.sh"
+python_cmd="$(ods_detect_python_cmd_with_module yaml)" \
+    || fail "PyYAML is required"
 
 ai() { :; }
 ai_ok() { :; }
@@ -178,7 +179,7 @@ fi
 pass "disabled Hermes routing patches through a safe image or fails closed"
 
 # OpenCode and OpenClaw must update only their managed routes across modes.
-eval "$(extract_installer_function _write_macos_opencode_config)"
+eval "$(extract_installer_function _write_macos_opencode_config | sed "s|/usr/bin/python3|$python_cmd|g")"
 opencode_path="$TMP_DIR/opencode/opencode.json"
 mkdir -p "$(dirname "$opencode_path")"
 printf '{"custom":{"preserve":true}}\n' > "$opencode_path"
@@ -194,9 +195,52 @@ assert data["model"] == "llama-server/default"
 opts = data["provider"]["llama-server"]["options"]
 assert opts == {"baseURL": "http://127.0.0.1:4000/v1", "apiKey": sys.argv[2]}
 PY
+_write_macos_opencode_config "$opencode_path" "ods/current" \
+    http://127.0.0.1:4000/v1 "$opencode_secret" 131072 >/dev/null
+"$python_cmd" - "$opencode_path" "$opencode_secret" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["model"] == "llama-server/ods/current"
+provider = data["provider"]["llama-server"]
+assert provider["models"]["ods/current"]["limit"] == {"context": 131072, "output": 32768}
+assert provider["options"] == {"baseURL": "http://127.0.0.1:4000/v1", "apiKey": sys.argv[2]}
+PY
 
 # shellcheck source=/dev/null
 source "$ENV_GENERATOR"
+
+(
+    calculate_llama_cpu_budget() { printf '4 1 8\n'; }
+    TIER_NAME="CI Mac"
+    ODS_VERSION="test"
+    SYSTEM_RAM_GB="128"
+    LLM_MODEL="qwen3.6-35b-a3b"
+    GGUF_FILE="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    MAX_CONTEXT="131072"
+    MODEL_PROFILE_REQUESTED="qwen"
+    MODEL_PROFILE_EFFECTIVE="qwen"
+    DOCKER_BACKEND="unknown"
+    ODS_MODEL_SWITCHBOARD="enabled"
+    env_install="$TMP_DIR/switchboard-env"
+    mkdir -p "$env_install/config/searxng"
+    generate_ods_env "$env_install" CI true
+    env_file="$env_install/.env"
+    litellm_key="$(grep '^LITELLM_KEY=' "$env_file" | cut -d= -f2-)"
+    grep -Fqx 'ODS_MODEL_SWITCHBOARD=enabled' "$env_file" \
+        || fail "macOS env did not persist enabled switchboard mode"
+    grep -Fqx 'LLM_API_URL=http://host.docker.internal:8080' "$env_file" \
+        || fail "macOS switchboard env must keep backend URL for model-router"
+    grep -Fqx 'HERMES_LLM_BASE_URL=http://litellm:4000/v1' "$env_file" \
+        || fail "macOS switchboard env must route Hermes through LiteLLM"
+    grep -Fqx "HERMES_LLM_API_KEY=${litellm_key}" "$env_file" \
+        || fail "macOS switchboard env must give Hermes the LiteLLM key"
+    grep -Fqx 'OPEN_WEBUI_LLM_BASE_URL=http://litellm:4000' "$env_file" \
+        || fail "macOS switchboard env must route Open WebUI through LiteLLM"
+    grep -Fqx "OPEN_WEBUI_LLM_API_KEY=${litellm_key}" "$env_file" \
+        || fail "macOS switchboard env must give Open WebUI the LiteLLM key"
+)
+pass "macOS switchboard env persists gateway consumers without hiding backend URL"
+
 openclaw_dir="$TMP_DIR/openclaw-install"
 mkdir -p "$openclaw_dir/data/openclaw/home"
 printf '{"custom":{"preserve":true}}\n' > "$openclaw_dir/data/openclaw/home/openclaw.json"

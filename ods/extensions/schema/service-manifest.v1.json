@@ -3,7 +3,7 @@
   "$id": "https://ods.ai/schemas/service-manifest.v1.json",
   "title": "ODS Service Manifest v1",
   "type": "object",
-  "required": ["schema_version"],
+  "required": ["schema_version", "service"],
   "properties": {
     "schema_version": {
       "const": "ods.services.v1"
@@ -27,7 +27,7 @@
     },
     "service": {
       "type": "object",
-      "required": ["id", "name"],
+      "required": ["id", "name", "port", "type", "category"],
       "allOf": [
         {
           "if": {
@@ -113,7 +113,7 @@
         },
         "depends_on": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
           "description": "Service IDs this service depends on"
         },
         "env_vars": {
@@ -215,6 +215,7 @@
               "services": { "type": "array", "items": { "type": "string" } },
               "services_any": { "type": "array", "items": { "type": "string" } },
               "vram_gb": { "type": "number", "minimum": 0 },
+              "vram_mb": { "type": "number", "minimum": 0 },
               "disk_gb": { "type": "number", "minimum": 0 }
             },
             "additionalProperties": true
@@ -242,6 +243,11 @@
         },
         "additionalProperties": true
       }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+      "description": "Categorization tags for service discovery"
     }
   },
   "additionalProperties": true

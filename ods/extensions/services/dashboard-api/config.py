@@ -403,7 +403,8 @@ def _load_core_service_ids() -> frozenset:
     return frozenset({
         "dashboard-api", "dashboard", "llama-server", "model-router", "open-webui",
         "litellm", "langfuse", "hermes", "hermes-proxy", "n8n", "openclaw", "opencode",
-        "perplexica", "searxng", "qdrant", "tts", "whisper",
+        "perplexica", "searxng", "qdrant", "remote-provider-egress",
+        "remote-provider-ssh-tunnel", "tts", "whisper",
         "embeddings", "token-spy", "comfyui", "ape", "privacy-shield",
     })
 
@@ -413,7 +414,8 @@ CORE_SERVICE_IDS = _load_core_service_ids()
 # Always-on services defined in docker-compose.base.yml — never manageable via API.
 # Distinct from CORE_SERVICE_IDS (the full built-in service allowlist).
 ALWAYS_ON_SERVICES: frozenset = frozenset({
-    "llama-server", "model-router", "open-webui", "dashboard", "dashboard-api",
+    "llama-server", "model-router", "remote-provider-egress",
+    "remote-provider-ssh-tunnel", "open-webui", "dashboard", "dashboard-api",
 })
 
 

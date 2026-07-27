@@ -101,16 +101,70 @@ assert_grep "installers/windows/install-windows.ps1" 'CTX_SIZE=\$\(\$tierConfig\
 
 echo ""
 echo "Hermes config patch paths:"
+assert_grep "extensions/services/hermes/cli-config.yaml.template" '^  max_tokens: 1024$' \
+    "Hermes template bounds each model turn"
+assert_grep "scripts/render-runtime-configs.py" '^DEFAULT_HERMES_MAX_TOKENS = 1024$' \
+    "runtime renderer uses the bounded Hermes output default"
+assert_grep "bin/ods-host-agent.py" 'max_tokens: int = 1024' \
+    "runtime model switch patcher migrates an uncapped Hermes config"
+assert_grep "installers/windows/phases/06-directories.ps1" '\[int\]\$MaxTokens = 1024' \
+    "Windows installer migrates an uncapped Hermes config"
 assert_grep "installers/phases/11-services.sh" '_hermes_context="\$\{MAX_CONTEXT:-65536\}"' \
     "Linux Hermes patcher uses selected context with 64K fallback"
 assert_grep "installers/phases/11-services.sh" '--context-length "\$_hermes_context"' \
     "Linux Hermes patcher receives context length"
+assert_grep "installers/phases/11-services.sh" '_hermes_switchboard_mode=.*ODS_MODEL_SWITCHBOARD' \
+    "Linux Hermes patcher reads switchboard mode"
+assert_grep "installers/phases/11-services.sh" '_hermes_model="ods/current"' \
+    "Linux Hermes patcher uses the stable switchboard model alias"
+assert_grep "installers/phases/11-services.sh" '_hermes_base_url=.*http://litellm:4000/v1' \
+    "Linux Hermes patcher routes switchboard mode through LiteLLM"
 assert_grep "installers/macos/install-macos.sh" '--context-length "\$MAX_CONTEXT"' \
     "macOS Hermes patcher receives context length"
 assert_grep "installers/macos/ods-macos.sh" 'ENV_CTX_SIZE:-65536' \
     "macOS native llama restart defaults to 64K context"
 assert_grep "installers/phases/07-devtools.sh" '"context": \$\{MAX_CONTEXT:-65536\}' \
     "Linux OpenCode config defaults to 64K context"
+assert_grep "installers/phases/07-devtools.sh" 'ODS_MODEL_SWITCHBOARD' \
+    "Linux OpenCode config reads switchboard mode"
+assert_grep "installers/phases/07-devtools.sh" '_opencode_model_id="ods/current"' \
+    "Linux OpenCode config uses stable switchboard alias"
+assert_grep "installers/phases/07-devtools.sh" 'OpenCode config updated \(model, API key, and URL refreshed\)' \
+    "Linux OpenCode reinstall migrates stale model route"
+assert_grep "installers/macos/install-macos.sh" '_opencode_switchboard_mode=.*ODS_MODEL_SWITCHBOARD' \
+    "macOS OpenCode config reads switchboard mode"
+assert_grep "installers/macos/install-macos.sh" '_opencode_model="ods/current"' \
+    "macOS OpenCode config uses stable switchboard alias"
+assert_grep "installers/macos/lib/env-generator.sh" 'ODS_MODEL_SWITCHBOARD=\$\{switchboard_mode\}' \
+    "macOS .env generation persists switchboard mode"
+assert_grep "installers/macos/lib/env-generator.sh" 'OPEN_WEBUI_LLM_BASE_URL=\$\{open_webui_llm_base_url\}' \
+    "macOS .env generation carries the Open WebUI switchboard route"
+assert_grep "installers/macos/docker-compose.macos.yml" 'OPENAI_API_BASE_URL: "\$\{OPEN_WEBUI_LLM_BASE_URL:-http://\$\{ODS_MACOS_HOST_GATEWAY:-host\.docker\.internal\}:8080/v1\}"' \
+    "macOS Open WebUI compose route honors switchboard override"
+assert_grep "installers/macos/docker-compose.macos.yml" 'OPENAI_API_KEY: "\$\{OPEN_WEBUI_LLM_API_KEY:-\}"' \
+    "macOS Open WebUI compose route carries switchboard API key"
+assert_grep "installers/macos/install-macos.sh" 'render-runtime-configs\.py' \
+    "macOS installer renders model-router runtime configs"
+assert_grep "installers/macos/install-macos.sh" 'PERPLEXICA_MODEL="ods/current"' \
+    "macOS Perplexica config uses stable switchboard alias"
+assert_grep "installers/macos/install-macos.sh" 'PERPLEXICA_BASE_URL="http://litellm:4000"' \
+    "macOS Perplexica config routes switchboard mode through LiteLLM"
+assert_grep "installers/phases/12-health.sh" 'ODS_MODEL_SWITCHBOARD' \
+    "Linux Perplexica config reads switchboard mode"
+assert_grep "installers/phases/12-health.sh" 'PERPLEXICA_MODEL="ods/current"' \
+    "Linux Perplexica config uses stable switchboard alias"
+assert_grep "installers/phases/12-health.sh" 'PERPLEXICA_LLM_BASE_URL="http://litellm:4000/v1"' \
+    "Linux Perplexica config routes switchboard mode through LiteLLM"
+assert_grep "installers/windows/install-windows.ps1" 'ODS_MODEL_SWITCHBOARD' \
+    "Windows Perplexica config reads switchboard mode"
+assert_grep "installers/windows/install-windows.ps1" '\$perplexicaModel = "ods/current"' \
+    "Windows Perplexica config uses stable switchboard alias"
+assert_grep "installers/windows/install-windows.ps1" '\$perplexicaBaseUrl = "http://litellm:4000/v1"' \
+    "Windows Perplexica config routes switchboard mode through LiteLLM"
+assert_grep "scripts/repair/repair-perplexica.sh" 'ODS_MODEL_SWITCHBOARD' \
+    "Perplexica repair reads switchboard mode"
+assert_grep "scripts/repair/repair-perplexica.sh" 'PERPLEXICA_MODEL:=ods/current' \
+    "Perplexica repair uses stable switchboard alias"
 assert_not_grep "installers/macos/install-macos.sh" '\$LOG_FILE' \
     "macOS installer uses ODS_LOG_FILE, not undefined LOG_FILE"
 assert_grep "installers/windows/install-windows.ps1" 'Update-HermesConfigFile.*ContextLength \(\[int\]\$tierConfig\.MaxContext\)' \
@@ -152,6 +206,9 @@ pass "Hermes patcher updates base_url"
 grep -q '^  context_length: 65536$' "$tmp_hermes" \
     || fail "Hermes patcher updates model.context_length"
 pass "Hermes patcher updates model.context_length"
+grep -q '^  max_tokens: 1024$' "$tmp_hermes" \
+    || fail "Hermes patcher adds the bounded model output default"
+pass "Hermes patcher adds the bounded model output default"
 grep -q '^    request_timeout_seconds: 180$' "$tmp_hermes" \
     || fail "Hermes patcher writes local provider request timeout"
 pass "Hermes patcher writes local provider request timeout"
@@ -190,6 +247,7 @@ pass "Hermes patcher writes WhatsApp bridge port away from Open WebUI"
 cat > "$tmp_hermes_custom" <<'HERMES_CUSTOM_EOF'
 model:
   default: "old-model"
+  max_tokens: 2048
 platforms:
   whatsapp:
     enabled: true
@@ -214,6 +272,9 @@ pass "Hermes patcher preserves custom WhatsApp bridge port"
 grep -q '^    request_timeout_seconds: 360$' "$tmp_hermes_custom" \
     || fail "Hermes patcher preserves custom provider request timeout"
 pass "Hermes patcher preserves custom provider request timeout"
+grep -q '^  max_tokens: 2048$' "$tmp_hermes_custom" \
+    || fail "Hermes patcher preserves a custom model output cap"
+pass "Hermes patcher preserves a custom model output cap"
 
 echo ""
 echo "Results: $PASS passed"

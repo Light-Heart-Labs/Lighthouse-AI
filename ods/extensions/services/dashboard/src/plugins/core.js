@@ -6,6 +6,7 @@ import {
   Activity,
   Box,
   Network,
+  Cloud,
   UserPlus,
   CreditCard,
 } from 'lucide-react'
@@ -15,6 +16,7 @@ const SettingsPage = lazy(() => import('../pages/Settings'))
 const Extensions = lazy(() => import('../pages/Extensions'))
 const GPUMonitor = lazy(() => import('../pages/GPUMonitor'))
 const Models = lazy(() => import('../pages/Models'))
+const RemoteProvider = lazy(() => import('../pages/RemoteProvider'))
 const ServiceMap = lazy(() => import('../pages/ServiceMap'))
 const Invites = lazy(() => import('../pages/Invites'))
 const Usage = lazy(() => import('../pages/Usage'))
@@ -70,6 +72,16 @@ export const coreRoutes = [
     getProps: () => ({}),
     sidebar: true,
     order: 3,
+  },
+  {
+    id: 'remote-provider',
+    path: '/remote-provider',
+    label: 'Remote GPU',
+    icon: Cloud,
+    component: RemoteProvider,
+    getProps: () => ({}),
+    sidebar: true,
+    order: 3.2,
   },
   // Usage + Setup / Owner are reachable from Settings rather than the top-level
   // sidebar. Setup / Owner is a factory/distributor/service-provider flow, not
