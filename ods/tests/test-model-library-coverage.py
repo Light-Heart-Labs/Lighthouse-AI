@@ -833,7 +833,7 @@ def test_qwen35_2b_records_exact_artifact_and_failed_fleet_evidence():
     assert not _agent_viable_for_release(model)
 
 
-def test_jamba_reasoning_3b_is_staged_as_a_4gb_long_context_candidate():
+def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     model = by_id["jamba-reasoning-3b-q4"]
@@ -849,8 +849,18 @@ def test_jamba_reasoning_3b_is_staged_as_a_4gb_long_context_candidate():
     assert model["vram_required_gb"] == 3
     assert model["context_length"] == HERMES_CONTEXT_FLOOR
     assert model["max_context_length"] == 262144
-    assert "install_recommendation" not in model
-    assert _agent_viable_for_release(model)
+    assert model["install_recommendation"] is False
+    assert model["app_compatibility"]["openai_chat"]["status"] == "verified"
+    assert model["app_compatibility"]["hermes_talk"]["status"] == "verified"
+    assert model["app_compatibility"]["opencode"]["status"] == "unsupported_until_revalidated"
+    assert model["app_compatibility"]["agent_viability"]["status"] == "not_agent_viable"
+    assert model["app_compatibility"]["agent_viability"]["productSha"] == (
+        "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb"
+    )
+    assert model["app_compatibility"]["agent_viability"]["harnessSha"] == (
+        "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+    )
+    assert not _agent_viable_for_release(model)
 
 
 def test_new_switchboard_models_do_not_change_install_recommendations():

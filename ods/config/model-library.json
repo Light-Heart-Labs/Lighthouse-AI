@@ -73,10 +73,52 @@
       "max_context_length": 262144,
       "quantization": "Q4_K_M",
       "specialty": "Efficient Reasoning",
-      "description": "AI21's compact reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work, instruction following, code, structured output, and multilingual use.",
+      "description": "AI21's compact hybrid reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work. It remains available for manual testing, but is not agent-ready after required OpenCode probes failed on two independent fleet backends.",
       "tokens_per_sec_estimate": 90,
       "llm_model_name": "jamba-reasoning-3b",
-      "llama_server_image": null
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "App chat verified across fleet",
+          "reason": "Fresh exact-commit six-host validation loaded the pinned Jamba artifact and passed the required LiteLLM and Open WebUI exact-token probes everywhere while route evidence named the live Jamba model.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "ODS Talk returned its challenge-bound verification phrase after the live Jamba swap on all six hosts, including both Windows Lemonade machines.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "label": "OpenCode needs revalidation",
+          "reason": "OpenCode routed to the exact live Jamba model but returned unrelated or repetitive reasoning instead of its requested verification phrase on tower2 through Linux llama-server and strix-halo through Lemonade. Four other hosts passed the same probe.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo"]
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not agent-ready",
+          "reason": "Four hosts completed the full rotation, but two independent backends failed the required OpenCode candidate probe after successful load and Talk inference. Every host restored its original model and deleted the test artifact cleanly.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        }
+      },
+      "install_recommendation": false
     },
     {
       "id": "phi4-mini-q4",
