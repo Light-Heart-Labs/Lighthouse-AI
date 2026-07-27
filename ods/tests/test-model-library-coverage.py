@@ -104,6 +104,7 @@ def test_release_model_switchboard_catalog_ids_exist():
         "granite4.0-h-1b-q4",
         "falcon-h1-1.5b-instruct-q4",
         "falcon-h1-3b-instruct-q4",
+        "nvidia-nemotron3-nano-4b-q4",
         "granite4.0-1b-q4",
         "granite4.0-h-350m-q4",
         "granite3.2-2b-instruct-q4",
@@ -613,6 +614,25 @@ def test_falcon_h1_3b_is_not_talk_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["falcon-h1-3b-instruct-q4"])
 
 
+def test_nemotron3_nano_4b_is_cataloged_for_fleet_validation():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["nvidia-nemotron3-nano-4b-q4"]
+
+    assert model["family"] == "nemotron"
+    assert model["gguf_file"] == "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
+    assert model["gguf_url"] == (
+        "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF/"
+        "resolve/main/NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "be5d9a656a51922f24f1f09a759cebb694e1f5d9728bf0ef9f8c972c5a0b5ef2"
+    assert model["size_bytes"] == 2837072864
+    assert model["vram_required_gb"] <= 5
+    assert model["context_length"] == 262144
+    assert model.get("install_recommendation") is False
+    assert _agent_viable_for_release(model)
+
+
 def test_qwen25_coder_15b_128k_has_scoped_app_blocks_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
@@ -729,6 +749,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "granite4.0-h-1b-q4",
         "falcon-h1-1.5b-instruct-q4",
         "falcon-h1-3b-instruct-q4",
+        "nvidia-nemotron3-nano-4b-q4",
         "granite4.0-1b-q4",
         "granite4.0-h-350m-q4",
         "granite3.2-2b-instruct-q4",

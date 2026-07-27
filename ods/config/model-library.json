@@ -461,6 +461,25 @@
       "install_recommendation": false
     },
     {
+      "id": "nvidia-nemotron3-nano-4b-q4",
+      "name": "NVIDIA Nemotron 3 Nano 4B",
+      "family": "nemotron",
+      "gguf_file": "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+      "gguf_sha256": "be5d9a656a51922f24f1f09a759cebb694e1f5d9728bf0ef9f8c972c5a0b5ef2",
+      "size_bytes": 2837072864,
+      "size_mb": 2838,
+      "vram_required_gb": 5,
+      "context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Reasoning",
+      "description": "NVIDIA's compact Nemotron 3 hybrid reasoning model with long-context and tool-use support. A diverse 5GB-class candidate for local agents, chat, and code.",
+      "tokens_per_sec_estimate": 105,
+      "llm_model_name": "NVIDIA-Nemotron3-Nano-4B",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
       "id": "granite4.1-3b-q4",
       "name": "Granite 4.1 3B",
       "family": "granite",
