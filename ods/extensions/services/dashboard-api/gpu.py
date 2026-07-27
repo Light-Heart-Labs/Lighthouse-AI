@@ -796,6 +796,7 @@ def get_gpu_info_amd_detailed() -> Optional[list[IndividualGPU]]:
             "vram_total": vram_total, "vram_used": vram_used,
             "gtt_total": gtt_total, "gtt_used": gtt_used,
             "gpu_busy": gpu_busy,
+            "gpu_busy_available": bool(gpu_busy_str),
             "is_unified": _amd_memory_is_unified(base, vram_total, gtt_total),
         })
 
@@ -838,9 +839,9 @@ def get_gpu_info_amd_detailed() -> Optional[list[IndividualGPU]]:
                 utilization_percent=r["gpu_busy"],
                 temperature_c=temp,
                 power_w=power_w,
-                memory_type="unified" if is_unified else "discrete",
+                memory_type="unified" if r["is_unified"] else "discrete",
                 assigned_services=uuid_service_map.get(gpu_uuid, []),
-                utilization_available=bool(gpu_busy_str),
+                utilization_available=r["gpu_busy_available"],
                 temperature_available=temp > 0,
             ))
         except (ValueError, TypeError):
