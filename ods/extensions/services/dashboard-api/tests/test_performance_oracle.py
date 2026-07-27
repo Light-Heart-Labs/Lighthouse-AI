@@ -1264,6 +1264,28 @@ def test_pre_download_ranker_accounts_for_long_context_kv_on_4gb_gpu(data_dir, t
     assert by_id["phi4-mini-q4"]["estimatedRequired"] > by_id["phi4-mini-q4"]["vramRequired"]
 
 
+def test_qwen35_2b_catalog_profile_fits_4gb_at_agent_context(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    payload = build_models_payload(
+        _gpu(total_mb=4096),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=_official_model_catalog(),
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "qwen3.5-2b-q4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 262144
+    assert model["vramRequired"] == 3
+    assert model["estimatedRequired"] <= 4
+    assert model["fitsVram"] is True
+    assert model["recommended"] is False
+
+
 def test_pre_download_ranker_falls_back_to_smallest_model_without_gpu_info(data_dir):
     catalog = [
         _model(),

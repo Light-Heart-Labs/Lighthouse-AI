@@ -802,8 +802,29 @@ def test_qwen35_9b_meets_hermes_context_floor():
     assert by_id["qwen3.5-9b-q4"]["context_length"] >= HERMES_CONTEXT_FLOOR
 
 
+def test_qwen35_2b_is_staged_as_a_3gb_long_context_candidate():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen3.5-2b-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/"
+        "resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/"
+        "Qwen3.5-2B-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
+    assert model["size_bytes"] == 1280835840
+    assert model["size_mb"] == 1281
+    assert model["vram_required_gb"] == 3
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 262144
+    assert model.get("install_recommendation") is False
+    assert _agent_viable_for_release(model)
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
+        "qwen3.5-2b-q4",
         "phi3.5-mini-q4",
         "qwen2.5-0.5b-instruct-q4",
         "qwen2.5-1.5b-instruct-q4",
