@@ -175,6 +175,7 @@ source "${LIB_DIR}/tier-map.sh"
 source "${LIB_DIR}/detection.sh"
 source "${LIB_DIR}/preflight-fs.sh"
 source "${LIB_DIR}/env-generator.sh"
+source "${LIB_DIR}/installed-footprint.sh"
 if [[ -f "${SOURCE_ROOT}/installers/lib/compose-failure-report.sh" ]]; then
     source "${SOURCE_ROOT}/installers/lib/compose-failure-report.sh"
 fi
@@ -1578,6 +1579,34 @@ else
     # Copy source tree (skip .git, data, logs, .env, models)
     if [[ "$SOURCE_ROOT" != "$INSTALL_DIR" ]]; then
         ai "Copying source files to ${INSTALL_DIR}..."
+        _ods_prune_stale_dev_paths=false
+        if [[ -f "${INSTALL_DIR}/.env" ]] \
+            && [[ -f "${INSTALL_DIR}/manifest.json" ]] \
+            && [[ -f "${INSTALL_DIR}/docker-compose.base.yml" ]]; then
+            _ods_prune_stale_dev_paths=true
+        fi
+        _ods_dev_only_dirs=(tests docs examples .github)
+        _ods_dev_only_files=(
+            CHANGELOG.md
+            CODE_OF_CONDUCT.md
+            CONTRIBUTING.md
+            EDGE-QUICKSTART.md
+            FAQ.md
+            QUICKSTART.md
+            SECURITY.md
+            README.md
+            .shellcheckrc
+            PSScriptAnalyzerSettings.psd1
+            test-stack.sh
+            .gitignore
+        )
+        _ods_dev_rsync_excludes=()
+        for _ods_dev_path in "${_ods_dev_only_dirs[@]}"; do
+            _ods_dev_rsync_excludes+=(--exclude="/${_ods_dev_path}/")
+        done
+        for _ods_dev_path in "${_ods_dev_only_files[@]}"; do
+            _ods_dev_rsync_excludes+=(--exclude="/${_ods_dev_path}")
+        done
         rsync -a --quiet \
             --exclude='.git' \
             --exclude='data' \
@@ -1592,7 +1621,24 @@ else
             --exclude='.target-model' \
             --exclude='.target-quantization' \
             --exclude='.offline-mode' \
+            "${_ods_dev_rsync_excludes[@]}" \
             "$SOURCE_ROOT/" "$INSTALL_DIR/"
+
+        # Excludes leave files copied by an older installer in place. Move
+        # managed-upgrade leftovers to a recoverable backup instead of deleting
+        # possible user modifications. Unmanaged targets remain untouched.
+        if $_ods_prune_stale_dev_paths; then
+            _ods_dev_backup="$(
+                ods_quarantine_development_paths \
+                    "$INSTALL_DIR" \
+                    "${_ods_dev_only_dirs[@]}" \
+                    "${_ods_dev_only_files[@]}"
+            )"
+            if [[ -n "$_ods_dev_backup" ]]; then
+                ai_warn "Older development files were moved to ${_ods_dev_backup}"
+            fi
+        fi
+        unset _ods_prune_stale_dev_paths _ods_dev_only_dirs _ods_dev_only_files _ods_dev_rsync_excludes _ods_dev_path _ods_dev_backup
         ai_ok "Source files installed"
     else
         ai "Running in-place, skipping file copy"
@@ -1672,6 +1718,18 @@ else
         ai_warn "ODS_AGENT_BIND=${_macos_agent_bind_raw} uses an unsupported IPv6 server socket; using ${_macos_agent_bind}"
         upsert_env_value "${INSTALL_DIR}/.env" "ODS_AGENT_BIND" "$_macos_agent_bind"
     fi
+    # Persist the interpreter that proved it can import yaml. _ensure_macos_pyyaml
+    # may have satisfied the compose resolver through an ODS-owned venv, but that
+    # choice only lives in this installer process. Without recording it, a later
+    # `ods enable` / `ods start` resolves python again, falls back to a host
+    # python3 that cannot import yaml, and scripts/resolve-compose-stack.sh fails
+    # after the install already reported success. lib/safe-env.sh exports .env
+    # keys, so the CLI and the resolver subprocess both pick this up.
+    if [[ -n "${ODS_PYTHON_CMD:-}" ]] && ! _macos_python_imports_yaml python3; then
+        upsert_env_value "${INSTALL_DIR}/.env" "ODS_PYTHON_CMD" "$ODS_PYTHON_CMD"
+        ai_ok "Recorded compose-resolver Python: ${ODS_PYTHON_CMD}"
+    fi
+
     _macos_llm_bridge_enabled="false"
     if [[ "${DOCKER_BACKEND:-unknown}" == "colima" ]]; then
         _macos_llm_bind="$(read_env_value "${INSTALL_DIR}/.env" "BIND_ADDRESS")"
@@ -1782,6 +1840,7 @@ else
         fi
     done
     if [[ "$_macos_switchboard_mode" == "enabled" ]] \
+       && [[ "$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODE")" != "cloud" ]] \
        && ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
             --surface litellm-switchboard "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
         ai_err "Failed to render required litellm-switchboard config"
@@ -2428,7 +2487,7 @@ for service in (data.get("services") or {}).values():
     # surface unrelated Dockerfile failures and make a healthy selected stack
     # look broken.
     ai "Rebuilding local-built images..."
-    _macos_candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
+    _macos_candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
     if ! _macos_enabled_services="$(docker compose "${COMPOSE_FLAGS[@]}" config --services 2>>"$ODS_LOG_FILE")"; then
         ai_err "Could not resolve macOS compose services for local image rebuilds."
         ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --services"

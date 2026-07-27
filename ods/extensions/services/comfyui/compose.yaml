@@ -4,7 +4,7 @@
 # The actual container definition lives in GPU-specific overlay files that are
 # merged with this stub at runtime by the installer/compose resolver:
 #
-#   compose.amd.yaml             — AMD ROCm (single GPU, gfx1151)
+#   compose.amd.yaml             — AMD ROCm (single GPU, native gfx architecture)
 #   compose.nvidia.yaml          — NVIDIA CUDA (single GPU, builds local Dockerfile)
 #   compose.multigpu-amd.yaml    — AMD ROCm multi-GPU
 #   compose.multigpu-nvidia.yaml — NVIDIA multi-GPU

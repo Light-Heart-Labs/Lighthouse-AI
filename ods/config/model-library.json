@@ -6,17 +6,119 @@
       "name": "Qwen 3.5 2B",
       "family": "qwen",
       "gguf_file": "Qwen3.5-2B-Q4_K_M.gguf",
-      "gguf_url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
       "gguf_sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
-      "size_mb": 1500,
+      "size_bytes": 1280835840,
+      "size_mb": 1281,
       "vram_required_gb": 3,
-      "context_length": 8192,
+      "context_length": 65536,
+      "max_context_length": 262144,
       "quantization": "Q4_K_M",
-      "specialty": "Fast",
-      "description": "Lightweight model for quick responses. Best for simple tasks and low-resource systems.",
+      "specialty": "Low-VRAM Chat",
+      "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target. It remains available for manual testing, but is not agent-ready after required app probes failed on four of six fleet hosts.",
       "tokens_per_sec_estimate": 120,
       "llm_model_name": "qwen3.5-2b",
-      "llama_server_image": null
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unsupported_until_revalidated",
+          "label": "App chat needs revalidation",
+          "reason": "Fresh exact-commit six-host validation loaded Qwen 3.5 2B and passed ODS Talk everywhere, but LiteLLM and Open WebUI exact-token probes emitted truncated reasoning instead of the requested answer on strixy.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "The same exact-commit run loaded Qwen 3.5 2B at 64K context and passed challenge-bound ODS Talk on all six Linux, macOS, and Windows hosts before app-consumer validation.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica needs revalidation",
+          "reason": "Perplexica exact-token probes were instruction-following failures on spark, m5-mbp, and windows-laptop after successful candidate load and Talk inference. The model refused or omitted the required verification phrase while the services remained healthy.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{spark,m5-mbp,windows-laptop}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not agent-ready",
+          "reason": "Only tower2 and strix-halo completed the full rotation. Four hosts failed required candidate-phase app probes, although every failure recovery restored the original model and deleted the test artifact cleanly.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        }
+      }
+    },
+    {
+      "id": "jamba-reasoning-3b-q4",
+      "name": "AI21 Jamba Reasoning 3B",
+      "family": "jamba",
+      "gguf_file": "jamba-reasoning-3b-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ai21labs/AI21-Jamba-Reasoning-3B-GGUF/resolve/462e08a43c3c32f6b8b85f79ff0796e484d7b65a/jamba-reasoning-3b-Q4_K_M.gguf",
+      "gguf_sha256": "5c8edf36ec3ad9792a639db8d6865e479038226cf8fc71ef47331c611854f6c8",
+      "size_bytes": 1932698048,
+      "size_mb": 1933,
+      "vram_required_gb": 3,
+      "context_length": 65536,
+      "max_context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Efficient Reasoning",
+      "description": "AI21's compact hybrid reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work. It remains available for manual testing, but is not agent-ready after required OpenCode probes failed on two independent fleet backends.",
+      "tokens_per_sec_estimate": 90,
+      "llm_model_name": "jamba-reasoning-3b",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "App chat verified across fleet",
+          "reason": "Fresh exact-commit six-host validation loaded the pinned Jamba artifact and passed the required LiteLLM and Open WebUI exact-token probes everywhere while route evidence named the live Jamba model.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "ODS Talk returned its challenge-bound verification phrase after the live Jamba swap on all six hosts, including both Windows Lemonade machines.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "label": "OpenCode needs revalidation",
+          "reason": "OpenCode routed to the exact live Jamba model but returned unrelated or repetitive reasoning instead of its requested verification phrase on tower2 through Linux llama-server and strix-halo through Lemonade. Four other hosts passed the same probe.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo"]
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not agent-ready",
+          "reason": "Four hosts completed the full rotation, but two independent backends failed the required OpenCode candidate probe after successful load and Talk inference. Every host restored its original model and deleted the test artifact cleanly.",
+          "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T11:12:30Z",
+          "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        }
+      },
+      "install_recommendation": false
     },
     {
       "id": "phi4-mini-q4",
@@ -72,8 +174,25 @@
       "app_compatibility": {
         "openai_chat": {
           "status": "unsupported_until_revalidated",
-          "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop downloaded this model with a valid SHA, but llama.cpp never reported the requested Phi-3.5 runtime identity during activation; keep it out of direct-chat and release switch coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-002/windows-laptop"
+          "label": "Windows 8GB runtime unsupported",
+          "reason": "Fresh exact-commit Windows revalidation loaded Phi-3.5 Mini at the required 65,536-token context with Q4 KV cache, but llama.cpp projected 9,344 MiB of device memory against 6,912 MiB free and challenge-bound direct probes decoded at only 0.47-0.49 tok/s before the Hermes prompt. Keep this model out of Windows 8GB release coverage until a viable partial-offload or lower-memory runtime is implemented.",
+          "evidence": "fleet-test/runs/2026-07-24T07-04-00Z-windows-profile-candidates-route-validation/cycle-002/windows-laptop",
+          "recordedAt": "2026-07-24T07:16:00Z",
+          "productSha": "011bbabd74b72476862ad9a741dc4876b57e9521",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica orchestration unsupported",
+          "reason": "Fresh exact-commit release cycles loaded Phi-3.5 Mini through the browser UI on tower2 (Linux llama-server) and strix-halo (Lemonade), then passed challenge-bound ODS Talk, LiteLLM, Open WebUI, and OpenCode where deployed. Perplexica alone failed to complete within 180 seconds on both independent backends, while its baseline probes and the following Granite H-Micro cycle passed. Keep Phi-3.5 Mini out of all-app release coverage until Perplexica orchestration is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T09-22-58Z-release-product-4cd022b82609-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-001/{tower2,strix-halo}",
+          "recordedAt": "2026-07-24T10:09:00Z",
+          "productSha": "4cd022b826093913dda7137b2dd69502628d7f50",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "globalScope": true,
+          "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -248,7 +367,7 @@
       "size_bytes": 1915306528,
       "size_mb": 1915,
       "vram_required_gb": 4,
-      "context_length": 128000,
+      "context_length": 65536,
       "quantization": "Q4_K_M",
       "specialty": "Chat",
       "description": "Hugging Face's small multilingual long-context instruct model. Candidate low-VRAM agent model pending fleet validation.",
@@ -258,13 +377,31 @@
       "app_compatibility": {
         "openai_chat": {
           "status": "verified",
-          "reason": "Fleet model-UI run 2026-07-18T16-52Z on windows-laptop loaded this model and direct OpenAI-compatible consumers returned requested verification phrases, but all-app release coverage remains blocked pending Perplexica and Privacy Shield revalidation.",
-          "evidence": "fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
+          "reason": "Fresh exact-commit fleet revalidation on windows-laptop loaded SmolLM3 with its observed 65,536-token runtime context, passed challenge-bound ODS Talk and required deployed LLM-consumer probes, restored the original model and repeated Talk/app probes, then deleted the test model with a clean final inventory.",
+          "evidence": "fleet-test/runs/2026-07-24T02-33-53Z-targeted-windows-smollm3-product-58944ba461fb-harness-b838abf5a87b/model-ui/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T02:40:33Z",
+          "productSha": "58944ba461fb87b87b1ce6fa854e32d15aeb8efa",
+          "harnessSha": "b838abf5a87b32c3f7ab8eaef43ea97133fb43d9"
         },
-        "agent_viability": {
-          "status": "not_agent_viable",
-          "reason": "Fleet model-UI run 2026-07-18T16-52Z on windows-laptop loaded this model and ODS Talk completed, but the required all-app probes did not complete: Perplexica timed out and Privacy Shield returned HTTP 504 while the runtime was producing very slow responses; keep it out of release-grade agent/app coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified",
+          "reason": "Fresh exact-commit fleet revalidation on windows-laptop passed challenge-bound ODS Talk on SmolLM3 and again after restoring the original model; all required deployed LLM-consumer probes and cleanup checks also passed.",
+          "evidence": "fleet-test/runs/2026-07-24T02-33-53Z-targeted-windows-smollm3-product-58944ba461fb-harness-b838abf5a87b/model-ui/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T02:40:33Z",
+          "productSha": "58944ba461fb87b87b1ce6fa854e32d15aeb8efa",
+          "harnessSha": "b838abf5a87b32c3f7ab8eaef43ea97133fb43d9"
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "A fresh exact-commit release run loaded SmolLM3 on all six in-scope hosts. It passed every required app on tower2 and strixy, but Perplexica returned unrelated prose instead of its requested challenge token on strix-halo through Lemonade, spark through Linux llama-server, m5-mbp through Apple llama-server, and windows-laptop through Windows llama-server; those four hosts still passed challenge-bound ODS Talk and every other deployed required LLM consumer, with route evidence naming the exact SmolLM3 runtime. Because the semantic failure spans four hosts and multiple platforms/backends without a stable runtime scope, keep SmolLM3 out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/tower2; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/strix-halo; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/spark; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/m5-mbp; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/windows-laptop; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/strixy",
+          "recordedAt": "2026-07-24T04:23:49Z",
+          "productSha": "faaf5af99c89e38cc43f18239ea94747f62bf16b",
+          "harnessSha": "b838abf5a87b32c3f7ab8eaef43ea97133fb43d9",
+          "globalScope": true,
+          "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -290,12 +427,12 @@
         "perplexica": {
           "status": "unsupported_until_revalidated",
           "label": "Perplexica revalidation required",
-          "reason": "Fleet model-UI runs on windows-laptop and strixy loaded this model and ODS Talk passed, but the Perplexica app probe failed instead of returning the requested verification phrase; keep it out of all-app release coverage on those hosts until Perplexica compatibility is revalidated.",
-          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop; fleet-test/runs/2026-07-22T09-42-12Z-release-product-b5bb39f2c0f2-harness-cc7b6148eb2c-hosts-windows-laptop-strixy-m5-mbp/model-ui/cycle-003/strixy",
-          "recordedAt": "2026-07-22T10:26:21Z",
-          "productSha": "b5bb39f2c0f2a7a3dfa5f98547e469b6eaf0acfd",
-          "harnessSha": "cc7b6148eb2cd6e667e6a9dd3d36dff6f8928052",
-          "hostScope": ["windows-laptop", "strixy"],
+          "reason": "Independent fleet model-UI runs on windows-laptop, strixy, and tower2 loaded this model and ODS Talk passed, but the Perplexica app probe failed instead of returning the requested verification phrase. The repeated cross-platform semantic failure makes this a model-level incompatibility; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop; fleet-test/runs/2026-07-22T09-42-12Z-release-product-b5bb39f2c0f2-harness-cc7b6148eb2c-hosts-windows-laptop-strixy-m5-mbp/model-ui/cycle-003/strixy; fleet-test/runs/2026-07-23T20-06-24Z-release-product-3675af793193-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-003/tower2",
+          "recordedAt": "2026-07-23T21:21:17Z",
+          "productSha": "3675af7931935ae0d435a6498c98bc114be209ca",
+          "harnessSha": "47eedd6c0b40908272ad6ba324868f4acec2f308",
+          "globalScope": true,
           "expiresAt": "2026-08-22T00:00:00Z"
         }
       },
@@ -350,6 +487,16 @@
       "llm_model_name": "Falcon-H1-1.5B-Instruct",
       "llama_server_image": null,
       "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-22T18:45Z on strixy loaded Falcon H1 1.5B through Lemonade and routed ODS Talk through ods/current, but Talk emitted a tool-call payload instead of the requested verification phrase.",
+          "evidence": "fleet-test/runs/2026-07-22T18-45-07Z-model-ui-product-31c93e53c4aa-harness-ebdb7f948190-hosts-strixy-talk-runtime-strict-6cycle/cycle-004/strixy",
+          "recordedAt": "2026-07-22T19:33:20Z",
+          "productSha": "31c93e53c4aa8f9831abdb00516639def985ef34",
+          "harnessSha": "ebdb7f9481901a35ca1e5108fe2a1769bab197e8",
+          "globalScope": true,
+          "expiresAt": "2026-08-22T00:00:00Z"
+        },
         "opencode": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-21T11:18Z on tower2 loaded Falcon H1 1.5B successfully and routed OpenCode through ods/current, but the OpenCode UX reply emitted a skill/tool meta-response instead of the requested verification phrase.",
@@ -362,13 +509,13 @@
         },
         "agent_viability": {
           "status": "not_agent_viable",
-          "reason": "The same run proved Talk, Open WebUI, LiteLLM, and Perplexica routing, but OpenCode did not complete the required agent verification phrase after the swap; keep Falcon H1 1.5B out of agent-required release coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-21T11-18-01Z-release-product-c43960145c39-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2",
-          "recordedAt": "2026-07-21T12:12:38Z",
-          "productSha": "c43960145c39c5fa24627bf8b0e98b30c362cc85",
-          "harnessSha": "9804e8523a6d11ebeb86eac5f5400cf21fc25b39",
-          "hostScope": ["tower2"],
-          "expiresAt": "2026-08-21T00:00:00Z"
+          "reason": "Falcon H1 1.5B has failed agent-required browser verification in OpenCode on tower2 and ODS Talk on strixy/Lemonade by emitting tool or meta payloads instead of the requested verification phrase; keep it out of agent-required release coverage until revalidated with a tool-aware Talk/app probe.",
+          "evidence": "fleet-test/runs/2026-07-21T11-18-01Z-release-product-c43960145c39-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-004/tower2; fleet-test/runs/2026-07-22T18-45-07Z-model-ui-product-31c93e53c4aa-harness-ebdb7f948190-hosts-strixy-talk-runtime-strict-6cycle/cycle-004/strixy",
+          "recordedAt": "2026-07-22T19:33:20Z",
+          "productSha": "31c93e53c4aa8f9831abdb00516639def985ef34",
+          "harnessSha": "ebdb7f9481901a35ca1e5108fe2a1769bab197e8",
+          "globalScope": true,
+          "expiresAt": "2026-08-22T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -398,7 +545,7 @@
           "recordedAt": "2026-07-21T14:25:00Z",
           "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
           "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
-          "hostScope": ["tower2"],
+          "globalScope": true,
           "expiresAt": "2026-08-21T00:00:00Z"
         },
         "agent_viability": {
@@ -408,11 +555,72 @@
           "recordedAt": "2026-07-21T14:25:00Z",
           "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
           "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
-          "hostScope": ["tower2"],
+          "globalScope": true,
           "expiresAt": "2026-08-21T00:00:00Z"
         }
       },
       "install_recommendation": false
+    },
+    {
+      "id": "nvidia-nemotron3-nano-4b-q4",
+      "name": "NVIDIA Nemotron 3 Nano 4B",
+      "family": "nemotron",
+      "gguf_file": "NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF/resolve/main/NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+      "gguf_sha256": "be5d9a656a51922f24f1f09a759cebb694e1f5d9728bf0ef9f8c972c5a0b5ef2",
+      "size_bytes": 2837072864,
+      "size_mb": 2838,
+      "vram_required_gb": 5,
+      "context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Reasoning",
+      "description": "NVIDIA's compact Nemotron 3 hybrid reasoning model with long-context and tool-use support. A diverse 5GB-class candidate for local agents, chat, and code.",
+      "tokens_per_sec_estimate": 105,
+      "llm_model_name": "NVIDIA-Nemotron3-Nano-4B",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Fleet chat routes verified",
+          "reason": "Fresh exact-commit six-host validation loaded NVIDIA Nemotron 3 Nano 4B through the browser switchboard and passed every required deployed OpenAI-compatible LLM-consumer probe with signed route evidence naming the candidate runtime.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed challenge-bound ODS Talk after loading Nemotron and again after restoring each host's original model.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed the challenge-bound Perplexica route on Nemotron with signed model-route evidence, then repeated the required consumer suite after clean baseline restoration.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed Nemotron load, challenge-bound ODS Talk, every required deployed LLM consumer, original-model restore, repeated Talk and consumer probes, candidate deletion, and clean final inventory across Linux, macOS, and Windows backends.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        }
+      },
+      "install_recommendation": true
     },
     {
       "id": "granite4.1-3b-q4",
@@ -432,6 +640,17 @@
       "llm_model_name": "granite-4.1-3b",
       "llama_server_image": null,
       "app_compatibility": {
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "label": "OpenCode revalidation required",
+          "reason": "Release-grade fleet evidence has shown intermittent one-character OpenCode answers for Granite 4.1 3B on strix-halo and spark. In the fresh exact-commit Spark failure, ODS Talk, LiteLLM, Open WebUI, and Perplexica passed and routed to the exact llama-server model, but OpenCode stopped after two output tokens and returned only \"O\" instead of its challenge-bound verification phrase. Keep this model out of all-app release coverage on those hosts until the OpenCode path is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/strix-halo; fleet-test/runs/2026-07-24T14-11-30Z-release-product-f35e9af8eeab-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/spark",
+          "recordedAt": "2026-07-24T16:36:20Z",
+          "productSha": "f35e9af8eeab7bb154081d1a3076ad9824f58616",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["strix-halo", "spark"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-22T08:31Z on windows-laptop loaded Granite 4.1 3B and ODS Talk accepted the stream request, but the browser stayed in the Thinking state until the 180s inference timeout while dashboard-api reported repeated llama metrics read timeouts.",
@@ -544,6 +763,17 @@
           "reason": "Targeted windows-laptop repro on 2026-07-20 loaded granite3.2-2b-instruct-q4 and the OpenAI-compatible chat API returned the requested verification phrase, but measured only 0.73 tok/s.",
           "evidence": "fleet-test/runs/2026-07-20T14-47-35Z-release-product-6b802d2d34a5-harness-d205823ca1d4-hosts-windows-laptop/model-ui/cycle-004/windows-laptop plus targeted repro at 2026-07-20T16:13Z"
         },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "A fresh release-grade fleet model-UI run loaded this model on tower2, strix-halo, spark, m5-mbp, and strixy. Strix Halo, Spark, and Strixy passed Perplexica, while Tower2 and M5 passed ODS Talk, LiteLLM, Open WebUI, and OpenCode but Perplexica did not return the requested verification phrase. Keep this model out of all-app release coverage on tower2 and m5-mbp until that path is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/tower2; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/strix-halo; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/spark; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/strixy",
+          "recordedAt": "2026-07-23T23:04:18Z",
+          "productSha": "cf6dffb8e8bbf60f418caeab47d7ae3ef8815307",
+          "harnessSha": "47eedd6c0b40908272ad6ba324868f4acec2f308",
+          "hostScope": ["tower2", "m5-mbp"],
+          "expiresAt": "2026-08-23T00:00:00Z"
+        },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-20T14:47Z on windows-laptop loaded this model successfully, but ODS Talk timed out after 180s. A targeted Talk repro on the same host streamed only a session frame and keepalives for 240s while llama-server was still processing a 19,349-token Hermes prompt.",
@@ -588,13 +818,13 @@
         "perplexica": {
           "status": "unsupported_until_revalidated",
           "label": "Perplexica revalidation required",
-          "reason": "Fleet model-UI run 2026-07-21T08:59Z on tower2 loaded this model and ODS Talk, LiteLLM, Open WebUI, and OpenCode passed, but the Perplexica app probe answered with prose/search-style content instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
-          "evidence": "fleet-test/runs/2026-07-21T08-59-51Z-targeted-granite31-allapps-product-73762173ae0c-harness-ecd8157a6324-hosts-tower2/cycle-001/tower2",
-          "recordedAt": "2026-07-21T08:59:51Z",
-          "productSha": "73762173ae0c",
-          "harnessSha": "ecd8157a6324",
-          "hostScope": ["tower2"],
-          "expiresAt": "2026-08-21T00:00:00Z"
+          "reason": "Fleet model-UI runs on tower2 and strixy loaded this model and ODS Talk, LiteLLM, Open WebUI, and OpenCode passed where deployed, but the Perplexica app probe answered with prose/search-style content instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T08-59-51Z-targeted-granite31-allapps-product-73762173ae0c-harness-ecd8157a6324-hosts-tower2/cycle-001/tower2; fleet-test/runs/2026-07-22T21-13-08Z-model-ui-product-39164d8c5bc3-harness-18e2bd60437f-hosts-strixy-switchboard-enabled-6cycle/cycle-006/strixy",
+          "recordedAt": "2026-07-22T22:21:04Z",
+          "productSha": "39164d8c5bc3306dd4e7ac3e884dcc8574b9930a",
+          "harnessSha": "18e2bd60437f4e5ba7b3cd461a37d99ab524ef6a",
+          "globalScope": true,
+          "expiresAt": "2026-08-22T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -627,6 +857,17 @@
           "hostScope": ["tower2"],
           "expiresAt": "2026-08-21T00:00:00Z"
         },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "Strixy browser model-UI coverage loaded Phi-3 Mini 128K and passed ODS Talk, LiteLLM, and Open WebUI, but the Perplexica HTTP 200 reply began with apology prose and omitted the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-23T01-27-32Z-model-ui-product-98d5a50cd5b5-harness-18e2bd60437f-hosts-strixy-switchboard-enabled-6cycle-rerun/cycle-006/strixy",
+          "recordedAt": "2026-07-23T02:25:29Z",
+          "productSha": "98d5a50cd5b527cb8dbd6117ba2d158538b73a9e",
+          "harnessSha": "18e2bd60437f4e5ba7b3cd461a37d99ab524ef6a",
+          "globalScope": true,
+          "expiresAt": "2026-08-23T00:00:00Z"
+        },
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "ODS Talk release probe failed exact verification after successful Phi-3 Mini 128K load; not agent-viable until a Talk revalidation passes.",
@@ -639,6 +880,88 @@
         }
       },
       "install_recommendation": false
+    },
+    {
+      "id": "ministral3-8b-instruct-2512-q4",
+      "name": "Ministral 3 8B Instruct 2512",
+      "family": "mistral",
+      "gguf_file": "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/0102285ad796bd99af90f58de616092e5630e970/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+      "gguf_sha256": "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761",
+      "size_bytes": 5198911904,
+      "size_mb": 5199,
+      "vram_required_gb": 7,
+      "context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Multilingual",
+      "description": "Mistral AI's edge-optimized 8B instruction model with 256K context, native function calling, JSON output, multilingual support, and optional vision through a separate projection artifact.",
+      "tokens_per_sec_estimate": 55,
+      "llm_model_name": "Ministral-3-8B-Instruct-2512",
+      "llama_server_image": null,
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-q4-kv",
+          "label": "NVIDIA 8GB 64K context with Q4 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.4,
+          "fit_label": "64K 8GB Q4 KV profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+          }
+        }
+      ],
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Fleet chat routes verified",
+          "reason": "Fresh exact-commit six-host validation loaded Ministral 3 8B through the browser switchboard and passed every required deployed OpenAI-compatible LLM-consumer probe with signed route evidence naming the candidate runtime.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed challenge-bound ODS Talk after loading Ministral and again after restoring each host's original model.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed the challenge-bound Perplexica route on Ministral with signed model-route evidence, then repeated the required consumer suite after clean baseline restoration.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed Ministral load with the scoped NVIDIA 8GB profile, challenge-bound ODS Talk, every required deployed LLM consumer, original-model restore, repeated Talk and consumer probes, candidate deletion, and clean final inventory across Linux, macOS, and Windows backends.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        }
+      },
+      "install_recommendation": true
     },
     {
       "id": "ministral-3b-instruct-q4",
@@ -816,6 +1139,73 @@
       "tokens_per_sec_estimate": 105,
       "llm_model_name": "qwen3-4b-instruct-2507",
       "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Direct chat verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation loaded the profiled model through the UI and passed challenge-bound LiteLLM and Open WebUI routes with exact model-route evidence.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation passed challenge-bound ODS Talk with the NVIDIA 8GB 64K Q4-KV profile, then restored the original model and passed Talk again.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation passed the challenge-bound Perplexica app route with exact Qwen3 4B Instruct route evidence before clean baseline restore and candidate deletion.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation loaded Qwen3 4B Instruct with the NVIDIA 8GB 64K Q4-KV profile and passed ODS Talk plus every required deployed LLM-consumer probe in test and restored-baseline phases, with clean candidate deletion and final inventory.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        }
+      },
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-q4-kv",
+          "label": "NVIDIA 8GB 64K context with Q4 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.2,
+          "fit_label": "64K 8GB Q4 KV profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+          }
+        }
+      ],
       "install_recommendation": false
     },
     {
@@ -835,6 +1225,19 @@
       "tokens_per_sec_estimate": 105,
       "llm_model_name": "qwen3-4b-128k",
       "llama_server_image": null,
+      "app_compatibility": {
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "label": "ODS Talk revalidation required",
+          "reason": "Fresh exact-commit release runs loaded Qwen3 4B 128K through Linux llama-server on tower2, Apple llama-server on m5-mbp, and Windows llama-server on windows-laptop. Tower2 loaded and routed the exact model in 3.9 seconds, but Talk replied that it generated the challenge phrase without actually returning it. M5 returned only a generated .MEDIA audio marker and omitted the challenge text, while Windows did not finish within the enforced 180-second inference limit. Keep this model out of Talk/all-app release coverage globally until challenge-bound response behavior is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/m5-mbp; fleet-test/runs/2026-07-24T02-46-53Z-release-product-faaf5af99c89-harness-b838abf5a87b-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/windows-laptop; fleet-test/runs/2026-07-24T10-53-17Z-release-product-68d41e774eb1-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/tower2",
+          "recordedAt": "2026-07-24T12:06:17Z",
+          "productSha": "68d41e774eb13be334aa8cd3904ecbadaf69f4bf",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "globalScope": true,
+          "expiresAt": "2026-08-24T00:00:00Z"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -895,15 +1298,37 @@
           "hostScope": ["tower2"],
           "expiresAt": "2026-08-21T00:00:00Z"
         },
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "label": "OpenCode revalidation required",
+          "reason": "Fresh exact-commit release coverage on strix-halo and spark routed OpenCode to Qwen 2.5 Coder 1.5B 128K after challenge-bound ODS Talk, LiteLLM, and Open WebUI passed. The strix-halo run emitted a webfetch tool payload with a mangled verification token; the spark run replied that no changes were made and omitted the requested token while Perplexica also passed. Keep this model out of OpenCode release coverage on those hosts until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark",
+          "recordedAt": "2026-07-24T22:11:24Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["strix-halo", "spark"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "Fresh exact-route browser coverage on strix-halo, m5-mbp, and windows-laptop loaded Qwen 2.5 Coder 1.5B 128K and passed challenge-bound ODS Talk, LiteLLM, and Open WebUI. Perplexica returned unrelated research output and omitted its requested verification phrase on all three hosts. Keep this model out of Perplexica release coverage on those hosts until revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T22:22:05Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["strix-halo", "m5-mbp", "windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
         "agent_viability": {
           "status": "not_agent_viable",
-          "reason": "The model loaded and routed through the browser-managed swap path, but ODS Talk did not follow the required verification instruction; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2",
-          "recordedAt": "2026-07-21T14:25:00Z",
-          "productSha": "7df3f218a06c386bdb40856c928a0618b8e16b57",
-          "harnessSha": "d2a31507fa0652dff4c8cc1892e56ccf1b9102bb",
-          "hostScope": ["tower2"],
-          "expiresAt": "2026-08-21T00:00:00Z"
+          "reason": "The model failed agent-required browser verification on tower2 in ODS Talk, on strix-halo in OpenCode and Perplexica, on spark in OpenCode, and on m5-mbp and windows-laptop in Perplexica after exact-model routing. Keep it out of agent-required release coverage on those hosts until the affected app paths are revalidated.",
+          "evidence": "fleet-test/runs/2026-07-21T12-25-39Z-release-product-7df3f218a06c-harness-9804e8523a6d-hosts-tower2/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-24T12-22-22Z-release-product-9ad366f47050-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark; fleet-test/runs/2026-07-24T20-41-29Z-release-product-8318f6cf37d8-harness-7b83ca3a780f-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp; fleet-test/runs/2026-07-24T18-04-guardrail-diagnostic-windows-qwen25-coder-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T22:22:05Z",
+          "productSha": "8318f6cf37d878ea5d31dab0f557678f1e8ca3ef",
+          "harnessSha": "7b83ca3a780f502f6f12c90596256fe1cb8235af",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -927,14 +1352,34 @@
       "llama_server_image": null,
       "app_compatibility": {
         "agent_viability": {
-          "status": "not_agent_viable",
-          "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk never returned the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
+          "status": "verified",
+          "label": "Agent workflow verified on Windows",
+          "reason": "Targeted windows-laptop browser revalidation with the literal-response persona guardrail loaded the exact Qwen 2.5 Coder 3B 128K route and passed challenge-bound ODS Talk plus every deployed LLM consumer, baseline restore, deletion, inventory, and environment cleanup.",
+          "evidence": "fleet-test/runs/2026-07-24T18-23-guardrail-fullapp-windows-qwen25-coder-3b-product-f35e9af8eeab-harness-7c6cd3af853b/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-24T18:30:00Z",
+          "hostScope": ["windows-laptop"]
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
-          "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk never returned the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
+          "label": "ODS Talk revalidation required on Tower2 and M5",
+          "reason": "Fresh exact-commit release coverage on tower2 loaded Qwen 2.5 Coder 3B 128K through the browser switchboard, but ODS Talk acknowledged that the verification phrase was correct without returning the challenge token. Final15 fresh exact-commit release coverage on m5-mbp loaded the same model in cycle 5, but ODS Talk returned reasoning/probe prose instead of the exact ODSVAL-8DB490CA32-3FC971DE20 verification phrase; cleanup succeeded, the original baseline was restored, the test model was deleted, and cycle 6 passed. Keep this model out of Tower2 and M5 ODS Talk release coverage until its literal-response behavior is revalidated. The prior windows-laptop full-app pass remains recorded by the host-scoped agent-viability verdict.",
+          "evidence": "fleet-test/runs/2026-07-24T23-54-27Z-release-product-b77641dd064f-harness-3930eeed3597-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/tower2; fleet-test/runs/2026-07-25T18-19-44Z-release-product-d5ef0b7ddfc8-harness-8b9f1a38027e-hosts-six-scope-6cycle-switchboard/model-ui/cycle-005/m5-mbp",
+          "recordedAt": "2026-07-25T18:19:44Z",
+          "productSha": "d5ef0b7ddfc8207600ec60813e5574dc516c5918",
+          "harnessSha": "8b9f1a38027ebafaad074eb7964ff65e7aa1e731",
+          "hostScope": ["tower2", "m5-mbp"],
+          "expiresAt": "2026-08-25T00:00:00Z"
+        },
+        "opencode": {
+          "status": "unsupported_until_revalidated",
+          "label": "OpenCode revalidation required on Strix Halo and Spark",
+          "reason": "Fresh exact-commit release coverage on strix-halo and spark loaded Qwen 2.5 Coder 3B 128K through the browser switchboard and passed challenge-bound ODS Talk, LiteLLM, Open WebUI, and Perplexica, but OpenCode did not return the exact unpredictable phrase. Strix Halo returned only the verification prefix; Spark changed the required 'ODS verify' prefix to 'ODES verify'. Keep this model out of Strix Halo and Spark all-app release coverage until its literal-response behavior is revalidated. Prior Strix Halo evidence: fleet-test/runs/2026-07-25T02-56-13Z-release-product-89c6e46fde88-harness-78aeb37d418e-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/strix-halo.",
+          "evidence": "fleet-test/runs/2026-07-25T07-36-57Z-release-product-ac90d567a6ea-harness-bfe040f32941-hosts-six-scope-6cycle-switchboard/model-ui/cycle-006/spark",
+          "recordedAt": "2026-07-25T09:13:26Z",
+          "productSha": "ac90d567a6ea721cedc2817f98edca16dd60dd0a",
+          "harnessSha": "bfe040f32941fa3cf82f709a02ab65dcf2e28c7a",
+          "hostScope": ["strix-halo", "spark"],
+          "expiresAt": "2026-08-25T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -1109,7 +1554,74 @@
       "description": "Unsloth's GGUF quant of Qwen3.5 4B with native 262K context metadata. A low-VRAM long-context release candidate for app and Talk validation.",
       "tokens_per_sec_estimate": 100,
       "llm_model_name": "qwen3.5-4b",
-      "llama_server_image": null
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Direct chat verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation loaded the profiled model through the UI and passed challenge-bound LiteLLM and Open WebUI routes with exact model-route evidence.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-002/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation passed challenge-bound ODS Talk with the NVIDIA 8GB 64K Q4-KV profile, then restored the original model and passed Talk again.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-002/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation passed the challenge-bound Perplexica app route with exact Qwen3.5 4B route evidence before clean baseline restore and candidate deletion.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-002/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified on Windows",
+          "reason": "Fresh exact-commit Windows fleet validation loaded Qwen3.5 4B with the NVIDIA 8GB 64K Q4-KV profile and passed ODS Talk plus every required deployed LLM-consumer probe in test and restored-baseline phases, with clean candidate deletion and final inventory.",
+          "evidence": "fleet-test/runs/2026-07-24T07-55-00Z-windows-profile-candidates-route-validation/cycle-002/windows-laptop",
+          "recordedAt": "2026-07-24T08:03:57Z",
+          "productSha": "449cf84d866d8bdedd8046d3c58faab6c07b5f03",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-24T00:00:00Z"
+        }
+      },
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-q4-kv",
+          "label": "NVIDIA 8GB 64K context with Q4 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.2,
+          "fit_label": "64K 8GB Q4 KV profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+          }
+        }
+      ]
     },
     {
       "id": "gemma4-e2b-q4",

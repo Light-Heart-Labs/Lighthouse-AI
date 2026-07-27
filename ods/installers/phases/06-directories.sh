@@ -268,6 +268,21 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         echo "$default"
     }
 
+    # Optional overrides use an empty value to mean "inherit the bundled
+    # provider". Preserve that explicit state across reruns; _env_get treats
+    # empty as missing for variables whose defaults must be backfilled.
+    _env_get_preserve_empty() {
+        local key="$1" default="${2:-}" val
+        if [[ -n "$_env_existing" ]] && grep -q -m1 "^${key}=" "$_env_existing" 2>/dev/null; then
+            val=$(grep -m1 "^${key}=" "$_env_existing" 2>/dev/null | cut -d= -f2- || true)
+            val="${val%\"}" && val="${val#\"}"
+            val="${val%\'}" && val="${val#\'}"
+            printf '%s\n' "$val"
+            return
+        fi
+        printf '%s\n' "$default"
+    }
+
     _env_get_explicit_first() {
         local key="$1" default="${2:-}" val
         val="${!key-}"
@@ -613,6 +628,11 @@ raise SystemExit(1)' 2>/dev/null && return 0
         _default_stt_model="Systran/faster-whisper-base"
     fi
     AUDIO_STT_MODEL=$(_env_get AUDIO_STT_MODEL "${AUDIO_STT_MODEL:-$_default_stt_model}")
+    EMBEDDING_MODEL_VALUE=$(_env_get EMBEDDING_MODEL "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}")
+    RAG_EMBEDDING_MODEL_VALUE=$(_env_get_preserve_empty RAG_EMBEDDING_MODEL "${RAG_EMBEDDING_MODEL:-}")
+    RAG_OPENAI_API_BASE_URL_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_BASE_URL "${RAG_OPENAI_API_BASE_URL:-}")
+    RAG_OPENAI_API_KEY_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_KEY "${RAG_OPENAI_API_KEY:-}")
+    EMBEDDINGS_MEMORY_LIMIT_VALUE=$(_env_get EMBEDDINGS_MEMORY_LIMIT "${EMBEDDINGS_MEMORY_LIMIT:-4G}")
 
     _phase06_lemonade_uses_host_9000() {
         [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]] && return 0
@@ -866,6 +886,15 @@ WHISPER_MODEL=base
 AUDIO_STT_MODEL=${AUDIO_STT_MODEL}
 TTS_VOICE=en_US-lessac-medium
 
+#=== Embeddings / RAG ===
+# Open WebUI uses this canonical model at first boot unless an explicit
+# external-provider override is configured.
+EMBEDDING_MODEL=${EMBEDDING_MODEL_VALUE}
+RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL_VALUE}
+RAG_OPENAI_API_BASE_URL=${RAG_OPENAI_API_BASE_URL_VALUE}
+RAG_OPENAI_API_KEY=${RAG_OPENAI_API_KEY_VALUE}
+EMBEDDINGS_MEMORY_LIMIT=${EMBEDDINGS_MEMORY_LIMIT_VALUE}
+
 #=== Device Name / mDNS / Proxy hostnames ===
 # Used by ods-mdns to publish <name>.local on the LAN, by ods-proxy
 # to route auth/chat/dashboard subdomains, and by dashboard-api when
@@ -963,7 +992,6 @@ ENV_EOF
         # lemonade config regardless of which model the install resolves to.
         # bootstrap-upgrade.sh mirrors this when it regenerates the file
         # after a hot-swap.
-        _renderer_ok=false
         _renderer_py="${ODS_PYTHON_CMD:-}"
         if [[ -z "$_renderer_py" && -f "$SCRIPT_DIR/lib/python-cmd.sh" ]]; then
             . "$SCRIPT_DIR/lib/python-cmd.sh"
@@ -972,56 +1000,30 @@ ENV_EOF
         if [[ -z "$_renderer_py" ]]; then
             _renderer_py="python3"
         fi
-        if [[ -f "$SCRIPT_DIR/scripts/render-runtime-configs.py" ]] && command -v "$_renderer_py" >/dev/null 2>&1; then
-            if "$_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
-                --surface litellm-lemonade \
-                --ods-mode lemonade \
-                --gpu-backend amd \
-                --gguf-file "$_active_gguf" \
-                --lemonade-model-id "$_lemonade_model_id" \
-                --lemonade-api-base "$LEMONADE_CONTAINER_API_BASE_VALUE" \
-                --litellm-key "$LITELLM_LEMONADE_API_KEY" \
-                --output-root "$INSTALL_DIR" \
-                --write >> "$LOG_FILE" 2>&1; then
-                _renderer_ok=true
-            else
-                warn "Runtime config renderer failed for Lemonade; falling back to inline writer"
-            fi
+        if [[ ! -f "$SCRIPT_DIR/scripts/render-runtime-configs.py" ]] \
+            || ! command -v "$_renderer_py" >/dev/null 2>&1; then
+            error "Runtime config renderer is unavailable for Lemonade"
+            return 1
         fi
-        if [[ "$_renderer_ok" != "true" ]]; then
-            cat > "$INSTALL_DIR/config/litellm/lemonade.yaml" << LITELLM_EOF
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/$(if [[ -n "$_lemonade_model_id" ]]; then echo "$_lemonade_model_id"; else echo "extra.${_active_gguf}"; fi)
-      api_base: ${LEMONADE_CONTAINER_API_BASE_VALUE}
-      api_key: ${LITELLM_LEMONADE_API_KEY}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-  - model_name: "*"
-    litellm_params:
-      model: openai/$(if [[ -n "$_lemonade_model_id" ]]; then echo "$_lemonade_model_id"; else echo "extra.${_active_gguf}"; fi)
-      api_base: ${LEMONADE_CONTAINER_API_BASE_VALUE}
-      api_key: ${LITELLM_LEMONADE_API_KEY}
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  request_timeout: 900
-  stream_timeout: 900
-LITELLM_EOF
+        if ! "$_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
+            --surface litellm-lemonade \
+            --ods-mode lemonade \
+            --gpu-backend amd \
+            --gguf-file "$_active_gguf" \
+            --lemonade-model-id "$_lemonade_model_id" \
+            --lemonade-api-base "$LEMONADE_CONTAINER_API_BASE_VALUE" \
+            --litellm-key "$LITELLM_LEMONADE_API_KEY" \
+            --output-root "$INSTALL_DIR" \
+            --write >> "$LOG_FILE" 2>&1; then
+            error "Runtime config renderer failed for Lemonade"
+            return 1
         fi
         if [[ -n "$_lemonade_model_id" ]]; then
             ai_ok "Generated LiteLLM config for external Lemonade (model: ${_lemonade_model_id})"
         else
             ai_ok "Generated LiteLLM config for Lemonade (model: extra.${_active_gguf})"
         fi
-        unset _renderer_ok _renderer_py
+        unset _renderer_py
     fi
 
     # Materialize router inputs before Compose can interpret file bind mounts.
@@ -1035,9 +1037,10 @@ LITELLM_EOF
         error "Model router config renderer is unavailable"
         return 1
     fi
+    _router_ods_mode="${ODS_MODE_VALUE:-${ODS_MODE:-local}}"
     _router_common_args=(
         --switchboard-mode "${ODS_MODEL_SWITCHBOARD_VALUE:-observe}"
-        --ods-mode "${ODS_MODE:-local}"
+        --ods-mode "$_router_ods_mode"
         --gpu-backend "${GPU_BACKEND:-nvidia}"
         --gguf-file "${GGUF_FILE:-}"
         --lemonade-model-id "${LEMONADE_MODEL_VALUE:-}"
@@ -1047,7 +1050,11 @@ LITELLM_EOF
         --output-root "$INSTALL_DIR"
         --write
     )
-    for _router_surface in model-router-endpoints litellm-switchboard; do
+    _router_surfaces=(model-router-endpoints)
+    if [[ "$_router_ods_mode" != "cloud" ]]; then
+        _router_surfaces+=(litellm-switchboard)
+    fi
+    for _router_surface in "${_router_surfaces[@]}"; do
         if ! "$_router_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
             --surface "$_router_surface" "${_router_common_args[@]}" \
             >> "$LOG_FILE" 2>&1; then
@@ -1056,6 +1063,7 @@ LITELLM_EOF
         fi
     done
     unset _router_renderer_py _router_surface _router_common_args
+    unset _router_ods_mode _router_surfaces
 
     # Validate generated .env against schema (fails fast on missing/unknown keys).
     _phase06_step "validate-env"

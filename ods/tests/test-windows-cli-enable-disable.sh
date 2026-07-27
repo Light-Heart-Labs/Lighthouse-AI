@@ -53,16 +53,17 @@ pass "Test-ODSInstallFiles helper present"
 info "Static: Invoke-Enable uses Test-ODSInstallFiles, not Test-Install"
 # Extract the Invoke-Enable function body and assert it doesn't call Test-Install
 awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Test-ODSInstallFiles' \
+    | grep 'Test-ODSInstallFiles' >/dev/null \
     || fail "Invoke-Enable does not call Test-ODSInstallFiles"
-awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
-    | grep -qv 'Test-Install[^F]' \
-    || fail "Invoke-Enable still calls Test-Install (requires Docker)"
+if awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
+    | grep 'Test-Install[^F]' >/dev/null; then
+    fail "Invoke-Enable still calls Test-Install (requires Docker)"
+fi
 pass "Invoke-Enable uses Docker-free Test-ODSInstallFiles"
 
 info "Static: Invoke-Disable uses Test-ODSInstallFiles, not Test-Install"
 awk '/^function Invoke-Disable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Test-ODSInstallFiles' \
+    | grep 'Test-ODSInstallFiles' >/dev/null \
     || fail "Invoke-Disable does not call Test-ODSInstallFiles"
 pass "Invoke-Disable uses Docker-free Test-ODSInstallFiles"
 
@@ -79,7 +80,7 @@ pass "Invoke-Disable gracefully skips stop when Docker is offline"
 info "Static: Rename+flags update runs regardless of Docker state in Invoke-Disable"
 # The Rename-Item call must appear AFTER the docker-offline else branch
 awk '/^function Invoke-Disable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Rename-Item.*compose.yaml.disabled' \
+    | grep 'Rename-Item.*compose.yaml.disabled' >/dev/null \
     || fail "Rename-Item not found in Invoke-Disable body"
 pass "Rename + flags update unconditional in Invoke-Disable"
 
@@ -431,6 +432,22 @@ if [[ -n "$PS_BIN" ]]; then
         $before = ($original -split "\s+" | Sort-Object) -join " "
         $after  = ($afterEnable -split "\s+" | Sort-Object) -join " "
         if ($before -ne $after) { throw "disable+enable round trip changed the token set" }
+
+        # Re-running enable on an already-active service is now a repair path,
+        # so it must preserve the service-selected installer GPU overlay.
+        $beforeComfyuiRepair = $afterEnable
+        Update-ComposeFlags -ServiceId "comfyui" -Action "enable"
+        $afterComfyuiRepair = (Get-Content $flagsFile -Raw).Trim()
+        if ($afterComfyuiRepair -notmatch "comfyui/compose\.nvidia\.yaml") {
+            throw "already-enabled repair dropped the toggled service overlay"
+        }
+        $overlayCount = ([regex]::Matches($afterComfyuiRepair, "comfyui/compose\.nvidia\.yaml")).Count
+        if ($overlayCount -ne 1) {
+            throw "already-enabled repair duplicated the toggled service overlay"
+        }
+        if ($beforeComfyuiRepair -ne $afterComfyuiRepair) {
+            throw "already-enabled repair reordered or rewrote the active service stack"
+        }
     '; then
         pass "Update-ComposeFlags preserves other services overlays and token order"
     else
@@ -459,31 +476,31 @@ pass "Get-EnabledDependents helper present"
 
 info "Static: Invoke-Enable cascades into disabled dependencies"
 awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Get-DisabledDependencies' \
+    | grep 'Get-DisabledDependencies' >/dev/null \
     || fail "Invoke-Enable does not resolve disabled dependencies"
 awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Invoke-Enable -ServiceId \$dep -AsDependency' \
+    | grep 'Invoke-Enable -ServiceId \$dep -AsDependency' >/dev/null \
     || fail "Invoke-Enable does not recursively enable its dependencies"
 pass "Invoke-Enable enables disabled dependencies first"
 
 info "Static: Invoke-Enable guards against manifest dependency cycles"
 awk '/^function Invoke-Enable/,/^}/' "$ODS_PS1" \
-    | grep -q '_EnableVisited' \
+    | grep '_EnableVisited' >/dev/null \
     || fail "Invoke-Enable has no cycle guard"
 pass "Invoke-Enable has a cycle guard"
 
 info "Static: Invoke-Disable refuses when enabled extensions still depend on the target"
 awk '/^function Invoke-Disable/,/^}/' "$ODS_PS1" \
-    | grep -q 'Get-EnabledDependents' \
+    | grep 'Get-EnabledDependents' >/dev/null \
     || fail "Invoke-Disable does not check reverse dependents"
 awk '/^function Invoke-Disable/,/^}/' "$ODS_PS1" \
-    | grep -q 'These enabled extensions depend on' \
+    | grep 'These enabled extensions depend on' >/dev/null \
     || fail "Invoke-Disable has no dependent-refusal message"
 pass "Invoke-Disable checks reverse dependents"
 
 info "Static: Invoke-Disable exposes a -Force escape hatch"
 awk '/^function Invoke-Disable/,/^}/' "$ODS_PS1" \
-    | grep -q '\[switch\]\$Force' \
+    | grep '\[switch\]\$Force' >/dev/null \
     || fail "Invoke-Disable has no -Force switch"
 grep -q 'Test-ForceArgument' "$ODS_PS1" \
     || fail "Dispatcher cannot detect -Force"
@@ -511,9 +528,16 @@ else
 
     # Pull the functions under test straight out of ods.ps1.
     extract_fn() {
-        # Top-level functions open with `function <Name> {` and close on a
-        # column-0 brace. [{] keeps the brace literal without an awk escape.
-        awk -v fn="^function $1 [{]" '$0 ~ fn, /^}/' "$ODS_PS1"
+        awk -v fn="^function $1 [{]" '
+            $0 ~ fn { printing = 1 }
+            printing {
+                print
+                opens = gsub(/\{/, "{")
+                closes = gsub(/\}/, "}")
+                depth += opens - closes
+                if (depth == 0) { exit }
+            }
+        ' "$ODS_PS1"
     }
 
     HARNESS="$PSTMP/harness.ps1"
@@ -526,8 +550,9 @@ else
         echo 'function Write-AIError { param($Message) Write-Host "ERROR: $Message" }'
         echo 'function Write-AISuccess { param($Message) Write-Host "OK: $Message" }'
         echo 'function Test-ODSInstallFiles { }'
-        # Accepts both the no-arg and the -ServiceId/-Action call shapes.
-        echo 'function Update-ComposeFlags { param($ServiceId, $Action) }'
+        # Exercise the real reconciliation logic against each temporary install.
+        extract_fn Get-ComposeFlags
+        extract_fn Update-ComposeFlags
         # Keep Docker out of the test: force the offline branch of Invoke-Disable.
         echo 'function docker { $global:LASTEXITCODE = 1 }'
         echo '$script:_EnableVisited = @()'
@@ -552,6 +577,9 @@ else
         local root="$1" id="$2" svc_category="$3" deps="$4" state="$5"
         local dir="$root/extensions/services/$id"
         mkdir -p "$dir"
+        if [[ ! -e "$root/.compose-flags" ]]; then
+            printf '%s' '--env-file .env -f docker-compose.base.yml' > "$root/.compose-flags"
+        fi
         cat > "$dir/manifest.yaml" <<EOF
 schema_version: ods.services.v1
 
@@ -576,7 +604,7 @@ EOF
         local script="$PSTMP/case.ps1"
         cat "$HARNESS" > "$script"
         echo "$snippet" >> "$script"
-        TEST_INSTALL_DIR="$install_dir" "$PS_BIN" -NoProfile -File "$script" 2>&1
+        TEST_INSTALL_DIR="$install_dir" "$PS_BIN" -NoProfile -ExecutionPolicy Bypass -File "$script" 2>&1
     }
 
     # ── Case 1: disable is refused while an enabled extension depends on it ────
@@ -629,6 +657,152 @@ EOF
             || fail "enable hermes-proxy did not transitively enable $svc; output: $out3"
     done
     pass "enable resolved the transitive dependency chain"
+
+    # ── Case 3b: enable repairs stale flags for an active compose fragment ─────
+    # An interrupted update can leave compose.yaml active while .compose-flags
+    # omits the service. Re-running enable must be an idempotent repair.
+    info "PowerShell: enable reconciles stale .compose-flags"
+    C3B="$PSTMP/case3b"
+    make_service "$C3B" ods-proxy optional "" enabled
+    printf '%s' '--env-file .env -f docker-compose.base.yml' > "$C3B/.compose-flags"
+
+    out3b=$(run_ps "$C3B" 'Invoke-Enable -ServiceId "ods-proxy"' || true)
+    flags3b=$(cat "$C3B/.compose-flags")
+    [[ "$flags3b" == *"-f extensions/services/ods-proxy/compose.yaml"* ]] \
+        || fail "enable did not repair stale compose flags; output: $out3b; flags: $flags3b"
+    [[ $(grep -o 'extensions/services/ods-proxy/compose.yaml' "$C3B/.compose-flags" | wc -l) -eq 1 ]] \
+        || fail "enable duplicated the ods-proxy compose fragment; flags: $flags3b"
+    pass "enable repairs stale compose flags without duplicate entries"
+
+    # ── Case 3c: empty/missing caches recover before reconciliation ───────────
+    info "PowerShell: enable recovers empty and missing .compose-flags"
+    for cache_state in empty missing; do
+        C3C="$PSTMP/case3c-$cache_state"
+        make_service "$C3C" ods-proxy optional "" enabled
+        mkdir -p "$C3C/logs"
+        printf '%s\n' \
+            'compose_flags=--env-file .env -f docker-compose.base.yml -f installers/windows/docker-compose.windows-amd.yml -f extensions/services/n8n/compose.yaml -f docker-compose.override.yml' \
+            > "$C3C/logs/compose-launch.txt"
+        if [[ "$cache_state" == "empty" ]]; then
+            : > "$C3C/.compose-flags"
+        else
+            rm -f "$C3C/.compose-flags"
+        fi
+
+        out3c=$(run_ps "$C3C" 'Invoke-Enable -ServiceId "ods-proxy"' || true)
+        expected3c='--env-file .env -f docker-compose.base.yml -f installers/windows/docker-compose.windows-amd.yml -f extensions/services/n8n/compose.yaml -f extensions/services/ods-proxy/compose.yaml -f docker-compose.override.yml'
+        actual3c=$(cat "$C3C/.compose-flags")
+        [[ "$actual3c" == "$expected3c" ]] \
+            || fail "$cache_state cache recovery lost or reordered compose flags; output: $out3c; flags: $actual3c"
+    done
+    pass "enable recovers empty/missing caches and preserves the launch stack"
+
+    # ── Case 3c.1: never synthesize a partial Windows stack ──────────────────
+    info "PowerShell: missing recovery receipt fails closed"
+    for cache_state in empty missing; do
+        C3C_FAIL="$PSTMP/case3c-no-receipt-$cache_state"
+        make_service "$C3C_FAIL" ods-proxy optional "" disabled
+        if [[ "$cache_state" == "empty" ]]; then
+            : > "$C3C_FAIL/.compose-flags"
+        else
+            rm -f "$C3C_FAIL/.compose-flags"
+        fi
+
+        out3c_fail=$(run_ps "$C3C_FAIL" '
+try { Invoke-Enable -ServiceId "ods-proxy" } catch { Write-Host $_.Exception.Message }' || true)
+        echo "$out3c_fail" | grep "Could not safely recover the complete Windows compose stack" >/dev/null \
+            || fail "$cache_state cache without a receipt did not fail closed; output: $out3c_fail"
+        [[ ! -e "$C3C_FAIL/extensions/services/ods-proxy/compose.yaml" ]] \
+            || fail "$cache_state cache failure left ods-proxy enabled"
+        [[ -f "$C3C_FAIL/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+            || fail "$cache_state cache failure did not restore the disabled marker"
+        if [[ "$cache_state" == "empty" ]]; then
+            [[ -f "$C3C_FAIL/.compose-flags" && ! -s "$C3C_FAIL/.compose-flags" ]] \
+                || fail "empty cache was not preserved exactly after recovery failure"
+        else
+            [[ ! -e "$C3C_FAIL/.compose-flags" ]] \
+                || fail "missing cache was synthesized after recovery failure"
+        fi
+    done
+    pass "missing recovery receipts preserve the exact prior cache and marker state"
+
+    # ── Case 3d: explicit commands normalize dual marker states ───────────────
+    info "PowerShell: enable/disable normalize dual compose markers"
+    C3D_ENABLE="$PSTMP/case3d-enable"
+    make_service "$C3D_ENABLE" ods-proxy optional "" enabled
+    cp "$C3D_ENABLE/extensions/services/ods-proxy/compose.yaml" \
+        "$C3D_ENABLE/extensions/services/ods-proxy/compose.yaml.disabled"
+    printf '%s' '--env-file .env -f docker-compose.base.yml' > "$C3D_ENABLE/.compose-flags"
+    out3d_enable=$(run_ps "$C3D_ENABLE" 'Invoke-Enable -ServiceId "ods-proxy"' || true)
+    [[ -f "$C3D_ENABLE/extensions/services/ods-proxy/compose.yaml" ]] \
+        || fail "enable removed the active marker in a dual-marker state; output: $out3d_enable"
+    [[ ! -e "$C3D_ENABLE/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+        || fail "enable left the stale disabled marker; output: $out3d_enable"
+
+    C3D_DISABLE="$PSTMP/case3d-disable"
+    make_service "$C3D_DISABLE" ods-proxy optional "" enabled
+    cp "$C3D_DISABLE/extensions/services/ods-proxy/compose.yaml" \
+        "$C3D_DISABLE/extensions/services/ods-proxy/compose.yaml.disabled"
+    printf '%s' '--env-file .env -f docker-compose.base.yml -f extensions/services/ods-proxy/compose.yaml' \
+        > "$C3D_DISABLE/.compose-flags"
+    out3d_disable=$(run_ps "$C3D_DISABLE" 'Invoke-Disable -ServiceId "ods-proxy"' || true)
+    [[ ! -e "$C3D_DISABLE/extensions/services/ods-proxy/compose.yaml" ]] \
+        || fail "disable left the active marker in a dual-marker state; output: $out3d_disable"
+    [[ -f "$C3D_DISABLE/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+        || fail "disable did not preserve a disabled compose fragment; output: $out3d_disable"
+    ! grep -q 'extensions/services/ods-proxy/compose.yaml' "$C3D_DISABLE/.compose-flags" \
+        || fail "disable left ods-proxy in compose flags; output: $out3d_disable"
+    pass "enable/disable normalize dual compose markers"
+
+    # ── Case 3e: already-disabled is an inverse cache repair ──────────────────
+    info "PowerShell: disable repairs stale flags for an already-disabled service"
+    C3E="$PSTMP/case3e"
+    make_service "$C3E" ods-proxy optional "" disabled
+    printf '%s' '--env-file .env -f docker-compose.base.yml -f extensions/services/ods-proxy/compose.yaml' \
+        > "$C3E/.compose-flags"
+    out3e=$(run_ps "$C3E" 'Invoke-Disable -ServiceId "ods-proxy"' || true)
+    ! grep -q 'extensions/services/ods-proxy/compose.yaml' "$C3E/.compose-flags" \
+        || fail "already-disabled repair left ods-proxy in compose flags; output: $out3e"
+    pass "already-disabled repair removes stale compose flags"
+
+    # ── Case 3f: marker changes roll back when cache reconciliation fails ─────
+    info "PowerShell: enable/disable restore markers after cache failure"
+    C3F_ENABLE="$PSTMP/case3f-enable"
+    make_service "$C3F_ENABLE" ods-proxy optional "" disabled
+    out3f_enable=$(run_ps "$C3F_ENABLE" '
+function Update-ComposeFlags { param($ServiceId, $Action) throw "forced cache failure" }
+try { Invoke-Enable -ServiceId "ods-proxy" } catch { Write-Host $_.Exception.Message }' || true)
+    [[ ! -e "$C3F_ENABLE/extensions/services/ods-proxy/compose.yaml" ]] \
+        || fail "failed enable left the service active; output: $out3f_enable"
+    [[ -f "$C3F_ENABLE/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+        || fail "failed enable did not restore the disabled marker; output: $out3f_enable"
+
+    C3F_DISABLE="$PSTMP/case3f-disable"
+    make_service "$C3F_DISABLE" ods-proxy optional "" enabled
+    out3f_disable=$(run_ps "$C3F_DISABLE" '
+function Update-ComposeFlags { param($ServiceId, $Action) throw "forced cache failure" }
+try { Invoke-Disable -ServiceId "ods-proxy" } catch { Write-Host $_.Exception.Message }' || true)
+    [[ -f "$C3F_DISABLE/extensions/services/ods-proxy/compose.yaml" ]] \
+        || fail "failed disable did not restore the active marker; output: $out3f_disable"
+    [[ ! -e "$C3F_DISABLE/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+        || fail "failed disable left the disabled marker behind; output: $out3f_disable"
+    pass "cache failures roll back compose marker changes"
+
+    # Exercise the real atomic cache writer by blocking its temporary path.
+    C3F_ATOMIC="$PSTMP/case3f-atomic"
+    make_service "$C3F_ATOMIC" ods-proxy optional "" disabled
+    printf '%s' '--env-file .env -f docker-compose.base.yml' > "$C3F_ATOMIC/.compose-flags"
+    out3f_atomic=$(run_ps "$C3F_ATOMIC" '
+$blockedTemp = "$InstallDir/.compose-flags.$PID.tmp"
+New-Item -ItemType Directory -Path $blockedTemp -Force | Out-Null
+try { Invoke-Enable -ServiceId "ods-proxy" } catch { Write-Host $_.Exception.Message }' || true)
+    [[ "$(cat "$C3F_ATOMIC/.compose-flags")" == '--env-file .env -f docker-compose.base.yml' ]] \
+        || fail "atomic writer failure changed the original cache; output: $out3f_atomic"
+    [[ ! -e "$C3F_ATOMIC/extensions/services/ods-proxy/compose.yaml" ]] \
+        || fail "atomic writer failure left the service active; output: $out3f_atomic"
+    [[ -f "$C3F_ATOMIC/extensions/services/ods-proxy/compose.yaml.disabled" ]] \
+        || fail "atomic writer failure did not restore the marker; output: $out3f_atomic"
+    pass "atomic cache write failure preserves the prior cache and marker"
 
     # ── Case 4: core dependencies are never treated as disabled ───────────────
     # Core services live in docker-compose.base.yml and own no compose.yaml,

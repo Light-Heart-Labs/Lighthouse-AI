@@ -23,6 +23,7 @@ from gpu import (
     get_gpu_info_nvidia_detailed,
     get_gpu_info_windows_host,
     get_gpu_info_windows_host_detailed,
+    _live_env_value,
     read_gpu_topology,
 )
 from models import GPUInfo, IndividualGPU, MultiGPUStatus
@@ -348,8 +349,8 @@ async def gpu_detailed():
         gpus=gpus,
         topology=None,  # topology is served from its own endpoint
         assignment=assignment_data,
-        split_mode=os.environ.get("LLAMA_ARG_SPLIT_MODE") or None,
-        tensor_split=os.environ.get("LLAMA_ARG_TENSOR_SPLIT") or None,
+        split_mode=_live_env_value("LLAMA_ARG_SPLIT_MODE") or None,
+        tensor_split=_live_env_value("LLAMA_ARG_TENSOR_SPLIT") or None,
         aggregate=aggregate,
     )
     _detailed_cache["expires"] = now + _GPU_DETAILED_TTL

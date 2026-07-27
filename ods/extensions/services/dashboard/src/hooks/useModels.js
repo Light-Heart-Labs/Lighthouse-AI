@@ -162,6 +162,7 @@ export function useModels() {
   const [models, setModels] = useState(USE_MOCK_DATA ? getMockModels() : [])
   const [gpu, setGpu] = useState(USE_MOCK_DATA ? MOCK_GPU : null)
   const [currentModel, setCurrentModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
+  const [activationReadyModel, setActivationReadyModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
   const [configuredModel, setConfiguredModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
   const [modelLifecycle, setModelLifecycle] = useState(null)
   const [odsMode, setOdsMode] = useState(USE_MOCK_DATA ? MOCK_MODES.odsMode : 'unknown')
@@ -238,6 +239,7 @@ export function useModels() {
       setModels(data.models)
       setGpu(data.gpu)
       setCurrentModel(data.currentModel)
+      setActivationReadyModel(data.activationReadyModel ?? null)
       setConfiguredModel(data.configuredModel ?? null)
       setModelLifecycle(normalizeModelLifecycle(data.modelLifecycle))
       const effectiveMode = normalizeOdsMode(data.odsMode)
@@ -327,7 +329,7 @@ export function useModels() {
     }
   }
 
-  const loadModel = async (modelId) => {
+  const loadModel = async (modelId, options = {}) => {
     const modeError = modelActivationModeError(odsMode, configuredMode)
     if (modeError) {
       setMutationError(modeError)
@@ -353,18 +355,36 @@ export function useModels() {
     const startedAt = Date.now()
     let activationError = null
     let targetLoaded = false
+    const requestedContextLength = Number(options.contextLength || 0) || null
+    const activationMatches = (data) => {
+      if (
+        data?.currentModel !== modelId ||
+        data?.activationReadyModel !== modelId ||
+        hasActiveModelActivation(data)
+      ) return false
+      if (!requestedContextLength) return true
+      const activeModel = data?.models?.find(model => model.id === modelId)
+      return Number(activeModel?.contextLength || 0) === requestedContextLength
+    }
 
-    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, {
+    const activationRequestOptions = {
       method: 'POST',
       signal: controller.signal,
-    })
+    }
+    if (requestedContextLength) {
+      activationRequestOptions.headers = { 'Content-Type': 'application/json' }
+      activationRequestOptions.body = JSON.stringify({
+        context_length: requestedContextLength,
+      })
+    }
+    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, activationRequestOptions)
       .then(async (response) => {
         if (response.ok) return
 
         const body = await responseJson(response)
         if (response.status === 409) {
           const activeModelId = conflictActiveModelId(body)
-          if (activeModelId === modelId) return
+          if (activeModelId === modelId && !requestedContextLength) return
 
           const detail = errorMessageFromPayload(body, 'Another model activation is in progress')
           activationError = activeModelId
@@ -386,7 +406,7 @@ export function useModels() {
 
         if (activationError) break
         const data = await fetchModels()
-        if (data?.currentModel === modelId && !hasActiveModelActivation(data)) {
+        if (activationMatches(data)) {
           targetLoaded = true
           break
         }
@@ -395,7 +415,7 @@ export function useModels() {
       // Take one final authoritative snapshot at the deadline or after a POST
       // failure. This cannot turn an unverified 409 into same-target success.
       const finalData = await fetchModels()
-      if (!activationError && finalData?.currentModel === modelId && !hasActiveModelActivation(finalData)) targetLoaded = true
+      if (!activationError && activationMatches(finalData)) targetLoaded = true
 
       if (!targetLoaded) {
         setMutationError(activationError ||
@@ -462,6 +482,7 @@ export function useModels() {
     models,
     gpu,
     currentModel,
+    activationReadyModel,
     configuredModel,
     modelLifecycle,
     odsMode,

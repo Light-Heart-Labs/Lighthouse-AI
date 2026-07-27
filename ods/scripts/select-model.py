@@ -113,11 +113,20 @@ def normalize_model(raw: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def curated_source_allowed(model: dict[str, Any]) -> bool:
+    """Return whether a catalog record is eligible for curated selection."""
+    return str(model.get("source") or "").strip().lower() in {"", "curated"}
+
+
 def load_catalog(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
     return [
-        model for model in (normalize_model(raw) for raw in data.get("models", []))
+        model for model in (
+            normalize_model(raw)
+            for raw in data.get("models", [])
+            if curated_source_allowed(raw)
+        )
         if model is not None
     ]
 
