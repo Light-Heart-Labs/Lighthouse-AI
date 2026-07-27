@@ -85,6 +85,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 . (Join-Path $LibDir "tier-map.ps1")
 . (Join-Path $LibDir "detection.ps1")
 . (Join-Path $LibDir "env-generator.ps1")
+. (Join-Path $LibDir "installed-footprint.ps1")
 . (Join-Path $LibDir "llm-endpoint.ps1")
 . (Join-Path $LibDir "opencode-config.ps1")
 . (Join-Path $LibDir "readiness-summary.ps1")
