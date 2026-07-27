@@ -1726,6 +1726,60 @@
       "llama_server_image": null
     },
     {
+      "id": "qwen3.6-27b-q4",
+      "name": "Qwen 3.6 27B",
+      "family": "qwen",
+      "gguf_file": "Qwen3.6-27B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/Qwen3.6-27B-Q4_K_M.gguf",
+      "gguf_sha256": "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
+      "size_bytes": 16817244384,
+      "size_mb": 16818,
+      "vram_required_gb": 20,
+      "context_length": 131072,
+      "max_context_length": 262144,
+      "total_params_b": 27.8,
+      "architecture": "dense",
+      "quantization": "Q4_K_M",
+      "specialty": "Reasoning, Coding & Agents",
+      "description": "Alibaba's Apache-2.0 dense flagship for practical high-end local systems. It leads Artificial Analysis' current 4B-40B open-weight intelligence ranking, supports native 262K context and Qwen tool calling, and is staged at 128K for agent workflows.",
+      "tokens_per_sec_estimate": 25,
+      "llm_model_name": "qwen3.6-27b",
+      "llama_server_image": null,
+      "install_recommendation": false,
+      "quality_evidence": {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/qwen3-6-27b/",
+        "score": 37,
+        "rank": 1,
+        "rank_scope": "4B-40B open-weight models",
+        "assessed_at": "2026-07-27"
+      },
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-partial-offload-q4-kv",
+          "label": "NVIDIA 8GB 64K partial GPU offload with Q4 KV cache",
+          "backend": "nvidia",
+          "host_arch": [
+            "amd64"
+          ],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.4,
+          "fit_label": "64K 8GB candidate partial-offload profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+            "N_GPU_LAYERS": "20"
+          }
+        }
+      ]
+    },
+    {
       "id": "qwen3.5-27b-q4",
       "name": "Qwen 3.5 27B",
       "family": "qwen",
