@@ -1726,6 +1726,50 @@
       "llama_server_image": null
     },
     {
+      "id": "gpt-oss-20b-mxfp4",
+      "name": "GPT-OSS 20B",
+      "family": "gpt-oss",
+      "gguf_file": "gpt-oss-20b-MXFP4.gguf",
+      "gguf_url": "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/c9a07b972b8979719fd97b8ff2c10dc79ebf5d26/gpt-oss-20b-MXFP4.gguf",
+      "gguf_sha256": "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901",
+      "size_bytes": 12109566624,
+      "size_mb": 12110,
+      "vram_required_gb": 16,
+      "context_length": 65536,
+      "max_context_length": 131072,
+      "kv_cache_gb_per_32k": 0.8,
+      "total_params_b": 20.91,
+      "active_params_b": 3.6,
+      "architecture": "moe",
+      "quantization": "MXFP4",
+      "specialty": "Reasoning & Agents",
+      "description": "OpenAI's Apache-2.0 open-weight MoE model with adjustable reasoning effort, tool use, structured output, and strong coding workflows. The native MXFP4 artifact targets 16GB-class systems, with a documented CPU-MoE profile for 8GB NVIDIA GPUs.",
+      "tokens_per_sec_estimate": 50,
+      "llm_model_name": "gpt-oss-20b",
+      "llama_server_image": null,
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-cpu-moe",
+          "label": "NVIDIA 8GB 64K context with CPU-MoE offload",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.4,
+          "fit_label": "64K 8GB CPU-MoE profile",
+          "source_url": "https://github.com/ggml-org/llama.cpp/discussions/15396",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_N_CPU_MOE": "22"
+          }
+        }
+      ]
+    },
+    {
       "id": "qwen3.5-27b-q4",
       "name": "Qwen 3.5 27B",
       "family": "qwen",

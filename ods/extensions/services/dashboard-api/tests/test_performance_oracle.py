@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from helpers import record_model_performance
+from model_memory import estimated_context_kv_gb
 from models import GPUInfo
 from performance_oracle import (
     build_models_payload,
@@ -1316,6 +1317,60 @@ def test_jamba_reasoning_3b_catalog_profile_fits_4gb_at_agent_context(data_dir, 
     assert model["estimatedRequired"] <= 4
     assert model["fitsVram"] is True
     assert model["recommended"] is False
+
+
+def test_gpt_oss_20b_uses_explicit_kv_memory_and_8gb_cpu_moe_profile(
+    data_dir,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("performance_oracle._system_ram_gb", lambda: 32)
+    monkeypatch.setattr("performance_oracle.platform.machine", lambda: "x86_64")
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    catalog = _official_model_catalog()
+    entry = next(item for item in catalog if item["id"] == "gpt-oss-20b-mxfp4")
+
+    assert estimated_context_kv_gb(entry, 32768) == 0.8
+    assert estimated_context_kv_gb(entry, 65536) == 1.6
+
+    payload = build_models_payload(
+        _gpu(total_mb=8192),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "gpt-oss-20b-mxfp4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 131072
+    assert model["vramRequired"] == 16
+    assert model["estimatedRequired"] == 7.4
+    assert model["fitsVram"] is True
+    assert model["runtimeProfile"]["id"] == "nvidia-8gb-64k-cpu-moe"
+    assert model["recommended"] is False
+
+    native_payload = build_models_payload(
+        _gpu(name="AMD Radeon RX 7800 XT", total_mb=16384, backend="amd"),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+    native = next(
+        item for item in native_payload["models"]
+        if item["id"] == "gpt-oss-20b-mxfp4"
+    )
+
+    assert native["estimatedRequired"] == 16
+    assert native["fitsVram"] is True
+    assert native["runtimeProfile"] is None
+    assert native["recommended"] is False
 
 
 def test_pre_download_ranker_falls_back_to_smallest_model_without_gpu_info(data_dir):
