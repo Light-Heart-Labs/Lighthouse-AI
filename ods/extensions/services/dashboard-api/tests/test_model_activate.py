@@ -6553,6 +6553,10 @@ class TestHipfireActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        # Rendering is exercised by its own tests; here it must succeed without
+        # spawning a subprocess, or fake_run would swallow the renderer call
+        # (and the required-renderer contract would abort the rollback under test).
+        monkeypatch.setattr(_mod, "_render_runtime_config", lambda *_a, **_k: True)
 
         recreate_calls = []
         effects = list(recreate_effects or [])
