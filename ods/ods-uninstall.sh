@@ -171,21 +171,6 @@ else
 fi
 
 # 2. Stop and remove host service definitions
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    log_info "Removing macOS LaunchAgents..."
-    for _label in \
-        com.ods.llm-bridge \
-        com.ods.host-agent-bridge \
-        com.ods.host-agent \
-        com.ods.opencode-web \
-        com.ods.llama-server \
-        com.ods.full-model-download; do
-        launchctl bootout "gui/$(id -u)/${_label}" >/dev/null 2>&1 || true
-        rm -f "$HOME/Library/LaunchAgents/${_label}.plist" 2>/dev/null || true
-    done
-    unset _label
-fi
-
 log_info "Removing systemd user services..."
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 for unit in opencode-web.service openclaw-session-cleanup.timer \
@@ -210,7 +195,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     log_info "Removing macOS LaunchAgents..."
     _ods_uid="$(id -u)"
     _ods_agents_cleaned=true
-    for _ods_agent_label in com.ods.host-agent com.ods.opencode-web \
+    for _ods_agent_label in com.ods.llm-bridge com.ods.host-agent-bridge \
+                            com.ods.host-agent com.ods.opencode-web \
                             com.ods.llama-server com.ods.full-model-download; do
         _ods_agent_plist="$HOME/Library/LaunchAgents/${_ods_agent_label}.plist"
         if launchctl print "gui/${_ods_uid}/${_ods_agent_label}" >/dev/null 2>&1; then

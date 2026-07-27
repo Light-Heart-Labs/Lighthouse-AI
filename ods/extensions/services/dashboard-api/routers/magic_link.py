@@ -522,8 +522,17 @@ def _ods_proxy_service() -> Optional[dict]:
     dashboard-api loads extension manifests at process startup, but `ods
     enable ods-proxy` flips compose.yaml.disabled to compose.yaml while this
     process is still running. Owner-card readiness must see that transition
-    without requiring an operator to restart dashboard-api manually.
+    without requiring an operator to restart dashboard-api manually. The
+    inverse transition must also invalidate a service cached before disable.
     """
+    proxy_dir = EXTENSIONS_DIR / "ods-proxy"
+    if any(
+        (proxy_dir / name).exists()
+        for name in ("compose.yaml.disabled", "compose.yml.disabled")
+    ):
+        SERVICES.pop("ods-proxy", None)
+        return None
+
     service = SERVICES.get("ods-proxy")
     if service:
         return service
@@ -559,7 +568,10 @@ def _ods_proxy_lan_ready() -> tuple[bool, str]:
                 return True, ""
             return False, f"ods-proxy health returned HTTP {status}"
     except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        return False, f"ods-proxy is enabled but not reachable: {exc}"
+        return (
+            False,
+            f"ods-proxy is configured but not reachable in the active stack: {exc}",
+        )
 
 
 def _owner_card_requires_lan_proxy(payload: GenerateRequest) -> bool:

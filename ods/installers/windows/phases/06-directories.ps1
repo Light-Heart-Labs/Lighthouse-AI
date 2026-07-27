@@ -94,7 +94,10 @@ $_expectedRegularFiles = @(
     "config\llama-server\models.ini",
     "config\litellm\local.yaml",
     "config\litellm\lemonade.yaml",
+    "config\litellm\switchboard.yaml",
     "data\.extensions-lock",
+    "extensions\services\litellm\select-config.sh",
+    "extensions\services\litellm\ods_token_spy_callback.py",
     "extensions\services\hermes\cli-config.yaml.template",
     "extensions\services\hermes\SOUL.md.template",
     "extensions\services\hermes-proxy\Caddyfile",
@@ -274,7 +277,7 @@ if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) {
     $_amdInferenceRuntime = "lemonade"
     $_amdInferenceBackend = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.windows_backend) { $amdLemonadeRuntime.windows_backend } else { "vulkan" })
     $_amdInferenceLocation = "host"
-    $_amdInferencePort = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.api_port) { [string]$amdLemonadeRuntime.api_port } else { "8080" })
+    $_amdInferencePort = [string]$script:LEMONADE_PORT
     $_amdInferenceSupportedBackends = $_amdInferenceBackend
     $_amdInferenceRuntimeMode = "windows-legacy-lemonade"
     $_amdInferenceManaged = "true"
@@ -343,6 +346,7 @@ function Update-HermesConfigFile {
         [string]$BaseUrl,
         [int]$ContextLength,
         [int]$RequestTimeoutSeconds = 180,
+        [int]$MaxTokens = 1024,
         [switch]$LemonadeCompact
     )
 
@@ -354,6 +358,10 @@ function Update-HermesConfigFile {
     $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
     $content = $content -replace '(?m)^    context_length: .+\r?$', "    context_length: $ContextLength"
+    if ($MaxTokens -lt 1) { $MaxTokens = 1024 }
+    if ($content -notmatch '(?m)^  max_tokens:\s*\d+\s*$') {
+        $content = $content -replace '(?m)^model:\s*$', "model:`n  max_tokens: $MaxTokens"
+    }
     if ($RequestTimeoutSeconds -lt 1) { $RequestTimeoutSeconds = 180 }
 
     $timeoutMatch = [regex]::Match($content, '(?m)^    request_timeout_seconds:\s*(\d+)\s*$')
@@ -526,6 +534,11 @@ function Invoke-HermesSoulRefresh {
 }
 
 if ($enableHermes) {
+    $_switchboardMode = $(if ($_envLines.ContainsKey("ODS_MODEL_SWITCHBOARD")) {
+        ([string]$_envLines["ODS_MODEL_SWITCHBOARD"]).Trim().ToLowerInvariant()
+    } else {
+        "observe"
+    })
     $_hermesModel = $(if ($tierConfig.GgufFile) {
         if ($gpuInfo.Backend -eq "amd" -and
             $_envLines.ContainsKey("LEMONADE_MODEL") -and
@@ -537,12 +550,15 @@ if ($enableHermes) {
     } else {
         $tierConfig.LlmModel
     })
+    if ($_switchboardMode -eq "enabled") {
+        $_hermesModel = "ods/current"
+    }
     $_hermesBaseUrl = ""
     if ($_envLines.ContainsKey("HERMES_LLM_BASE_URL")) {
         $_hermesBaseUrl = $_envLines["HERMES_LLM_BASE_URL"].Trim().Trim('"').Trim("'")
     }
     if ([string]::IsNullOrWhiteSpace($_hermesBaseUrl)) {
-        $_hermesBaseUrl = $(if ($cloudMode -or $gpuInfo.Backend -eq "amd") {
+        $_hermesBaseUrl = $(if ($cloudMode -or $gpuInfo.Backend -eq "amd" -or $_switchboardMode -eq "enabled") {
             "http://litellm:4000/v1"
         } else {
             "http://llama-server:8080/v1"
@@ -557,7 +573,7 @@ if ($enableHermes) {
     if (-not (Test-Path $_hermesLive)) {
         Copy-Item -Path $_hermesTemplate -Destination $_hermesLive -Force
     }
-    $_hermesRequestTimeout = $(if ($cloudMode) { 180 } else { 900 })
+    $_hermesRequestTimeout = $(if ($cloudMode -and $_switchboardMode -ne "enabled") { 180 } else { 900 })
     $_patchedHermesTemplate = Update-HermesConfigFile -Path $_hermesTemplate -Model $_hermesModel -BaseUrl $_hermesBaseUrl -ContextLength ([int]$tierConfig.MaxContext) -RequestTimeoutSeconds $_hermesRequestTimeout -LemonadeCompact:($gpuInfo.Backend -eq "amd")
     $_patchedHermesLive = Update-HermesConfigFile -Path $_hermesLive -Model $_hermesModel -BaseUrl $_hermesBaseUrl -ContextLength ([int]$tierConfig.MaxContext) -RequestTimeoutSeconds $_hermesRequestTimeout -LemonadeCompact:($gpuInfo.Backend -eq "amd")
     if (-not ($_patchedHermesTemplate -and $_patchedHermesLive)) {
@@ -579,7 +595,7 @@ if ($enableOpenClaw) {
     # Lemonade serves at /api/v1, so OpenClaw base URL needs /api prefix
     # (OpenClaw appends /v1/chat/completions to the base URL)
     $_providerUrl = $(if ($gpuInfo.Backend -eq "amd") {
-        "http://host.docker.internal:8080/api"
+        "http://host.docker.internal:$($script:LEMONADE_PORT)/api"
     } else {
         "http://llama-server:8080"
     })

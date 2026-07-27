@@ -1660,6 +1660,12 @@ else
     _previous_llm_bind="$(read_env_value "${INSTALL_DIR}/.env" "BIND_ADDRESS")"
     _previous_macos_gateway="$(read_env_value "${INSTALL_DIR}/.env" "ODS_MACOS_HOST_GATEWAY")"
     generate_ods_env "$INSTALL_DIR" "$SELECTED_TIER" "$FORCE"
+    _macos_switchboard_mode="$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODEL_SWITCHBOARD")"
+    case "${_macos_switchboard_mode:-observe}" in
+        legacy|observe|enabled) ;;
+        *) _macos_switchboard_mode="observe" ;;
+    esac
+    upsert_env_value "${INSTALL_DIR}/.env" "ODS_MODEL_SWITCHBOARD" "$_macos_switchboard_mode"
     _macos_agent_bind_raw="$(read_env_value "${INSTALL_DIR}/.env" "ODS_AGENT_BIND")"
     _macos_agent_bind="$(macos_normalize_agent_bind "${_macos_agent_bind_raw:-127.0.0.1}")"
     if [[ -n "$_macos_agent_bind_raw" && "$_macos_agent_bind" != "$_macos_agent_bind_raw" ]]; then
@@ -1701,6 +1707,8 @@ else
         upsert_env_value "${INSTALL_DIR}/.env" "LLM_API_URL" "http://litellm:4000"
         upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_BASE_URL" "http://litellm:4000/v1"
         upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_API_KEY" "$_macos_litellm_key"
+        upsert_env_value "${INSTALL_DIR}/.env" "OPEN_WEBUI_LLM_BASE_URL" "http://litellm:4000"
+        upsert_env_value "${INSTALL_DIR}/.env" "OPEN_WEBUI_LLM_API_KEY" "$_macos_litellm_key"
         upsert_env_value "${INSTALL_DIR}/.env" "LLM_MODEL" "$LLM_MODEL"
         upsert_env_value "${INSTALL_DIR}/.env" "GGUF_FILE" ""
         upsert_env_value "${INSTALL_DIR}/.env" "MAX_CONTEXT" "$MAX_CONTEXT"
@@ -1722,6 +1730,17 @@ else
             upsert_env_value "${INSTALL_DIR}/.env" "LLM_API_URL" "http://host.docker.internal:8080"
             upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_BASE_URL" "http://host.docker.internal:8080/v1"
         fi
+        if [[ "$_macos_switchboard_mode" == "enabled" ]]; then
+            _macos_litellm_key="$(read_env_value "${INSTALL_DIR}/.env" "LITELLM_KEY")"
+            if [[ -z "$_macos_litellm_key" ]]; then
+                ai_err "Switchboard mode requires the generated LiteLLM master key, but LITELLM_KEY is empty."
+                exit 1
+            fi
+            upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_BASE_URL" "http://litellm:4000/v1"
+            upsert_env_value "${INSTALL_DIR}/.env" "HERMES_LLM_API_KEY" "$_macos_litellm_key"
+            upsert_env_value "${INSTALL_DIR}/.env" "OPEN_WEBUI_LLM_BASE_URL" "http://litellm:4000"
+            upsert_env_value "${INSTALL_DIR}/.env" "OPEN_WEBUI_LLM_API_KEY" "$_macos_litellm_key"
+        fi
     fi
     if [[ "${DOCKER_BACKEND:-unknown}" == "colima" ]] \
        && [[ "$_macos_llm_bridge_enabled" == "true" ]] \
@@ -1737,6 +1756,39 @@ else
         _macos_litellm_key
     CONTAINER_LLM_URL="$(read_env_value "${INSTALL_DIR}/.env" "LLM_API_URL")"
     [[ -n "$CONTAINER_LLM_URL" ]] || CONTAINER_LLM_URL="http://host.docker.internal:8080"
+    _macos_runtime_renderer="${ODS_PYTHON_CMD:-python3}"
+    if [[ ! -f "${INSTALL_DIR}/scripts/render-runtime-configs.py" ]] \
+        || ! command -v "$_macos_runtime_renderer" >/dev/null 2>&1; then
+        ai_err "Model router config renderer is unavailable"
+        exit 1
+    fi
+    _macos_router_args=(
+        --switchboard-mode "$_macos_switchboard_mode"
+        --ods-mode "$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODE")"
+        --gpu-backend "apple"
+        --model "${LLM_MODEL:-}"
+        --gguf-file "${GGUF_FILE:-}"
+        --llm-base-url "${CONTAINER_LLM_URL}"
+        --litellm-key "$(read_env_value "${INSTALL_DIR}/.env" "LITELLM_KEY")"
+        --context-length "${MAX_CONTEXT:-65536}"
+        --output-root "$INSTALL_DIR"
+        --write
+    )
+    for _macos_router_surface in model-router-endpoints; do
+        if ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
+            --surface "$_macos_router_surface" "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
+            ai_err "Failed to render required ${_macos_router_surface} config"
+            exit 1
+        fi
+    done
+    if [[ "$_macos_switchboard_mode" == "enabled" ]] \
+       && [[ "$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODE")" != "cloud" ]] \
+       && ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
+            --surface litellm-switchboard "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
+        ai_err "Failed to render required litellm-switchboard config"
+        exit 1
+    fi
+    unset _macos_runtime_renderer _macos_router_args _macos_router_surface
     if $env_existed && ! $FORCE; then
         ai_ok "Preserved existing .env (use --force to regenerate secrets)"
     else
@@ -2377,7 +2429,7 @@ for service in (data.get("services") or {}).values():
     # surface unrelated Dockerfile failures and make a healthy selected stack
     # look broken.
     ai "Rebuilding local-built images..."
-    _macos_candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
+    _macos_candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
     if ! _macos_enabled_services="$(docker compose "${COMPOSE_FLAGS[@]}" config --services 2>>"$ODS_LOG_FILE")"; then
         ai_err "Could not resolve macOS compose services for local image rebuilds."
         ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --services"
@@ -2619,7 +2671,16 @@ for service in (data.get("services") or {}).values():
     # local mode follows the actual native llama bind and port.
     if [[ -n "$OPENCODE_BIN" && -x "$OPENCODE_BIN" ]]; then
         mkdir -p "$OPENCODE_CONFIG_DIR"
-        if $CLOUD_MODE; then
+        _opencode_switchboard_mode="$(read_env_value "$INSTALL_DIR/.env" "ODS_MODEL_SWITCHBOARD")"
+        if [[ "${_opencode_switchboard_mode:-observe}" == "enabled" ]]; then
+            _opencode_model="ods/current"
+            _opencode_port="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_PORT")"
+            [[ "$_opencode_port" =~ ^[0-9]+$ ]] || _opencode_port="4000"
+            _opencode_bind="$(read_env_value "$INSTALL_DIR/.env" "BIND_ADDRESS")"
+            _opencode_host="$(macos_bind_probe_host "${_opencode_bind:-127.0.0.1}")"
+            _opencode_base_url="http://${_opencode_host}:${_opencode_port}/v1"
+            _opencode_api_key="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_KEY")"
+        elif $CLOUD_MODE; then
             _opencode_model="default"
             _opencode_port="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_PORT")"
             [[ "$_opencode_port" =~ ^[0-9]+$ ]] || _opencode_port="4000"
@@ -2646,6 +2707,7 @@ for service in (data.get("services") or {}).values():
         fi
         ai_ok "OpenCode configured for ${_opencode_model} at ${_opencode_base_url}"
         unset _opencode_model _opencode_port _opencode_bind _opencode_host \
+            _opencode_switchboard_mode \
             _opencode_base_url _opencode_api_key
 
         # Install as macOS LaunchAgent (auto-start on login).
@@ -3040,20 +3102,28 @@ if $ENABLE_PERPLEXICA; then
     ai "Configuring Perplexica..."
     PERPLEXICA_MODEL="${GGUF_FILE:-$LLM_MODEL}"
     PERPLEXICA_API_KEY="no-key"
+    PERPLEXICA_BASE_URL="${CONTAINER_LLM_URL:-http://host.docker.internal:8080}"
+    _perplexica_switchboard_mode="$(read_env_value "$INSTALL_DIR/.env" "ODS_MODEL_SWITCHBOARD")"
+    if [[ "${_perplexica_switchboard_mode:-observe}" == "enabled" ]]; then
+        PERPLEXICA_MODEL="ods/current"
+        PERPLEXICA_API_KEY="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_KEY")"
+        PERPLEXICA_BASE_URL="http://litellm:4000"
+    fi
     $CLOUD_MODE && PERPLEXICA_MODEL="default"
     if $CLOUD_MODE; then
         PERPLEXICA_API_KEY="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_KEY")"
+        PERPLEXICA_BASE_URL="http://litellm:4000"
     fi
     _perplexica_port="$(read_env_value "$INSTALL_DIR/.env" "PERPLEXICA_PORT")"
     [[ "$_perplexica_port" =~ ^[0-9]+$ ]] || _perplexica_port="3004"
     if [[ -z "$PERPLEXICA_API_KEY" ]] \
        || ! configure_perplexica "$_perplexica_port" "$PERPLEXICA_MODEL" \
-            "${CONTAINER_LLM_URL:-http://host.docker.internal:8080}" "$PERPLEXICA_API_KEY"; then
+            "$PERPLEXICA_BASE_URL" "$PERPLEXICA_API_KEY"; then
         ai_err "Perplexica was selected but its authenticated inference route could not be configured and verified."
         exit 1
     fi
     ai_ok "Perplexica configured (model: ${PERPLEXICA_MODEL})"
-    unset PERPLEXICA_API_KEY _perplexica_port
+    unset PERPLEXICA_API_KEY PERPLEXICA_BASE_URL _perplexica_port _perplexica_switchboard_mode
 fi
 
 # ── Pre-mark setup wizard complete ──

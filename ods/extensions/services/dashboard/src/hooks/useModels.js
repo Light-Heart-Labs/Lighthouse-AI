@@ -112,12 +112,32 @@ async function errorMessageFromResponse(response, fallback) {
 
 function conflictActiveModelId(data) {
   const nested = data?.detail && typeof data.detail === 'object'
-    ? data.detail.activeModelId
+    ? data.detail.activeModelId || data.detail.activeTarget
     : null
-  for (const value of [data?.activeModelId, nested]) {
+  for (const value of [data?.activeModelId, data?.activeTarget, nested]) {
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
   return null
+}
+
+function normalizeModelLifecycle(data) {
+  if (!data || typeof data !== 'object') return null
+  const operation = data.operation || data.activeOperation || null
+  const target = data.target || data.activeTarget || null
+  const modelId = data.modelId || data.activeModelId || target
+  const active = data.active === true || data.lifecycleActive === true || Boolean(operation)
+  if (!active || !operation) return null
+  return {
+    active: true,
+    operation,
+    target,
+    modelId,
+  }
+}
+
+function hasActiveModelActivation(data) {
+  const lifecycle = normalizeModelLifecycle(data?.modelLifecycle)
+  return lifecycle?.operation === 'model_activation'
 }
 
 function normalizeOdsMode(value) {
@@ -142,7 +162,9 @@ export function useModels() {
   const [models, setModels] = useState(USE_MOCK_DATA ? getMockModels() : [])
   const [gpu, setGpu] = useState(USE_MOCK_DATA ? MOCK_GPU : null)
   const [currentModel, setCurrentModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
+  const [activationReadyModel, setActivationReadyModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
   const [configuredModel, setConfiguredModel] = useState(USE_MOCK_DATA ? MOCK_CURRENT_MODEL : null)
+  const [modelLifecycle, setModelLifecycle] = useState(null)
   const [odsMode, setOdsMode] = useState(USE_MOCK_DATA ? MOCK_MODES.odsMode : 'unknown')
   const [configuredMode, setConfiguredMode] = useState(USE_MOCK_DATA ? MOCK_MODES.configuredMode : 'unknown')
   const [recommendationAlternatives, setRecommendationAlternatives] = useState([])
@@ -217,7 +239,9 @@ export function useModels() {
       setModels(data.models)
       setGpu(data.gpu)
       setCurrentModel(data.currentModel)
+      setActivationReadyModel(data.activationReadyModel ?? null)
       setConfiguredModel(data.configuredModel ?? null)
+      setModelLifecycle(normalizeModelLifecycle(data.modelLifecycle))
       const effectiveMode = normalizeOdsMode(data.odsMode)
       setOdsMode(effectiveMode)
       setConfiguredMode(normalizeOdsMode(data.configuredMode ?? data.odsMode))
@@ -252,7 +276,11 @@ export function useModels() {
     pollModels()
   }, [pollModels])
 
-  const pollInterval = pendingActions.some(action => action.kind === 'download' || action.kind === 'delete')
+  const backendActivationModel = modelLifecycle?.operation === 'model_activation'
+    ? modelLifecycle.modelId
+    : null
+  const backendLifecycleBusy = Boolean(modelLifecycle?.active)
+  const pollInterval = pendingActions.some(action => action.kind === 'download' || action.kind === 'delete' || action.kind === 'load') || backendLifecycleBusy
     ? PENDING_MODEL_ACTION_POLL_MS
     : DEFAULT_POLL_MS
 
@@ -301,7 +329,7 @@ export function useModels() {
     }
   }
 
-  const loadModel = async (modelId) => {
+  const loadModel = async (modelId, options = {}) => {
     const modeError = modelActivationModeError(odsMode, configuredMode)
     if (modeError) {
       setMutationError(modeError)
@@ -327,18 +355,36 @@ export function useModels() {
     const startedAt = Date.now()
     let activationError = null
     let targetLoaded = false
+    const requestedContextLength = Number(options.contextLength || 0) || null
+    const activationMatches = (data) => {
+      if (
+        data?.currentModel !== modelId ||
+        data?.activationReadyModel !== modelId ||
+        hasActiveModelActivation(data)
+      ) return false
+      if (!requestedContextLength) return true
+      const activeModel = data?.models?.find(model => model.id === modelId)
+      return Number(activeModel?.contextLength || 0) === requestedContextLength
+    }
 
-    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, {
+    const activationRequestOptions = {
       method: 'POST',
       signal: controller.signal,
-    })
+    }
+    if (requestedContextLength) {
+      activationRequestOptions.headers = { 'Content-Type': 'application/json' }
+      activationRequestOptions.body = JSON.stringify({
+        context_length: requestedContextLength,
+      })
+    }
+    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, activationRequestOptions)
       .then(async (response) => {
         if (response.ok) return
 
         const body = await responseJson(response)
         if (response.status === 409) {
           const activeModelId = conflictActiveModelId(body)
-          if (activeModelId === modelId) return
+          if (activeModelId === modelId && !requestedContextLength) return
 
           const detail = errorMessageFromPayload(body, 'Another model activation is in progress')
           activationError = activeModelId
@@ -360,7 +406,7 @@ export function useModels() {
 
         if (activationError) break
         const data = await fetchModels()
-        if (data?.currentModel === modelId) {
+        if (activationMatches(data)) {
           targetLoaded = true
           break
         }
@@ -369,7 +415,7 @@ export function useModels() {
       // Take one final authoritative snapshot at the deadline or after a POST
       // failure. This cannot turn an unverified 409 into same-target success.
       const finalData = await fetchModels()
-      if (!activationError && finalData?.currentModel === modelId) targetLoaded = true
+      if (!activationError && activationMatches(finalData)) targetLoaded = true
 
       if (!targetLoaded) {
         setMutationError(activationError ||
@@ -421,9 +467,14 @@ export function useModels() {
 
   const activationAction = pendingActions.find(action => action.kind === 'load')
   const latestAction = pendingActions[pendingActions.length - 1]
-  const activationLoading = activationAction?.modelId ?? null
+  const activationLoading = activationAction?.modelId ?? backendActivationModel ?? null
   const actionLoading = activationAction?.modelId ?? latestAction?.modelId ?? null
-  const actionLoadingModels = [...new Set(pendingActions.map(action => action.modelId))]
+  const actionLoadingModels = [
+    ...new Set([
+      ...pendingActions.map(action => action.modelId),
+      backendActivationModel,
+    ].filter(Boolean)),
+  ]
   const error = mutationError || fetchError
   const activationModeError = modelActivationModeError(odsMode, configuredMode)
 
@@ -431,7 +482,9 @@ export function useModels() {
     models,
     gpu,
     currentModel,
+    activationReadyModel,
     configuredModel,
+    modelLifecycle,
     odsMode,
     configuredMode,
     canActivateModels: activationModeError === null,
