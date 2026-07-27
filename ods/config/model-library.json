@@ -797,6 +797,27 @@
       "tokens_per_sec_estimate": 55,
       "llm_model_name": "Ministral-3-8B-Instruct-2512",
       "llama_server_image": null,
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-q4-kv",
+          "label": "NVIDIA 8GB 64K context with Q4 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 31,
+          "context_length": 65536,
+          "estimated_required_gb": 7.4,
+          "fit_label": "64K 8GB Q4 KV profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+          }
+        }
+      ],
       "install_recommendation": false
     },
     {

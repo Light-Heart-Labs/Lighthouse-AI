@@ -659,6 +659,23 @@ def test_ministral3_8b_is_staged_for_six_host_validation():
     assert model["size_bytes"] == 5198911904
     assert model["vram_required_gb"] == 7
     assert model["context_length"] == 262144
+    profile = {
+        item["id"]: item for item in model["runtime_profiles"]
+    }["nvidia-8gb-64k-q4-kv"]
+    assert profile["backend"] == "nvidia"
+    assert profile["host_arch"] == ["amd64"]
+    assert profile["memory_type"] == "discrete"
+    assert profile["vram_min_gb"] == 7.5
+    assert profile["vram_max_gb"] == 8.5
+    assert profile["system_ram_min_gb"] == 31
+    assert profile["context_length"] == 65536
+    assert profile["estimated_required_gb"] == 7.4
+    assert profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+        "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+    }
     assert model.get("install_recommendation") is False
     assert _agent_viable_for_release(model)
 
