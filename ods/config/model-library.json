@@ -477,7 +477,49 @@
       "tokens_per_sec_estimate": 105,
       "llm_model_name": "NVIDIA-Nemotron3-Nano-4B",
       "llama_server_image": null,
-      "install_recommendation": false
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Fleet chat routes verified",
+          "reason": "Fresh exact-commit six-host validation loaded NVIDIA Nemotron 3 Nano 4B through the browser switchboard and passed every required deployed OpenAI-compatible LLM-consumer probe with signed route evidence naming the candidate runtime.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed challenge-bound ODS Talk after loading Nemotron and again after restoring each host's original model.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed the challenge-bound Perplexica route on Nemotron with signed model-route evidence, then repeated the required consumer suite after clean baseline restoration.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed Nemotron load, challenge-bound ODS Talk, every required deployed LLM consumer, original-model restore, repeated Talk and consumer probes, candidate deletion, and clean final inventory across Linux, macOS, and Windows backends.",
+          "evidence": "fleet-test/runs/2026-07-27T02-32-10Z-model-ui-product-651e048b61d9-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T03:04:50Z",
+          "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        }
+      },
+      "install_recommendation": true
     },
     {
       "id": "granite4.1-3b-q4",

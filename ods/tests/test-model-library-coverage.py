@@ -614,7 +614,7 @@ def test_falcon_h1_3b_is_not_talk_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["falcon-h1-3b-instruct-q4"])
 
 
-def test_nemotron3_nano_4b_is_cataloged_for_fleet_validation():
+def test_nemotron3_nano_4b_is_recommended_after_six_host_validation():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     model = by_id["nvidia-nemotron3-nano-4b-q4"]
@@ -629,7 +629,16 @@ def test_nemotron3_nano_4b_is_cataloged_for_fleet_validation():
     assert model["size_bytes"] == 2837072864
     assert model["vram_required_gb"] <= 5
     assert model["context_length"] == 262144
-    assert model.get("install_recommendation") is False
+    assert model.get("install_recommendation") is True
+    compatibility = model["app_compatibility"]
+    assert compatibility["openai_chat"]["status"] == "verified"
+    assert compatibility["hermes_talk"]["status"] == "verified"
+    assert compatibility["perplexica"]["status"] == "verified"
+    assert compatibility["agent_viability"]["status"] == "verified"
+    assert "2026-07-27T02-32-10Z" in compatibility["agent_viability"]["evidence"]
+    assert compatibility["agent_viability"]["hostScope"] == [
+        "tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"
+    ]
     assert _agent_viable_for_release(model)
 
 
@@ -749,7 +758,6 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "granite4.0-h-1b-q4",
         "falcon-h1-1.5b-instruct-q4",
         "falcon-h1-3b-instruct-q4",
-        "nvidia-nemotron3-nano-4b-q4",
         "granite4.0-1b-q4",
         "granite4.0-h-350m-q4",
         "granite3.2-2b-instruct-q4",
