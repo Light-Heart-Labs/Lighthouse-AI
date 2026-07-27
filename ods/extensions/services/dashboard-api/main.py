@@ -69,6 +69,7 @@ from routers import (
     talk,
     tailscale,
     usage,
+    test,
 )
 from settings import (
     _ENV_ASSIGNMENT_RE, _ENV_COMMENTED_ASSIGNMENT_RE, _SETTINGS_APPLY_ALLOWED_SERVICES, _parse_env_text, _read_env_map_from_path,
@@ -1032,6 +1033,7 @@ app.include_router(extensions.router)
 app.include_router(gpu_router.router)
 app.include_router(resources.router)
 app.include_router(voice.router)
+app.include_router(test.router)
 # Static switchboard state route registers before the dynamic model-ID routes.
 app.include_router(model_state_router.router)
 app.include_router(models_router.router)
