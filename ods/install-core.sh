@@ -49,6 +49,9 @@ interrupt_handler() {
     if (( now - LAST_SIGINT <= 3 )); then
         echo ""
         echo -e "\033[0;33m[!] Install cancelled by user.\033[0m"
+        if declare -F cancel_active_download >/dev/null 2>&1; then
+            cancel_active_download
+        fi
         echo -e "\033[0;32m    Log file: ${LOG_FILE:-/tmp/ods-install.log}\033[0m"
         exit 130
     fi

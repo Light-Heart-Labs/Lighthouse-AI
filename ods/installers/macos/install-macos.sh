@@ -175,6 +175,7 @@ source "${LIB_DIR}/tier-map.sh"
 source "${LIB_DIR}/detection.sh"
 source "${LIB_DIR}/preflight-fs.sh"
 source "${LIB_DIR}/env-generator.sh"
+source "${LIB_DIR}/installed-footprint.sh"
 if [[ -f "${SOURCE_ROOT}/installers/lib/compose-failure-report.sh" ]]; then
     source "${SOURCE_ROOT}/installers/lib/compose-failure-report.sh"
 fi
@@ -1578,6 +1579,34 @@ else
     # Copy source tree (skip .git, data, logs, .env, models)
     if [[ "$SOURCE_ROOT" != "$INSTALL_DIR" ]]; then
         ai "Copying source files to ${INSTALL_DIR}..."
+        _ods_prune_stale_dev_paths=false
+        if [[ -f "${INSTALL_DIR}/.env" ]] \
+            && [[ -f "${INSTALL_DIR}/manifest.json" ]] \
+            && [[ -f "${INSTALL_DIR}/docker-compose.base.yml" ]]; then
+            _ods_prune_stale_dev_paths=true
+        fi
+        _ods_dev_only_dirs=(tests docs examples .github)
+        _ods_dev_only_files=(
+            CHANGELOG.md
+            CODE_OF_CONDUCT.md
+            CONTRIBUTING.md
+            EDGE-QUICKSTART.md
+            FAQ.md
+            QUICKSTART.md
+            SECURITY.md
+            README.md
+            .shellcheckrc
+            PSScriptAnalyzerSettings.psd1
+            test-stack.sh
+            .gitignore
+        )
+        _ods_dev_rsync_excludes=()
+        for _ods_dev_path in "${_ods_dev_only_dirs[@]}"; do
+            _ods_dev_rsync_excludes+=(--exclude="/${_ods_dev_path}/")
+        done
+        for _ods_dev_path in "${_ods_dev_only_files[@]}"; do
+            _ods_dev_rsync_excludes+=(--exclude="/${_ods_dev_path}")
+        done
         rsync -a --quiet \
             --exclude='.git' \
             --exclude='data' \
@@ -1592,7 +1621,24 @@ else
             --exclude='.target-model' \
             --exclude='.target-quantization' \
             --exclude='.offline-mode' \
+            "${_ods_dev_rsync_excludes[@]}" \
             "$SOURCE_ROOT/" "$INSTALL_DIR/"
+
+        # Excludes leave files copied by an older installer in place. Move
+        # managed-upgrade leftovers to a recoverable backup instead of deleting
+        # possible user modifications. Unmanaged targets remain untouched.
+        if $_ods_prune_stale_dev_paths; then
+            _ods_dev_backup="$(
+                ods_quarantine_development_paths \
+                    "$INSTALL_DIR" \
+                    "${_ods_dev_only_dirs[@]}" \
+                    "${_ods_dev_only_files[@]}"
+            )"
+            if [[ -n "$_ods_dev_backup" ]]; then
+                ai_warn "Older development files were moved to ${_ods_dev_backup}"
+            fi
+        fi
+        unset _ods_prune_stale_dev_paths _ods_dev_only_dirs _ods_dev_only_files _ods_dev_rsync_excludes _ods_dev_path _ods_dev_backup
         ai_ok "Source files installed"
     else
         ai "Running in-place, skipping file copy"
@@ -1672,6 +1718,18 @@ else
         ai_warn "ODS_AGENT_BIND=${_macos_agent_bind_raw} uses an unsupported IPv6 server socket; using ${_macos_agent_bind}"
         upsert_env_value "${INSTALL_DIR}/.env" "ODS_AGENT_BIND" "$_macos_agent_bind"
     fi
+    # Persist the interpreter that proved it can import yaml. _ensure_macos_pyyaml
+    # may have satisfied the compose resolver through an ODS-owned venv, but that
+    # choice only lives in this installer process. Without recording it, a later
+    # `ods enable` / `ods start` resolves python again, falls back to a host
+    # python3 that cannot import yaml, and scripts/resolve-compose-stack.sh fails
+    # after the install already reported success. lib/safe-env.sh exports .env
+    # keys, so the CLI and the resolver subprocess both pick this up.
+    if [[ -n "${ODS_PYTHON_CMD:-}" ]] && ! _macos_python_imports_yaml python3; then
+        upsert_env_value "${INSTALL_DIR}/.env" "ODS_PYTHON_CMD" "$ODS_PYTHON_CMD"
+        ai_ok "Recorded compose-resolver Python: ${ODS_PYTHON_CMD}"
+    fi
+
     _macos_llm_bridge_enabled="false"
     if [[ "${DOCKER_BACKEND:-unknown}" == "colima" ]]; then
         _macos_llm_bind="$(read_env_value "${INSTALL_DIR}/.env" "BIND_ADDRESS")"
@@ -2351,11 +2409,13 @@ for service in (data.get("services") or {}).values():
     if service.get("build") is not None:
         continue
     image = str(service.get("image") or "").strip()
-    if image:
-        print(image)
-' | while IFS= read -r _image; do
+    if not image:
+        continue
+    platform = str(service.get("platform") or "").strip()
+    print(image + "\t" + platform)
+' | while IFS=$'\t' read -r _image _platform; do
                 _macos_is_local_image "$_image" && continue
-                printf '%s\n' "$_image"
+                printf '%s\t%s\n' "$_image" "$_platform"
             done | awk '!seen[$0]++'; then
                 return 0
             fi
@@ -2367,19 +2427,91 @@ for service in (data.get("services") or {}).values():
         done | awk '!seen[$0]++'
     }
 
-    _macos_pull_image_with_retry() {
-        local image="$1" attempt max_attempts delay
-        local -a delays=(5 15 30)
+    _macos_normalize_image_platform() {
+        local raw="${1:-}" os arch variant extra
+        raw="${raw//$'\r'/}"
+        raw="${raw//$'\n'/}"
+        raw="${raw//[[:space:]]/}"
+        raw="${raw,,}"
+        raw="${raw#\"}"
+        raw="${raw%\"}"
+        raw="${raw#\'}"
+        raw="${raw%\'}"
+        [[ -n "$raw" ]] || return 1
 
-        if docker image inspect "$image" >/dev/null 2>&1; then
-            log "Compose image already cached: $image"
-            return 0
+        if [[ "$raw" != */* ]]; then
+            raw="linux/$raw"
+        fi
+        IFS='/' read -r os arch variant extra <<< "$raw"
+        [[ -n "$os" && -n "$arch" && -z "$extra" ]] || return 1
+
+        case "$arch" in
+            amd64|x86_64|x86-64)
+                arch="amd64"
+                ;;
+            arm64|aarch64)
+                arch="arm64"
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+
+        case "${variant:-}" in
+            ""|"<no value>")
+                variant=""
+                ;;
+            v8)
+                [[ "$arch" == "arm64" ]] || return 1
+                variant=""
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+
+        printf '%s/%s\n' "$os" "$arch"
+    }
+
+    _macos_cached_image_platform() {
+        local image="$1" inspected
+        inspected="$(docker image inspect \
+            --format '{{.Os}}/{{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}' \
+            "$image" 2>/dev/null)" || return 1
+        _macos_normalize_image_platform "$inspected"
+    }
+
+    _macos_pull_image_with_retry() {
+        # $2 is the compose service's platform pin (may be empty). Without it,
+        # docker pull resolves the host platform (linux/arm64 on Apple
+        # Silicon), which hard-fails for amd64-only images like TEI even
+        # though compose would run them pinned under emulation.
+        local image="$1" platform="${2:-}" attempt max_attempts delay cached_platform requested_platform
+        local -a delays=(5 15 30)
+        local -a pull_cmd=(docker pull "$image")
+        [[ -n "$platform" ]] && pull_cmd=(docker pull --platform "$platform" "$image")
+
+        if [[ -z "$platform" ]]; then
+            if docker image inspect "$image" >/dev/null 2>&1; then
+                log "Compose image already cached: $image"
+                return 0
+            fi
+        else
+            requested_platform="$(_macos_normalize_image_platform "$platform" 2>/dev/null || true)"
+            cached_platform="$(_macos_cached_image_platform "$image" 2>/dev/null || true)"
+            if [[ -n "$requested_platform" && "$cached_platform" == "$requested_platform" ]]; then
+                log "Compose image already cached for $requested_platform: $image"
+                return 0
+            fi
+            if [[ -n "$cached_platform" ]]; then
+                log "Compose image cache platform mismatch for $image: cached=$cached_platform requested=${requested_platform:-$platform}"
+            fi
         fi
 
         max_attempts="${ODS_DOCKER_PULL_MAX_ATTEMPTS:-4}"
         for ((attempt=1; attempt<=max_attempts; attempt++)); do
-            ai "Pulling Compose image ($attempt/$max_attempts): $image"
-            if docker pull "$image" >>"$ODS_LOG_FILE" 2>&1; then
+            ai "Pulling Compose image ($attempt/$max_attempts): $image${platform:+ [$platform]}"
+            if "${pull_cmd[@]}" >>"$ODS_LOG_FILE" 2>&1; then
                 ai_ok "Pulled $image"
                 return 0
             fi
@@ -2395,7 +2527,7 @@ for service in (data.get("services") or {}).values():
     }
 
     _macos_pre_pull_compose_images() {
-        local image_output image failed
+        local image_output image platform failed
         image_output="$(_macos_compose_external_images)" || {
             ai_err "Could not resolve macOS Docker Compose images before service launch"
             ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --images"
@@ -2405,9 +2537,9 @@ for service in (data.get("services") or {}).values():
 
         ai "Verifying Compose image cache before launch..."
         failed=0
-        while IFS= read -r image; do
+        while IFS=$'\t' read -r image platform; do
             [[ -n "$image" ]] || continue
-            _macos_pull_image_with_retry "$image" || failed=$((failed + 1))
+            _macos_pull_image_with_retry "$image" "$platform" || failed=$((failed + 1))
         done <<< "$image_output"
 
         if [[ "$failed" -eq 0 ]]; then

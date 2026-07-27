@@ -652,6 +652,21 @@ else
         if [[ ! -f "$GGUF_DIR/$GGUF_FILE" ]]; then
             ods_progress 77 "services" "Downloading AI model"
             ai "Downloading GGUF model: $GGUF_FILE"
+
+            # Expected size drives the progress percentage. LLM_MODEL_SIZE_MB
+            # tracks the full model, which is not what fast-start downloads
+            # here, so the bootstrap branch carries its own number.
+            _model_total_mb="${LLM_MODEL_SIZE_MB:-0}"
+            [[ "$_BOOTSTRAP_ACTIVE" == "true" ]] && _model_total_mb="${BOOTSTRAP_GGUF_SIZE_MB:-0}"
+            [[ "$_model_total_mb" =~ ^[0-9]+$ ]] || _model_total_mb=0
+            ODS_ACTIVE_DOWNLOAD_PART="$GGUF_DIR/$GGUF_FILE.part"
+            ODS_ACTIVE_DOWNLOAD_TOTAL_MB="$_model_total_mb"
+
+            # curl resumes into the same .part file (-C -), so an interrupted
+            # install keeps its bytes. Say so instead of looking like a restart.
+            if [[ -s "$ODS_ACTIVE_DOWNLOAD_PART" ]]; then
+                ai "Found partial download: $(format_download_progress "$(download_part_bytes "$ODS_ACTIVE_DOWNLOAD_PART")" "$_model_total_mb"). Resuming..."
+            fi
             signal "This is the big one. I've got it — sit back."
             echo ""
 
@@ -661,11 +676,14 @@ else
                 [[ $_attempt -gt 1 ]] && ai "Retry attempt $_attempt of 3..."
                 curl -fSL -C - --connect-timeout 30 --max-time 3600 \
                     --retry 3 --retry-delay 5 --retry-all-errors \
-                    -o "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_URL" \
+                    -o "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_URL" \
                     >> "$INSTALL_DIR/logs/model-download.log" 2>&1 &
                 dl_pid=$!
+                ODS_ACTIVE_DOWNLOAD_PID="$dl_pid"
 
-                if spin_task $dl_pid "Downloading $GGUF_FILE"; then
+                if spin_task $dl_pid "Downloading $GGUF_FILE" \
+                    "$ODS_ACTIVE_DOWNLOAD_PART" "$_model_total_mb"; then
+                    ODS_ACTIVE_DOWNLOAD_PID=""
                     # Verify the file actually landed before claiming success.
                     # Today's chain (spin_task → mv → printf) trusts each step's
                     # exit code separately and can race: mv can silently fail if
@@ -673,7 +691,7 @@ else
                     # another process can remove the file before the printf
                     # fires. A spurious "Model downloaded" line then misleads
                     # later phases that depend on the file existing.
-                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                    if mv "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
                         printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded: $GGUF_FILE"
                         _dl_success=true
                         break
@@ -681,14 +699,17 @@ else
                         rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
                         printf "\r  ${AMB}⚠${NC} %-60s\n" "Download claimed to succeed but $GGUF_FILE is missing/empty"
                     fi
-                elif _phase11_download_hf_artifact "$GGUF_URL" "$GGUF_DIR/$GGUF_FILE.part" "$INSTALL_DIR/logs/model-download.log"; then
-                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
-                        printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
-                        _dl_success=true
-                        break
-                    else
-                        rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
-                        printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
+                else
+                    ODS_ACTIVE_DOWNLOAD_PID=""
+                    if _phase11_download_hf_artifact "$GGUF_URL" "$ODS_ACTIVE_DOWNLOAD_PART" "$INSTALL_DIR/logs/model-download.log"; then
+                        if mv "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                            printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
+                            _dl_success=true
+                            break
+                        else
+                            rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
+                            printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
+                        fi
                     fi
                 fi
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"
@@ -702,6 +723,10 @@ else
 
             if [[ "$_dl_success" != "true" ]]; then
                 printf "\r  ${RED}✗${NC} %-60s\n" "Download failed after 3 attempts: $GGUF_FILE"
+                # Nothing above deletes the .part, so the bytes already on disk
+                # are still usable. Users who do not know that re-download from
+                # zero or clear the directory by hand.
+                report_active_download_preserved
                 ai "Manual retry: curl -fSL -C - --connect-timeout 30 --max-time 3600 --retry 3 --retry-delay 5 --retry-all-errors -o '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_URL' && mv '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_DIR/$GGUF_FILE'"
             else
                 # Verify freshly downloaded file
@@ -728,6 +753,7 @@ else
                     fi
                 fi
             fi
+            unset ODS_ACTIVE_DOWNLOAD_PID ODS_ACTIVE_DOWNLOAD_PART ODS_ACTIVE_DOWNLOAD_TOTAL_MB
         fi
 
         # Abort if model download/verification failed
