@@ -106,7 +106,8 @@
           "recordedAt": "2026-07-27T11:12:30Z",
           "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
           "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
-          "hostScope": ["tower2", "strix-halo"]
+          "hostScope": ["tower2", "strix-halo"],
+          "expiresAt": "2026-08-27T00:00:00Z"
         },
         "agent_viability": {
           "status": "not_agent_viable",
@@ -115,7 +116,9 @@
           "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
           "recordedAt": "2026-07-27T11:12:30Z",
           "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
-          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "globalScope": true,
+          "expiresAt": "2026-08-27T00:00:00Z"
         }
       },
       "install_recommendation": false
@@ -1743,10 +1746,11 @@
       "architecture": "moe",
       "quantization": "MXFP4",
       "specialty": "Reasoning & Agents",
-      "description": "OpenAI's Apache-2.0 open-weight MoE model with adjustable reasoning effort, tool use, structured output, and strong coding workflows. The native MXFP4 artifact targets 16GB-class systems, with a documented CPU-MoE profile for 8GB NVIDIA GPUs.",
+      "description": "OpenAI's Apache-2.0 open-weight MoE model with adjustable reasoning effort, tool use, structured output, and strong coding workflows. The native MXFP4 artifact targets 16GB-class systems, with a documented CPU-MoE profile for 8GB NVIDIA GPUs. It remains available for manual testing, but is not agent-ready after required app and activation probes failed across the fleet.",
       "tokens_per_sec_estimate": 50,
       "llm_model_name": "gpt-oss-20b",
       "llama_server_image": null,
+      "install_recommendation": false,
       "runtime_profiles": [
         {
           "id": "nvidia-8gb-64k-cpu-moe",
@@ -1767,7 +1771,74 @@
             "LLAMA_ARG_N_CPU_MOE": "22"
           }
         }
-      ]
+      ],
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unsupported_until_revalidated",
+          "label": "App chat needs revalidation",
+          "reason": "After the exact GPT-OSS swap and successful ODS Talk inference, Open WebUI exhausted its short response budget before completing the challenge phrase on tower2, strix-halo, and strixy. On m5-mbp, LiteLLM and Open WebUI returned raw Harmony analysis-channel text even when the verification token was present.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,m5-mbp,strixy}",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "m5-mbp", "strixy"],
+          "expiresAt": "2026-08-27T00:00:00Z"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified on four hosts",
+          "reason": "The pinned GPT-OSS artifact loaded and returned a challenge-bound ODS Talk response on tower2, strix-halo, m5-mbp, and strixy before downstream app validation. Spark never activated the model, and windows-laptop did not establish a verified gateway route.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,m5-mbp,strixy}",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "m5-mbp", "strixy"]
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica needs revalidation",
+          "reason": "Perplexica timed out on m5-mbp after GPT-OSS loaded and ODS Talk passed, while the same host's gateway and Open WebUI remained responsive.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/m5-mbp",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["m5-mbp"],
+          "expiresAt": "2026-08-27T00:00:00Z"
+        },
+        "runtime_activation": {
+          "status": "unsupported_until_revalidated",
+          "label": "Spark activation needs revalidation",
+          "reason": "Spark downloaded and checksum-verified the exact artifact, but activation remained in downloaded state until the bounded load timeout; failure recovery restored the original model and removed the test artifact.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/spark",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["spark"],
+          "expiresAt": "2026-08-27T00:00:00Z"
+        },
+        "gateway_route": {
+          "status": "unsupported_until_revalidated",
+          "label": "Windows gateway route needs revalidation",
+          "reason": "The staged catalog was auto-selected on windows-laptop before validation because omitted install metadata defaulted to true. GPT-OSS loaded through the 8GB CPU-MoE profile, but LiteLLM, Open WebUI, and Perplexica had no verified active route. Explicit install_recommendation false prevents recurrence.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-08-27T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not agent-ready",
+          "reason": "The six-host run produced independent downstream-app, activation, and routing blockers. All failure cleanup paths passed, but GPT-OSS must remain outside installation and recommendation selection until a fresh exact-commit run passes load, inference, every required consumer, restore, and cleanup on all six hosts.",
+          "evidence": "fleet-test/runs/2026-07-27T11-49-00Z-model-ui-product-d72b40956d3b-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T12:37:33Z",
+          "productSha": "d72b40956d3b012d3ee850edc42c329b5ce8c2f3",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "globalScope": true,
+          "expiresAt": "2026-08-27T00:00:00Z"
+        }
+      }
     },
     {
       "id": "qwen3.5-27b-q4",
