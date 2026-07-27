@@ -563,7 +563,8 @@ def test_write_path_never_truncates_in_place() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         target = Path(tmp) / "lemonade.yaml"
         original_content = "original-content-prior-to-replace\n"
-        target.write_text(original_content, encoding="utf-8")
+        target.write_bytes(original_content.encode("utf-8"))
+        original_size = target.stat().st_size
         seen_sizes = []
         real_chmod = renderer.os.chmod
 
@@ -577,7 +578,7 @@ def test_write_path_never_truncates_in_place() -> None:
         finally:
             renderer.os.chmod = real_chmod
 
-        assert all(size == len(original_content) for size in seen_sizes)
+        assert all(size == original_size for size in seen_sizes)
         assert target.read_text(encoding="utf-8") == "new-content\n"
 
 
