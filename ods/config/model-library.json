@@ -18,8 +18,7 @@
       "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target for low-VRAM local agents.",
       "tokens_per_sec_estimate": 120,
       "llm_model_name": "qwen3.5-2b",
-      "llama_server_image": null,
-      "install_recommendation": false
+      "llama_server_image": null
     },
     {
       "id": "phi4-mini-q4",

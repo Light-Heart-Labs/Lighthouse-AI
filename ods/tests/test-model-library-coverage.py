@@ -818,13 +818,12 @@ def test_qwen35_2b_is_staged_as_a_3gb_long_context_candidate():
     assert model["vram_required_gb"] == 3
     assert model["context_length"] == HERMES_CONTEXT_FLOOR
     assert model["max_context_length"] == 262144
-    assert model.get("install_recommendation") is False
+    assert "install_recommendation" not in model
     assert _agent_viable_for_release(model)
 
 
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
-        "qwen3.5-2b-q4",
         "phi3.5-mini-q4",
         "qwen2.5-0.5b-instruct-q4",
         "qwen2.5-1.5b-instruct-q4",
