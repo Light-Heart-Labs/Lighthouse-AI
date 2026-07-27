@@ -643,7 +643,7 @@ def test_nemotron3_nano_4b_is_recommended_after_six_host_validation():
     assert _agent_viable_for_release(model)
 
 
-def test_ministral3_8b_is_staged_for_six_host_validation():
+def test_ministral3_8b_is_recommended_after_six_host_validation():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     model = by_id["ministral3-8b-instruct-2512-q4"]
@@ -676,7 +676,23 @@ def test_ministral3_8b_is_staged_for_six_host_validation():
         "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
         "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
     }
-    assert model.get("install_recommendation") is False
+    compatibility = model["app_compatibility"]
+    assert model.get("install_recommendation") is True
+    assert {
+        app: entry["status"] for app, entry in compatibility.items()
+    } == {
+        "openai_chat": "verified",
+        "hermes_talk": "verified",
+        "perplexica": "verified",
+        "agent_viability": "verified",
+    }
+    evidence = compatibility["agent_viability"]
+    assert "2026-07-27T06-31-36Z" in evidence["evidence"]
+    assert evidence["productSha"] == "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a"
+    assert evidence["harnessSha"] == "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+    assert evidence["hostScope"] == [
+        "tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"
+    ]
     assert _agent_viable_for_release(model)
 
 
@@ -801,7 +817,6 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "granite3.2-2b-instruct-q4",
         "granite3.1-2b-instruct-q4",
         "phi3-mini-128k-q4",
-        "ministral3-8b-instruct-2512-q4",
         "llama3.2-1b-instruct-q4",
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",

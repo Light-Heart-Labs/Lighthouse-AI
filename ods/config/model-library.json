@@ -818,7 +818,49 @@
           }
         }
       ],
-      "install_recommendation": false
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Fleet chat routes verified",
+          "reason": "Fresh exact-commit six-host validation loaded Ministral 3 8B through the browser switchboard and passed every required deployed OpenAI-compatible LLM-consumer probe with signed route evidence naming the candidate runtime.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed challenge-bound ODS Talk after loading Ministral and again after restoring each host's original model.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed the challenge-bound Perplexica route on Ministral with signed model-route evidence, then repeated the required consumer suite after clean baseline restoration.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed Ministral load with the scoped NVIDIA 8GB profile, challenge-bound ODS Talk, every required deployed LLM consumer, original-model restore, repeated Talk and consumer probes, candidate deletion, and clean final inventory across Linux, macOS, and Windows backends.",
+          "evidence": "fleet-test/runs/2026-07-27T06-31-36Z-model-ui-product-7629cd20c0ec-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T06:59:37Z",
+          "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        }
+      },
+      "install_recommendation": true
     },
     {
       "id": "ministral-3b-instruct-q4",
