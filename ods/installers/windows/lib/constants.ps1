@@ -14,11 +14,13 @@ $script:ODS_VERSION = "2.5.3"
 
 # Install location (override via $env:ODS_HOME)
 # NOTE: $(if ...) syntax required for PS 5.1 compatibility (bare if-as-expression is PS 7+ only)
-$script:ODS_INSTALL_DIR = $(if ($env:ODS_HOME) { $env:ODS_HOME } else { Join-Path $env:USERPROFILE "ods" })
+$script:ODS_USER_DIR = $(if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { "." })
+$script:ODS_INSTALL_DIR = $(if ($env:ODS_HOME) { $env:ODS_HOME } else { Join-Path $script:ODS_USER_DIR "ods" })
 
 # Logging
-$script:ODS_LOG_FILE = Join-Path $env:TEMP "ods-install.log"
-$script:ODS_PREFLIGHT_REPORT = Join-Path $env:TEMP "ods-windows-preflight.json"
+$script:ODS_TEMP_DIR = $(if ($env:TEMP) { $env:TEMP } elseif ($env:TMP) { $env:TMP } else { "/tmp" })
+$script:ODS_LOG_FILE = Join-Path $script:ODS_TEMP_DIR "ods-install.log"
+$script:ODS_PREFLIGHT_REPORT = Join-Path $script:ODS_TEMP_DIR "ods-windows-preflight.json"
 
 # Native inference server paths (AMD path)
 # PID file is shared -- only one native inference server runs at a time
@@ -29,7 +31,8 @@ $script:LEMONADE_VERSION     = "10.0.0"
 $script:LEMONADE_MSI_FILE    = "lemonade-server-minimal.msi"
 $script:LEMONADE_MSI_URL     = "https://github.com/lemonade-sdk/lemonade/releases/download/v$($script:LEMONADE_VERSION)/$($script:LEMONADE_MSI_FILE)"
 # Default path; install-windows.ps1 resolves both Program Files roots at runtime.
-$script:LEMONADE_INSTALL_DIR = Join-Path $env:ProgramFiles "Lemonade Server"
+$script:ODS_PROGRAM_FILES    = $(if ($env:ProgramFiles) { $env:ProgramFiles } else { $script:ODS_TEMP_DIR })
+$script:LEMONADE_INSTALL_DIR = Join-Path $script:ODS_PROGRAM_FILES "Lemonade Server"
 $script:LEMONADE_EXE         = Join-Path (Join-Path $script:LEMONADE_INSTALL_DIR "bin") "lemonade-server.exe"
 $script:LEMONADE_PORT        = 8080
 $script:LEMONADE_API_KEY     = "lemonade"
@@ -58,10 +61,10 @@ $script:MIN_WINDOWS_WHISPER_CUDA_DRIVER = 575
 $script:OPENCODE_VERSION = "1.2.18"
 $script:OPENCODE_ZIP = "opencode-windows-x64.zip"
 $script:OPENCODE_URL = "https://github.com/anomalyco/opencode/releases/download/v$($script:OPENCODE_VERSION)/$($script:OPENCODE_ZIP)"
-$script:OPENCODE_DIR = Join-Path $env:USERPROFILE ".opencode"
-$script:OPENCODE_BIN = Join-Path (Join-Path $env:USERPROFILE ".opencode") "bin"
-$script:OPENCODE_EXE = Join-Path (Join-Path $env:USERPROFILE ".opencode") "bin\opencode.exe"
-$script:OPENCODE_CONFIG_DIR = Join-Path (Join-Path $env:USERPROFILE ".config") "opencode"
+$script:OPENCODE_DIR = Join-Path $script:ODS_USER_DIR ".opencode"
+$script:OPENCODE_BIN = Join-Path (Join-Path $script:ODS_USER_DIR ".opencode") "bin"
+$script:OPENCODE_EXE = Join-Path (Join-Path $script:ODS_USER_DIR ".opencode") "bin\opencode.exe"
+$script:OPENCODE_CONFIG_DIR = Join-Path (Join-Path $script:ODS_USER_DIR ".config") "opencode"
 $script:OPENCODE_PORT = 3003
 
 # ODS Host Agent (host-level extension lifecycle manager)
@@ -86,4 +89,87 @@ $script:C = @{
     White     = "White"
     Cyan      = "Cyan"
     Reset     = "Gray"
+}
+function Get-ODSModelsDir {
+    <#
+    .SYNOPSIS
+        Resolve the ODS models directory on Windows.
+    .DESCRIPTION
+        Precedence:
+          1. $ModelsDirOverride parameter
+          2. $env:ODS_MODELS_DIR
+          3. $env:ODS_WIN_MODELS_DIR
+          4. $env:MODELS_DIR
+          5. ODS_WIN_MODELS_DIR, then MODELS_DIR, in .env (if present)
+          6. Default fallback: $InstallDir\data\models
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$InstallDir = $script:ODS_INSTALL_DIR,
+        [string]$ModelsDirOverride
+    )
+
+    function Resolve-ODSModelsPath {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return $null
+        }
+        if ($Value.IndexOfAny([char[]]"`r`n") -ge 0) {
+            throw "Models directory must not contain newline characters"
+        }
+        try {
+            return [System.IO.Path]::GetFullPath($Value.Trim())
+        } catch {
+            throw "Invalid models directory '$Value': $($_.Exception.Message)"
+        }
+    }
+
+    function ConvertFrom-ODSEnvValue {
+        param([string]$Value)
+        $resolved = $Value.Trim()
+        if ($resolved.Length -ge 2) {
+            $first = $resolved.Substring(0, 1)
+            $last = $resolved.Substring($resolved.Length - 1, 1)
+            if (($first -eq "'" -or $first -eq '"') -and $last -eq $first) {
+                $resolved = $resolved.Substring(1, $resolved.Length - 2)
+                if ($first -eq "'") {
+                    $resolved = $resolved.Replace("\'", "'")
+                }
+            }
+        }
+        return $resolved
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ModelsDirOverride)) {
+        return Resolve-ODSModelsPath $ModelsDirOverride
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ODS_MODELS_DIR)) {
+        return Resolve-ODSModelsPath $env:ODS_MODELS_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ODS_WIN_MODELS_DIR)) {
+        return Resolve-ODSModelsPath $env:ODS_WIN_MODELS_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:MODELS_DIR)) {
+        return Resolve-ODSModelsPath $env:MODELS_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallDir)) {
+        $envPath = Join-Path $InstallDir ".env"
+        if (Test-Path -LiteralPath $envPath -PathType Leaf) {
+            $persisted = @{}
+            $lines = Get-Content -LiteralPath $envPath -ErrorAction SilentlyContinue
+            foreach ($line in $lines) {
+                if ($line -match "^(ODS_WIN_MODELS_DIR|MODELS_DIR)=(.*)$") {
+                    $persisted[$Matches[1]] = ConvertFrom-ODSEnvValue $Matches[2]
+                }
+            }
+            foreach ($key in @("ODS_WIN_MODELS_DIR", "MODELS_DIR")) {
+                if ($persisted.ContainsKey($key) -and
+                    -not [string]::IsNullOrWhiteSpace($persisted[$key])) {
+                    return Resolve-ODSModelsPath $persisted[$key]
+                }
+            }
+        }
+        return Resolve-ODSModelsPath (Join-Path (Join-Path $InstallDir "data") "models")
+    }
+    return $null
 }

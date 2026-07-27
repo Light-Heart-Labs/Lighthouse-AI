@@ -9,7 +9,7 @@
 # Usage (called by phase 11, not directly by users):
 #   nohup bash bootstrap-upgrade.sh \
 #       <install_dir> <gguf_file> <gguf_url> <gguf_sha256> \
-#       <llm_model> <max_context> [<bootstrap_gguf_file>] \
+#       <llm_model> <max_context> [<bootstrap_gguf_file>] [<models_dir>] \
 #       > logs/model-upgrade.log 2>&1 &
 #
 # Arg 7 (bootstrap_gguf_file) is optional and defaults to the historical
@@ -34,6 +34,7 @@ FULL_GGUF_SHA256="$4"
 FULL_LLM_MODEL="$5"
 FULL_MAX_CONTEXT="$6"
 BOOTSTRAP_GGUF_FILE="${7:-Qwen3.5-2B-Q4_K_M.gguf}"
+MODELS_DIR_OVERRIDE="${8:-}"
 
 LOG_TAG="[BOOTSTRAP-UPGRADE]"
 
@@ -83,7 +84,7 @@ cd "$INSTALL_DIR" || {
     exit 1
 }
 
-MODELS_DIR="$INSTALL_DIR/data/models"
+MODELS_DIR="${MODELS_DIR_OVERRIDE:-$INSTALL_DIR/data/models}"
 ENV_FILE="$INSTALL_DIR/.env"
 MODELS_INI="$INSTALL_DIR/config/llama-server/models.ini"
 STATUS_FILE="$INSTALL_DIR/data/bootstrap-status.json"

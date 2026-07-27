@@ -62,6 +62,7 @@ param(
     [switch]$NoLangfuse,
     [switch]$NoBootstrap,
     [string]$InstallDir = "",
+    [string]$ModelsDir = "",
     [string]$SummaryJsonPath = ""
 )
 
@@ -84,6 +85,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 . (Join-Path $LibDir "backend-contract.ps1")
 . (Join-Path $LibDir "tier-map.ps1")
 . (Join-Path $LibDir "detection.ps1")
+. (Join-Path $LibDir "model-storage.ps1")
 . (Join-Path $LibDir "env-generator.ps1")
 . (Join-Path $LibDir "llm-endpoint.ps1")
 . (Join-Path $LibDir "opencode-config.ps1")
@@ -193,6 +195,27 @@ function Get-UsableWindowsBash {
 $PhasesDir = Join-Path $ScriptDir "phases"
 
 Write-ODSBanner
+
+$desiredModelsDir = Get-ODSModelsDir `
+    -InstallDir $installDir -ModelsDirOverride $ModelsDir
+$ModelsDir = $desiredModelsDir
+$modelStorageChange = Get-ODSWindowsModelStorageChange `
+    -InstallDir $installDir -DesiredModelsDir $desiredModelsDir
+if ($modelStorageChange.Changed) {
+    Write-AIError "Changing the model directory of an existing Windows installation is not supported by this installer."
+    Write-AI "  Installed model directory: $($modelStorageChange.PersistedModelsDir)"
+    Write-AI "  Requested model directory: $($modelStorageChange.DesiredModelsDir)"
+    Write-AI "  Keep the installed path for this rerun, or perform a fresh install with -ModelsDir."
+    $global:LASTEXITCODE = 1
+    exit 1
+}
+if ($modelStorageChange.ExistingInstall -and
+        (Test-ODSWindowsModelUpgradeActive -InstallDir $installDir)) {
+    Write-AIError "A full-model upgrade is still active or pending."
+    Write-AI "  Let it finish, or use ods start to resume a failed upgrade, before rerunning the installer."
+    $global:LASTEXITCODE = 1
+    exit 1
+}
 
 # Variables produced by each phase and consumed by downstream phases:
 #
@@ -311,7 +334,7 @@ if ($dryRun) {
 
         if (Should-UseBootstrap -Tier $selectedTier -InstallDir $installDir `
                 -GgufFile $tierConfig.GgufFile -CloudMode $cloudMode `
-                -NoBootstrap $noBootstrapFlag) {
+                -NoBootstrap $noBootstrapFlag -ModelsDirOverride $ModelsDir) {
             $bootstrapActive = $true
             $fullTierConfig = @{}
             foreach ($k in $tierConfig.Keys) { $fullTierConfig[$k] = $tierConfig[$k] }
@@ -326,7 +349,8 @@ if ($dryRun) {
 
         # ── Download GGUF model ───────────────────────────────────────────────
         if ($tierConfig.GgufUrl -and -not $cloudMode) {
-            $modelPath    = Join-Path (Join-Path $installDir "data\models") $tierConfig.GgufFile
+            $resolvedModelsDir = Get-ODSModelsDir -InstallDir $installDir -ModelsDirOverride $ModelsDir
+            $modelPath    = Join-Path $resolvedModelsDir $tierConfig.GgufFile
             $needsDownload = -not (Test-Path $modelPath)
 
             if ((Test-Path $modelPath) -and $tierConfig.GgufSha256) {
@@ -530,7 +554,7 @@ if ($dryRun) {
                 # releases and configures models/Vulkan through Lemonade 10.7's
                 # authenticated internal API. Models load on first chat request.
                 Write-AI "Starting Lemonade server..."
-                $modelsDir = Join-Path (Join-Path $installDir "data") "models"
+                $modelsDir = Get-ODSModelsDir -InstallDir $installDir -ModelsDirOverride $ModelsDir
                 $taskName = "ODSLemonadeRuntime"
                 $taskNames = @($taskName, (Get-ODSPriorLemonadeTaskName))
                 Stop-ODSWindowsLemonadeProcesses -ExePath $script:LEMONADE_EXE -TaskNames $taskNames
@@ -708,7 +732,8 @@ if ($dryRun) {
 
                 # Start native llama-server
                 Write-AI "Starting native llama-server (Vulkan)..."
-                $modelFullPath = Join-Path (Join-Path $installDir "data\models") $tierConfig.GgufFile
+                $resolvedModelsDir = Get-ODSModelsDir -InstallDir $installDir -ModelsDirOverride $ModelsDir
+                $modelFullPath = Join-Path $resolvedModelsDir $tierConfig.GgufFile
                 $llamaArgs = @(
                     "--model", $modelFullPath,
                     "--host", $bindAddr,
@@ -1892,6 +1917,10 @@ litellm_settings:
                 $bashScript = ($upgradeScript -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
                 $bashUpgradeLog = ($upgradeLog -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
                 $bashUpgradeErrLog = ($upgradeErrLog -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
+                $upgradeModelsDir = Get-ODSModelsDir `
+                    -InstallDir $installDir -ModelsDirOverride $ModelsDir
+                $bashModelsDir = ($upgradeModelsDir -replace "\\", "/" -replace "^([A-Za-z]):", '/$1').ToLower()
+                $bashModelsDirArg = "'" + $bashModelsDir.Replace("'", "'`"`"'`"`'") + "'"
                 $upgradePidFile = Join-Path $logDir "model-upgrade.pid"
                 $upgradeLaunchLog = Join-Path $logDir "model-upgrade-launch.log"
                 $upgradeLaunchErrLog = Join-Path $logDir "model-upgrade-launch-err.log"
@@ -1909,7 +1938,7 @@ litellm_settings:
 set -uo pipefail
 mkdir -p "`$(dirname "$bashUpgradeLog")"
 echo "`$`$" > "$bashUpgradePidFile"
-exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($fullTierConfig.GgufUrl)" "$($fullTierConfig.GgufSha256)" "$($fullTierConfig.LlmModel)" "$($fullTierConfig.MaxContext)" "$($script:BOOTSTRAP_GGUF_FILE)" > "$bashUpgradeLog" 2> "$bashUpgradeErrLog" < /dev/null
+exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($fullTierConfig.GgufUrl)" "$($fullTierConfig.GgufSha256)" "$($fullTierConfig.LlmModel)" "$($fullTierConfig.MaxContext)" "$($script:BOOTSTRAP_GGUF_FILE)" $bashModelsDirArg > "$bashUpgradeLog" 2> "$bashUpgradeErrLog" < /dev/null
 "@
                 [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent.Replace("`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
 
@@ -2120,7 +2149,9 @@ if (-not $cloudMode) {
         Write-AI "  Active model changed during install; verifying $($activeModel.GgufFile)."
     }
     $llmReady = Test-WindowsLlmModelReadiness -Endpoint $llmEndpoint -InstallDir $installDir `
-        -GgufFile $activeModel.GgufFile -TimeoutSec 120
+        -GgufFile $activeModel.GgufFile `
+        -ModelsDir (Get-ODSModelsDir -InstallDir $installDir -ModelsDirOverride $ModelsDir) `
+        -TimeoutSec 120
     if ($llmReady.Ok -and $useLemonade) {
         try {
             $lemonadeModel = [string]$llmReady.ModelId

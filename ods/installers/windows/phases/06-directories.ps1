@@ -285,6 +285,12 @@ if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) {
 if ($amdLemonadeRuntime -and $amdLemonadeRuntime.container_image) {
     $_lemonadeServerImage = $amdLemonadeRuntime.container_image
 }
+
+$_resolvedModelsDir = Get-ODSModelsDir `
+    -InstallDir $installDir -ModelsDirOverride $modelsDir
+if (-not (Test-Path -LiteralPath $_resolvedModelsDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $_resolvedModelsDir -Force | Out-Null
+}
 $envResult = New-ODSEnv `
     -InstallDir     $installDir `
     -TierConfig     $tierConfig `
@@ -304,7 +310,8 @@ $envResult = New-ODSEnv `
     -WhisperCudaEnabled $whisperCudaSupported `
     -EnableLangfuse $enableLangfuse `
     -SwitchboardMode $env:ODS_MODEL_SWITCHBOARD `
-    -EnableLan      $lanFlag
+    -EnableLan      $lanFlag `
+    -ModelsDir      $modelsDir
 Write-AISuccess "Generated .env with secure secrets"
 
 # ── Post-generation validation: verify all required keys are present with values ──

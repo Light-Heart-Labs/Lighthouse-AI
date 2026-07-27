@@ -12,6 +12,14 @@
 #   All secrets use cryptographic RNG -- never use Get-Random for secrets.
 # ============================================================================
 
+if (-not (Get-Command Get-ODSModelsDir -ErrorAction SilentlyContinue)) {
+    $constantsPath = Join-Path $PSScriptRoot "constants.ps1"
+    if (-not (Test-Path -LiteralPath $constantsPath -PathType Leaf)) {
+        throw "Windows installer constants not found: $constantsPath"
+    }
+    . $constantsPath
+}
+
 function Resolve-WindowsODSPort {
     <#
     .SYNOPSIS
@@ -457,7 +465,8 @@ function New-ODSEnv {
         # user already had in .env (via Get-EnvOrNew), so manual
         # `ods enable langfuse` edits survive.
         [bool]$EnableLangfuse = $false,
-        [bool]$EnableLan = $false
+        [bool]$EnableLan = $false,
+        [string]$ModelsDir = ""
     )
 
     # Preserve existing secrets on re-install (mirrors Linux _env_get logic)
@@ -478,6 +487,13 @@ function New-ODSEnv {
         }
         return $Default
     }
+
+    # Resolve this once so install-time downloads, persisted runtime state, and
+    # reruns cannot diverge. An explicit -ModelsDir or process override must
+    # replace an older value from .env.
+    $resolvedModelsDir = Get-ODSModelsDir `
+        -InstallDir $InstallDir -ModelsDirOverride $ModelsDir
+    $dotenvModelsDir = $resolvedModelsDir.Replace("'", "\'")
 
     # Empty is meaningful for optional provider overrides: it selects the
     # bundled service. Distinguish it from a key missing in an older .env.
@@ -842,6 +858,8 @@ MINIMAX_API_KEY=$(Get-EnvOrNew "MINIMAX_API_KEY" "")
 MODEL_PROFILE=$(Get-EnvOrNew "MODEL_PROFILE" "$(if ($TierConfig.ModelProfileRequested) { $TierConfig.ModelProfileRequested } else { "qwen" })")
 LLM_MODEL=$($TierConfig.LlmModel)
 GGUF_FILE=$($TierConfig.GgufFile)
+MODELS_DIR='$dotenvModelsDir'
+ODS_WIN_MODELS_DIR='$dotenvModelsDir'
 LEMONADE_MODEL=$effectiveLemonadeModel
 MAX_CONTEXT=$($TierConfig.MaxContext)
 CTX_SIZE=$($TierConfig.MaxContext)

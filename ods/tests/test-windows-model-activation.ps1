@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root "installers\windows\lib\constants.ps1")
+. (Join-Path $root "installers\windows\lib\env-generator.ps1")
 . (Join-Path $root "installers\windows\lib\model-activation.ps1")
 . (Join-Path $root "installers\windows\lib\tier-map.ps1")
 . (Join-Path $root "installers\windows\lib\backend-contract.ps1")
@@ -27,6 +29,11 @@ function Assert-Throws {
     throw "$Label did not throw"
 }
 
+function Write-AIWarn { param([string]$Message) }
+function Get-LlamaCpuBudget {
+    return @{ Limit = "4.0"; Reservation = "1.0"; Available = "4.0" }
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "ods-windows-model-activation-contract"
 Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $tempRoot "config") -Force | Out-Null
@@ -35,6 +42,14 @@ Set-Content -LiteralPath (Join-Path $tempRoot "data\models\model.gguf") -Value "
 @{
     models = @(@{ id = "catalog-model"; gguf_file = "model.gguf" })
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $tempRoot "config\model-library.json")
+
+# Create custom models directory for testing ODS_MODELS_DIR override
+$customModelsDir = Join-Path ([IO.Path]::GetTempPath()) "ods-windows-custom-models"
+$legacyModelsDir = $null
+$rerunModelsDir = $null
+Remove-Item -LiteralPath $customModelsDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $customModelsDir -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $customModelsDir "model.gguf") -Value "custom-fixture"
 
 try {
     $openCodeInstall = Join-Path $tempRoot "opencode-context"
@@ -101,6 +116,8 @@ MAX_CONTEXT=65536
         "Lemonade large context argument"
 
     $previousModelProfile = $env:MODEL_PROFILE
+    $previousOdsModelsDir = $env:ODS_MODELS_DIR
+    $previousModelsDir    = $env:MODELS_DIR
     try {
         $env:MODEL_PROFILE = "qwen"
         Assert-Equal `
@@ -110,10 +127,71 @@ MAX_CONTEXT=65536
         Assert-Equal $gemmaTier.LlmModel "gemma-4-e2b-it" "Explicit tier profile model"
         Assert-Equal $gemmaTier.GgufFile `
             "gemma-4-E2B-it-Q4_K_M.gguf" "Explicit tier profile GGUF"
+
+        # Test Get-ODSModelsDir precedence
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot) (Join-Path $tempRoot "data\models") "Default models dir"
+        $env:ODS_MODELS_DIR = $customModelsDir
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot) (Resolve-Path $customModelsDir).Path "ODS_MODELS_DIR override"
+        $env:ODS_MODELS_DIR = $null
+
+        $env:MODELS_DIR = $customModelsDir
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot) (Resolve-Path $customModelsDir).Path "MODELS_DIR override"
+        $env:MODELS_DIR = $null
+
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot -ModelsDirOverride $customModelsDir) `
+            (Resolve-Path $customModelsDir).Path "Explicit ModelsDir parameter override"
+        Assert-Throws {
+            Get-ODSModelsDir -InstallDir $tempRoot -ModelsDirOverride "D:\models`nINJECTED=value"
+        } "must not contain newline" "ModelsDir env injection rejection"
+
+        # Persisted Windows-specific state wins regardless of .env line order.
+        $legacyModelsDir = Join-Path ([IO.Path]::GetTempPath()) "ods-windows-legacy-models"
+        New-Item -ItemType Directory -Path $legacyModelsDir -Force | Out-Null
+        @(
+            "MODELS_DIR=$legacyModelsDir"
+            "ODS_WIN_MODELS_DIR=$customModelsDir"
+        ) | Set-Content -LiteralPath (Join-Path $tempRoot ".env")
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot) `
+            (Resolve-Path $customModelsDir).Path "Persisted Windows models dir precedence"
+
+        # An explicit rerun override must replace both persisted aliases.
+        $rerunModelsDir = Join-Path ([IO.Path]::GetTempPath()) "ods `$cash O'Brien # windows rerun models"
+        New-Item -ItemType Directory -Path $rerunModelsDir -Force | Out-Null
+        $tier = @{
+            TierName = "Test"
+            LlmModel = "test-model"
+            GgufFile = "model.gguf"
+            MaxContext = 8192
+        }
+        $null = New-ODSEnv -InstallDir $tempRoot -TierConfig $tier -Tier "1" `
+            -GpuBackend "nvidia" -ModelsDir $rerunModelsDir
+        $envText = Get-Content -LiteralPath (Join-Path $tempRoot ".env") -Raw
+        $resolvedRerunDir = [IO.Path]::GetFullPath($rerunModelsDir)
+        $escapedRerunDir = [regex]::Escape($resolvedRerunDir.Replace("'", "\'"))
+        if ($envText -notmatch "(?m)^MODELS_DIR='$escapedRerunDir'`r?$" -or
+            $envText -notmatch "(?m)^ODS_WIN_MODELS_DIR='$escapedRerunDir'`r?$") {
+            throw "Explicit ModelsDir rerun did not replace both persisted aliases"
+        }
+        Assert-Equal (Get-ODSModelsDir -InstallDir $tempRoot) `
+            $resolvedRerunDir "Single-quoted persisted models directory round trip"
+
+        # Catalog resolution with custom models dir
+        Assert-Equal (Resolve-WindowsODSModelCatalogId -InstallDir $tempRoot -GgufFile "model.gguf" -ModelsDirOverride $customModelsDir) `
+            "catalog-model" "Custom models dir catalog resolution"
     } finally {
-        $env:MODEL_PROFILE = $previousModelProfile
+        $env:MODEL_PROFILE  = $previousModelProfile
+        $env:ODS_MODELS_DIR = $previousOdsModelsDir
+        $env:MODELS_DIR     = $previousModelsDir
+        if ($legacyModelsDir) {
+            Remove-Item -LiteralPath $legacyModelsDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if ($rerunModelsDir) {
+            Remove-Item -LiteralPath $rerunModelsDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $customModelsDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    Remove-Item -LiteralPath (Join-Path $tempRoot ".env") -Force -ErrorAction SilentlyContinue
     Assert-Equal (Resolve-WindowsODSModelCatalogId -InstallDir $tempRoot -GgufFile "model.gguf") `
         "catalog-model" "Catalog model resolution"
     Assert-Throws { Resolve-WindowsODSModelCatalogId -InstallDir $tempRoot -GgufFile "..\model.gguf" } `

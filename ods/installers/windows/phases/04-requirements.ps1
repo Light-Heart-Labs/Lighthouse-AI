@@ -10,7 +10,7 @@
 #   $selectedTier, $tierConfig    -- from phase 02
 #   $gpuInfo, $systemRamGB        -- from phase 02
 #   $enableVoice, $enableWorkflows, $enableRag  -- from phase 03
-#   $installDir                   -- from orchestrator context
+#   $installDir, $ModelsDir       -- from orchestrator context
 #   $force, $nonInteractive, $dryRun
 #
 # Writes:
@@ -234,23 +234,12 @@ if ($systemRamGB -lt 8) {
 }
 
 # ── Tier-specific disk requirements ──────────────────────────────────────────
-# These account for model file + Docker image layers + data volumes.
-$_minDiskGB = switch ($selectedTier) {
-    "NV_ULTRA"   { 100 }
-    "SH_LARGE"   { 100 }
-    "SH_COMPACT" {  50 }
-    "4"          {  50 }
-    "3"          {  35 }
-    "2"          {  30 }
-    "1"          {  25 }
-    "0"          {  15 }
-    "CLOUD"      {  10 }
-    default      {  30 }
-}
-
-$_diskCheck = Test-DiskSpace -Path $installDir -RequiredGB $_minDiskGB
-if (-not $_diskCheck.Sufficient) {
-    Write-AIWarn "Disk: $($_diskCheck.FreeGB) GB free, ${_minDiskGB} GB required for Tier $selectedTier."
+# Model storage is checked against the selected model in phase 02. Keep Docker
+# images, application data, and installer state on the installation volume.
+$_installDiskRequiredGB = 20
+$_installDiskCheck = Test-DiskSpace -Path $installDir -RequiredGB $_installDiskRequiredGB
+if (-not $_installDiskCheck.Sufficient) {
+    Write-AIWarn "Install disk: $($_installDiskCheck.FreeGB) GB free, ${_installDiskRequiredGB} GB required."
     Write-AI "  Install target checked: $installDir"
     $_installDirHint = "<path-with-enough-space>\ods"
     if ($sourceRoot -match "^([A-Za-z]):") {
@@ -260,7 +249,7 @@ if (-not $_diskCheck.Sufficient) {
     Write-AI "  .\install.ps1 -InstallDir $_installDirHint"
     $requirementsMet = $false
 } else {
-    Write-AISuccess "Disk: $($_diskCheck.FreeGB) GB free OK (>= ${_minDiskGB} GB for Tier $selectedTier)"
+    Write-AISuccess "Install disk: $($_installDiskCheck.FreeGB) GB free on $installDir OK"
 }
 
 # ── GPU requirement check ─────────────────────────────────────────────────────

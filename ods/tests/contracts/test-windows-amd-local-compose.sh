@@ -58,6 +58,8 @@ cat > "$tmp_env" <<'ENV_EOF'
 WEBUI_SECRET=ci-placeholder
 OLLAMA_PORT=11434
 LLM_API_BASE_PATH=/api/v1
+MODELS_DIR='C:/Legacy Models CI'
+ODS_WIN_MODELS_DIR='C:/ODS $cash # Models CI'
 ENV_EOF
 
 cat > "$tmp_custom_port_env" <<'ENV_EOF'
@@ -114,6 +116,14 @@ if grep -q 'host.docker.internal:11434' <<<"$rendered"; then
 fi
 grep -q 'condition: service_healthy' <<<"$rendered" \
   || { echo "[FAIL] open-webui must wait for llama-server-ready health"; exit 1; }
+grep -q 'target: /data/models' <<<"$rendered" \
+  || { echo "[FAIL] dashboard-api must mount the configured Windows models directory"; exit 1; }
+grep -q 'C:/ODS \$\$cash # Models CI' <<<"$rendered" \
+  || { echo "[FAIL] dashboard-api ignored ODS_WIN_MODELS_DIR"; exit 1; }
+if grep -q 'C:/Legacy Models CI' <<<"$rendered"; then
+  echo "[FAIL] legacy MODELS_DIR overrode canonical ODS_WIN_MODELS_DIR"
+  exit 1
+fi
 
 custom_port_rendered="$(
   docker compose \

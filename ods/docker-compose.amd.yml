@@ -38,7 +38,7 @@ services:
     expose:
       - "8001"
     volumes:
-      - ./data/models:/models:ro,z
+      - ${ODS_WIN_MODELS_DIR:-${MODELS_DIR:-./data/models}}:/models:ro,z
       - lemonade-cache:/root/.cache/huggingface
       - lemonade-llama:/opt/lemonade/llama
       - lemonade-recipe:/root/.cache/lemonade
