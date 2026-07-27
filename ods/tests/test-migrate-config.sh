@@ -289,7 +289,11 @@ if [[ -f "$MIGRATION_V241_SCRIPT" ]]; then
 #!/bin/bash
 for arg in "\$@"; do
     if [[ "\$arg" == *".tmp"* ]]; then
-        mode=\$(stat -f "%Lp" "\$arg" 2>/dev/null || stat -c "%a" "\$arg" 2>/dev/null || echo "")
+        if [ "\$(uname -s)" = "Darwin" ]; then
+            mode=\$(stat -f "%Lp" "\$arg" 2>/dev/null || echo "")
+        else
+            mode=\$(stat -c "%a" "\$arg" 2>/dev/null || echo "")
+        fi
         echo "\$mode" > "$TEST_WINDOW_DIR/captured.mode"
     fi
 done
