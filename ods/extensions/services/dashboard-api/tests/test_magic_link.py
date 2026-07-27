@@ -388,6 +388,31 @@ def test_owner_card_status_reports_proxy_state(
     }
 
 
+def test_ods_proxy_readiness_reports_unreachable_active_stack(
+    magic_link_module, monkeypatch
+):
+    # The shared fixture replaces readiness with an always-ready stub for API
+    # tests. Reload here to exercise the implementation itself.
+    actual_readiness = importlib.reload(magic_link_module)._ods_proxy_lan_ready
+    monkeypatch.setattr(
+        magic_link_module,
+        "_ods_proxy_service",
+        lambda: {"host": "ods-proxy", "port": 80, "health": "/health"},
+    )
+
+    def fail_urlopen(_url, timeout):
+        assert timeout == 1.0
+        raise magic_link_module.urllib.error.URLError("Name or service not known")
+
+    monkeypatch.setattr(magic_link_module.urllib.request, "urlopen", fail_urlopen)
+
+    ready, reason = actual_readiness()
+
+    assert ready is False
+    assert "configured but not reachable in the active stack" in reason
+    assert "Name or service not known" in reason
+
+
 def test_ods_proxy_service_refreshes_stale_manifest_cache(
     magic_link_module, monkeypatch
 ):
@@ -435,6 +460,23 @@ def test_ods_proxy_service_keeps_disabled_state(magic_link_module, monkeypatch):
         "load_extension_manifests",
         fake_load_extension_manifests,
     )
+
+    assert magic_link_module._ods_proxy_service() is None
+    assert "ods-proxy" not in magic_link_module.SERVICES
+
+
+def test_ods_proxy_service_invalidates_cached_service_after_disable(
+    magic_link_module, monkeypatch, tmp_path
+):
+    proxy_dir = tmp_path / "ods-proxy"
+    proxy_dir.mkdir()
+    (proxy_dir / "compose.yaml.disabled").write_text("services: {}\n")
+    monkeypatch.setattr(magic_link_module, "EXTENSIONS_DIR", tmp_path)
+    magic_link_module.SERVICES["ods-proxy"] = {
+        "host": "ods-proxy",
+        "port": 80,
+        "health": "/health",
+    }
 
     assert magic_link_module._ods_proxy_service() is None
     assert "ods-proxy" not in magic_link_module.SERVICES

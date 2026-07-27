@@ -746,12 +746,26 @@ else
         ai "Cloud mode — skipping image model download"
     elif [[ "$GPU_BACKEND" == "amd" ]]; then
         COMFYUI_BASE="$INSTALL_DIR/data/comfyui/ComfyUI/models"
+        COMFYUI_MIOPEN_CACHE="$INSTALL_DIR/data/comfyui/miopen"
     elif [[ "$GPU_BACKEND" == "nvidia" ]]; then
         COMFYUI_BASE="$INSTALL_DIR/data/comfyui/models"
     fi
     if [[ "$ENABLE_COMFYUI" == "true" && "${ODS_MODE:-local}" != "cloud" && ( "$GPU_BACKEND" == "amd" || "$GPU_BACKEND" == "nvidia" ) ]]; then
         SDXL_CHECKPOINT_DIR="$COMFYUI_BASE/checkpoints"
         mkdir -p "$SDXL_CHECKPOINT_DIR"
+        if [[ "$GPU_BACKEND" == "amd" ]]; then
+            # Pre-create the cache as the install owner. This avoids Docker
+            # creating a root-owned bind source and keeps it traversable for
+            # both rootful and rootless container runtimes.
+            mkdir -p "$COMFYUI_MIOPEN_CACHE"
+            if ! chmod u+rwx,go+rx "$COMFYUI_MIOPEN_CACHE" 2>>"$LOG_FILE"; then
+                ai_warn "Could not normalize MIOpen cache permissions; continuing because the install owner may still have access"
+            fi
+            if [[ ! -w "$COMFYUI_MIOPEN_CACHE" || ! -x "$COMFYUI_MIOPEN_CACHE" ]]; then
+                ai_bad "MIOpen cache is not writable: $COMFYUI_MIOPEN_CACHE"
+                exit 1
+            fi
+        fi
         # NVIDIA ComfyUI also needs output/input/workflows bind-mount dirs
         if [[ "$GPU_BACKEND" == "nvidia" ]]; then
             mkdir -p "$INSTALL_DIR/data/comfyui"/{output,input,workflows}
@@ -896,7 +910,10 @@ MODELS_INI_EOF
         if [[ -f "$_hermes_tpl" ]]; then
             # Model name: cloud mode uses the routed model id; Lemonade
             # prefixes GGUF files with "extra."; llama.cpp uses the file name.
-            if [[ "${ODS_MODE:-local}" == "cloud" ]]; then
+            _hermes_switchboard_mode="$(printf '%s' "${ODS_MODEL_SWITCHBOARD:-observe}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$_hermes_switchboard_mode" == "enabled" ]]; then
+                _hermes_model="ods/current"
+            elif [[ "${ODS_MODE:-local}" == "cloud" ]]; then
                 _hermes_model="${LLM_MODEL:-default}"
             elif _phase11_external_lemonade; then
                 _hermes_model="${LEMONADE_MODEL:-$(_phase11_env_get LEMONADE_MODEL "${LLM_MODEL:-default}")}"
@@ -917,7 +934,10 @@ MODELS_INI_EOF
             # macOS install-macos.sh handles the host.docker.internal swap.
             _hermes_base_url=""
             _hermes_api_key=""
-            if [[ "${ODS_MODE:-local}" == "cloud" ]]; then
+            if [[ "$_hermes_switchboard_mode" == "enabled" ]]; then
+                _hermes_base_url="${HERMES_LLM_BASE_URL:-http://litellm:4000/v1}"
+                _hermes_api_key="${HERMES_LLM_API_KEY:-${LITELLM_KEY:-}}"
+            elif [[ "${ODS_MODE:-local}" == "cloud" ]]; then
                 _hermes_base_url="${HERMES_LLM_BASE_URL:-http://litellm:4000/v1}"
                 _hermes_api_key="${HERMES_LLM_API_KEY:-${LITELLM_KEY:-}}"
             elif [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; then
@@ -926,7 +946,9 @@ MODELS_INI_EOF
             fi
             _hermes_context="${MAX_CONTEXT:-65536}"
             _hermes_request_timeout=180
-            if [[ "${ODS_MODE:-local}" != "cloud" ]] && { [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; }; then
+            if [[ "$_hermes_switchboard_mode" == "enabled" ]]; then
+                _hermes_request_timeout=900
+            elif [[ "${ODS_MODE:-local}" != "cloud" ]] && { [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; }; then
                 _hermes_request_timeout=900
             fi
             _hermes_patcher="$INSTALL_DIR/scripts/patch-hermes-config.py"
@@ -1025,7 +1047,7 @@ MODELS_INI_EOF
     compose_ok=false
     # Build local images individually so every failure is reported before the
     # installer refuses to launch any potentially stale image.
-    _candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
+    _candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
     [[ "$ENABLE_COMFYUI" == "true" ]] && _candidate_build_services+=(comfyui)
     [[ "$GPU_BACKEND" == "amd" ]] && _candidate_build_services+=(llama-server)
     if ! _enabled_compose_services="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --services 2>>"$LOG_FILE")"; then
