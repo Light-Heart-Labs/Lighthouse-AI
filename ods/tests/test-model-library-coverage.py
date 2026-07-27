@@ -833,6 +833,26 @@ def test_qwen35_2b_records_exact_artifact_and_failed_fleet_evidence():
     assert not _agent_viable_for_release(model)
 
 
+def test_jamba_reasoning_3b_is_staged_as_a_4gb_long_context_candidate():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["jamba-reasoning-3b-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/ai21labs/AI21-Jamba-Reasoning-3B-GGUF/"
+        "resolve/462e08a43c3c32f6b8b85f79ff0796e484d7b65a/"
+        "jamba-reasoning-3b-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "5c8edf36ec3ad9792a639db8d6865e479038226cf8fc71ef47331c611854f6c8"
+    assert model["size_bytes"] == 1932698048
+    assert model["size_mb"] == 1933
+    assert model["vram_required_gb"] == 3
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 262144
+    assert "install_recommendation" not in model
+    assert _agent_viable_for_release(model)
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",

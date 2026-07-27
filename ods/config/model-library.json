@@ -60,6 +60,25 @@
       }
     },
     {
+      "id": "jamba-reasoning-3b-q4",
+      "name": "AI21 Jamba Reasoning 3B",
+      "family": "jamba",
+      "gguf_file": "jamba-reasoning-3b-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ai21labs/AI21-Jamba-Reasoning-3B-GGUF/resolve/462e08a43c3c32f6b8b85f79ff0796e484d7b65a/jamba-reasoning-3b-Q4_K_M.gguf",
+      "gguf_sha256": "5c8edf36ec3ad9792a639db8d6865e479038226cf8fc71ef47331c611854f6c8",
+      "size_bytes": 1932698048,
+      "size_mb": 1933,
+      "vram_required_gb": 3,
+      "context_length": 65536,
+      "max_context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Efficient Reasoning",
+      "description": "AI21's compact reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work, instruction following, code, structured output, and multilingual use.",
+      "tokens_per_sec_estimate": 90,
+      "llm_model_name": "jamba-reasoning-3b",
+      "llama_server_image": null
+    },
+    {
       "id": "phi4-mini-q4",
       "name": "Phi-4 Mini",
       "family": "phi",
