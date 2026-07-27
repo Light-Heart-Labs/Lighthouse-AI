@@ -110,6 +110,7 @@ def test_release_model_switchboard_catalog_ids_exist():
         "granite3.2-2b-instruct-q4",
         "granite3.1-2b-instruct-q4",
         "phi3-mini-128k-q4",
+        "ministral3-8b-instruct-2512-q4",
         "llama3.2-1b-instruct-q4",
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",
@@ -642,6 +643,26 @@ def test_nemotron3_nano_4b_is_recommended_after_six_host_validation():
     assert _agent_viable_for_release(model)
 
 
+def test_ministral3_8b_is_staged_for_six_host_validation():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["ministral3-8b-instruct-2512-q4"]
+
+    assert model["family"] == "mistral"
+    assert model["gguf_file"] == "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+    assert model["gguf_url"] == (
+        "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/"
+        "resolve/0102285ad796bd99af90f58de616092e5630e970/"
+        "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761"
+    assert model["size_bytes"] == 5198911904
+    assert model["vram_required_gb"] == 8
+    assert model["context_length"] == 262144
+    assert model.get("install_recommendation") is False
+    assert _agent_viable_for_release(model)
+
+
 def test_qwen25_coder_15b_128k_has_scoped_app_blocks_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
@@ -763,6 +784,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "granite3.2-2b-instruct-q4",
         "granite3.1-2b-instruct-q4",
         "phi3-mini-128k-q4",
+        "ministral3-8b-instruct-2512-q4",
         "llama3.2-1b-instruct-q4",
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",

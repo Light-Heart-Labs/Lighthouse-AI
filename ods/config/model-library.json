@@ -781,6 +781,25 @@
       "install_recommendation": false
     },
     {
+      "id": "ministral3-8b-instruct-2512-q4",
+      "name": "Ministral 3 8B Instruct 2512",
+      "family": "mistral",
+      "gguf_file": "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/0102285ad796bd99af90f58de616092e5630e970/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+      "gguf_sha256": "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761",
+      "size_bytes": 5198911904,
+      "size_mb": 5199,
+      "vram_required_gb": 8,
+      "context_length": 262144,
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Multilingual",
+      "description": "Mistral AI's edge-optimized 8B instruction model with 256K context, native function calling, JSON output, multilingual support, and optional vision through a separate projection artifact.",
+      "tokens_per_sec_estimate": 55,
+      "llm_model_name": "Ministral-3-8B-Instruct-2512",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
       "id": "ministral-3b-instruct-q4",
       "name": "Ministral 3B Instruct",
       "family": "mistral",
