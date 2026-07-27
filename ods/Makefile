@@ -73,8 +73,14 @@ test: ## Run unit and contract tests
 	@echo "=== config migration (version check under set -e) ==="
 	@bash tests/test-migrate-config.sh
 	@echo ""
+	@echo "=== brave-search searxng compat contract ==="
+	@bash tests/test-brave-search-searxng-compat.sh
+	@echo ""
 	@echo "=== ods-cli pipefail tolerance ==="
 	@bash tests/test-ods-cli-pipefail-tolerance.sh
+	@echo ""
+	@echo "=== offline model validation ==="
+	@python3 tests/test-offline-model-validation.py
 	@echo ""
 	@echo "=== Bash 3.2 guard contracts ==="
 	@bash tests/test-bash32-guards.sh

@@ -1028,6 +1028,8 @@ def _hf_import_record(details: dict[str, Any], artifact: dict[str, Any]) -> dict
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", revision):
         raise HTTPException(status_code=502, detail="Hugging Face did not provide an immutable repository revision")
     remote_files = artifact["files"]
+    if not remote_files:
+        raise HTTPException(status_code=422, detail="The selected artifact contains no files")
     local_files = [
         _hf_local_filename(repo_id, item["filename"], revision)
         for item in remote_files

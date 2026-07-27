@@ -367,6 +367,8 @@ def _empty_value_unsets_env_key(key: str, field: dict[str, Any]) -> bool:
 
 
 def _match_apply_service(key: str) -> Optional[str]:
+    if key.endswith("_PUBLIC_URL") or key == "ODS_SERVICE_PUBLIC_URLS":
+        return None
     if key in _LLAMA_APPLY_KEYS or key.startswith(("LLAMA_", "GGUF_")):
         return "llama-server"
     if key == "SEARXNG_URL":
@@ -485,7 +487,12 @@ def _compute_env_apply_plan(
         if service and service in _SETTINGS_APPLY_ALLOWED_SERVICES:
             schedule(service)
             continue
-        if key in _MANUAL_RESTART_KEYS or key.startswith("ODS_AGENT_"):
+        if (
+            key in _MANUAL_RESTART_KEYS
+            or key.startswith("ODS_AGENT_")
+            or key.endswith("_PUBLIC_URL")
+            or key == "ODS_SERVICE_PUBLIC_URLS"
+        ):
             manual_keys.append(key)
             continue
         if key not in {"TZ", "TIMEZONE"}:

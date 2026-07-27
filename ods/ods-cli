@@ -699,10 +699,18 @@ _regenerate_compose_flags() {
         # --gpu-count gates the multigpu-{backend}.yml overlay; without it,
         # toggling any extension would silently strip multi-GPU plumbing
         # from the persisted cache.
-        "$INSTALL_DIR/scripts/resolve-compose-stack.sh" \
+        # Capture the resolver's stderr instead of discarding it: it reports
+        # actionable causes (e.g. missing PyYAML) that would otherwise only
+        # surface commands later as compose's "no configuration file provided".
+        local resolver_err=""
+        if ! resolver_err=$("$INSTALL_DIR/scripts/resolve-compose-stack.sh" \
             --script-dir "$INSTALL_DIR" --tier "${TIER:-1}" --gpu-backend "${GPU_BACKEND:-nvidia}" \
             --gpu-count "${GPU_COUNT:-1}" --ods-mode "${ODS_MODE:-local}" \
-            > "$INSTALL_DIR/.compose-flags" 2>/dev/null || rm -f "$INSTALL_DIR/.compose-flags"
+            2>&1 > "$INSTALL_DIR/.compose-flags"); then
+            rm -f "$INSTALL_DIR/.compose-flags"
+            warn "Could not regenerate the compose stack cache. 'ods start' will fail until this is resolved:"
+            [[ -n "$resolver_err" ]] && printf '%s\n' "$resolver_err" >&2
+        fi
     else
         rm -f "$INSTALL_DIR/.compose-flags"
     fi
@@ -2361,6 +2369,35 @@ for name, status in checks:
     else:
         print(f"  {RED}✗{NC} {name}")
         has_failures = True
+
+llm_backend = runtime.get('llm_backend', {})
+if llm_backend:
+    llm_status = llm_backend.get('status', 'unknown')
+    llm_provider = llm_backend.get('provider', 'unknown')
+    llm_url = llm_backend.get('url', '')
+    llm_model = llm_backend.get('model', '')
+    local_warn = llm_backend.get('local_running_warning', False)
+    recovery = llm_backend.get('recovery_hint', '')
+
+    is_external = llm_provider != "llama-server"
+    backend_label = f"{llm_provider} (external)" if is_external else "llama-server (local)"
+
+    if llm_status == 'ok':
+        print(f"  {GREEN}✓{NC} LLM Backend: {backend_label} — responding")
+        if llm_url:
+            print(f"    Endpoint: {llm_url}")
+        if llm_model:
+            print(f"    Model:    {llm_model}")
+    else:
+        print(f"  {RED}✗{NC} LLM Backend: {backend_label} — not responding")
+        if llm_url:
+            print(f"    Endpoint: {llm_url}")
+        if recovery:
+            print(f"    Recovery: {recovery}")
+        has_failures = True
+
+    if local_warn:
+        print(f"    {YELLOW}⚠{NC} Note: Unused local llama-server container is running")
 
 dgx_check = runtime.get('dgx_spark_cuda_arch_check', {})
 dgx_status = dgx_check.get('status')
