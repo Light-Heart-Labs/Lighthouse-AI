@@ -1,12 +1,8 @@
 """Tests for build-installation-context.py atomic writing."""
 
-import os
 import stat
 import sys
-import tempfile
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import importlib.util
