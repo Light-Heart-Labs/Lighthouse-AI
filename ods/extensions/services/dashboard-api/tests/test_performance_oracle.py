@@ -1264,7 +1264,12 @@ def test_pre_download_ranker_accounts_for_long_context_kv_on_4gb_gpu(data_dir, t
     assert by_id["phi4-mini-q4"]["estimatedRequired"] > by_id["phi4-mini-q4"]["vramRequired"]
 
 
-def test_qwen35_2b_fits_4gb_but_is_not_recommended_after_fleet_failures(data_dir, tmp_path):
+def test_qwen35_2b_fits_4gb_but_is_not_recommended_after_fleet_failures(
+    data_dir,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ODS_FLEET_HOST_ID", "tower2")
     install_dir = tmp_path / "ods"
     (install_dir / "data" / "models").mkdir(parents=True)
     payload = build_models_payload(
