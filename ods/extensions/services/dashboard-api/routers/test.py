@@ -1,12 +1,10 @@
 """Router for ODS capability test endpoints."""
 
-import asyncio
 import logging
 import os
 from typing import Any
 
-import aiohttp
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 import hermes_bridge
 from config import SERVICES
