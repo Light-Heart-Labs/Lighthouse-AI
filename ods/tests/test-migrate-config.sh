@@ -273,6 +273,42 @@ if [[ -f "$MIGRATION_V241_SCRIPT" ]]; then
     else
         fail "Migration v2.4.1: failed to append missing SHIELD_API_KEY atomically or preserve mode (mode: $MISSING_MODE)"
     fi
+
+    # ============================================================================
+    # Test 15: Temp file permission window validation (temp file created 0600 before atomic swap)
+    # ============================================================================
+    TEST_WINDOW_DIR="$TEMP_DIR/window_test"
+    mkdir -p "$TEST_WINDOW_DIR"
+    TEST_WINDOW_ENV="$TEST_WINDOW_DIR/.env"
+    echo "EXISTING_VAR=1" > "$TEST_WINDOW_ENV"
+    chmod 0600 "$TEST_WINDOW_ENV"
+
+    BIN_DIR="$TEMP_DIR/bin"
+    mkdir -p "$BIN_DIR"
+    cat > "$BIN_DIR/mv" <<EOF
+#!/bin/bash
+for arg in "\$@"; do
+    if [[ "\$arg" == *".tmp"* ]]; then
+        mode=\$(stat -f "%Lp" "\$arg" 2>/dev/null || stat -c "%a" "\$arg" 2>/dev/null || echo "")
+        echo "\$mode" > "$TEST_WINDOW_DIR/captured.mode"
+    fi
+done
+exec /bin/mv "\$@"
+EOF
+    chmod +x "$BIN_DIR/mv"
+
+    PATH="$BIN_DIR:$PATH" INSTALL_DIR="$TEST_WINDOW_DIR" ENV_FILE="$TEST_WINDOW_ENV" bash "$MIGRATION_V241_SCRIPT" >/dev/null 2>&1 || true
+
+    CAPTURED_MODE=""
+    if [[ -f "$TEST_WINDOW_DIR/captured.mode" ]]; then
+        CAPTURED_MODE=$(cat "$TEST_WINDOW_DIR/captured.mode")
+    fi
+
+    if [[ "$CAPTURED_MODE" == "600" || "$CAPTURED_MODE" == "700" ]]; then
+        pass "Migration v2.4.1: temp file permission window is strictly 0600 prior to replacement (captured mode: $CAPTURED_MODE)"
+    else
+        fail "Migration v2.4.1: temp file exposed loose umask permissions during write window (captured mode: '$CAPTURED_MODE')"
+    fi
 fi
 
 # ============================================================================
