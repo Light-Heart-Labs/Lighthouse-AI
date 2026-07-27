@@ -802,7 +802,7 @@ def test_qwen35_9b_meets_hermes_context_floor():
     assert by_id["qwen3.5-9b-q4"]["context_length"] >= HERMES_CONTEXT_FLOOR
 
 
-def test_qwen35_2b_is_staged_as_a_3gb_long_context_candidate():
+def test_qwen35_2b_records_exact_artifact_and_failed_fleet_evidence():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     model = by_id["qwen3.5-2b-q4"]
@@ -819,7 +819,18 @@ def test_qwen35_2b_is_staged_as_a_3gb_long_context_candidate():
     assert model["context_length"] == HERMES_CONTEXT_FLOOR
     assert model["max_context_length"] == 262144
     assert "install_recommendation" not in model
-    assert _agent_viable_for_release(model)
+    compatibility = model["app_compatibility"]
+    assert compatibility["hermes_talk"]["status"] == "verified"
+    assert compatibility["openai_chat"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert compatibility["agent_viability"]["productSha"] == (
+        "b5da3792c281e0ba8f679e33876ee3de902a7dd6"
+    )
+    assert compatibility["agent_viability"]["harnessSha"] == (
+        "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+    )
+    assert not _agent_viable_for_release(model)
 
 
 def test_new_switchboard_models_do_not_change_install_recommendations():

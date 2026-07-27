@@ -14,11 +14,50 @@
       "context_length": 65536,
       "max_context_length": 262144,
       "quantization": "Q4_K_M",
-      "specialty": "Low-VRAM Agentic",
-      "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target for low-VRAM local agents.",
+      "specialty": "Low-VRAM Chat",
+      "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target. It remains available for manual testing, but is not agent-ready after required app probes failed on four of six fleet hosts.",
       "tokens_per_sec_estimate": 120,
       "llm_model_name": "qwen3.5-2b",
-      "llama_server_image": null
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unsupported_until_revalidated",
+          "label": "App chat needs revalidation",
+          "reason": "Fresh exact-commit six-host validation loaded Qwen 3.5 2B and passed ODS Talk everywhere, but LiteLLM and Open WebUI exact-token probes emitted truncated reasoning instead of the requested answer on strixy.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "The same exact-commit run loaded Qwen 3.5 2B at 64K context and passed challenge-bound ODS Talk on all six Linux, macOS, and Windows hosts before app-consumer validation.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica needs revalidation",
+          "reason": "Perplexica exact-token probes were instruction-following failures on spark, m5-mbp, and windows-laptop after successful candidate load and Talk inference. The model refused or omitted the required verification phrase while the services remained healthy.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{spark,m5-mbp,windows-laptop}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not agent-ready",
+          "reason": "Only tower2 and strix-halo completed the full rotation. Four hosts failed required candidate-phase app probes, although every failure recovery restored the original model and deleted the test artifact cleanly.",
+          "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
+          "recordedAt": "2026-07-27T09:13:58Z",
+          "productSha": "b5da3792c281e0ba8f679e33876ee3de902a7dd6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        }
+      }
     },
     {
       "id": "phi4-mini-q4",
