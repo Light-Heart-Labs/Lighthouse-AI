@@ -30,10 +30,12 @@ done < <(
 (( ${#compose_files[@]} > 0 )) || { echo "[FAIL] no compose files found" >&2; exit 1; }
 
 # Interpolated keys, both ${KEY} and ${KEY:-default}. Compose only expands
-# upper-case-style env names here; anything else is a literal.
+# upper-case-style env names here; anything else is a literal. `$${KEY}` is an
+# escaped literal that compose passes to the container shell untouched, so it
+# is not a .env key and must not be collected.
 mapfile -t compose_keys < <(
-    grep -ho '\${[A-Z][A-Z0-9_]*' "${compose_files[@]}" \
-        | sed 's/^\${//' \
+    grep -ho '[^$]\${[A-Z][A-Z0-9_]*' "${compose_files[@]}" \
+        | sed 's/^.\${//' \
         | sort -u
 )
 
