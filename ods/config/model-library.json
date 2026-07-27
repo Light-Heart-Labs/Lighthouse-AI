@@ -789,7 +789,7 @@
       "gguf_sha256": "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761",
       "size_bytes": 5198911904,
       "size_mb": 5199,
-      "vram_required_gb": 8,
+      "vram_required_gb": 7,
       "context_length": 262144,
       "quantization": "Q4_K_M",
       "specialty": "Agentic Multilingual",

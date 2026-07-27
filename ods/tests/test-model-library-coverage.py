@@ -657,7 +657,7 @@ def test_ministral3_8b_is_staged_for_six_host_validation():
     )
     assert model["gguf_sha256"] == "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761"
     assert model["size_bytes"] == 5198911904
-    assert model["vram_required_gb"] == 8
+    assert model["vram_required_gb"] == 7
     assert model["context_length"] == 262144
     assert model.get("install_recommendation") is False
     assert _agent_viable_for_release(model)
