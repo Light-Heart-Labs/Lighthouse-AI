@@ -10,6 +10,8 @@ from performance_oracle import (
     load_evidence,
     model_compatibility_runtime_context,
     model_app_compatibility,
+    model_publisher,
+    normalize_catalog_entry,
     rank_pre_download_models,
 )
 
@@ -90,6 +92,32 @@ def test_current_model_matches_complete_phi_aliases_and_runtime_prefixes():
     assert current_model_matches(mini, None, mini["gguf_file"])
     assert not current_model_matches(full, None, mini["gguf_file"])
     assert not current_model_matches(full, "custom.phi-4")
+
+
+def test_normalize_catalog_entry_tolerates_explicit_null_aliases():
+    """A catalog entry may carry an explicit ``"aliases": null`` (JSON null).
+
+    ``.get("aliases", [])`` only substitutes the default when the key is
+    absent, so a null value used to raise TypeError and take down every
+    caller of load_model_catalog. Aliases are still derived from the other
+    identity fields.
+    """
+    entry = normalize_catalog_entry(
+        {"id": "m", "gguf": "model-Q4_K_M.gguf", "aliases": None}
+    )
+
+    assert entry is not None
+    assert "m" in entry["aliases"]
+    assert "model-Q4_K_M.gguf" in entry["aliases"]
+
+
+def test_normalize_catalog_entry_keeps_listed_aliases():
+    entry = normalize_catalog_entry(
+        {"id": "m", "gguf": "model-Q4_K_M.gguf", "aliases": ["custom-alias"]}
+    )
+
+    assert entry is not None
+    assert "custom-alias" in entry["aliases"]
 
 
 def test_real_catalog_phi_models_have_exactly_one_loaded_identity(data_dir, tmp_path):
@@ -183,6 +211,92 @@ def test_build_models_payload_uses_official_model_library(data_dir, tmp_path):
     assert [model["id"] for model in payload["models"]] == ["phi4-mini-q4", "qwen3.5-9b-q4"]
     assert payload["models"][0]["gguf"] == "Phi-4-mini-instruct-Q4_K_M.gguf"
     assert payload["models"][0]["llmModelName"] == "phi-4-mini"
+
+
+def test_local_model_payload_prefers_canonical_context_when_upgrade_aliases_diverge(
+    data_dir,
+    tmp_path,
+):
+    install_dir = tmp_path / "ods"
+    models_dir = install_dir / "data" / "models"
+    models_dir.mkdir(parents=True)
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=131072\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    local_model = models_dir / "LocalUpgrade.gguf"
+    local_model.write_text("model", encoding="utf-8")
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=[],
+        evidence=[],
+        downloaded_files_override={local_model.name: local_model},
+    )
+
+    assert payload["models"][0]["contextLength"] == 131072
+
+
+def test_local_model_payload_skips_invalid_canonical_context_for_legacy_alias(
+    data_dir,
+    tmp_path,
+):
+    install_dir = tmp_path / "ods"
+    models_dir = install_dir / "data" / "models"
+    models_dir.mkdir(parents=True)
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=auto\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    local_model = models_dir / "LocalUpgrade.gguf"
+    local_model.write_text("model", encoding="utf-8")
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=[],
+        evidence=[],
+        downloaded_files_override={local_model.name: local_model},
+    )
+
+    assert payload["models"][0]["contextLength"] == 65536
+
+
+def test_local_model_payload_prefers_persisted_context_over_stale_process_value(
+    data_dir,
+    tmp_path,
+    monkeypatch,
+):
+    install_dir = tmp_path / "ods"
+    models_dir = install_dir / "data" / "models"
+    models_dir.mkdir(parents=True)
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CTX_SIZE", "8192")
+    local_model = models_dir / "LocalUpgrade.gguf"
+    local_model.write_text("model", encoding="utf-8")
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=[],
+        evidence=[],
+        downloaded_files_override={local_model.name: local_model},
+    )
+
+    assert payload["models"][0]["contextLength"] == 65536
 
 
 def test_model_payload_projects_explicit_app_compatibility(data_dir, tmp_path):
@@ -392,7 +506,7 @@ def test_model_payload_applies_host_scoped_app_compatibility_from_install_env(da
     assert strixy_payload["models"][0]["appCompatibility"]["agentViability"]["status"] == "unknown"
 
 
-def test_real_catalog_gemma_perplexica_block_is_host_scoped():
+def test_real_catalog_gemma_perplexica_block_is_global():
     by_id = {model["id"]: model for model in _official_model_catalog()}
     model = by_id["gemma3-4b-it-q4"]
 
@@ -411,7 +525,171 @@ def test_real_catalog_gemma_perplexica_block_is_host_scoped():
 
     assert windows_laptop["perplexica"]["status"] == "unsupported_until_revalidated"
     assert strixy["perplexica"]["status"] == "unsupported_until_revalidated"
-    assert tower2["perplexica"]["status"] == "unknown"
+    assert tower2["perplexica"]["status"] == "unsupported_until_revalidated"
+
+
+def test_real_catalog_granite32_perplexica_block_is_tower2_and_m5_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["granite3.2-2b-instruct-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+    m5_mbp = model_app_compatibility(
+        model,
+        runtime_context={"host": "m5-mbp", "hosts": ["m5-mbp"]},
+    )
+
+    assert windows_laptop["perplexica"]["status"] == "unknown"
+    assert strix_halo["perplexica"]["status"] == "unknown"
+    assert tower2["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["perplexica"]["status"] == "unsupported_until_revalidated"
+
+
+def test_real_catalog_smollm3_perplexica_block_is_global():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["smollm3-3b-q4"]
+
+    lemonade = model_app_compatibility(
+        model,
+        runtime_context={
+            "host": "strix-halo",
+            "hosts": ["strix-halo"],
+            "llmBackend": "lemonade",
+            "runtime": "lemonade",
+        },
+    )
+    llama_server = model_app_compatibility(
+        model,
+        runtime_context={
+            "host": "tower2",
+            "hosts": ["tower2"],
+            "llmBackend": "llama-server",
+            "runtime": "llama-server",
+        },
+    )
+
+    assert lemonade["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert lemonade["agentViability"]["status"] == "agent_viable"
+    assert llama_server["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert llama_server["agentViability"]["status"] == "agent_viable"
+
+
+def test_real_catalog_granite41_opencode_block_is_strix_halo_and_spark_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["granite4.1-3b-q4"]
+
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    spark = model_app_compatibility(
+        model,
+        runtime_context={"host": "spark", "hosts": ["spark"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+
+    assert strix_halo["opencode"]["status"] == "unsupported_until_revalidated"
+    assert spark["opencode"]["status"] == "unsupported_until_revalidated"
+    assert tower2["opencode"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen25_coder_15b_blocks_include_spark_and_m5():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen2.5-coder-1.5b-128k-q4"]
+
+    spark = model_app_compatibility(
+        model,
+        runtime_context={"host": "spark", "hosts": ["spark"]},
+    )
+    m5_mbp = model_app_compatibility(
+        model,
+        runtime_context={"host": "m5-mbp", "hosts": ["m5-mbp"]},
+    )
+
+    assert spark["opencode"]["status"] == "unsupported_until_revalidated"
+    assert spark["agentViability"]["status"] == "not_agent_viable"
+    assert m5_mbp["opencode"]["status"] == "unknown"
+    assert m5_mbp["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["agentViability"]["status"] == "not_agent_viable"
+
+
+def test_real_catalog_qwen3_4b_instruct_windows_revalidation_is_verified():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3-4b-instruct-2507-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+
+    assert windows_laptop["openaiChat"]["status"] == "verified"
+    assert windows_laptop["hermesTalk"]["status"] == "verified"
+    assert windows_laptop["perplexica"]["status"] == "verified"
+    assert windows_laptop["agentViability"]["status"] == "verified"
+    assert "Q4-KV profile" in windows_laptop["agentViability"]["reason"]
+    assert strix_halo["agentViability"]["status"] == "unknown"
+    assert tower2["agentViability"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen35_4b_windows_revalidation_is_verified():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3.5-4b-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+
+    assert windows_laptop["openaiChat"]["status"] == "verified"
+    assert windows_laptop["hermesTalk"]["status"] == "verified"
+    assert windows_laptop["perplexica"]["status"] == "verified"
+    assert windows_laptop["agentViability"]["status"] == "verified"
+    assert strix_halo["hermesTalk"]["status"] == "unknown"
+    assert strix_halo["agentViability"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen3_4b_128k_talk_block_is_m5_and_windows_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3-4b-128k-q4"]
+
+    m5_mbp = model_app_compatibility(
+        model,
+        runtime_context={"host": "m5-mbp", "hosts": ["m5-mbp"]},
+    )
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+
+    assert m5_mbp["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["agentViability"]["status"] == "not_agent_viable"
+    assert windows_laptop["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert windows_laptop["agentViability"]["status"] == "not_agent_viable"
 
 
 def test_measured_local_too_slow_blocks_agent_compatibility(data_dir, tmp_path):
@@ -567,41 +845,119 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
 
     assert len(candidates) >= 6
     assert {
-        "qwen3.5-4b-q4",
-        "qwen3-4b-instruct-2507-q4",
-        "qwen3-4b-128k-q4",
-        "qwen2.5-coder-1.5b-128k-q4",
+        "qwen2.5-coder-3b-128k-q4",
         "granite4.0-h-micro-q4",
         "granite4.0-h-tiny-q4",
+        "granite4.0-h-1b-q4",
+        "qwen3-4b-instruct-2507-q4",
+        "qwen3.5-4b-q4",
     }.issubset(candidate_ids)
-    assert by_id["qwen3.5-4b-q4"]["contextLength"] == 262144
-    assert by_id["qwen3-4b-instruct-2507-q4"]["contextLength"] == 262144
-    assert by_id["qwen3-4b-128k-q4"]["contextLength"] == 131072
-    assert by_id["qwen2.5-coder-1.5b-128k-q4"]["contextLength"] == 131072
-    assert all_by_id["falcon-h1-1.5b-instruct-q4"]["appCompatibility"]["opencode"]["status"] == "unknown"
-    assert all_by_id["falcon-h1-3b-instruct-q4"]["appCompatibility"]["hermesTalk"]["status"] == "unknown"
-    assert all_by_id["qwen2.5-coder-1.5b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == "unknown"
+    assert "qwen3.5-4b-q4" in candidate_ids
+    assert by_id["qwen3.5-4b-q4"]["contextLength"] >= 64000
+    assert by_id["qwen3.5-4b-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
+    assert all_by_id["smollm3-3b-q4"]["contextLength"] == 65536
+    assert all_by_id["qwen3-4b-128k-q4"]["contextLength"] == 131072
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["contextLength"] == 128000
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
+        "unknown"
+    )
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
+    assert "qwen3-4b-instruct-2507-q4" in candidate_ids
+    assert by_id["qwen3-4b-instruct-2507-q4"]["contextLength"] >= 64000
+    assert by_id["qwen3-4b-instruct-2507-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
+    assert "phi3.5-mini-q4" not in candidate_ids
+    assert (
+        all_by_id["phi3.5-mini-q4"]["appCompatibility"]["openaiChat"]["status"]
+        == "unsupported_until_revalidated"
+    )
+    assert all_by_id["falcon-h1-1.5b-instruct-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
+        "unsupported_until_revalidated"
+    )
+    assert all_by_id["falcon-h1-1.5b-instruct-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "not_agent_viable"
+    )
+    assert all_by_id["falcon-h1-3b-instruct-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
+        "unsupported_until_revalidated"
+    )
+    assert all_by_id["falcon-h1-3b-instruct-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "not_agent_viable"
+    )
+    assert (
+        all_by_id["qwen2.5-coder-1.5b-128k-q4"]["appCompatibility"]["perplexica"]["status"]
+        == "unsupported_until_revalidated"
+    )
+    assert "qwen2.5-coder-1.5b-128k-q4" not in candidate_ids
     assert all_by_id["phi3-mini-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == "unknown"
+    assert all_by_id["phi3-mini-128k-q4"]["appCompatibility"]["perplexica"]["status"] == (
+        "unsupported_until_revalidated"
+    )
     assert all_by_id["granite4.1-3b-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
         "unsupported_until_revalidated"
     )
-    assert all_by_id["granite3.1-2b-instruct-q4"]["appCompatibility"]["perplexica"]["status"] == "unknown"
+    assert all_by_id["granite3.1-2b-instruct-q4"]["appCompatibility"]["perplexica"]["status"] == (
+        "unsupported_until_revalidated"
+    )
     assert all_by_id["granite4.0-h-1b-q4"]["appCompatibility"]["perplexica"]["status"] == "unknown"
-    assert "granite3.1-2b-instruct-q4" in candidate_ids
+    assert "granite3.1-2b-instruct-q4" not in candidate_ids
     assert "granite4.0-h-1b-q4" in candidate_ids
     assert "phi4-mini-q4" not in candidate_ids
     assert "gemma3-4b-it-q4" not in candidate_ids
-    assert "falcon-h1-1.5b-instruct-q4" in candidate_ids
-    assert "falcon-h1-3b-instruct-q4" in candidate_ids
+    assert "falcon-h1-1.5b-instruct-q4" not in candidate_ids
+    assert "falcon-h1-3b-instruct-q4" not in candidate_ids
     assert "granite4.1-3b-q4" not in candidate_ids
     assert "granite4.0-h-350m-q4" not in candidate_ids
     assert "granite4.0-1b-q4" not in candidate_ids
-    assert "phi3-mini-128k-q4" in candidate_ids
+    assert "phi3-mini-128k-q4" not in candidate_ids
     assert "granite3.3-8b-instruct-q4" not in candidate_ids
     assert "smollm3-3b-q4" not in candidate_ids
+    assert (
+        all_by_id["smollm3-3b-q4"]["appCompatibility"]["perplexica"]["status"]
+        == "unsupported_until_revalidated"
+    )
+    assert "qwen3-4b-128k-q4" not in candidate_ids
+    assert (
+        all_by_id["qwen3-4b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"]
+        == "unsupported_until_revalidated"
+    )
     assert "qwen2.5-3b-instruct-q4" not in candidate_ids
     assert "qwen3-4b-q4" not in candidate_ids
     assert "qwen3-1.7b-q4" not in candidate_ids
+
+
+def test_real_catalog_scopes_qwen25_coder_3b_host_failures():
+    catalog = _official_model_catalog()
+    model = next(model for model in catalog if model["id"] == "qwen2.5-coder-3b-128k-q4")
+
+    tower = model_app_compatibility(model, runtime_context={"hosts": ["tower2"]})
+    halo = model_app_compatibility(model, runtime_context={"hosts": ["strix-halo"]})
+    spark = model_app_compatibility(model, runtime_context={"hosts": ["spark"]})
+    m5_mbp = model_app_compatibility(model, runtime_context={"hosts": ["m5-mbp"]})
+    windows = model_app_compatibility(model, runtime_context={"hosts": ["windows-laptop"]})
+
+    assert tower["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert tower["agentViability"]["status"] == "unknown"
+    assert tower["opencode"]["status"] == "unknown"
+    assert halo["hermesTalk"]["status"] == "unknown"
+    assert halo["opencode"]["status"] == "unsupported_until_revalidated"
+    assert halo["agentViability"]["status"] == "unknown"
+    assert spark["hermesTalk"]["status"] == "unknown"
+    assert spark["opencode"]["status"] == "unsupported_until_revalidated"
+    assert spark["agentViability"]["status"] == "unknown"
+    assert m5_mbp["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert "cycle-005/m5-mbp" in m5_mbp["hermesTalk"]["evidence"]
+    assert m5_mbp["opencode"]["status"] == "unknown"
+    assert m5_mbp["agentViability"]["status"] == "unknown"
+    assert any(_compatibility_blocks_release_coverage(entry) for entry in m5_mbp.values())
+    assert windows["hermesTalk"]["status"] == "unknown"
+    assert windows["opencode"]["status"] == "unknown"
+    assert windows["agentViability"]["status"] == "verified"
+    assert not any(_compatibility_blocks_release_coverage(entry) for entry in windows.values())
 
 
 def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):
@@ -645,6 +1001,149 @@ def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):
     assert by_id["qwen3.5-9b-q4"]["recommendation"]["source"] == "installer_tier_map"
     assert by_id["qwen3.5-9b-q4"]["recommendation"]["contextLength"] == 65536
     assert payload["recommendationAlternatives"][0]["id"] == "qwen3.5-9b-q4"
+
+
+def test_context_options_separate_recommended_context_from_model_limit(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    (install_dir / ".env").write_text(
+        "LLM_MODEL=qwen3.5-2b\n"
+        "GGUF_FILE=Qwen3.5-2B-Q4_K_M.gguf\n"
+        "CTX_SIZE=8192\n"
+        "MAX_CONTEXT=8192\n",
+        encoding="utf-8",
+    )
+    catalog = [{
+        "id": "qwen3.5-2b-q4",
+        "name": "Qwen 3.5 2B",
+        "gguf_file": "Qwen3.5-2B-Q4_K_M.gguf",
+        "size_mb": 1500,
+        "vram_required_gb": 3,
+        "context_length": 8192,
+        "max_context_length": 262144,
+        "quantization": "Q4_K_M",
+        "specialty": "Fast",
+        "description": "Bootstrap model",
+        "llm_model_name": "qwen3.5-2b",
+    }]
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+
+    model = payload["models"][0]
+    assert model["contextLength"] == 8192
+    assert model["maxContextLength"] == 262144
+    assert [option["contextLength"] for option in model["contextOptions"]] == [
+        8192,
+        16384,
+        32768,
+        65536,
+        131072,
+        262144,
+    ]
+    assert next(
+        option for option in model["contextOptions"] if option["recommended"]
+    )["contextLength"] == 8192
+    assert next(
+        option for option in model["contextOptions"] if option["fullContext"]
+    )["contextLength"] == 262144
+
+
+def test_unknown_import_context_is_not_reported_as_a_declared_limit(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    catalog = [{
+        "id": "hf-community",
+        "name": "Community model",
+        "gguf_file": "community.gguf",
+        "size_mb": 500,
+        "vram_required_gb": 1,
+        "context_length": 8192,
+        "max_context_length": None,
+        "context_limit_known": False,
+        "context_source": "unavailable",
+        "quantization": "Q4_K_M",
+        "specialty": "Community GGUF",
+        "description": "Imported model",
+        "source": "huggingface",
+    }]
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+
+    model = payload["models"][0]
+    assert model["contextLength"] == 8192
+    assert model["maxContextLength"] is None
+    assert model["metadata"]["contextLimitKnown"] is False
+    assert model["metadata"]["contextSource"] == "unavailable"
+    assert not any(option["fullContext"] for option in model["contextOptions"])
+
+
+def test_downloaded_gguf_header_replaces_stale_hub_context(
+    data_dir, tmp_path, monkeypatch,
+):
+    import performance_oracle
+
+    install_dir = tmp_path / "ods"
+    model_path = install_dir / "data" / "models" / "community.gguf"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"GGUF")
+    catalog = [{
+        "id": "hf-community",
+        "name": "Community model",
+        "gguf_file": model_path.name,
+        "size_mb": 500,
+        "vram_required_gb": 1,
+        "context_length": 8192,
+        "max_context_length": 32768,
+        "context_limit_known": True,
+        "context_source": "hub_config",
+        "quantization": "Q4_K_M",
+        "specialty": "Community GGUF",
+        "description": "Imported model",
+        "source": "huggingface",
+    }]
+    monkeypatch.setattr(
+        performance_oracle,
+        "inspect_gguf",
+        lambda _path: {
+            "exists": True,
+            "readable": True,
+            "context_length": 131072,
+            "quantization": "Q4_K_M",
+        },
+    )
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        install_dir / "data",
+        catalog=catalog,
+        evidence=[],
+    )
+
+    model = payload["models"][0]
+    assert model["maxContextLength"] == 131072
+    assert model["metadata"]["contextLimitKnown"] is True
+    assert model["metadata"]["contextSource"] == "gguf_file"
+    assert model["contextOptions"][-1]["contextLength"] == 131072
+    assert model["contextOptions"][-1]["fullContext"] is True
 
 
 def test_configured_model_prefers_env_file_over_stale_process_env(data_dir, tmp_path, monkeypatch):
@@ -763,6 +1262,60 @@ def test_pre_download_ranker_accounts_for_long_context_kv_on_4gb_gpu(data_dir, t
     by_id = {model["id"]: model for model in payload["models"]}
     assert by_id["phi4-mini-q4"]["fitsVram"] is False
     assert by_id["phi4-mini-q4"]["estimatedRequired"] > by_id["phi4-mini-q4"]["vramRequired"]
+
+
+def test_qwen35_2b_fits_4gb_but_is_not_recommended_after_fleet_failures(
+    data_dir,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ODS_FLEET_HOST_ID", "tower2")
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    payload = build_models_payload(
+        _gpu(total_mb=4096),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=_official_model_catalog(),
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "qwen3.5-2b-q4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 262144
+    assert model["vramRequired"] == 3
+    assert model["estimatedRequired"] <= 4
+    assert model["fitsVram"] is True
+    assert model["recommended"] is False
+    compatibility = model["appCompatibility"]
+    assert compatibility["hermesTalk"]["status"] == "verified"
+    assert compatibility["openaiChat"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agentViability"]["status"] == "not_agent_viable"
+
+
+def test_jamba_reasoning_3b_catalog_profile_fits_4gb_at_agent_context(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    payload = build_models_payload(
+        _gpu(total_mb=4096),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=_official_model_catalog(),
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "jamba-reasoning-3b-q4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 262144
+    assert model["vramRequired"] == 3
+    assert model["estimatedRequired"] <= 4
+    assert model["fitsVram"] is True
+    assert model["recommended"] is False
 
 
 def test_pre_download_ranker_falls_back_to_smallest_model_without_gpu_info(data_dir):
@@ -923,6 +1476,27 @@ def test_measured_local_from_live_loaded_model(data_dir, tmp_path):
     assert loaded["tokensPerSec"] == 41.8
 
 
+def test_implausible_live_counter_is_not_emitted_as_measured_speed(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+
+    payload = build_models_payload(
+        _gpu(),
+        "qwen3.5-9b",
+        1_000_000,
+        install_dir,
+        data_dir,
+        context_length=32768,
+        catalog=[_model()],
+        evidence=[],
+    )
+
+    loaded = payload["models"][0]
+    assert loaded["status"] == "loaded"
+    assert loaded["performance"]["source"] == "benchmark_required"
+    assert loaded["tokensPerSec"] is None
+
+
 def test_predicted_calibrated_requires_local_sample(data_dir, tmp_path):
     record_model_performance(
         "qwen3.5-4b",
@@ -953,6 +1527,90 @@ def test_predicted_calibrated_requires_local_sample(data_dir, tmp_path):
     assert perf["source"] == "predicted_calibrated"
     assert perf["tokensPerSec"] is not None
     assert perf["confidence"] == "low"
+
+
+def test_polluted_history_is_ignored_in_favor_of_a_valid_exact_alias(
+    data_dir, tmp_path, monkeypatch,
+):
+    import performance_oracle
+
+    samples = iter([
+        {"tokens_per_second": 1_000_000, "sample_count": 336},
+        {"tokens_per_second": 240.5, "sample_count": 1},
+    ])
+    monkeypatch.setattr(
+        performance_oracle,
+        "get_recorded_model_performance",
+        lambda *args, **kwargs: next(samples, None),
+    )
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        context_length=32768,
+        catalog=[_model()],
+        evidence=[],
+    )
+
+    assert payload["models"][0]["performance"]["source"] == "measured_local"
+    assert payload["models"][0]["tokensPerSec"] == 240.5
+
+
+def test_official_catalog_families_expose_their_real_hugging_face_identity():
+    cases = {
+        "Qwen 3.5 2B": ("Qwen", "Qwen"),
+        "Phi-4 Mini": ("Microsoft", "microsoft"),
+        "Granite 3.3 2B": ("IBM Granite", "ibm-granite"),
+        "SmolLM3 3B": ("Hugging Face", "HuggingFaceTB"),
+        "Gemma 3 4B": ("Google", "google"),
+        "Falcon H1 7B": ("Technology Innovation Institute", "tiiuae"),
+        "Ministral 3B": ("Mistral AI", "mistralai"),
+        "Llama 3.2 3B": ("Meta", "meta-llama"),
+        "DeepSeek R1 7B": ("DeepSeek", "deepseek-ai"),
+    }
+
+    for name, (publisher, author) in cases.items():
+        assert model_publisher({"name": name}) == {
+            "name": publisher,
+            "huggingFaceAuthor": author,
+        }
+
+
+def test_publisher_identity_does_not_match_family_substrings_inside_other_words():
+    assert model_publisher({"name": "Dolphin 2.9 Mixtral 8x7B"}) == {
+        "name": "Mistral AI",
+        "huggingFaceAuthor": "mistralai",
+    }
+    assert model_publisher({"name": "OpenPhind Code Model"}) is None
+
+
+def test_calibrated_prediction_above_single_request_ceiling_requires_benchmark(data_dir):
+    record_model_performance(
+        "calibration-model",
+        "NVIDIA GeForce RTX 4060",
+        "nvidia",
+        5_000,
+        decode_read_mb=10_000,
+        vram_total_mb=8192,
+    )
+    performance = evaluate_performance(
+        {**_model(), "decode_read_mb": 1},
+        _gpu(),
+        {"quantization": "Q4_K_M", "readable": False},
+        False,
+        0,
+        32768,
+        {},
+        [],
+        True,
+    )
+
+    assert performance["source"] == "benchmark_required"
 
 
 def test_published_exact_requires_matching_signature(data_dir):

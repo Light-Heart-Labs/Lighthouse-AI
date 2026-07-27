@@ -31,9 +31,10 @@ extract_installer_function() {
     sed -n "/^${1}() {/,/^}$/p" "$INSTALLER"
 }
 
-python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-[[ -n "$python_cmd" ]] || fail "python is required"
-"$python_cmd" -c 'import yaml' 2>/dev/null || fail "PyYAML is required"
+# shellcheck source=lib/python-cmd.sh
+. "$ROOT_DIR/lib/python-cmd.sh"
+python_cmd="$(ods_detect_python_cmd_with_module yaml)" \
+    || fail "PyYAML is required"
 
 ai() { :; }
 ai_ok() { :; }

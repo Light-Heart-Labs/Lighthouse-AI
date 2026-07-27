@@ -39,8 +39,15 @@ env_set() {
 }
 
 show_status() {
-    local current
-    current=$(grep "^ODS_MODE=" "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+    local current=""
+    if [[ -f "$ENV_FILE" ]]; then
+        # `grep` exits 1 when the key is absent and the script runs under
+        # `set -euo pipefail`, so a bare pipeline here aborted the whole script
+        # before the default below could apply — status printed nothing at all.
+        current=$(grep -m1 "^ODS_MODE=" "$ENV_FILE" | cut -d= -f2- | tr -d '"\047\r' || true)
+    else
+        warn ".env not found at $ENV_FILE — showing defaults"
+    fi
     echo "Current mode: ${current:-local}"
     echo ""
     echo "Available modes:"

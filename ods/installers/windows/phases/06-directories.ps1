@@ -94,7 +94,10 @@ $_expectedRegularFiles = @(
     "config\llama-server\models.ini",
     "config\litellm\local.yaml",
     "config\litellm\lemonade.yaml",
+    "config\litellm\switchboard.yaml",
     "data\.extensions-lock",
+    "extensions\services\litellm\select-config.sh",
+    "extensions\services\litellm\ods_token_spy_callback.py",
     "extensions\services\hermes\cli-config.yaml.template",
     "extensions\services\hermes\SOUL.md.template",
     "extensions\services\hermes-proxy\Caddyfile",
@@ -135,20 +138,54 @@ if (-not (Test-Path -LiteralPath $_extensionsLock -PathType Leaf)) {
 if ($sourceRoot -ne $installDir) {
     Write-AI "Copying source files to $installDir..."
 
+    $pruneStaleDevPaths = (
+        (Test-Path -LiteralPath (Join-Path $installDir ".env") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $installDir "manifest.json") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $installDir "docker-compose.base.yml") -PathType Leaf)
+    )
+    $devOnlyDirectories = @("tests", "docs", "examples", ".github")
+    $devOnlyFiles = @(
+        "CHANGELOG.md", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md",
+        "EDGE-QUICKSTART.md", "FAQ.md", "QUICKSTART.md",
+        "SECURITY.md", "README.md",
+        ".shellcheckrc", "PSScriptAnalyzerSettings.psd1",
+        "test-stack.sh", ".gitignore"
+    )
+
     # robocopy exit codes 0-7 are success (bits for files copied, extras, etc.)
     $robocopyArgs = @(
         $sourceRoot, $installDir,
         "/E",                                  # Copy subdirectories including empty ones
         "/NFL", "/NDL", "/NJH", "/NJS",        # Suppress file/dir/job headers (clean output)
-        "/XD", ".git", "data", "logs", "models", "node_modules", "dist",
+        "/XD", ".git", "data", "logs", "models", "node_modules", "dist"
+    )
+    $robocopyArgs += @($devOnlyDirectories | ForEach-Object {
+        Join-Path $sourceRoot $_
+    })
+    $robocopyArgs += @(
         "/XF", ".env", "*.log", ".current-mode", ".profiles",
                ".target-model", ".target-quantization", ".offline-mode"
     )
+    $robocopyArgs += @($devOnlyFiles | ForEach-Object {
+        Join-Path $sourceRoot $_
+    })
     & robocopy @robocopyArgs | Out-Null
     if ($LASTEXITCODE -gt 7) {
         Write-AIError "File copy failed (robocopy exit code: $LASTEXITCODE)."
         Write-AI "  Try re-running with --Force or check that $installDir is writable."
         throw "ODS_INSTALL_ABORTED"
+    }
+
+    # Robocopy exclusions leave files copied by older installers in place.
+    # Move managed-upgrade leftovers to a recoverable backup instead of
+    # deleting possible user modifications. Unmanaged targets remain untouched.
+    if ($pruneStaleDevPaths) {
+        $devBackup = Move-ODSDevelopmentPathsToBackup `
+            -InstallDir $installDir `
+            -RelativePaths @($devOnlyDirectories + $devOnlyFiles)
+        if (-not [string]::IsNullOrWhiteSpace($devBackup)) {
+            Write-AIWarn "Older development files were moved to $devBackup"
+        }
     }
     Write-AISuccess "Source files installed to $installDir"
 } else {
@@ -274,7 +311,7 @@ if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) {
     $_amdInferenceRuntime = "lemonade"
     $_amdInferenceBackend = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.windows_backend) { $amdLemonadeRuntime.windows_backend } else { "vulkan" })
     $_amdInferenceLocation = "host"
-    $_amdInferencePort = $(if ($amdLemonadeRuntime -and $amdLemonadeRuntime.api_port) { [string]$amdLemonadeRuntime.api_port } else { "8080" })
+    $_amdInferencePort = [string]$script:LEMONADE_PORT
     $_amdInferenceSupportedBackends = $_amdInferenceBackend
     $_amdInferenceRuntimeMode = "windows-legacy-lemonade"
     $_amdInferenceManaged = "true"
@@ -343,6 +380,7 @@ function Update-HermesConfigFile {
         [string]$BaseUrl,
         [int]$ContextLength,
         [int]$RequestTimeoutSeconds = 180,
+        [int]$MaxTokens = 1024,
         [switch]$LemonadeCompact
     )
 
@@ -354,6 +392,10 @@ function Update-HermesConfigFile {
     $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
     $content = $content -replace '(?m)^    context_length: .+\r?$', "    context_length: $ContextLength"
+    if ($MaxTokens -lt 1) { $MaxTokens = 1024 }
+    if ($content -notmatch '(?m)^  max_tokens:\s*\d+\s*$') {
+        $content = $content -replace '(?m)^model:\s*$', "model:`n  max_tokens: $MaxTokens"
+    }
     if ($RequestTimeoutSeconds -lt 1) { $RequestTimeoutSeconds = 180 }
 
     $timeoutMatch = [regex]::Match($content, '(?m)^    request_timeout_seconds:\s*(\d+)\s*$')
@@ -587,7 +629,7 @@ if ($enableOpenClaw) {
     # Lemonade serves at /api/v1, so OpenClaw base URL needs /api prefix
     # (OpenClaw appends /v1/chat/completions to the base URL)
     $_providerUrl = $(if ($gpuInfo.Backend -eq "amd") {
-        "http://host.docker.internal:8080/api"
+        "http://host.docker.internal:$($script:LEMONADE_PORT)/api"
     } else {
         "http://llama-server:8080"
     })

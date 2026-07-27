@@ -1068,6 +1068,15 @@ def _extensions_lock_path() -> Path:
     for lock_path in _extensions_lock_candidates():
         try:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
+            operation_lock_dir = lock_path.parent / ".extension-operation-locks"
+            if operation_lock_dir.is_symlink():
+                raise OSError("Extension operation lock directory is a symlink")
+            operation_lock_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=operation_lock_dir,
+                prefix=".write-probe-",
+            ):
+                pass
             lock_path.touch(exist_ok=True)
             if lock_path != Path(DATA_DIR) / ".extensions-lock":
                 logger.warning("extensions lock falling back to %s", lock_path)
@@ -1173,6 +1182,9 @@ async def extensions_catalog(
         llm_contract = _llm_contract_for_extension(ext)
         if llm_contract is not None:
             enriched["llm"] = llm_contract
+        service_config = SERVICES.get(ext_id, {})
+        if service_config.get("public_url"):
+            enriched["public_url"] = service_config["public_url"]
         # Surface install-failure reason inline. The progress file already
         # records `error` (set by _write_error_progress) but it lives behind
         # a separate /progress endpoint, so a caller seeing `status: "error"`
@@ -1309,6 +1321,8 @@ async def extension_detail(
     status = _compute_extension_status(ext, services_by_id)
     installable = _is_installable(service_id)
     llm_contract = _llm_contract_for_extension(ext)
+    service_config = SERVICES.get(service_id, {})
+    public_url = service_config.get("public_url") or None
     manifest = {**ext, **({"llm": llm_contract} if llm_contract is not None else {})}
 
     user_dir = USER_EXTENSIONS_DIR / service_id
@@ -1336,6 +1350,7 @@ async def extension_detail(
         "source": source,
         "installable": installable,
         "llm": llm_contract,
+        "public_url": public_url,
         "manifest": manifest,
         "env_vars": ext.get("env_vars", []),
         "features": ext.get("features", []),

@@ -520,10 +520,15 @@ def migrate_env_identity(env: dict[str, str]) -> dict[str, Any] | None:
             stem = stem[: -len(".gguf")]
         catalog_guess = stem
 
-    try:
-        context = int(str(env.get("MAX_CONTEXT") or env.get("CTX_SIZE") or "0").strip() or 0)
-    except ValueError:
-        context = 0
+    context = 0
+    for key in ("CTX_SIZE", "MAX_CONTEXT"):
+        try:
+            candidate = int(str(env.get(key) or "0").strip() or 0)
+        except (TypeError, ValueError):
+            continue
+        if candidate > 0:
+            context = candidate
+            break
 
     return {
         "catalogId": catalog_guess,

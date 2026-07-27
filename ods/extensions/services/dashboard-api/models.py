@@ -29,8 +29,17 @@ class ServiceStatus(BaseModel):
     name: str
     port: int
     external_port: int
-    status: str  # "healthy", "unhealthy", "unknown", "down", "not_deployed"
+    status: str  # "healthy", "unhealthy", "unknown", "degraded", "down", "not_deployed"
     response_time_ms: Optional[float] = None
+
+
+class NodeCapabilities(BaseModel):
+    ods_version: str
+    gpu: Optional[GPUInfo] = None
+    loaded_model: Optional[str] = None
+    services: list[ServiceStatus] = []
+    service_count: int = 0
+    running_service_count: int = 0
 
 
 class DiskUsage(BaseModel):
@@ -71,7 +80,10 @@ PortNumber = Annotated[int, Field(ge=1, le=65535)]
 
 
 class PortCheckRequest(BaseModel):
-    ports: list[PortNumber]
+    # preflight_ports binds a socket per entry synchronously on the event loop,
+    # so cap the list. A real install exposes a couple dozen service ports;
+    # 128 leaves ample headroom while preventing bind-probe amplification.
+    ports: Annotated[list[PortNumber], Field(max_length=128)]
 
 
 class PortConflict(BaseModel):
@@ -175,6 +187,8 @@ class ModelLibraryEntry(BaseModel):
     vramRequired: float
     estimatedRequired: Optional[float] = None
     contextLength: int
+    maxContextLength: Optional[int] = None
+    contextOptions: list[dict[str, Any]] = Field(default_factory=list)
     specialty: str
     description: str
     tokensPerSec: Optional[float] = None
@@ -182,6 +196,7 @@ class ModelLibraryEntry(BaseModel):
     quantization: Optional[str] = None
     architecture: Optional[str] = None
     activeParamsB: Optional[float] = None
+    publisher: Optional[dict[str, str]] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     appCompatibility: dict[str, Any] = Field(default_factory=dict)
     status: str  # "loaded", "downloaded", "available"
@@ -205,6 +220,7 @@ class ModelLibraryResponse(BaseModel):
     models: list[ModelLibraryEntry]
     gpu: Optional[ModelLibraryGpu] = None
     currentModel: Optional[str] = None
+    activationReadyModel: Optional[str] = None
     loadedModel: Optional[str] = None
     configuredModel: Optional[str] = None
     hermesMinimumContext: int = HERMES_MIN_CONTEXT

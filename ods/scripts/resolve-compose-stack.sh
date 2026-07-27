@@ -240,6 +240,7 @@ except (OSError, ValueError):
         "ape", "comfyui", "dashboard", "dashboard-api",
         "embeddings", "langfuse", "litellm", "llama-server", "n8n",
         "open-webui", "openclaw", "perplexica", "privacy-shield", "qdrant",
+        "remote-provider-egress", "remote-provider-ssh-tunnel",
         "searxng", "token-spy", "tts", "whisper",
     }
 

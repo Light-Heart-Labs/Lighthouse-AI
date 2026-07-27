@@ -252,6 +252,27 @@ class TestExtensionDetail:
         assert data["setup_instructions"]["cli_enable"] == "ods enable test-svc"
         assert data["setup_instructions"]["cli_disable"] == "ods disable test-svc"
 
+    def test_detail_returns_configured_public_url(self, test_client, monkeypatch, tmp_path):
+        catalog = [_make_catalog_ext("test-svc", "Test Service")]
+        services = {
+            "test-svc": {
+                "host": "localhost",
+                "port": 8080,
+                "name": "Test Service",
+                "public_url": "https://service.example.test",
+            },
+        }
+        _patch_extensions_config(monkeypatch, catalog, services, tmp_path=tmp_path)
+
+        with patch("helpers.get_all_services", new_callable=AsyncMock, return_value=[]):
+            resp = test_client.get(
+                "/api/extensions/test-svc",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["public_url"] == "https://service.example.test"
+
     def test_detail_404_for_unknown(self, test_client, monkeypatch, tmp_path):
         """404 for service_id not in catalog."""
         _patch_extensions_config(monkeypatch, [], tmp_path=tmp_path)
@@ -4141,6 +4162,41 @@ def test_extensions_lock_falls_back_when_data_root_is_unwritable(
 
     with ext_module._extensions_lock():
         assert fallback_lock.exists()
+
+
+def test_extension_operation_lock_falls_back_when_primary_lock_parent_cannot_create(
+    tmp_path, monkeypatch,
+):
+    """A stale root lock must not select a parent that cannot hold service locks."""
+    from routers import extensions as ext_module
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    primary_lock = data_dir / ".extensions-lock"
+    primary_lock.touch()
+    fallback_lock = data_dir / "config" / ".extensions-lock"
+    primary_operation_dir = data_dir / ".extension-operation-locks"
+    original_named_temporary_file = ext_module.tempfile.NamedTemporaryFile
+
+    def fail_primary_write_probe(*args, **kwargs):
+        if Path(kwargs["dir"]) == primary_operation_dir:
+            raise PermissionError("primary operation lock directory is not writable")
+        return original_named_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(
+        ext_module,
+        "_extensions_lock_candidates",
+        lambda: [primary_lock, fallback_lock],
+    )
+    monkeypatch.setattr(
+        ext_module.tempfile,
+        "NamedTemporaryFile",
+        fail_primary_write_probe,
+    )
+
+    with ext_module._extension_operation_lock("aider"):
+        assert fallback_lock.exists()
+        assert (fallback_lock.parent / ".extension-operation-locks").is_dir()
 
 
 class TestUpdateHardening(TestUpdateExtension):

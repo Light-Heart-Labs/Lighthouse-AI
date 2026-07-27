@@ -282,6 +282,7 @@ if ! PATH="$tmpdir/bin:$PATH" \
     ODS_INSTALL_DIR="$sha_install" \
     ODS_ALLOW_LEGACY_PARALLEL=1 \
     ODS_TEST_BOOTSTRAP_INSTALL_MARKER="$sha_marker" \
+    OSTYPE=linux-gnu \
     bash get-ods.sh --non-interactive >"$tmpdir/bootstrap-sha.out" 2>&1; then
   cat "$tmpdir/bootstrap-sha.out"
   echo "[FAIL] bootstrap exact-SHA install failed"

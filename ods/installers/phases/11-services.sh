@@ -746,12 +746,26 @@ else
         ai "Cloud mode — skipping image model download"
     elif [[ "$GPU_BACKEND" == "amd" ]]; then
         COMFYUI_BASE="$INSTALL_DIR/data/comfyui/ComfyUI/models"
+        COMFYUI_MIOPEN_CACHE="$INSTALL_DIR/data/comfyui/miopen"
     elif [[ "$GPU_BACKEND" == "nvidia" ]]; then
         COMFYUI_BASE="$INSTALL_DIR/data/comfyui/models"
     fi
     if [[ "$ENABLE_COMFYUI" == "true" && "${ODS_MODE:-local}" != "cloud" && ( "$GPU_BACKEND" == "amd" || "$GPU_BACKEND" == "nvidia" ) ]]; then
         SDXL_CHECKPOINT_DIR="$COMFYUI_BASE/checkpoints"
         mkdir -p "$SDXL_CHECKPOINT_DIR"
+        if [[ "$GPU_BACKEND" == "amd" ]]; then
+            # Pre-create the cache as the install owner. This avoids Docker
+            # creating a root-owned bind source and keeps it traversable for
+            # both rootful and rootless container runtimes.
+            mkdir -p "$COMFYUI_MIOPEN_CACHE"
+            if ! chmod u+rwx,go+rx "$COMFYUI_MIOPEN_CACHE" 2>>"$LOG_FILE"; then
+                ai_warn "Could not normalize MIOpen cache permissions; continuing because the install owner may still have access"
+            fi
+            if [[ ! -w "$COMFYUI_MIOPEN_CACHE" || ! -x "$COMFYUI_MIOPEN_CACHE" ]]; then
+                ai_bad "MIOpen cache is not writable: $COMFYUI_MIOPEN_CACHE"
+                exit 1
+            fi
+        fi
         # NVIDIA ComfyUI also needs output/input/workflows bind-mount dirs
         if [[ "$GPU_BACKEND" == "nvidia" ]]; then
             mkdir -p "$INSTALL_DIR/data/comfyui"/{output,input,workflows}
@@ -1033,7 +1047,7 @@ MODELS_INI_EOF
     compose_ok=false
     # Build local images individually so every failure is reported before the
     # installer refuses to launch any potentially stale image.
-    _candidate_build_services=(dashboard dashboard-api model-router ape token-spy privacy-shield brave-search)
+    _candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
     [[ "$ENABLE_COMFYUI" == "true" ]] && _candidate_build_services+=(comfyui)
     [[ "$GPU_BACKEND" == "amd" ]] && _candidate_build_services+=(llama-server)
     if ! _enabled_compose_services="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --services 2>>"$LOG_FILE")"; then

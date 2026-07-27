@@ -186,6 +186,7 @@ async def _check_host_systemd_health(service_id: str, config: dict) -> ServiceSt
 
 _TOKEN_FILE = Path(DATA_DIR) / "token_counter.json"
 _PERF_FILE = Path(DATA_DIR) / "model_performance.json"
+MAX_SINGLE_REQUEST_TOKENS_PER_SECOND = 10_000.0
 _prev_tokens = {"count": 0, "time": 0.0, "tps": 0.0}
 _token_counter_lock = threading.Lock()
 
@@ -228,6 +229,15 @@ def _non_negative_number(value) -> float:
 
 def _normalize_perf_key(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+
+
+def is_plausible_single_request_tps(value) -> bool:
+    """Validate interactive single-request decode throughput, not batched capacity."""
+    try:
+        tokens_per_second = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(tokens_per_second) and 0 < tokens_per_second <= MAX_SINGLE_REQUEST_TOKENS_PER_SECOND
 
 
 def _read_json_file(path: Path, default):
@@ -306,7 +316,8 @@ def record_model_performance(
         tps = float(tokens_per_second)
     except (TypeError, ValueError):
         return
-    if tps <= 0:
+    if not is_plausible_single_request_tps(tps):
+        logger.warning("Ignoring implausible single-request throughput sample: %s tok/s", tps)
         return
 
     data = _read_json_file(_PERF_FILE, {"schema_version": "ods.model-performance.v1", "samples": {}})
@@ -315,6 +326,9 @@ def record_model_performance(
     previous = samples.get(key, {})
     previous_avg = float(previous.get("tokens_per_second", tps))
     previous_count = int(previous.get("sample_count", 0))
+    if not is_plausible_single_request_tps(previous_avg):
+        previous_avg = tps
+        previous_count = 0
     avg = (previous_avg * 0.8) + (tps * 0.2) if previous_count else tps
     samples[key] = {
         "model": model_name,
@@ -382,6 +396,12 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                 host_status = await request_agent_json("GET", "/v1/llm/status", timeout=6)
                 stats = host_status.get("stats")
             else:
+                if "llama-server" not in SERVICES:
+                    return {
+                        "tokens_per_second": 0,
+                        "lifetime_tokens": 0,
+                        "token_count_mode": "unavailable",
+                    }
                 host = SERVICES["llama-server"]["host"]
                 port = SERVICES["llama-server"]["port"]
                 client = await _get_httpx_client()
@@ -407,7 +427,11 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                 tokens_per_second = float(stats.get("tokens_per_second") or 0)
             except (TypeError, ValueError):
                 tokens_per_second = 0.0
-            if not math.isfinite(tokens_per_second):
+            if tokens_per_second and not is_plausible_single_request_tps(tokens_per_second):
+                logger.warning(
+                    "Ignoring implausible Lemonade single-request throughput: %s tok/s",
+                    tokens_per_second,
+                )
                 tokens_per_second = 0.0
             output_tokens = int(_non_negative_number(stats.get("output_tokens")))
             return {
@@ -417,6 +441,13 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                 # polling cannot truthfully construct a lifetime total.
                 "lifetime_tokens": output_tokens,
                 "token_count_mode": "latest_completion",
+            }
+
+        if "llama-server" not in SERVICES:
+            return {
+                "tokens_per_second": 0,
+                "lifetime_tokens": _get_lifetime_tokens(),
+                "token_count_mode": "cumulative",
             }
 
         host = SERVICES["llama-server"]["host"]
@@ -479,7 +510,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
             "lifetime_tokens": lifetime,
             "token_count_mode": "cumulative",
         }
-    except (AgentClientError, httpx.HTTPError, httpx.TimeoutException, OSError, ValueError) as e:
+    except (AgentClientError, httpx.HTTPError, httpx.TimeoutException, OSError, ValueError, KeyError) as e:
         logger.warning("get_llama_metrics failed: %s: %s", type(e).__name__, e)
         if LLM_BACKEND == "lemonade":
             return {
@@ -496,6 +527,8 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
 
 async def get_loaded_model() -> Optional[str]:
     """Query llama-server for actually loaded model name."""
+    if "llama-server" not in SERVICES:
+        return None
     try:
         host = SERVICES["llama-server"]["host"]
         port = SERVICES["llama-server"]["port"]
@@ -518,7 +551,7 @@ async def get_loaded_model() -> Optional[str]:
                 return m.get("id")
         if models:
             return models[0].get("id")
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
         logger.debug("get_loaded_model failed: %s", e)
     return None
 
@@ -529,6 +562,8 @@ async def get_llama_context_size(model_hint: Optional[str] = None) -> Optional[i
     Accepts an optional *model_hint* to skip the redundant
     ``get_loaded_model()`` call when the caller already has it.
     """
+    if "llama-server" not in SERVICES:
+        return None
     try:
         host = SERVICES["llama-server"]["host"]
         port = SERVICES["llama-server"]["port"]
@@ -540,7 +575,7 @@ async def get_llama_context_size(model_hint: Optional[str] = None) -> Optional[i
         resp = await client.get(url)
         n_ctx = resp.json().get("default_generation_settings", {}).get("n_ctx")
         return int(n_ctx) if n_ctx else None
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
         logger.debug("get_llama_context_size failed: %s", e)
         return None
 
@@ -804,14 +839,19 @@ def get_model_info() -> Optional[ModelInfo]:
             model_name = env_values.get("LLM_MODEL")
             if model_name:
                 size_gb, quant = 15.0, None
-                # MAX_CONTEXT/CTX_SIZE come straight from .env and may be
+                # CTX_SIZE/MAX_CONTEXT come straight from .env and may be
                 # non-numeric (e.g. "auto", "8k", or a trailing comment); fall
                 # back to the default rather than 500-ing every caller. Mirrors
                 # the guard already used in routers/models.py.
-                try:
-                    context = int(env_values.get("MAX_CONTEXT") or env_values.get("CTX_SIZE") or 32768)
-                except (TypeError, ValueError):
-                    context = 32768
+                context = 32768
+                for key in ("CTX_SIZE", "MAX_CONTEXT"):
+                    try:
+                        candidate = int(env_values.get(key) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if candidate > 0:
+                        context = candidate
+                        break
 
                 import re as _re
 
