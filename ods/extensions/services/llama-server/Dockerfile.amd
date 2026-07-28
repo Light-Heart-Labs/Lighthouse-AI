@@ -6,7 +6,7 @@
 #
 # Build args (override via .env or docker compose build --build-arg):
 #   AMDGPU_TARGET  — GPU architecture (default: gfx1151 for Strix Halo)
-#   LLAMA_CPP_REF  — llama.cpp git ref to build (default: b8763)
+#   LLAMA_CPP_REF  — llama.cpp git ref to build (default: b9641)
 #   ROCM_VERSION   — ROCm SDK version for builder (default: 7.2)
 #   LEMONADE_SERVER_IMAGE — Lemonade runtime image tag
 #
@@ -22,7 +22,7 @@ ARG LEMONADE_SERVER_IMAGE=ghcr.io/lemonade-sdk/lemonade-server:v10.2.0
 FROM rocm/dev-ubuntu-24.04:${ROCM_VERSION}-complete AS builder
 
 ARG AMDGPU_TARGET=gfx1151
-ARG LLAMA_CPP_REF=b8763
+ARG LLAMA_CPP_REF=b9641
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake ninja-build git ca-certificates \
@@ -57,7 +57,14 @@ RUN cmake -B build -G Ninja \
         -DAMDGPU_TARGETS=${AMDGPU_TARGET} \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_HIP_COMPILER=/opt/rocm/bin/amdclang++ \
-    && cmake --build build --config Release -j$(nproc)
+        -DLLAMA_BUILD_APP=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_TOOLS=ON \
+        -DLLAMA_BUILD_UI=OFF \
+        -DLLAMA_USE_PREBUILT_UI=OFF \
+    && cmake --build build --config Release --target llama-server -j$(nproc)
 
 # ── Collect binary + runtime dependencies into /opt/llama-dist/ ──
 # Note: newer llama.cpp puts all binaries AND shared libs in build/bin/, not build/lib/

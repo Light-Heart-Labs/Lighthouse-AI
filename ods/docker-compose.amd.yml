@@ -12,7 +12,7 @@ services:
       dockerfile: Dockerfile.amd
       args:
         AMDGPU_TARGET: ${AMDGPU_TARGET:-gfx1151}
-        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-b8763}
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-b9641}
         LEMONADE_SERVER_IMAGE: ${LEMONADE_SERVER_IMAGE:-ghcr.io/lemonade-sdk/lemonade-server:v10.2.0}
     image: ods-lemonade-server:latest
     # Wrapper entrypoint syncs ctx_size from LEMONADE_CTX_SIZE env into

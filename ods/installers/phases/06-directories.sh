@@ -855,7 +855,7 @@ ${_amd_hsa_override}
 HSA_XNACK=1
 ROCBLAS_USE_HIPBLASLT=1
 AMDGPU_TARGET=${_amd_gfx_detected}
-LLAMA_CPP_REF=b8763
+LLAMA_CPP_REF=b9641
 ${_amd_custom_bin}
 # Backend selector (becomes --llamacpp). NOT "auto": auto re-runs Lemonade's own gfx
 # detection, which maps GPU marketing names to arches and does not recognise every
