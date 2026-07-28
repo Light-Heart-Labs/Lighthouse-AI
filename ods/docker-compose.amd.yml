@@ -30,7 +30,7 @@ services:
       - "0.0.0.0"
       - --no-tray
       - --llamacpp
-      - auto
+      - "${LEMONADE_LLAMACPP:-rocm}"
       - --llamacpp-args
       - "--metrics --host 0.0.0.0 -fa on -b 2048 -ub 256"
       - --extra-models-dir
@@ -61,8 +61,10 @@ services:
       - HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-}
       - HSA_XNACK=${HSA_XNACK:-1}
       - ROCBLAS_USE_HIPBLASLT=${ROCBLAS_USE_HIPBLASLT:-1}
-      # NOTE: the backend selector is LEMONADE_LLAMACPP (-> --llamacpp), set in
-      # docker-compose.multigpu-amd.yml. LEMONADE_LLAMACPP_BACKEND, which used to be set
+      # NOTE: the backend selector is LEMONADE_LLAMACPP (-> --llamacpp), passed
+      # and exported here with a rocm default so single-GPU installs honor the
+      # installer-written value (docker-compose.multigpu-amd.yml overrides both
+      # on multi-GPU hosts). LEMONADE_LLAMACPP_BACKEND, which used to be set
       # here, is NOT a variable Lemonade reads (its recognised names are visible with
       # `grep -aoE 'LEMONADE_[A-Z_]+' /opt/lemonade/lemond`) — it was a no-op, so the
       # comment claiming it kept us on "auto" was describing something that never ran.
@@ -73,6 +75,7 @@ services:
       # only ROCm stack in this image — the Lemonade base image ships no ROCm userspace.
       # Left empty, Lemonade detects no ROCm device, falls back to its Vulkan llama.cpp
       # build on radv, and may fail to load models outright.
+      - LEMONADE_LLAMACPP=${LEMONADE_LLAMACPP:-rocm}
       - LEMONADE_LLAMACPP_ROCM_BIN=${LEMONADE_LLAMACPP_ROCM_BIN:-}
       - LEMONADE_CTX_SIZE=${CTX_SIZE:-131072}
     healthcheck:
