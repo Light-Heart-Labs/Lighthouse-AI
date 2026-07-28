@@ -289,6 +289,46 @@ Applying a template only enables services — it doesn't disable anything you've
 
 ---
 
+### Can ODS reuse a model already running in Ollama or LM Studio?
+
+The Linux installer can reuse a host-managed text/chat model instead of
+downloading and starting a duplicate GGUF with ODS's llama-server.
+
+Interactive installs discover matching local services and ask before adopting
+one. Non-interactive installs require an explicit decision:
+
+```bash
+./install.sh --reuse-external-llm --non-interactive
+```
+
+Or configure the endpoint and exact provider model directly:
+
+```bash
+./install.sh \
+  --external-llm-url http://127.0.0.1:11434 \
+  --external-llm-provider ollama \
+  --external-llm-model qwen3.5:9b
+```
+
+The installer verifies the model and a real completion before changing the
+Compose topology. Open WebUI, ODS Talk, Hermes, Perplexica, Privacy Shield, and
+Token Spy then use the container-safe external endpoint. ODS does not stop the
+external process and does not activate local catalog models while that backend
+is selected.
+
+To return an existing installation to ODS-managed llama-server:
+
+```bash
+./install.sh --no-external-llm
+```
+
+This integration routes text/chat inference; it does not import or synchronize
+Ollama/LM Studio model files, VLMs, embedding models, or rerankers. The
+installer flags in this release are Linux-only. Windows Lemonade and macOS
+native llama-server keep their existing platform lifecycle.
+
+---
+
 ### Can I chat while models are downloading?
 
 Yes. During install, a small bootstrap model (~1.5GB, Qwen 3.5 2B) downloads first so you can start chatting within a couple of minutes. The bootstrap context is 64K so Hermes can work during the first session. The full tier-appropriate model downloads in the background.
