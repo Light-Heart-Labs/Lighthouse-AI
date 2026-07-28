@@ -1543,18 +1543,35 @@
       "name": "Qwen 3.5 4B",
       "family": "qwen",
       "gguf_file": "Qwen3.5-4B-Q4_K_M.gguf",
-      "gguf_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
       "gguf_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
       "size_bytes": 2740937888,
       "size_mb": 2741,
       "vram_required_gb": 5,
       "context_length": 262144,
+      "total_params_b": 4.7,
+      "architecture": "dense",
       "quantization": "Q4_K_M",
-      "specialty": "Balanced",
-      "description": "Unsloth's GGUF quant of Qwen3.5 4B with native 262K context metadata. A low-VRAM long-context release candidate for app and Talk validation.",
+      "specialty": "Reasoning, Coding & Agents",
+      "description": "Alibaba's Apache-2.0 Qwen 3.5 4B combines native 262K context with reasoning, coding, and agentic capabilities. Its current Artificial Analysis Intelligence Index score of 20 makes it the leading independently ranked model in ODS's 5GB-class local tier.",
       "tokens_per_sec_estimate": 100,
       "llm_model_name": "qwen3.5-4b",
       "llama_server_image": null,
+      "install_recommendation": true,
+      "quality_evidence": {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/qwen3-5-4b/",
+        "score": 20,
+        "assessed_at": "2026-07-28",
+        "note": "The score is an Artificial Analysis estimate pending an independent provider evaluation; it is still materially above Gemma 4 E2B's score of 9 in the same index."
+      },
+      "source_evidence": {
+        "model_card": "https://huggingface.co/Qwen/Qwen3.5-4B",
+        "model_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "gguf_repository": "unsloth/Qwen3.5-4B-GGUF",
+        "gguf_revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+        "license": "apache-2.0"
+      },
       "app_compatibility": {
         "openai_chat": {
           "status": "verified",
