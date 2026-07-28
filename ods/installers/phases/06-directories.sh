@@ -469,18 +469,47 @@ raise SystemExit(1)' 2>/dev/null && return 0
     LANGFUSE_INIT_USER_EMAIL=$(_env_get LANGFUSE_INIT_USER_EMAIL "admin@ods.local")
     LANGFUSE_INIT_USER_PASSWORD=$(_env_get LANGFUSE_INIT_USER_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
     MODEL_PROFILE_VALUE=$(_env_get MODEL_PROFILE "${MODEL_PROFILE_REQUESTED:-${MODEL_PROFILE:-qwen}}")
-    ODS_MODE_VALUE="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
+    MODEL_RECOMMENDED_MODEL_VALUE="${LLM_MODEL}"
+    MODEL_RECOMMENDED_GGUF_VALUE="${GGUF_FILE}"
+    MODEL_RECOMMENDED_CONTEXT_VALUE="${MAX_CONTEXT}"
+    EXTERNAL_LLM_URL_VALUE="${EXTERNAL_LLM_URL:-}"
+    EXTERNAL_LLM_CONTAINER_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL:-}"
+    EXTERNAL_LLM_PROVIDER_VALUE="${EXTERNAL_LLM_PROVIDER:-}"
+    EXTERNAL_SELECTED_MODEL="${EXTERNAL_LLM_MODEL:-}"
+    EXTERNAL_LLM_ACTIVE=false
+    if [[ -n "$EXTERNAL_LLM_URL_VALUE" ]]; then
+        if [[ -z "$EXTERNAL_LLM_CONTAINER_URL_VALUE" || -z "$EXTERNAL_LLM_PROVIDER_VALUE" || -z "$EXTERNAL_SELECTED_MODEL" ]]; then
+            error "External LLM selection is incomplete. Re-run with a reachable endpoint and model, or use --no-external-llm."
+        fi
+        EXTERNAL_LLM_ACTIVE=true
+        LLM_MODEL="$EXTERNAL_SELECTED_MODEL"
+    fi
+    ODS_MODE_VALUE="$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "local"; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
     ODS_MODEL_SWITCHBOARD_VALUE=$(_env_get ODS_MODEL_SWITCHBOARD "${ODS_MODEL_SWITCHBOARD:-observe}")
     case "$ODS_MODEL_SWITCHBOARD_VALUE" in
         legacy|observe|enabled) ;;
         *) ODS_MODEL_SWITCHBOARD_VALUE="observe" ;;
     esac
+    if [[ "$EXTERNAL_LLM_ACTIVE" == "true" && "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
+        ai_warn "External LLM reuse bypasses the managed model router; setting ODS_MODEL_SWITCHBOARD=observe."
+        ODS_MODEL_SWITCHBOARD_VALUE="observe"
+    fi
     _default_llm_api_url="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "http://litellm:4000"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "http://litellm:4000"; elif [[ "${ODS_MODE:-local}" == "local" ]]; then echo "http://llama-server:8080"; else echo "http://litellm:4000"; fi)"
-    LLM_API_URL_VALUE=$(_env_get LLM_API_URL "$_default_llm_api_url")
-    if [[ "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
+    if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
+        LLM_API_URL_VALUE="$EXTERNAL_LLM_CONTAINER_URL_VALUE"
+        OPEN_WEBUI_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
+        OPEN_WEBUI_LLM_API_KEY_VALUE=""
+    elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
+        LLM_API_URL_VALUE="$_default_llm_api_url"
+        OPEN_WEBUI_LLM_BASE_URL_VALUE=""
+        OPEN_WEBUI_LLM_API_KEY_VALUE=""
+    else
+        LLM_API_URL_VALUE=$(_env_get LLM_API_URL "$_default_llm_api_url")
+    fi
+    if [[ "$EXTERNAL_LLM_ACTIVE" != "true" && "${EXTERNAL_LLM_RESET:-false}" != "true" && "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
         OPEN_WEBUI_LLM_BASE_URL_VALUE=$(_env_get OPEN_WEBUI_LLM_BASE_URL "http://litellm:4000")
         OPEN_WEBUI_LLM_API_KEY_VALUE=$(_env_get OPEN_WEBUI_LLM_API_KEY "${LITELLM_KEY}")
-    else
+    elif [[ "$EXTERNAL_LLM_ACTIVE" != "true" && "${EXTERNAL_LLM_RESET:-false}" != "true" ]]; then
         OPEN_WEBUI_LLM_BASE_URL_VALUE=$(_env_get OPEN_WEBUI_LLM_BASE_URL "")
         OPEN_WEBUI_LLM_API_KEY_VALUE=$(_env_get OPEN_WEBUI_LLM_API_KEY "")
     fi
@@ -498,8 +527,16 @@ raise SystemExit(1)' 2>/dev/null && return 0
         _default_hermes_base_url="http://litellm:4000/v1"
         _default_hermes_api_key="${LITELLM_KEY}"
     fi
-    HERMES_LLM_BASE_URL_VALUE=$(_env_get HERMES_LLM_BASE_URL "$_default_hermes_base_url")
-    HERMES_LLM_API_KEY_VALUE=$(_env_get HERMES_LLM_API_KEY "$_default_hermes_api_key")
+    if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
+        HERMES_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
+        HERMES_LLM_API_KEY_VALUE="not-needed"
+    elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
+        HERMES_LLM_BASE_URL_VALUE="$_default_hermes_base_url"
+        HERMES_LLM_API_KEY_VALUE="$_default_hermes_api_key"
+    else
+        HERMES_LLM_BASE_URL_VALUE=$(_env_get HERMES_LLM_BASE_URL "$_default_hermes_base_url")
+        HERMES_LLM_API_KEY_VALUE=$(_env_get HERMES_LLM_API_KEY "$_default_hermes_api_key")
+    fi
     LLM_API_URL="$LLM_API_URL_VALUE"
     HERMES_LLM_BASE_URL="$HERMES_LLM_BASE_URL_VALUE"
     HERMES_LLM_API_KEY="$HERMES_LLM_API_KEY_VALUE"
@@ -698,15 +735,20 @@ ODS_MODEL_SWITCHBOARD=${ODS_MODEL_SWITCHBOARD_VALUE}
 LLM_API_URL=${LLM_API_URL_VALUE}
 OPEN_WEBUI_LLM_BASE_URL=${OPEN_WEBUI_LLM_BASE_URL_VALUE}
 OPEN_WEBUI_LLM_API_KEY=${OPEN_WEBUI_LLM_API_KEY_VALUE}
-LLM_BACKEND=$(if [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "lemonade"; else echo "llama-server"; fi)
+LLM_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "external"; elif [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "lemonade"; else echo "llama-server"; fi)
 LLM_API_BASE_PATH=$(if [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "${LEMONADE_API_BASE_PATH_VALUE}"; else echo "/v1"; fi)
-AMD_INFERENCE_RUNTIME=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" || ( "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ) ]]; then echo "lemonade"; else echo ""; fi)
-AMD_INFERENCE_BACKEND=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_BACKEND:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
-AMD_INFERENCE_LOCATION=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "host"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "container"; else echo ""; fi)
-AMD_INFERENCE_PORT=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${LEMONADE_PORT_VALUE}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_API_PORT:-8080}"; else echo ""; fi)
-AMD_INFERENCE_SUPPORTED_BACKENDS=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_SUPPORTED_BACKENDS:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
-AMD_INFERENCE_RUNTIME_MODE=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "external-lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "linux-container"; else echo ""; fi)
-AMD_INFERENCE_MANAGED=$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "false"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "true"; else echo ""; fi)
+EXTERNAL_LLM_URL=${EXTERNAL_LLM_URL_VALUE}
+EXTERNAL_LLM_CONTAINER_URL=${EXTERNAL_LLM_CONTAINER_URL_VALUE}
+EXTERNAL_LLM_PROVIDER=${EXTERNAL_LLM_PROVIDER_VALUE}
+EXTERNAL_LLM_MODEL=${EXTERNAL_SELECTED_MODEL}
+SKIP_MODEL_DOWNLOAD=${EXTERNAL_LLM_ACTIVE}
+AMD_INFERENCE_RUNTIME=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" || ( "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ) ]]; then echo "lemonade"; else echo ""; fi)
+AMD_INFERENCE_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_BACKEND:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
+AMD_INFERENCE_LOCATION=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "host"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "container"; else echo ""; fi)
+AMD_INFERENCE_PORT=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${LEMONADE_PORT_VALUE}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_API_PORT:-8080}"; else echo ""; fi)
+AMD_INFERENCE_SUPPORTED_BACKENDS=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_SUPPORTED_BACKENDS:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
+AMD_INFERENCE_RUNTIME_MODE=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "external-lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "linux-container"; else echo ""; fi)
+AMD_INFERENCE_MANAGED=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "false"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "true"; else echo ""; fi)
 LEMONADE_EXTERNAL=${LEMONADE_EXTERNAL_VALUE}
 LEMONADE_BASE_URL=${LEMONADE_BASE_URL_VALUE}
 LEMONADE_CONTAINER_BASE_URL=${LEMONADE_CONTAINER_BASE_URL_VALUE}
@@ -729,9 +771,9 @@ LLM_MODEL=${LLM_MODEL}
 GGUF_FILE=${GGUF_FILE}
 MAX_CONTEXT=${MAX_CONTEXT}
 CTX_SIZE=${MAX_CONTEXT}
-MODEL_RECOMMENDED_MODEL=${LLM_MODEL}
-MODEL_RECOMMENDED_GGUF=${GGUF_FILE}
-MODEL_RECOMMENDED_CONTEXT=${MAX_CONTEXT}
+MODEL_RECOMMENDED_MODEL=${MODEL_RECOMMENDED_MODEL_VALUE}
+MODEL_RECOMMENDED_GGUF=${MODEL_RECOMMENDED_GGUF_VALUE}
+MODEL_RECOMMENDED_CONTEXT=${MODEL_RECOMMENDED_CONTEXT_VALUE}
 MODEL_RECOMMENDATION_SOURCE=${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}
 MODEL_RECOMMENDATION_POLICY=${MODEL_RECOMMENDATION_POLICY:-tier-map}
 MODEL_RECOMMENDATION_CONFIDENCE=${MODEL_RECOMMENDATION_CONFIDENCE:-medium}

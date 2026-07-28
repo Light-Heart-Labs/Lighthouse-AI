@@ -86,6 +86,11 @@ _READ_ONLY_ENV_FIELDS = {
     "MODEL_RECOMMENDATION_CONFIDENCE": "Recommendation confidence is managed by the installer.",
     "MODEL_RECOMMENDATION_REASON": "Recommendation rationale is managed by the installer.",
     "MODEL_RECOMMENDED_ALTERNATIVES": "Recommended alternatives are managed by the installer.",
+    "EXTERNAL_LLM_URL": "External inference topology is validated and managed by the installer.",
+    "EXTERNAL_LLM_CONTAINER_URL": "The container route is derived and validated by the installer.",
+    "EXTERNAL_LLM_PROVIDER": "The external provider is detected and validated by the installer.",
+    "EXTERNAL_LLM_MODEL": "The external model id is verified against the provider by the installer.",
+    "SKIP_MODEL_DOWNLOAD": "Model download skipping is an installer-owned validation receipt.",
 }
 
 # ── Env parsing ────────────────────────────────────────────────────────────────

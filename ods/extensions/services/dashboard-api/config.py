@@ -153,6 +153,54 @@ def _apply_host_native_llm_service_override(
     logger.info("Host-native AMD inference detected; routing LLM probes to %s:%d", parsed.hostname, port)
 
 
+def _apply_external_llm_service_override(
+    services: dict[str, dict[str, Any]],
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    """Route dashboard LLM probes to a validated external Ollama/LM Studio endpoint."""
+    env = environment if environment is not None else os.environ
+    if str(env.get("LLM_BACKEND", "")).strip().lower() != "external":
+        return
+    service = services.get("llama-server")
+    if not service:
+        return
+
+    configured_url = (
+        env.get("EXTERNAL_LLM_CONTAINER_URL")
+        or env.get("LLM_API_URL")
+        or ""
+    )
+    parsed = urlparse(str(configured_url).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        logger.warning("Ignoring invalid external LLM URL: %s", configured_url)
+        return
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        logger.warning("Ignoring invalid external LLM port in URL: %s", configured_url)
+        return
+
+    provider = str(env.get("EXTERNAL_LLM_PROVIDER", "")).strip().lower()
+    health_paths = {
+        "ollama": "/api/tags",
+        "lmstudio": "/v1/models",
+    }
+    service["host"] = parsed.hostname
+    service["port"] = port
+    service["health"] = health_paths.get(provider, "/v1/models")
+    service["name"] = {
+        "ollama": "Ollama (External LLM)",
+        "lmstudio": "LM Studio (External LLM)",
+    }.get(provider, "External LLM")
+    logger.info(
+        "External %s inference detected; routing LLM probes to %s:%d%s",
+        provider or "OpenAI-compatible",
+        parsed.hostname,
+        port,
+        service["health"],
+    )
+
+
 def _read_env_value(key: str) -> str:
     return (os.environ.get(key) or _read_env_from_file(key)).strip()
 
@@ -382,6 +430,7 @@ if not SERVICES:
 # health path so the dashboard poll loop hits the correct endpoint.
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "")
 _apply_host_native_llm_service_override(SERVICES, GPU_BACKEND)
+_apply_external_llm_service_override(SERVICES)
 if LLM_BACKEND == "lemonade" and "llama-server" in SERVICES:
     SERVICES["llama-server"]["health"] = "/api/v1/health"
     logger.info("Lemonade backend detected — overriding llama-server health to /api/v1/health")

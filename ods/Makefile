@@ -32,6 +32,8 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== Installer contracts ==="
 	@bash tests/contracts/test-installer-contracts.sh
+	@bash tests/test-external-services.sh
+	@bash tests/test-resolve-compose-resilient.sh
 	@bash tests/test-phase03-multigpu-tty.sh
 	@bash tests/contracts/test-preflight-fixtures.sh
 	@bash tests/test-preflight-resolver-bug.sh
