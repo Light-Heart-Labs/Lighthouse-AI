@@ -177,6 +177,7 @@ class AmdRuntimeStatus(BaseModel):
 class ModelLibraryEntry(BaseModel):
     id: str
     name: str
+    engine: str = "gguf"
     gguf: Optional[str] = None
     ggufParts: Optional[list[dict[str, Any]]] = None
     downloadUrl: Optional[str] = None

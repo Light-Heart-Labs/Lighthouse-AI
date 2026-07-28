@@ -2656,6 +2656,21 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
             if [[ -z "$_renderer_py" ]]; then
                 _renderer_py="python3"
             fi
+            # hipfire routing must survive the hot-swap re-render — the
+            # upgrade changes the GGUF, not the engine choice, so the pins
+            # in .env pass straight through. Without them one bootstrap
+            # upgrade silently wipes hipfire's routes (the same clobber the
+            # host-agent renderer path closes).
+            _hipfire_enabled="$(read_env_value ENABLE_HIPFIRE | tr '[:upper:]' '[:lower:]')"
+            _hipfire_model="$(read_env_value HIPFIRE_MODEL)"
+            _hipfire_active="$(read_env_value HIPFIRE_ACTIVE | tr '[:upper:]' '[:lower:]')"
+            _hipfire_render_args=()
+            if [[ "$_hipfire_enabled" == "true" && -n "$_hipfire_model" ]]; then
+                _hipfire_render_args+=(--hipfire-enabled --hipfire-model "$_hipfire_model")
+                if [[ "$_hipfire_active" == "true" ]]; then
+                    _hipfire_render_args+=(--hipfire-active)
+                fi
+            fi
             if [[ ! -f "$_renderer_script" ]] \
                 || ! command -v "$_renderer_py" >/dev/null 2>&1 \
                 || ! "$_renderer_py" "$_renderer_script" \
@@ -2667,6 +2682,7 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
                     --lemonade-api-base "$_lemonade_api_base" \
                     --litellm-key "$LITELLM_LEMONADE_API_KEY" \
                     --output-root "$INSTALL_DIR" \
+                    "${_hipfire_render_args[@]}" \
                     --write >/dev/null 2>&1; then
                 log "ERROR: runtime config renderer failed for the Lemonade route"
                 _rollback_status="Previous active model config restore was attempted; inspect the logs before retrying."
@@ -2678,6 +2694,7 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
                 exit 1
             fi
             unset _renderer_script _renderer_py _lemonade_api_base _lemonade_model_id _resolved_lemonade_model_id _amd_location _amd_port
+            unset _hipfire_enabled _hipfire_model _hipfire_active _hipfire_render_args
             log "Restarting LiteLLM to pick up model change..."
             _litellm_port="$(read_env_value LITELLM_PORT)"
             [[ -n "$_litellm_port" ]] || _litellm_port="4000"
