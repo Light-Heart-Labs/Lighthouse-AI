@@ -1754,30 +1754,72 @@
         "rank_scope": "4B-40B open-weight models",
         "assessed_at": "2026-07-27"
       },
-      "runtime_profiles": [
-        {
-          "id": "nvidia-8gb-64k-partial-offload-q4-kv",
-          "label": "NVIDIA 8GB 64K partial GPU offload with Q4 KV cache",
-          "backend": "nvidia",
-          "host_arch": [
-            "amd64"
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unsupported_until_revalidated",
+          "label": "8GB Windows chat runtime not viable",
+          "reason": "At corrected product commit fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef, windows-laptop loaded the exact Q4_K_M artifact at 65,536-token context with 20 of 65 layers offloaded, passed identity and direct inference, and passed challenge-bound ODS Talk. Generation nevertheless measured only 0.07-0.08 tok/s, and the required LiteLLM and Open WebUI probes timed out. Keep this dense 27B model out of 8GB Windows release coverage; the scoped verdict does not reject 20GB-plus hosts.",
+          "evidence": "fleet-test/runs/2026-07-28T00-15-34Z-model-ui-product-fdedd5dd090b-harness-19d43e6f9f25-hosts-windows-laptop-qwen36-27b-windows-fix-r12/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-28T01:22:28Z",
+          "productSha": "fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": [
+            "windows-laptop"
           ],
-          "memory_type": "discrete",
-          "vram_min_gb": 7.5,
-          "vram_max_gb": 8.5,
-          "system_ram_min_gb": 31,
-          "context_length": 65536,
-          "estimated_required_gb": 7.4,
-          "fit_label": "64K 8GB candidate partial-offload profile",
-          "env": {
-            "LLAMA_PARALLEL": "1",
-            "LLAMA_ARG_FLASH_ATTN": "on",
-            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
-            "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
-            "N_GPU_LAYERS": "20"
-          }
+          "gpuBackendScope": [
+            "nvidia"
+          ],
+          "llmBackendScope": [
+            "llama-server"
+          ],
+          "expiresAt": "2026-08-28T00:00:00Z"
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified during six-host staged trials",
+          "reason": "The pinned Qwen 3.6 27B artifact loaded with correct route identity and passed challenge-bound ODS Talk on tower2, strix-halo, spark, m5-mbp, strixy, and windows-laptop. Four larger-memory hosts completed the full rotation; strixy also passed every candidate consumer before a restored-baseline Perplexica cleanup flake, while the corrected Windows partial-offload run later failed other consumers on performance.",
+          "evidence": "fleet-test/runs/2026-07-27T22-56-10Z-model-ui-product-5e753f617ced-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-qwen36-27b-quality-first-r10/cycle-001/{tower2,strix-halo,spark,m5-mbp,strixy}; fleet-test/runs/2026-07-28T00-15-34Z-model-ui-product-fdedd5dd090b-harness-19d43e6f9f25-hosts-windows-laptop-qwen36-27b-windows-fix-r12/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-28T01:22:28Z",
+          "productSha": "fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": [
+            "tower2",
+            "strix-halo",
+            "spark",
+            "m5-mbp",
+            "windows-laptop",
+            "strixy"
+          ]
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "8GB Windows Perplexica runtime not viable",
+          "reason": "The corrected Windows partial-offload run loaded and directly inferred with the exact Qwen 3.6 27B artifact, but Perplexica did not complete within the enforced consumer timeout at the observed 0.07-0.08 tok/s generation rate. Keep this model out of Perplexica release coverage on 8GB Windows hardware.",
+          "evidence": "fleet-test/runs/2026-07-28T00-15-34Z-model-ui-product-fdedd5dd090b-harness-19d43e6f9f25-hosts-windows-laptop-qwen36-27b-windows-fix-r12/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-28T01:22:28Z",
+          "productSha": "fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": [
+            "windows-laptop"
+          ],
+          "gpuBackendScope": [
+            "nvidia"
+          ],
+          "llmBackendScope": [
+            "llama-server"
+          ],
+          "expiresAt": "2026-08-28T00:00:00Z"
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not fleet-wide agent-ready",
+          "reason": "The required six-host gate did not pass. Tower2, strix-halo, spark, and m5-mbp completed the full rotation; strixy passed the candidate load, Talk, and all candidate consumers before a restored-baseline cleanup flake; windows-laptop loaded the corrected 20-layer partial-offload route but ran at only 0.07-0.08 tok/s and timed out in LiteLLM, Open WebUI, and Perplexica. Keep install_recommendation false.",
+          "evidence": "fleet-test/runs/2026-07-27T22-56-10Z-model-ui-product-5e753f617ced-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-qwen36-27b-quality-first-r10/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}; fleet-test/runs/2026-07-28T00-15-34Z-model-ui-product-fdedd5dd090b-harness-19d43e6f9f25-hosts-windows-laptop-qwen36-27b-windows-fix-r12/cycle-001/windows-laptop",
+          "recordedAt": "2026-07-28T01:22:28Z",
+          "productSha": "fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
         }
-      ]
+      }
     },
     {
       "id": "qwen3.5-27b-q4",
