@@ -802,6 +802,56 @@ def test_qwen35_9b_meets_hermes_context_floor():
     assert by_id["qwen3.5-9b-q4"]["context_length"] >= HERMES_CONTEXT_FLOOR
 
 
+def test_north_mini_code_is_audited_as_current_specialist_candidate():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["north-mini-code-30b-a3b-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/bartowski/North-Mini-Code-1.0-GGUF/"
+        "resolve/6ff6563002170723a6f7a672bf4c99775be6c0dd/"
+        "North-Mini-Code-1.0-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "38a7f05a0bf703be5a9c474d205229d68ffa6c15f8e793923cd2d46c9b77a723"
+    assert model["size_bytes"] == 18744024640
+    assert model["size_mb"] == 18745
+    assert model["total_params_b"] == 30
+    assert model["active_params_b"] == 3
+    assert model["architecture"] == "moe"
+    assert model["context_length"] == 131072
+    assert model["max_context_length"] == 262144
+    assert model["install_recommendation"] is False
+    assert model["llama_server_image"] == (
+        "ghcr.io/ggml-org/llama.cpp:server-cuda-b9641"
+    )
+
+    assert model["quality_evidence"] == {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/north-mini-code",
+        "score": 20,
+        "rank": 21,
+        "rank_scope": "4B-40B open-weight models",
+        "assessed_at": "2026-07-28",
+    }
+    assert model["coding_evidence"]["score"] == 33.4
+    assert "Launch-era" in model["coding_evidence"]["note"]
+    assert model["runtime_requirements"]["llama_cpp_min_build"] == 9637
+    assert model["runtime_requirements"]["docker_image_build"] == 9641
+
+    profile = {
+        item["id"]: item for item in model["runtime_profiles"]
+    }["nvidia-8gb-64k-partial-offload-q4-kv"]
+    assert profile["context_length"] == HERMES_CONTEXT_FLOOR
+    assert profile["system_ram_min_gb"] == 31
+    assert profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+        "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+        "N_GPU_LAYERS": "16",
+    }
+
+
 def test_qwen35_2b_records_exact_artifact_and_failed_fleet_evidence():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}

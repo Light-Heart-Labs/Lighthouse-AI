@@ -1364,11 +1364,13 @@ function Start-NativeInferenceServer {
             return
         }
 
+        $gpuLayers = $envVars["N_GPU_LAYERS"]
+        if (-not $gpuLayers) { $gpuLayers = "999" }
         $llamaArgs = @(
             "--model", $modelPath,
             "--host", $bindAddr,
             "--port", [string]$script:LEMONADE_PORT,
-            "--n-gpu-layers", "999",
+            "--n-gpu-layers", $gpuLayers,
             "--ctx-size", $ctxSize
         )
         if ($envVars["LLAMA_ARG_FLASH_ATTN"]) { $llamaArgs += @("--flash-attn", $envVars["LLAMA_ARG_FLASH_ATTN"]) }

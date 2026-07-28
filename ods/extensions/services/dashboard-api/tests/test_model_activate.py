@@ -1777,7 +1777,8 @@ class TestLaunchNativeLlamaServer:
             "GGUF_FILE=test-model.gguf\n"
             "CTX_SIZE=8192\n"
             "LLAMA_REASONING=on\n"
-            "AMD_INFERENCE_PORT=9090\n",
+            "AMD_INFERENCE_PORT=9090\n"
+            "N_GPU_LAYERS=20\n",
             encoding="utf-8",
         )
         (tmp_path / "data" / "models").mkdir(parents=True)
@@ -1811,6 +1812,7 @@ class TestLaunchNativeLlamaServer:
         assert "--ctx-size" in cmd
         assert "8192" in cmd
         assert "--reasoning-format" in cmd
+        assert cmd[cmd.index("--n-gpu-layers") + 1] == "20"
         assert "deepseek" in cmd
         assert _kwargs["cwd"] == str(tmp_path)
 
@@ -5229,6 +5231,7 @@ class TestModelActivateRollback:
                         "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS": "-1",
                         "LLAMA_ARG_SPEC_TYPE": "draft-mtp",
                         "LLAMA_ARG_SPEC_DRAFT_N_MAX": "3",
+                        "N_GPU_LAYERS": "20",
                     },
                 }],
             }]
@@ -5260,6 +5263,7 @@ class TestModelActivateRollback:
         assert "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS=-1" in env_text
         assert "LLAMA_ARG_SPEC_TYPE=draft-mtp" in env_text
         assert "LLAMA_ARG_SPEC_DRAFT_N_MAX=3" in env_text
+        assert "N_GPU_LAYERS=20" in env_text
 
     def test_explicit_context_overrides_profile_and_installer_recommendation(
         self, tmp_path, monkeypatch,

@@ -7820,6 +7820,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS",
                     "LLAMA_ARG_SPEC_TYPE",
                     "LLAMA_ARG_SPEC_DRAFT_N_MAX",
+                    "N_GPU_LAYERS",
                 }
                 if runtime_profile:
                     for key, value in runtime_env.items():
@@ -7838,6 +7839,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS",
                     "LLAMA_ARG_SPEC_TYPE",
                     "LLAMA_ARG_SPEC_DRAFT_N_MAX",
+                    "N_GPU_LAYERS",
                 }
                 if gpu_assignment_plan:
                     remove_keys.update(gpu_assignment_plan.get("env_removals") or [])
@@ -11634,7 +11636,7 @@ def _launch_native_llama_server(env_path: Path, llama_bin: Path, llama_log: Path
         "--host", bind_addr, "--port", str(port),
         "--model", str(model_path),
         "--ctx-size", ctx_size,
-        "--n-gpu-layers", "999",
+        "--n-gpu-layers", env.get("N_GPU_LAYERS", "999"),
         "--parallel", env.get("LLAMA_PARALLEL", "1"),
         "--reasoning-format", reasoning_fmt,
         "--metrics",
