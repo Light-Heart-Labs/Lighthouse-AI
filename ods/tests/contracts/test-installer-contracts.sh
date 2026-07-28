@@ -335,6 +335,12 @@ if grep -q '_env_set "HSA_OVERRIDE_GFX_VERSION" "\$gfx_ver"' ods-cli; then
   exit 1
 fi
 
+echo "[contract] single-GPU AMD Compose selects the custom ROCm llama.cpp runtime"
+grep -Fq -- '- "${LEMONADE_LLAMACPP:-rocm}"' docker-compose.amd.yml \
+  || { echo "[FAIL] base AMD command must select LEMONADE_LLAMACPP instead of hard-coding auto"; exit 1; }
+grep -Fq -- '- LEMONADE_LLAMACPP=${LEMONADE_LLAMACPP:-rocm}' docker-compose.amd.yml \
+  || { echo "[FAIL] base AMD service must pass LEMONADE_LLAMACPP to its entrypoint"; exit 1; }
+
 echo "[contract] AMD ComfyUI uses native gfx architecture"
 bash tests/contracts/test-amd-comfyui-architecture.sh
 
