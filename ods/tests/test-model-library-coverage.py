@@ -802,6 +802,59 @@ def test_qwen35_9b_meets_hermes_context_floor():
     assert by_id["qwen3.5-9b-q4"]["context_length"] >= HERMES_CONTEXT_FLOOR
 
 
+def test_qwen36_27b_is_audited_as_quality_first_large_candidate_with_fleet_verdict():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen3.6-27b-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/"
+        "resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/"
+        "Qwen3.6-27B-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0"
+    assert model["size_bytes"] == 16817244384
+    assert model["size_mb"] == 16818
+    assert model["total_params_b"] == 27.8
+    assert model["architecture"] == "dense"
+    assert model["context_length"] == 131072
+    assert model["max_context_length"] == 262144
+    assert model["install_recommendation"] is False
+
+    quality = model["quality_evidence"]
+    assert quality == {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/qwen3-6-27b/",
+        "score": 37,
+        "rank": 1,
+        "rank_scope": "4B-40B open-weight models",
+        "assessed_at": "2026-07-27",
+    }
+
+    assert "runtime_profiles" not in model
+
+    compatibility = model["app_compatibility"]
+    assert compatibility["openai_chat"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["openai_chat"]["hostScope"] == ["windows-laptop"]
+    assert "0.07-0.08 tok/s" in compatibility["openai_chat"]["reason"]
+    assert compatibility["hermes_talk"]["status"] == "verified"
+    assert set(compatibility["hermes_talk"]["hostScope"]) == {
+        "tower2",
+        "strix-halo",
+        "spark",
+        "m5-mbp",
+        "windows-laptop",
+        "strixy",
+    }
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "six-host gate did not pass" in compatibility["agent_viability"]["reason"]
+    assert compatibility["agent_viability"]["productSha"] == (
+        "fdedd5dd090b6fd8b6eaa246ff6117b0a6e6cfef"
+    )
+    assert not _agent_viable_for_release(model)
+
+
 def test_qwen35_2b_records_exact_artifact_and_failed_fleet_evidence():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
