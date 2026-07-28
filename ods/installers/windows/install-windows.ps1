@@ -710,19 +710,21 @@ if ($dryRun) {
                 # Start native llama-server
                 Write-AI "Starting native llama-server (Vulkan)..."
                 $modelFullPath = Join-Path (Join-Path $installDir "data\models") $tierConfig.GgufFile
-                $llamaArgs = @(
-                    "--model", $modelFullPath,
-                    "--host", $bindAddr,
-                    "--port", [string]$script:LEMONADE_PORT,
-                    "--n-gpu-layers", "999",
-                    "--ctx-size", "$($tierConfig.MaxContext)"
-                )
                 $_llamaEnv = @{}
                 Get-Content -LiteralPath (Join-Path $installDir ".env") -ErrorAction SilentlyContinue | ForEach-Object {
                     if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
                     $parts = $_ -split '=', 2
                     $_llamaEnv[$parts[0].Trim()] = $parts[1].Trim().Trim('"')
                 }
+                $gpuLayers = $_llamaEnv["N_GPU_LAYERS"]
+                if (-not $gpuLayers) { $gpuLayers = "999" }
+                $llamaArgs = @(
+                    "--model", $modelFullPath,
+                    "--host", $bindAddr,
+                    "--port", [string]$script:LEMONADE_PORT,
+                    "--n-gpu-layers", $gpuLayers,
+                    "--ctx-size", "$($tierConfig.MaxContext)"
+                )
                 if ($_llamaEnv["LLAMA_ARG_FLASH_ATTN"]) { $llamaArgs += @("--flash-attn", $_llamaEnv["LLAMA_ARG_FLASH_ATTN"]) }
                 if ($_llamaEnv["LLAMA_ARG_CACHE_TYPE_K"]) { $llamaArgs += @("--cache-type-k", $_llamaEnv["LLAMA_ARG_CACHE_TYPE_K"]) }
                 if ($_llamaEnv["LLAMA_ARG_CACHE_TYPE_V"]) { $llamaArgs += @("--cache-type-v", $_llamaEnv["LLAMA_ARG_CACHE_TYPE_V"]) }

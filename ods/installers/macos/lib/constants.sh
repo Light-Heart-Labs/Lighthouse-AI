@@ -53,7 +53,7 @@ HOST_AGENT_BRIDGE_PLIST="$HOME/Library/LaunchAgents/${HOST_AGENT_BRIDGE_PLIST_LA
 HOST_AGENT_BRIDGE_LOG="$HOME/Library/Logs/ODS/ods-host-agent-bridge.log"
 
 # llama.cpp release for macOS Metal build (update when new releases ship)
-LLAMA_CPP_RELEASE_TAG="b8210"
+LLAMA_CPP_RELEASE_TAG="b9637"
 LLAMA_CPP_MACOS_ASSET="llama-${LLAMA_CPP_RELEASE_TAG}-bin-macos-arm64.tar.gz"
 LLAMA_CPP_MACOS_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_RELEASE_TAG}/${LLAMA_CPP_MACOS_ASSET}"
 
