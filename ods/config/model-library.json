@@ -1797,6 +1797,46 @@
       "tokens_per_sec_estimate": 55,
       "llm_model_name": "north-mini-code-1.0",
       "llama_server_image": "ghcr.io/ggml-org/llama.cpp:server-cuda-b9641",
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unsupported_until_revalidated",
+          "label": "AMD runtime dependency pending",
+          "reason": "The exact base candidate passed signed LiteLLM, Open WebUI, OpenCode, and Perplexica routes on tower2. On current-main Strix Halo, Lemonade 10.2.0 failed before load because its bundled llama.cpp did not recognize cohere2moe. An exact remediation stack selected the custom ROCm b9641 binary and then passed every required app route on Strix Halo, but that runtime fix is not yet in the candidate branch or main.",
+          "evidence": "fleet-test/runs/2026-07-28T02-12-14Z-model-ui-product-7af49e3c90d2-harness-19d43e6f9f25-hosts-tower2-north-mini-code-tower2-r7/cycle-001/tower2; fleet-test/runs/2026-07-28T02-40-20Z-model-ui-product-7af49e3c90d2-harness-19d43e6f9f25-hosts-strix-halo-north-mini-code-strix-halo-r1/cycle-001/strix-halo; fleet-test/runs/2026-07-28T03-36-36Z-model-ui-product-b1a9af7a5d4e-harness-19d43e6f9f25-hosts-strix-halo-north-mini-code-strix-halo-remediation-r3/cycle-001/strix-halo",
+          "recordedAt": "2026-07-28T04:02:27Z",
+          "productSha": "7af49e3c90d29a828e821d3c562dac35ea8ffa2a",
+          "remediationProductSha": "b1a9af7a5d4ee8ebcdf4bf1dd0565af9c3ccfac6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": [
+            "tower2",
+            "strix-halo"
+          ]
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "label": "ODS Talk needs six-host validation",
+          "reason": "Challenge-bound ODS Talk passed on tower2 at the base candidate and on Strix Halo only after the custom ROCm b9641 remediation. Keep Talk compatibility unverified fleet-wide until the AMD runtime dependency lands and the exact six-host rotation passes.",
+          "evidence": "fleet-test/runs/2026-07-28T02-12-14Z-model-ui-product-7af49e3c90d2-harness-19d43e6f9f25-hosts-tower2-north-mini-code-tower2-r7/cycle-001/tower2; fleet-test/runs/2026-07-28T03-36-36Z-model-ui-product-b1a9af7a5d4e-harness-19d43e6f9f25-hosts-strix-halo-north-mini-code-strix-halo-remediation-r3/cycle-001/strix-halo",
+          "recordedAt": "2026-07-28T04:02:27Z",
+          "productSha": "7af49e3c90d29a828e821d3c562dac35ea8ffa2a",
+          "remediationProductSha": "b1a9af7a5d4ee8ebcdf4bf1dd0565af9c3ccfac6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": [
+            "tower2",
+            "strix-halo"
+          ]
+        },
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "label": "Not fleet-ready",
+          "reason": "Tower2 completed the full exact candidate rotation on the base branch. Strix Halo completed the same rotation only on a remediation stack that selects a custom ROCm b9641 runtime; current main cannot load the Cohere2-MoE architecture. Promotion remains blocked on landing that dependency and passing one exact six-host run.",
+          "evidence": "fleet-test/runs/2026-07-28T02-12-14Z-model-ui-product-7af49e3c90d2-harness-19d43e6f9f25-hosts-tower2-north-mini-code-tower2-r7/cycle-001/tower2; fleet-test/runs/2026-07-28T02-40-20Z-model-ui-product-7af49e3c90d2-harness-19d43e6f9f25-hosts-strix-halo-north-mini-code-strix-halo-r1/cycle-001/strix-halo; fleet-test/runs/2026-07-28T03-36-36Z-model-ui-product-b1a9af7a5d4e-harness-19d43e6f9f25-hosts-strix-halo-north-mini-code-strix-halo-remediation-r3/cycle-001/strix-halo",
+          "recordedAt": "2026-07-28T04:02:27Z",
+          "productSha": "7af49e3c90d29a828e821d3c562dac35ea8ffa2a",
+          "remediationProductSha": "b1a9af7a5d4ee8ebcdf4bf1dd0565af9c3ccfac6",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+        }
+      },
       "install_recommendation": false,
       "quality_evidence": {
         "source": "Artificial Analysis Intelligence Index v4.1",
@@ -1818,7 +1858,15 @@
       "runtime_requirements": {
         "llama_cpp_min_build": 9637,
         "docker_image_build": 9641,
-        "reason": "Dedicated Cohere2-MoE chat parsing landed in llama.cpp b9637; b9641 is the first published official server image after that release."
+        "reason": "Dedicated Cohere2-MoE chat parsing landed in llama.cpp b9637; b9641 is the first published official server image after that release.",
+        "amd_lemonade": {
+          "status": "blocked_on_runtime_fix",
+          "selector": "rocm",
+          "binary": "/opt/llama-custom/llama-server",
+          "validated_build": 9641,
+          "upstream_pr": "https://github.com/Osmantic/ODS/pull/1783",
+          "reason": "The current single-GPU AMD compose path selects Lemonade's bundled runtime, which predates Cohere2-MoE. Exact Strix Halo validation passed only after selecting the custom ROCm b9641 binary."
+        }
       },
       "runtime_profiles": [
         {
