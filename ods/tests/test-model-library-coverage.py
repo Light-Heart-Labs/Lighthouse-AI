@@ -863,6 +863,34 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_qwen36_35b_a3b_records_pinned_artifact_and_current_quality_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen3.6-35b-a3b-ud-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/"
+        "resolve/a483e9e6cbd595906af30beda3187c2663a1118c/"
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61"
+    assert model["size_bytes"] == 22134528992
+    assert model["context_length"] == 131072
+    assert model["max_context_length"] == 262144
+    assert model["total_params_b"] == 35
+    assert model["active_params_b"] == 3
+    assert model["architecture"] == "moe"
+    assert model["quality_evidence"]["score"] == 32
+    assert "Qwen 3.6 27B scores higher" in model["quality_evidence"]["note"]
+    assert model["source_evidence"]["model_revision"] == (
+        "995ad96eacd98c81ed38be0c5b274b04031597b0"
+    )
+    assert model["source_evidence"]["gguf_revision"] == (
+        "a483e9e6cbd595906af30beda3187c2663a1118c"
+    )
+    assert model["install_recommendation"] is False
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
