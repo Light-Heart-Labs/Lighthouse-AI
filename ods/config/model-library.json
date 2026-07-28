@@ -1700,14 +1700,14 @@
       "gguf_sha256": "93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b",
       "size_bytes": 6975879296,
       "size_mb": 6976,
-      "vram_required_gb": 8,
-      "context_length": 32768,
+      "vram_required_gb": 10,
+      "context_length": 65536,
       "max_context_length": 262144,
       "total_params_b": 12,
       "architecture": "dense",
       "quantization": "Q4_0",
       "specialty": "Reasoning, Coding & Agents",
-      "description": "Google's first-party Apache-2.0 QAT Q4_0 release of Gemma 4 12B. It scores 22 on the independently evaluated Artificial Analysis Intelligence Index, supports a native 256K context ceiling, and is staged at a conservative 32K default for local text and agent workflows.",
+      "description": "Google's first-party Apache-2.0 QAT Q4_0 release of Gemma 4 12B. It scores 22 on the independently evaluated Artificial Analysis Intelligence Index, supports a native 256K context ceiling, and is staged at the 64K minimum required for ODS agent and research workflows.",
       "tokens_per_sec_estimate": 55,
       "llm_model_name": "gemma-4-12b-it",
       "llama_server_image": "ghcr.io/ggml-org/llama.cpp:server-cuda-b9014",
@@ -1725,28 +1725,7 @@
         "gguf_repository": "google/gemma-4-12B-it-qat-q4_0-gguf",
         "gguf_revision": "29d097773436b69ff9feafd636ab4cf873786537",
         "license": "apache-2.0"
-      },
-      "runtime_profiles": [
-        {
-          "id": "nvidia-8gb-16k-q4-kv",
-          "label": "NVIDIA 8GB 16K context with Q4 KV cache",
-          "backend": "nvidia",
-          "host_arch": ["amd64"],
-          "memory_type": "discrete",
-          "vram_min_gb": 7.5,
-          "vram_max_gb": 8.5,
-          "system_ram_min_gb": 31,
-          "context_length": 16384,
-          "estimated_required_gb": 7.9,
-          "fit_label": "16K 8GB Q4 KV profile",
-          "env": {
-            "LLAMA_PARALLEL": "1",
-            "LLAMA_ARG_FLASH_ATTN": "on",
-            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
-            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
-          }
-        }
-      ]
+      }
     },
     {
       "id": "phi4-q4",
