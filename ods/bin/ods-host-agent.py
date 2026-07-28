@@ -7320,6 +7320,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 json_response(self, 404, {"error": f"Model '{model_id}' not found in library or local GGUF files"})
                 return
 
+        if model.get("engine") == "hipfire":
+            self._do_hipfire_activate(model_id, model)
+            return
+
         gguf_file = model.get("gguf_file", "")
         llm_model_name = model.get("llm_model_name", model_id)
         if not _valid_gguf_filename(gguf_file):
@@ -7810,6 +7814,11 @@ class AgentHandler(BaseHTTPRequestHandler):
                     updates["TIER"] = requested_tier
                 if lemonade_runtime:
                     updates["LEMONADE_MODEL"] = lemonade_model_id
+                # Loading a GGUF is an explicit engine choice: text routes back to
+                # llama-server/Lemonade. hipfire stays resident and reachable via
+                # the "hipfire" model name; activating its catalog entry flips back.
+                if (env_pre.get("ENABLE_HIPFIRE") or "").strip().lower() == "true":
+                    updates["HIPFIRE_ACTIVE"] = "false"
                 runtime_keys = {
                     "LLAMA_PARALLEL",
                     "LLAMA_ARG_FLASH_ATTN",
@@ -8342,6 +8351,124 @@ class AgentHandler(BaseHTTPRequestHandler):
                 payload["failure_phase"] = switchboard_run.get("phase")
                 payload["failure_detail"] = switchboard_run.get("detail")
             json_response(self, 500, payload)
+
+    def _do_hipfire_activate(self, model_id: str, model: dict):
+        """Activate a hipfire-engine model — called with _model_activate_lock held.
+
+        Pins the model in .env, recreates the hipfire container (its entrypoint
+        translates HIPFIRE_MODEL into `hipfire config set` and pulls weights if
+        missing), re-renders LiteLLM routing so `default` points at hipfire, and
+        health-gates before committing. llama-server is left untouched — it keeps
+        serving vision and the explicit "lemonade" route.
+        """
+        import time
+
+        env_path = INSTALL_DIR / ".env"
+        lemonade_yaml = INSTALL_DIR / "config" / "litellm" / "lemonade.yaml"
+
+        env_pre = load_env(env_path)
+        if (env_pre.get("GPU_BACKEND") or "").lower() != "amd":
+            json_response(self, 400, {"error": "hipfire models require the AMD backend"})
+            return
+        if (env_pre.get("ENABLE_HIPFIRE") or "").strip().lower() != "true":
+            json_response(self, 400, {"error": "hipfire extension is not enabled (set ENABLE_HIPFIRE=true)"})
+            return
+        model_file = (model.get("model_file") or "").strip()
+        if not model_file:
+            json_response(self, 400, {"error": f"Model '{model_id}' has no hipfire model_file"})
+            return
+        if os.environ.get("ODS_HOST_INSTALL_DIR"):
+            # Recreating hipfire needs compose with host-resolved bind mounts;
+            # a containerized agent cannot provide that (same constraint as
+            # _recreate_llama_server, which hipfire has no equivalent of yet).
+            json_response(self, 501, {"error": "hipfire activation requires the host-native agent"})
+            return
+
+        env_backup: str | None = None
+        lemonade_backup: str | None = None
+        committed = False
+
+        def restore_backups():
+            if env_backup is not None:
+                env_path.write_text(env_backup, encoding="utf-8")
+            if lemonade_backup is not None:
+                lemonade_yaml.write_text(lemonade_backup, encoding="utf-8")
+
+        try:
+            env_backup = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+            lemonade_backup = lemonade_yaml.read_text(encoding="utf-8") if lemonade_yaml.exists() else None
+
+            _update_env_keys(env_path, {"HIPFIRE_MODEL": model_file, "HIPFIRE_ACTIVE": "true"})
+            if lemonade_yaml.exists():
+                _write_lemonade_config(INSTALL_DIR, env_pre.get("GGUF_FILE", ""))
+
+            _compose_recreate_hipfire()
+
+            # Health-gate: /health returns 503 until the model is resident.
+            # A cold MQ4 load takes minutes (manifest health_timeout: 300).
+            port = env_pre.get("HIPFIRE_PORT", "11435") or "11435"
+            health_url = f"http://127.0.0.1:{port}/health"
+            logger.info("Waiting for hipfire health at %s", health_url)
+            healthy = False
+            time.sleep(5)
+            for attempt in range(60):
+                try:
+                    result = subprocess.run(
+                        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                         "--max-time", "5", health_url],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if result.stdout.strip() == "200":
+                        healthy = True
+                        logger.info("hipfire healthy after %d attempts", attempt + 1)
+                        break
+                except subprocess.TimeoutExpired:
+                    pass
+                if attempt % 6 == 0:
+                    logger.info("hipfire health attempt %d", attempt + 1)
+                time.sleep(5)
+
+            if healthy:
+                # LiteLLM reads its config once at boot — restart to pick up
+                # routing. An unchecked failure here would report "activated"
+                # while every client still talks to the old routing.
+                result = subprocess.run(["docker", "restart", "ods-litellm"],
+                                        capture_output=True, text=True, timeout=60)
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        "LiteLLM restart failed after hipfire came up healthy: "
+                        + ((result.stderr or result.stdout) or "").strip()
+                    )
+                committed = True
+                json_response(self, 200, {"status": "activated", "model_id": model_id, "engine": "hipfire"})
+            else:
+                logger.warning("hipfire activation failed — rolling back")
+                restore_backups()
+                _compose_recreate_hipfire()
+                json_response(self, 500, {"error": "hipfire health check failed — rolled back to previous model", "rolled_back": True})
+        except Exception as exc:
+            if committed:
+                json_response(self, 500, {"error": f"hipfire model activation failed: {exc}"})
+                return
+            logger.exception("hipfire activation failed — rolling back")
+            rolled_back = False
+            try:
+                restore_backups()
+                # Restoring the files is not enough: the container may already
+                # be recreated on the new pin (or be down entirely). Recreate
+                # on the restored pin so runtime state matches the files, and
+                # give LiteLLM a best-effort restart so a half-applied restart
+                # from the commit path cannot leave it stopped.
+                _compose_recreate_hipfire()
+                rolled_back = True
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                logger.exception("Rollback failed during hipfire-activate failure handling")
+            try:
+                subprocess.run(["docker", "restart", "ods-litellm"],
+                               capture_output=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):
+                logger.exception("LiteLLM restart failed during hipfire-activate rollback")
+            json_response(self, 500, {"error": f"hipfire model activation failed: {exc}", "rolled_back": rolled_back})
 
     def _handle_model_delete(self):
         """Delete a downloaded GGUF model file."""
@@ -9902,6 +10029,9 @@ def _render_runtime_config(
     llm_base_url: str = "",
     ods_mode: str,
     gpu_backend: str,
+    hipfire_enabled: bool = False,
+    hipfire_active: bool = False,
+    hipfire_model: str = "",
     context_length: int | None = None,
     switchboard_mode: str = "observe",
 ) -> bool:
@@ -9935,6 +10065,10 @@ def _render_runtime_config(
         str(install_dir),
         "--write",
     ]
+    if hipfire_enabled and hipfire_model:
+        cmd += ["--hipfire-enabled", "--hipfire-model", hipfire_model]
+        if hipfire_active:
+            cmd.append("--hipfire-active")
     if context_length is not None:
         cmd.extend(["--context-length", str(context_length)])
     try:
@@ -10045,6 +10179,11 @@ def _write_lemonade_config(
     if env.get("AMD_INFERENCE_LOCATION", "").lower() == "host":
         lemonade_port = env.get("AMD_INFERENCE_PORT", "8080") or "8080"
         lemonade_api_base = f"http://host.docker.internal:{lemonade_port}/api/v1"
+    # hipfire routing must survive every re-render, or a dashboard Load
+    # silently sends text back to llama-server while hipfire idles on VRAM.
+    hipfire_enabled = (env.get("ENABLE_HIPFIRE") or "").strip().lower() == "true"
+    hipfire_model = (env.get("HIPFIRE_MODEL") or "").strip()
+    hipfire_active = (env.get("HIPFIRE_ACTIVE") or "").strip().lower() == "true"
     if not _render_runtime_config(
         install_dir,
         "litellm-lemonade",
@@ -10054,6 +10193,9 @@ def _write_lemonade_config(
         lemonade_api_base=lemonade_api_base,
         ods_mode=ods_mode,
         gpu_backend=gpu_backend,
+        hipfire_enabled=hipfire_enabled,
+        hipfire_active=hipfire_active,
+        hipfire_model=hipfire_model,
     ):
         raise RuntimeError("Failed to render required litellm-lemonade config")
     logger.info(
@@ -11669,6 +11811,50 @@ def _launch_native_llama_server(env_path: Path, llama_bin: Path, llama_log: Path
         )
     pid_file.write_text(str(proc.pid), encoding="utf-8")
     logger.info("Native llama-server launched (pid %d, model %s)", proc.pid, gguf_file)
+
+
+def _update_env_keys(env_path: Path, updates: dict[str, str]):
+    """Update or append KEY=value lines in .env, preserving everything else."""
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    new_lines = []
+    seen = set()
+    for line in lines:
+        key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
+        if key and key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            new_lines.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            new_lines.append(f"{key}={val}")
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def _compose_recreate_hipfire():
+    """Recreate the hipfire container so it picks up new .env values.
+
+    stop + up -d (not `docker restart`) because HIPFIRE_MODEL reaches the
+    container as compose-interpolated environment, which is baked in at
+    create time. Raises RuntimeError on any docker-layer failure so the
+    activate path surfaces it immediately.
+    """
+    compose_flags = resolve_compose_flags()
+    if not compose_flags:
+        raise RuntimeError("compose flags unavailable — cannot recreate hipfire")
+    for argv, timeout in (
+        (["docker", "compose"] + compose_flags + ["stop", "hipfire"], 120),
+        (["docker", "compose"] + compose_flags + ["up", "-d", "hipfire"], 300),
+    ):
+        result = subprocess.run(
+            argv, cwd=str(INSTALL_DIR),
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{' '.join(argv[:3])} failed (exit {result.returncode}): "
+                f"{(result.stderr or '').strip()[:300]}"
+            )
 
 
 def _compose_restart_llama_server(env: dict):

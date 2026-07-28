@@ -450,6 +450,15 @@ raise SystemExit(1)' 2>/dev/null && return 0
     OPENCODE_SERVER_PASSWORD=$(_env_get OPENCODE_SERVER_PASSWORD "$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)")
     SEARXNG_SECRET=$(_env_get SEARXNG_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
 
+    # hipfire (RDNA-native inference engine). Same preserve-on-reinstall rule
+    # as LANGFUSE_ENABLED below; HIPFIRE_MODEL/HIPFIRE_ACTIVE are written by
+    # dashboard model activation (host-agent), never by the installer, so
+    # regenerating .env without them would disable the engine and orphan its
+    # LiteLLM routing on the next render.
+    HIPFIRE_ENABLED_VALUE=$(_env_get ENABLE_HIPFIRE "${ENABLE_HIPFIRE:-false}")
+    HIPFIRE_MODEL_VALUE=$(_env_get HIPFIRE_MODEL "")
+    HIPFIRE_ACTIVE_VALUE=$(_env_get HIPFIRE_ACTIVE "false")
+
     # Langfuse (LLM Observability). LANGFUSE_ENABLED mirrors the install-time
     # ENABLE_LANGFUSE toggle, falling back to whatever the user had in .env on
     # re-install so manual post-install `ods enable langfuse` edits survive.
@@ -975,6 +984,14 @@ LANGFUSE_INIT_USER_PASSWORD=${LANGFUSE_INIT_USER_PASSWORD}
 # ── Image Generation ──
 ENABLE_IMAGE_GENERATION=${ENABLE_COMFYUI:-true}
 
+# ── hipfire (RDNA-native inference engine) ──
+ENABLE_HIPFIRE=${HIPFIRE_ENABLED_VALUE}
+$(if [[ -n "$HIPFIRE_MODEL_VALUE" ]]; then cat << HIPFIRE_ENV
+HIPFIRE_MODEL=${HIPFIRE_MODEL_VALUE}
+HIPFIRE_ACTIVE=${HIPFIRE_ACTIVE_VALUE}
+HIPFIRE_ENV
+fi)
+
 #=== Multi-GPU Settings ===
 GPU_COUNT=${GPU_COUNT:-1}
 GPU_ASSIGNMENT_JSON_B64=${GPU_ASSIGNMENT_JSON_B64:-}
@@ -1042,6 +1059,18 @@ ENV_EOF
         if [[ -z "$_renderer_py" ]]; then
             _renderer_py="python3"
         fi
+        # hipfire routing must survive installer re-renders exactly as it
+        # survives host-agent re-renders — pass the preserved pins through,
+        # or a re-install over a hipfire deployment silently orphans the
+        # engine's routes. Fresh installs have no HIPFIRE_MODEL, so this
+        # adds no flags there.
+        _hipfire_render_args=()
+        if [[ "$HIPFIRE_ENABLED_VALUE" == "true" && -n "$HIPFIRE_MODEL_VALUE" ]]; then
+            _hipfire_render_args+=(--hipfire-enabled --hipfire-model "$HIPFIRE_MODEL_VALUE")
+            if [[ "$HIPFIRE_ACTIVE_VALUE" == "true" ]]; then
+                _hipfire_render_args+=(--hipfire-active)
+            fi
+        fi
         if [[ ! -f "$SCRIPT_DIR/scripts/render-runtime-configs.py" ]] \
             || ! command -v "$_renderer_py" >/dev/null 2>&1; then
             error "Runtime config renderer is unavailable for Lemonade"
@@ -1056,6 +1085,7 @@ ENV_EOF
             --lemonade-api-base "$LEMONADE_CONTAINER_API_BASE_VALUE" \
             --litellm-key "$LITELLM_LEMONADE_API_KEY" \
             --output-root "$INSTALL_DIR" \
+            "${_hipfire_render_args[@]}" \
             --write >> "$LOG_FILE" 2>&1; then
             error "Runtime config renderer failed for Lemonade"
             return 1

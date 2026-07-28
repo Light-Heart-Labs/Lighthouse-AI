@@ -1952,6 +1952,11 @@ def download_model(model_id: str, api_key: str = Depends(verify_api_key)):
     model = _find_model_in_library(model_id)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in library")
+    if model.get("engine") == "hipfire":
+        raise HTTPException(
+            status_code=400,
+            detail="hipfire models are pulled by the hipfire engine on load — nothing to download",
+        )
 
     bootstrap_conflict = _bootstrap_upgrade_download_conflict()
     if bootstrap_conflict is not None:
@@ -2064,6 +2069,11 @@ def delete_model(model_id: str, api_key: str = Depends(verify_api_key)):
     model = _find_model_in_library(model_id) or _find_local_gguf_model(model_id)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in library or local GGUF files")
+    if model.get("engine") == "hipfire":
+        raise HTTPException(
+            status_code=400,
+            detail="hipfire model files are managed by the hipfire engine, not the dashboard",
+        )
 
     payload = {
         "gguf_file": model["gguf_file"],
