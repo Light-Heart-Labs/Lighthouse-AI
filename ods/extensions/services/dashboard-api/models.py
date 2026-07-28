@@ -231,3 +231,4 @@ class ModelLibraryResponse(BaseModel):
     modelLifecycle: Optional[dict[str, Any]] = None
     odsMode: str = "unknown"
     configuredMode: str = "unknown"
+    llmBackend: str = "unknown"

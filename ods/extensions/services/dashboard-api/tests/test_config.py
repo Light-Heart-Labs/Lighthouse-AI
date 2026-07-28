@@ -7,6 +7,7 @@ import pytest
 
 import config
 from config import (
+    _apply_external_llm_service_override,
     _apply_host_native_llm_service_override,
     _detect_container_default_gateway,
     load_extension_manifests,
@@ -166,6 +167,57 @@ class TestHostNativeLlmResolution:
         )
 
         assert services["llama-server"] == {"host": "llama-server", "port": 8080}
+
+
+class TestExternalLlmResolution:
+
+    @pytest.mark.parametrize(
+        ("provider", "url", "expected_port", "expected_health", "expected_name"),
+        [
+            ("ollama", "http://host.docker.internal:11434", 11434, "/api/tags", "Ollama (External LLM)"),
+            ("lmstudio", "http://host.docker.internal:1234", 1234, "/v1/models", "LM Studio (External LLM)"),
+            ("", "https://llm.example.test", 443, "/v1/models", "External LLM"),
+        ],
+    )
+    def test_routes_external_runtime_to_configured_endpoint(
+        self, provider, url, expected_port, expected_health, expected_name,
+    ):
+        services = {"llama-server": {"host": "llama-server", "port": 8080, "health": "/health"}}
+
+        _apply_external_llm_service_override(
+            services,
+            {
+                "LLM_BACKEND": "external",
+                "EXTERNAL_LLM_PROVIDER": provider,
+                "EXTERNAL_LLM_CONTAINER_URL": url,
+            },
+        )
+
+        assert services["llama-server"] == {
+            "host": "host.docker.internal" if "host.docker.internal" in url else "llm.example.test",
+            "port": expected_port,
+            "health": expected_health,
+            "name": expected_name,
+        }
+
+    @pytest.mark.parametrize(
+        "environment",
+        [
+            {},
+            {"LLM_BACKEND": "llama-server", "EXTERNAL_LLM_CONTAINER_URL": "http://host.docker.internal:11434"},
+            {"LLM_BACKEND": "external", "EXTERNAL_LLM_CONTAINER_URL": "not-a-url"},
+        ],
+    )
+    def test_leaves_service_unchanged_without_valid_external_contract(self, environment):
+        services = {"llama-server": {"host": "llama-server", "port": 8080, "health": "/health"}}
+
+        _apply_external_llm_service_override(services, environment)
+
+        assert services["llama-server"] == {
+            "host": "llama-server",
+            "port": 8080,
+            "health": "/health",
+        }
 
 
 class TestLoadExtensionManifests:
