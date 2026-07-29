@@ -863,6 +863,74 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_nemotron3_super_120b_stages_exact_multipart_artifact_and_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["nvidia-nemotron3-super-120b-a12b-ud-q4"]
+
+    assert model["gguf_file"] == (
+        "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00001-of-00003.gguf"
+    )
+    assert model["gguf_url"] == ""
+    assert model["gguf_sha256"] == ""
+    assert model["size_bytes"] == 82541168480
+    assert model["size_mb"] == 82542
+    assert model["vram_required_gb"] == 96
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 1048576
+    assert model["total_params_b"] == 120.6
+    assert model["active_params_b"] == 12.7
+    assert model["architecture"] == "hybrid-moe"
+    assert model["quantization"] == "UD-Q4_K_M"
+    assert model["install_recommendation"] is False
+
+    parts = model["gguf_parts"]
+    assert [part["file"] for part in parts] == [
+        "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00001-of-00003.gguf",
+        "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00002-of-00003.gguf",
+        "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00003-of-00003.gguf",
+    ]
+    assert [part["sha256"] for part in parts] == [
+        "f22083eb6b15acb52905308ab083e8b0cc38897005cc45e8881abd164580aac2",
+        "6d65adda88759f1bcea714e4da09dab8ecc42265a57b87f9bf7fe3cb7f53b889",
+        "2b126c51396dd31fbb1273fb2b28d0c8502bab5e357a852f67af7a4b6f5ba79c",
+    ]
+    assert [part["size_bytes"] for part in parts] == [
+        7872576,
+        49932117344,
+        32601178560,
+    ]
+    assert sum(part["size_bytes"] for part in parts) == model["size_bytes"]
+    assert all(
+        "/resolve/036038fb30334a2d56a146c6f0d4871ab5edccbb/"
+        in part["url"]
+        for part in parts
+    )
+
+    quality = model["quality_evidence"]
+    assert quality["independent"] is True
+    assert quality["score"] == 25
+    assert "median of 9" in quality["note"]
+    assert "Ranked" not in quality["note"]
+    publisher = model["publisher_evidence"]
+    assert publisher["independent"] is False
+    assert publisher["swe_bench_verified_openhands"] == 60.47
+    assert publisher["ruler_1m"] == 91.75
+    deployment = model["deployment_evidence"]
+    assert deployment[0]["independent"] is True
+    assert deployment[0]["controlled"] is False
+    assert "exact three-shard quant" in deployment[0]["reported_result"]
+
+    source = model["source_evidence"]
+    assert source["model_revision"] == (
+        "d51eab0d1f979ebc26b546e634a04f450d99158e"
+    )
+    assert source["gguf_revision"] == (
+        "036038fb30334a2d56a146c6f0d4871ab5edccbb"
+    )
+    assert source["license"] == "nvidia-nemotron-open-model-license"
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
@@ -891,6 +959,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.1-8b-instruct-q4",
         "granite3.3-8b-instruct-q4",
         "mistral-nemo-12b-instruct-q4",
+        "nvidia-nemotron3-super-120b-a12b-ud-q4",
     }
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
