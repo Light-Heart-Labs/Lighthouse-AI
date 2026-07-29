@@ -106,7 +106,8 @@
           "recordedAt": "2026-07-27T11:12:30Z",
           "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
           "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
-          "hostScope": ["tower2", "strix-halo"]
+          "hostScope": ["tower2", "strix-halo"],
+          "expiresAt": "2026-08-27T11:12:30Z"
         },
         "agent_viability": {
           "status": "not_agent_viable",
