@@ -1940,6 +1940,105 @@
       "tokens_per_sec_estimate": 15,
       "llm_model_name": "qwen3.5-122b-a10b",
       "llama_server_image": null
+    },
+    {
+      "id": "mistral-small-4-119b-a6b-ud-q4",
+      "name": "Mistral Small 4 119B-A6.5B",
+      "family": "mistral",
+      "gguf_file": "Mistral-Small-4-119B-2603-UD-Q4_K_M-00001-of-00003.gguf",
+      "gguf_url": "",
+      "gguf_sha256": "",
+      "gguf_parts": [
+        {
+          "file": "Mistral-Small-4-119B-2603-UD-Q4_K_M-00001-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/Mistral-Small-4-119B-2603-GGUF/resolve/bd93c721735aa32c035c0f19e738cb3371fd56ff/UD-Q4_K_M/Mistral-Small-4-119B-2603-UD-Q4_K_M-00001-of-00003.gguf",
+          "sha256": "fd3cc46082e4e64eb623eea4611b02583d1de4c20a59411bf1820925d5117dfe",
+          "size_bytes": 7875616
+        },
+        {
+          "file": "Mistral-Small-4-119B-2603-UD-Q4_K_M-00002-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/Mistral-Small-4-119B-2603-GGUF/resolve/bd93c721735aa32c035c0f19e738cb3371fd56ff/UD-Q4_K_M/Mistral-Small-4-119B-2603-UD-Q4_K_M-00002-of-00003.gguf",
+          "sha256": "f357d8dc029824fa4515ae60d7a8b7e108546763614f16c00a1b4ea0cd94145c",
+          "size_bytes": 49299298464
+        },
+        {
+          "file": "Mistral-Small-4-119B-2603-UD-Q4_K_M-00003-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/Mistral-Small-4-119B-2603-GGUF/resolve/bd93c721735aa32c035c0f19e738cb3371fd56ff/UD-Q4_K_M/Mistral-Small-4-119B-2603-UD-Q4_K_M-00003-of-00003.gguf",
+          "sha256": "9dc960d67fb1ef23029d24878b4cf6c63b743ab26cf9137402549591bd770c50",
+          "size_bytes": 24456006464
+        }
+      ],
+      "size_bytes": 73763180544,
+      "size_mb": 73764,
+      "vram_required_gb": 80,
+      "context_length": 65536,
+      "max_context_length": 262144,
+      "total_params_b": 119,
+      "active_params_b": 6.5,
+      "architecture": "mistral4-moe",
+      "quantization": "UD-Q4_K_M",
+      "specialty": "Multimodal Agentic Reasoning",
+      "description": "Mistral's March 2026 Apache-2.0 MoE unifies instruct, reasoning, coding-agent, tool-call, and vision behavior with 6.5B active parameters. Its independent score of 20 is above the comparable open-weight size-class median of 9, but community reports favor Qwen 3.6 on some real workloads. ODS therefore stages it as a non-default 64K candidate pending exact fleet validation.",
+      "tokens_per_sec_estimate": 15,
+      "llm_model_name": "Mistral-Small-4-119B-2603",
+      "llama_server_image": null,
+      "install_recommendation": false,
+      "quality_evidence": {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/mistral-small-4",
+        "benchmark": "Artificial Analysis Intelligence Index",
+        "score": 20,
+        "assessed_at": "2026-07-29",
+        "independent": true,
+        "note": "The reasoning profile scores 20, above the comparable open-weight size-class median of 9. Artificial Analysis reports 53M evaluation output tokens, equal to the class median; the score is materially below Qwen 3.6 27B's 37, so this candidate broadens architecture and licensing coverage rather than replacing the current quality leader."
+      },
+      "publisher_evidence": {
+        "source_url": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603",
+        "aa_lcr": 0.72,
+        "aa_lcr_output_characters": 1600,
+        "livecodebench_output_reduction_vs_gpt_oss_120b_pct": 20,
+        "independent": false,
+        "note": "Mistral reports 119B total and 6.5B active parameters, 256K context, configurable reasoning effort, native function calling, JSON output, vision, and multilingual support. Its comparative benchmark charts are publisher evidence and do not substitute for fleet validation."
+      },
+      "deployment_evidence": [
+        {
+          "source": "llama.cpp CUDA deployment issue",
+          "source_url": "https://github.com/ggml-org/llama.cpp/issues/20710",
+          "artifact": "Unsloth Mistral Small 4 GGUF sibling quants",
+          "hardware": "RTX 4090 with 128GB system RAM",
+          "runtime": "llama.cpp b8400 CUDA",
+          "reported_result": "The model loaded and decoded, but enabling flash attention produced poor prefill GPU utilization and roughly 8 tokens/s versus an expected 16 tokens/s for the MXFP4_MOE sibling quant.",
+          "independent": true,
+          "controlled": false
+        },
+        {
+          "source": "LocalLLaMA post-fix user report",
+          "source_url": "https://www.reddit.com/r/LocalLLaMA/comments/1sq01bj/unsloth_fix_on_mistral_small_4/",
+          "artifact": "Unsloth updated UD-Q4 family and Mistral API",
+          "hardware": "not reported",
+          "runtime": "local GGUF and OpenRouter",
+          "reported_result": "A user described the model as janky outside web-development work and preferred Qwen 3.6; the similar API result suggests the concern was not solely quantization. This is anecdotal negative evidence, retained to prevent benchmark-only promotion.",
+          "independent": true,
+          "controlled": false
+        }
+      ],
+      "runtime_evidence": {
+        "llama_cpp_support_pr": "https://github.com/ggml-org/llama.cpp/pull/20649",
+        "llama_cpp_merge_commit": "d34ff7e",
+        "llama_cpp_merged_at": "2026-03-16",
+        "chat_template_source": "https://huggingface.co/unsloth/Mistral-Small-4-119B-2603-GGUF",
+        "chat_template_requirement": "The selected repository includes Unsloth chat-template fixes and explicitly instructs llama.cpp users to enable --jinja.",
+        "validation_risk": "Exact ODS fleet validation must prove chat-template rendering and compare flash-attention behavior on each supported backend before any recommendation."
+      },
+      "source_evidence": {
+        "model_card": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603",
+        "model_revision": "a11f36bebf709121056b1dbcc943d1c6afbe494d",
+        "gguf_repository": "unsloth/Mistral-Small-4-119B-2603-GGUF",
+        "gguf_revision": "bd93c721735aa32c035c0f19e738cb3371fd56ff",
+        "license": "apache-2.0",
+        "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+        "license_note": "Apache 2.0 permits commercial use, modification, and redistribution subject to its notice and license terms."
+      }
     }
   ]
 }

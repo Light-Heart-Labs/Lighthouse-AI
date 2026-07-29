@@ -863,6 +863,77 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_mistral_small_4_stages_exact_multipart_artifact_and_balanced_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["mistral-small-4-119b-a6b-ud-q4"]
+
+    assert model["gguf_file"] == (
+        "Mistral-Small-4-119B-2603-UD-Q4_K_M-00001-of-00003.gguf"
+    )
+    assert model["gguf_url"] == ""
+    assert model["gguf_sha256"] == ""
+    assert model["size_bytes"] == 73763180544
+    assert model["size_mb"] == 73764
+    assert model["vram_required_gb"] == 80
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 262144
+    assert model["total_params_b"] == 119
+    assert model["active_params_b"] == 6.5
+    assert model["architecture"] == "mistral4-moe"
+    assert model["quantization"] == "UD-Q4_K_M"
+    assert model["install_recommendation"] is False
+
+    parts = model["gguf_parts"]
+    assert [part["file"] for part in parts] == [
+        "Mistral-Small-4-119B-2603-UD-Q4_K_M-00001-of-00003.gguf",
+        "Mistral-Small-4-119B-2603-UD-Q4_K_M-00002-of-00003.gguf",
+        "Mistral-Small-4-119B-2603-UD-Q4_K_M-00003-of-00003.gguf",
+    ]
+    assert [part["sha256"] for part in parts] == [
+        "fd3cc46082e4e64eb623eea4611b02583d1de4c20a59411bf1820925d5117dfe",
+        "f357d8dc029824fa4515ae60d7a8b7e108546763614f16c00a1b4ea0cd94145c",
+        "9dc960d67fb1ef23029d24878b4cf6c63b743ab26cf9137402549591bd770c50",
+    ]
+    assert [part["size_bytes"] for part in parts] == [
+        7875616,
+        49299298464,
+        24456006464,
+    ]
+    assert sum(part["size_bytes"] for part in parts) == model["size_bytes"]
+    assert all(
+        "/resolve/bd93c721735aa32c035c0f19e738cb3371fd56ff/"
+        in part["url"]
+        for part in parts
+    )
+
+    quality = model["quality_evidence"]
+    assert quality["independent"] is True
+    assert quality["score"] == 20
+    assert "median of 9" in quality["note"]
+    assert "Qwen 3.6 27B's 37" in quality["note"]
+
+    deployment = model["deployment_evidence"]
+    assert all(item["independent"] is True for item in deployment)
+    assert all(item["controlled"] is False for item in deployment)
+    assert "poor prefill GPU utilization" in deployment[0]["reported_result"]
+    assert "preferred Qwen 3.6" in deployment[1]["reported_result"]
+
+    runtime = model["runtime_evidence"]
+    assert runtime["llama_cpp_merge_commit"] == "d34ff7e"
+    assert "--jinja" in runtime["chat_template_requirement"]
+    assert "fleet validation" in runtime["validation_risk"]
+
+    source = model["source_evidence"]
+    assert source["model_revision"] == (
+        "a11f36bebf709121056b1dbcc943d1c6afbe494d"
+    )
+    assert source["gguf_revision"] == (
+        "bd93c721735aa32c035c0f19e738cb3371fd56ff"
+    )
+    assert source["license"] == "apache-2.0"
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
@@ -891,6 +962,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.1-8b-instruct-q4",
         "granite3.3-8b-instruct-q4",
         "mistral-nemo-12b-instruct-q4",
+        "mistral-small-4-119b-a6b-ud-q4",
     }
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
