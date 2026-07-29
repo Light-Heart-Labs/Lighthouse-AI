@@ -869,22 +869,22 @@ def test_kat_coder_v25_dev_records_pinned_evidence_without_recommendation():
     model = by_id["kat-coder-v2.5-dev-apex-q4"]
 
     assert model["gguf_url"] == (
-        "https://huggingface.co/gbuzhf/KAT-Coder-V2.5-Dev-APEX-MTP-GGUF/"
-        "resolve/b5d04175d9c1d014d61a0c26eef987f50656d8b4/"
-        "Kwaipilot_KAT-Coder-V2.5-Dev-APEX-MTP-I-Balanced.gguf"
+        "https://huggingface.co/mudler/KAT-Coder-V2.5-Dev-APEX-GGUF/"
+        "resolve/be23ff3a49eee0d5160e3fd4f5d58062160856c2/"
+        "KAT-Coder-V2.5-Dev-APEX-I-Balanced.gguf"
     )
     assert model["gguf_sha256"] == (
-        "cce1395f842b99c147cc99025267c866aaaec5cd7b8c2c9c11d5530dc10c5e7b"
+        "ee6e0ec15964c42ba91831d13e9709239f1b74da3dc49dd3edec4ad6aed8029f"
     )
-    assert model["size_bytes"] == 26128039552
-    assert model["size_mb"] == 26129
+    assert model["size_bytes"] == 25268441472
+    assert model["size_mb"] == 25269
     assert model["vram_required_gb"] == 32
     assert model["context_length"] == 131072
     assert model["max_context_length"] == 262144
     assert model["total_params_b"] == 35
     assert model["active_params_b"] == 3
     assert model["architecture"] == "hybrid-moe"
-    assert model["quantization"] == "APEX-MTP-I-Balanced"
+    assert model["quantization"] == "APEX-I-Balanced"
     assert model["install_recommendation"] is False
 
     quality = model["quality_evidence"]
@@ -906,13 +906,33 @@ def test_kat_coder_v25_dev_records_pinned_evidence_without_recommendation():
         "68466af897fddf5539a9a7179b42868645457a95"
     )
     assert source["gguf_revision"] == (
-        "b5d04175d9c1d014d61a0c26eef987f50656d8b4"
+        "be23ff3a49eee0d5160e3fd4f5d58062160856c2"
     )
     assert source["license"] == "apache-2.0"
+    assert "40 model blocks" in source["gguf_metadata_note"]
+    assert "no grafted MTP draft layer" in source["gguf_metadata_note"]
     assert "pre-fix chat template" in source["gguf_metadata_note"]
     assert "3a7d874090df0cd4399401982eca67df2c5a7e82" in (
         source["gguf_metadata_note"]
     )
+
+    rejected = model["rejected_artifacts"]
+    assert len(rejected) == 1
+    assert rejected[0]["revision"] == (
+        "b5d04175d9c1d014d61a0c26eef987f50656d8b4"
+    )
+    assert rejected[0]["sha256"] == (
+        "cce1395f842b99c147cc99025267c866aaaec5cd7b8c2c9c11d5530dc10c5e7b"
+    )
+    assert rejected[0]["verdict"] == "runtime_incompatible"
+    assert "blk.40.ssm_conv1d.weight" in rejected[0]["reason"]
+    assert rejected[0]["evidence"]["product_sha"] == (
+        "333b08c4f65de6534c46a45e2fd646732629c76f"
+    )
+    assert rejected[0]["evidence"]["harness_sha"] == (
+        "65a24267982811bc72e45db219e09e6e547c9628"
+    )
+    assert rejected[0]["evidence"]["hosts"] == ["tower2", "strix-halo"]
 
 
 def test_new_switchboard_models_do_not_change_install_recommendations():

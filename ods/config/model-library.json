@@ -1849,18 +1849,18 @@
       "id": "kat-coder-v2.5-dev-apex-q4",
       "name": "KAT-Coder V2.5 Dev 35B-A3B",
       "family": "kat-coder",
-      "gguf_file": "Kwaipilot_KAT-Coder-V2.5-Dev-APEX-MTP-I-Balanced.gguf",
-      "gguf_url": "https://huggingface.co/gbuzhf/KAT-Coder-V2.5-Dev-APEX-MTP-GGUF/resolve/b5d04175d9c1d014d61a0c26eef987f50656d8b4/Kwaipilot_KAT-Coder-V2.5-Dev-APEX-MTP-I-Balanced.gguf",
-      "gguf_sha256": "cce1395f842b99c147cc99025267c866aaaec5cd7b8c2c9c11d5530dc10c5e7b",
-      "size_bytes": 26128039552,
-      "size_mb": 26129,
+      "gguf_file": "KAT-Coder-V2.5-Dev-APEX-I-Balanced.gguf",
+      "gguf_url": "https://huggingface.co/mudler/KAT-Coder-V2.5-Dev-APEX-GGUF/resolve/be23ff3a49eee0d5160e3fd4f5d58062160856c2/KAT-Coder-V2.5-Dev-APEX-I-Balanced.gguf",
+      "gguf_sha256": "ee6e0ec15964c42ba91831d13e9709239f1b74da3dc49dd3edec4ad6aed8029f",
+      "size_bytes": 25268441472,
+      "size_mb": 25269,
       "vram_required_gb": 32,
       "context_length": 131072,
       "max_context_length": 262144,
       "total_params_b": 35,
       "active_params_b": 3,
       "architecture": "hybrid-moe",
-      "quantization": "APEX-MTP-I-Balanced",
+      "quantization": "APEX-I-Balanced",
       "specialty": "Agentic Coding",
       "description": "Kuaishou's July 2026 SFT and RL post-train of Qwen 3.6 35B-A3B for repository-scale coding, tool discipline, and efficient agent loops. Independent 120-run evidence tied the best pass rate while using about half the stock models' input tokens.",
       "tokens_per_sec_estimate": 55,
@@ -1874,7 +1874,7 @@
         "score": "29/30",
         "assessed_at": "2026-07-27",
         "independent": true,
-        "note": "KAT tied the best of four 35B-class models at 29/30 passes, used 12.6M input tokens versus 25.1M for stock Qwen 3.6, and had zero malformed tool-call leaks in the cited research task. The study used this APEX-MTP I-Balanced artifact but had one harness, one GPU, five repetitions per task, and a quantization confound favoring the post-trains."
+        "note": "KAT tied the best of four 35B-class models at 29/30 passes, used 12.6M input tokens versus 25.1M for stock Qwen 3.6, and had zero malformed tool-call leaks in the cited research task. The study used the MTP-grafted APEX I-Balanced sibling; this 40-block artifact removes the grafted draft head and therefore requires its own fleet validation. The study also had one harness, one GPU, five repetitions per task, and a quantization confound favoring the post-trains."
       },
       "publisher_evidence": {
         "source_url": "https://huggingface.co/Kwaipilot/KAT-Coder-V2.5-Dev",
@@ -1892,13 +1892,33 @@
         "model_card": "https://huggingface.co/Kwaipilot/KAT-Coder-V2.5-Dev",
         "model_revision": "7be56fe773e72b6f5ca93c1ae45d828ddb893922",
         "weights_revision": "68466af897fddf5539a9a7179b42868645457a95",
-        "gguf_repository": "gbuzhf/KAT-Coder-V2.5-Dev-APEX-MTP-GGUF",
-        "gguf_revision": "b5d04175d9c1d014d61a0c26eef987f50656d8b4",
+        "gguf_repository": "mudler/KAT-Coder-V2.5-Dev-APEX-GGUF",
+        "gguf_revision": "be23ff3a49eee0d5160e3fd4f5d58062160856c2",
         "license": "apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
-        "license_note": "Both the KAT checkpoint and the grafted Qwen 3.6 MTP head are Apache-2.0 licensed; commercial use, modification, and redistribution are permitted subject to license notice and attribution requirements.",
-        "gguf_metadata_note": "The exact artifact reports qwen35moe, 256 experts with 8 active, 262K native context, 41 blocks, and one grafted MTP draft layer. Plain llama.cpp can ignore the draft tensors. It embeds the upstream pre-fix chat template (SHA-256 e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259), which rejects non-leading system messages; upstream fixed that template at revision 3a7d874090df0cd4399401982eca67df2c5a7e82, so exact deployed-consumer validation is required before recommendation."
-      }
+        "license_note": "The KAT checkpoint is Apache-2.0 licensed; commercial use, modification, and redistribution are permitted subject to license notice and attribution requirements.",
+        "gguf_metadata_note": "The exact artifact reports qwen35moe, 256 experts with 8 active, 262K native context, and 40 model blocks with no grafted MTP draft layer. It embeds the upstream pre-fix chat template (SHA-256 e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259), which rejects non-leading system messages; upstream fixed that template at revision 3a7d874090df0cd4399401982eca67df2c5a7e82, so exact deployed-consumer validation is required before recommendation."
+      },
+      "rejected_artifacts": [
+        {
+          "repository": "gbuzhf/KAT-Coder-V2.5-Dev-APEX-MTP-GGUF",
+          "revision": "b5d04175d9c1d014d61a0c26eef987f50656d8b4",
+          "file": "Kwaipilot_KAT-Coder-V2.5-Dev-APEX-MTP-I-Balanced.gguf",
+          "sha256": "cce1395f842b99c147cc99025267c866aaaec5cd7b8c2c9c11d5530dc10c5e7b",
+          "verdict": "runtime_incompatible",
+          "reason": "The grafted 41st MTP block requires llama.cpp MTP loader support merged after the ODS production builds. ODS llama.cpp b8668 on Strix Halo/ROCm and b9014 on Tower2/CUDA both interpreted it as a normal hybrid block and failed with missing tensor 'blk.40.ssm_conv1d.weight' despite ample memory.",
+          "evidence": {
+            "product_sha": "333b08c4f65de6534c46a45e2fd646732629c76f",
+            "harness_sha": "65a24267982811bc72e45db219e09e6e547c9628",
+            "run": "2026-07-29T09-28-59Z-model-ui-product-333b08c4f65d-harness-65a242679828-hosts-tower2-strix-halo-spark-m5-mbp-strixy-kat-coder-fit-five-r1",
+            "hosts": [
+              "tower2",
+              "strix-halo"
+            ],
+            "observed_at": "2026-07-29"
+          }
+        }
+      ]
     },
     {
       "id": "deepseek-r1-70b-q4",
