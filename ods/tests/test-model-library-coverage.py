@@ -863,6 +863,41 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_minicpm5_1b_is_promoted_with_exact_six_host_fleet_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["minicpm5-1b-q4"]
+
+    assert model["family"] == "minicpm"
+    assert model["gguf_url"] == (
+        "https://huggingface.co/openbmb/MiniCPM5-1B-GGUF/"
+        "resolve/87007042419d30c1d8f38ef065424ee33870831e/"
+        "MiniCPM5-1B-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa"
+    assert model["size_bytes"] == 688065920
+    assert model["size_mb"] == 688
+    assert model["vram_required_gb"] == 3
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 131072
+    assert model["quantization"] == "Q4_K_M"
+    assert model["install_recommendation"] is True
+    assert model["app_compatibility"]["openai_chat"]["status"] == "verified"
+    assert model["app_compatibility"]["hermes_talk"]["status"] == "verified"
+    assert model["app_compatibility"]["perplexica"]["status"] == "verified"
+    assert model["app_compatibility"]["agent_viability"]["status"] == "verified"
+    assert model["app_compatibility"]["agent_viability"]["productSha"] == (
+        "6ffa84e835405fefb8a8d1e296b595d203d13f7e"
+    )
+    assert model["app_compatibility"]["agent_viability"]["harnessSha"] == (
+        "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+    )
+    assert model["app_compatibility"]["agent_viability"]["hostScope"] == [
+        "tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"
+    ]
+    assert _agent_viable_for_release(model)
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",

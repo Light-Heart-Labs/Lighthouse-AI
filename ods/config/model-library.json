@@ -106,7 +106,8 @@
           "recordedAt": "2026-07-27T11:12:30Z",
           "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
           "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
-          "hostScope": ["tower2", "strix-halo"]
+          "hostScope": ["tower2", "strix-halo"],
+          "expiresAt": "2026-08-27T00:00:00Z"
         },
         "agent_viability": {
           "status": "not_agent_viable",
@@ -115,10 +116,74 @@
           "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
           "recordedAt": "2026-07-27T11:12:30Z",
           "productSha": "ca730791cacaadb0280f63f3fc9f8b8ef70e4ebb",
-          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "globalScope": true,
+          "expiresAt": "2026-08-27T00:00:00Z"
         }
       },
       "install_recommendation": false
+    },
+    {
+      "id": "minicpm5-1b-q4",
+      "name": "MiniCPM5 1B",
+      "family": "minicpm",
+      "gguf_file": "MiniCPM5-1B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/openbmb/MiniCPM5-1B-GGUF/resolve/87007042419d30c1d8f38ef065424ee33870831e/MiniCPM5-1B-Q4_K_M.gguf",
+      "gguf_sha256": "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa",
+      "size_bytes": 688065920,
+      "size_mb": 688,
+      "vram_required_gb": 3,
+      "context_length": 65536,
+      "max_context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Edge Agents",
+      "description": "OpenBMB's Apache-2.0 dense 1B model for local assistants, coding, tool use, and hybrid reasoning. The official Q4_K_M GGUF uses standard Llama architecture and targets low-resource edge devices with a native 131K context ceiling.",
+      "tokens_per_sec_estimate": 170,
+      "llm_model_name": "MiniCPM5-1B",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "verified",
+          "label": "Fleet chat routes verified",
+          "reason": "Fresh exact-commit six-host validation loaded MiniCPM5 1B through the browser switchboard and passed every required deployed OpenAI-compatible LLM-consumer probe with signed route evidence naming the candidate runtime.",
+          "evidence": "fleet-test/runs/2026-07-27T20-12-55Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-quiesced/cycle-001/{strix-halo,m5-mbp,strixy}; fleet-test/runs/2026-07-27T20-42-57Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-spark-windows-laptop-retry-tower2-spark-windows-laptop-1/cycle-001/{spark,windows-laptop}; fleet-test/runs/2026-07-27T20-59-00Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-retry-tower2-3/cycle-001/tower2",
+          "recordedAt": "2026-07-27T21:02:49Z",
+          "productSha": "6ffa84e835405fefb8a8d1e296b595d203d13f7e",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "hermes_talk": {
+          "status": "verified",
+          "label": "ODS Talk verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed challenge-bound ODS Talk after loading MiniCPM5 1B and again after restoring each host's original model.",
+          "evidence": "fleet-test/runs/2026-07-27T20-12-55Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-quiesced/cycle-001/{strix-halo,m5-mbp,strixy}; fleet-test/runs/2026-07-27T20-42-57Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-spark-windows-laptop-retry-tower2-spark-windows-laptop-1/cycle-001/{spark,windows-laptop}; fleet-test/runs/2026-07-27T20-59-00Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-retry-tower2-3/cycle-001/tower2",
+          "recordedAt": "2026-07-27T21:02:49Z",
+          "productSha": "6ffa84e835405fefb8a8d1e296b595d203d13f7e",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "perplexica": {
+          "status": "verified",
+          "label": "Perplexica verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed the challenge-bound Perplexica route on MiniCPM5 1B with signed model-route evidence, then repeated the required consumer suite after clean baseline restoration.",
+          "evidence": "fleet-test/runs/2026-07-27T20-12-55Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-quiesced/cycle-001/{strix-halo,m5-mbp,strixy}; fleet-test/runs/2026-07-27T20-42-57Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-spark-windows-laptop-retry-tower2-spark-windows-laptop-1/cycle-001/{spark,windows-laptop}; fleet-test/runs/2026-07-27T20-59-00Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-retry-tower2-3/cycle-001/tower2",
+          "recordedAt": "2026-07-27T21:02:49Z",
+          "productSha": "6ffa84e835405fefb8a8d1e296b595d203d13f7e",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "agent_viability": {
+          "status": "verified",
+          "label": "Agent workflow verified across fleet",
+          "reason": "Fresh exact-commit six-host validation passed MiniCPM5 1B load, challenge-bound ODS Talk, every required deployed LLM consumer, original-model restore, repeated Talk and consumer probes, candidate deletion, and clean final inventory across Linux, macOS, and Windows backends.",
+          "evidence": "fleet-test/runs/2026-07-27T20-12-55Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy-quiesced/cycle-001/{strix-halo,m5-mbp,strixy}; fleet-test/runs/2026-07-27T20-42-57Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-spark-windows-laptop-retry-tower2-spark-windows-laptop-1/cycle-001/{spark,windows-laptop}; fleet-test/runs/2026-07-27T20-59-00Z-model-ui-product-6ffa84e83540-harness-19d43e6f9f25-hosts-tower2-retry-tower2-3/cycle-001/tower2",
+          "recordedAt": "2026-07-27T21:02:49Z",
+          "productSha": "6ffa84e835405fefb8a8d1e296b595d203d13f7e",
+          "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
+          "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        }
+      },
+      "install_recommendation": true
     },
     {
       "id": "phi4-mini-q4",
