@@ -1940,6 +1940,67 @@
       "tokens_per_sec_estimate": 15,
       "llm_model_name": "qwen3.5-122b-a10b",
       "llama_server_image": null
+    },
+    {
+      "id": "nvidia-nemotron3-super-120b-a12b-ud-q4",
+      "name": "NVIDIA Nemotron 3 Super 120B-A12B",
+      "family": "nemotron",
+      "gguf_file": "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00001-of-00003.gguf",
+      "gguf_url": "",
+      "gguf_sha256": "",
+      "gguf_parts": [
+        {
+          "file": "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00001-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF/resolve/036038fb30334a2d56a146c6f0d4871ab5edccbb/UD-Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00001-of-00003.gguf",
+          "sha256": "f22083eb6b15acb52905308ab083e8b0cc38897005cc45e8881abd164580aac2",
+          "size_bytes": 7872576
+        },
+        {
+          "file": "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00002-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF/resolve/036038fb30334a2d56a146c6f0d4871ab5edccbb/UD-Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00002-of-00003.gguf",
+          "sha256": "6d65adda88759f1bcea714e4da09dab8ecc42265a57b87f9bf7fe3cb7f53b889",
+          "size_bytes": 49932117344
+        },
+        {
+          "file": "NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00003-of-00003.gguf",
+          "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF/resolve/036038fb30334a2d56a146c6f0d4871ab5edccbb/UD-Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M-00003-of-00003.gguf",
+          "sha256": "2b126c51396dd31fbb1273fb2b28d0c8502bab5e357a852f67af7a4b6f5ba79c",
+          "size_bytes": 32601178560
+        }
+      ],
+      "size_bytes": 82541168480,
+      "size_mb": 82542,
+      "vram_required_gb": 96,
+      "context_length": 65536,
+      "max_context_length": 1048576,
+      "total_params_b": 120.6,
+      "active_params_b": 12.7,
+      "architecture": "hybrid-moe",
+      "quantization": "UD-Q4_K_M",
+      "specialty": "Large-Scale Agentic Reasoning",
+      "description": "NVIDIA's March 2026 hybrid Mamba-2, latent-MoE, attention, and MTP model for reasoning, coding, tool use, RAG, and long-context agents. Artificial Analysis ranks it fourth among 62 comparable open-weight models; ODS stages a practical 64K profile for 96GB-class systems.",
+      "tokens_per_sec_estimate": 12,
+      "llm_model_name": "Nvidia-Nemotron-3-Super-120B-A12B",
+      "llama_server_image": null,
+      "install_recommendation": false,
+      "quality_evidence": {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/nvidia-nemotron-3-super-120b-a12b/",
+        "benchmark": "Artificial Analysis Intelligence Index",
+        "score": 25,
+        "assessed_at": "2026-07-29",
+        "independent": true,
+        "note": "Ranked #4 of 62 comparable open-weight models with a class median of 9. Artificial Analysis reports 110M evaluation output tokens versus a 53M class median, so ODS treats exact-response behavior as an explicit fleet-validation risk."
+      },
+      "source_evidence": {
+        "model_card": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+        "model_revision": "d51eab0d1f979ebc26b546e634a04f450d99158e",
+        "gguf_repository": "unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF",
+        "gguf_revision": "036038fb30334a2d56a146c6f0d4871ab5edccbb",
+        "license": "nvidia-nemotron-open-model-license",
+        "license_url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-nemotron-open-model-license/",
+        "license_note": "Commercial use and derivative distribution are allowed. Redistribution requires a license copy, retained notices, and the NVIDIA NOTICE attribution when applicable."
+      }
     }
   ]
 }
