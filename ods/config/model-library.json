@@ -1845,6 +1845,48 @@
       "llama_server_image": null
     },
     {
+      "id": "qwen3.6-27b-q4",
+      "name": "Qwen 3.6 27B",
+      "family": "qwen",
+      "gguf_file": "Qwen3.6-27B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/Qwen3.6-27B-Q4_K_M.gguf",
+      "gguf_sha256": "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
+      "size_bytes": 16817244384,
+      "size_mb": 16818,
+      "vram_required_gb": 32,
+      "context_length": 131072,
+      "max_context_length": 1010000,
+      "total_params_b": 26.9,
+      "active_params_b": 26.9,
+      "architecture": "hybrid-dense",
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Coding and Reasoning",
+      "description": "Alibaba's April 2026 dense hybrid DeltaNet and attention model for coding, tool use, reasoning, and long-context work. Artificial Analysis ranks its reasoning configuration first among 130 comparable open-weight models.",
+      "tokens_per_sec_estimate": 25,
+      "llm_model_name": "qwen3.6-27b",
+      "llama_server_image": null,
+      "install_recommendation": false,
+      "quality_evidence": {
+        "source": "Artificial Analysis Intelligence Index v4.1",
+        "source_url": "https://artificialanalysis.ai/models/qwen3-6-27b/",
+        "benchmark": "Artificial Analysis Intelligence Index",
+        "score": 37,
+        "assessed_at": "2026-07-29",
+        "independent": true,
+        "note": "Ranked #1 of 130 comparable open-weight models in the 4B-40B class with a class median of 9. Artificial Analysis reports 140M evaluation output tokens versus a 37M class median, so exact-response and latency behavior remain explicit fleet-validation risks."
+      },
+      "source_evidence": {
+        "model_card": "https://huggingface.co/Qwen/Qwen3.6-27B",
+        "model_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+        "gguf_repository": "unsloth/Qwen3.6-27B-GGUF",
+        "gguf_revision": "82d411acf4a06cfb8d9b073a5211bf410bfc29bf",
+        "license": "apache-2.0",
+        "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+        "license_note": "Commercial use, modification, and redistribution are permitted subject to the Apache 2.0 license notice and attribution requirements.",
+        "gguf_metadata_note": "The selected language GGUF reports architecture qwen35, 26.90B parameters, 64 layers, native 262K context, and Q4_K_M at 15.65 GiB. The deployed llama.cpp b9014 lineage parses it and offloads 65 of 65 layers on DGX Spark."
+      }
+    },
+    {
       "id": "deepseek-r1-70b-q4",
       "name": "DeepSeek R1 70B",
       "family": "deepseek",

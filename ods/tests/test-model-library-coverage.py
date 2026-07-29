@@ -863,6 +863,44 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_qwen36_27b_records_pinned_candidate_evidence_without_recommendation():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["qwen3.6-27b-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/"
+        "resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/"
+        "Qwen3.6-27B-Q4_K_M.gguf"
+    )
+    assert model["gguf_sha256"] == (
+        "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0"
+    )
+    assert model["size_bytes"] == 16817244384
+    assert model["size_mb"] == 16818
+    assert model["vram_required_gb"] == 32
+    assert model["context_length"] == 131072
+    assert model["max_context_length"] == 1010000
+    assert model["total_params_b"] == 26.9
+    assert model["active_params_b"] == 26.9
+    assert model["architecture"] == "hybrid-dense"
+    assert model["install_recommendation"] is False
+
+    quality = model["quality_evidence"]
+    assert quality["independent"] is True
+    assert quality["score"] == 37
+    assert "#1 of 130" in quality["note"]
+
+    source = model["source_evidence"]
+    assert source["model_revision"] == (
+        "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
+    )
+    assert source["gguf_revision"] == (
+        "82d411acf4a06cfb8d9b073a5211bf410bfc29bf"
+    )
+    assert source["license"] == "apache-2.0"
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
@@ -891,6 +929,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.1-8b-instruct-q4",
         "granite3.3-8b-instruct-q4",
         "mistral-nemo-12b-instruct-q4",
+        "qwen3.6-27b-q4",
     }
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
