@@ -1979,7 +1979,7 @@
       "architecture": "hybrid-moe",
       "quantization": "UD-Q4_K_M",
       "specialty": "Large-Scale Agentic Reasoning",
-      "description": "NVIDIA's March 2026 hybrid Mamba-2, latent-MoE, attention, and MTP model for reasoning, coding, tool use, RAG, and long-context agents. Artificial Analysis ranks it fourth among 62 comparable open-weight models; ODS stages a practical 64K profile for 96GB-class systems.",
+      "description": "NVIDIA's March 2026 hybrid Mamba-2, latent-MoE, attention, and MTP model for reasoning, coding, tool use, RAG, and long-context agents. Its independent Artificial Analysis score of 25 is above the comparable open-weight size-class median of 9; ODS stages a practical 64K profile for 96GB-class systems.",
       "tokens_per_sec_estimate": 12,
       "llm_model_name": "Nvidia-Nemotron-3-Super-120B-A12B",
       "llama_server_image": null,
@@ -1991,8 +1991,47 @@
         "score": 25,
         "assessed_at": "2026-07-29",
         "independent": true,
-        "note": "Ranked #4 of 62 comparable open-weight models with a class median of 9. Artificial Analysis reports 110M evaluation output tokens versus a 53M class median, so ODS treats exact-response behavior as an explicit fleet-validation risk."
+        "note": "The score of 25 is above the comparable open-weight size-class median of 9. Artificial Analysis reports 110M evaluation output tokens versus a 53M class median, so ODS treats exact-response behavior as an explicit fleet-validation risk."
       },
+      "publisher_evidence": {
+        "source_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+        "mmlu_pro": 83.73,
+        "aime_2025": 90.21,
+        "gpqa_diamond": 79.23,
+        "gpqa_diamond_with_tools": 82.7,
+        "livecodebench": 81.19,
+        "scicode": 42.05,
+        "terminal_bench_2_hard": 25.78,
+        "swe_bench_verified_openhands": 60.47,
+        "swe_bench_verified_opencode": 59.2,
+        "ruler_256k": 96.3,
+        "ruler_512k": 95.67,
+        "ruler_1m": 91.75,
+        "independent": false,
+        "note": "Publisher-reported results span reasoning, coding-agent, tool-use, and long-context evaluations. NVIDIA discloses evaluation configurations for most results but labels some configurations internal; these numbers are supporting evidence, not independent validation."
+      },
+      "deployment_evidence": [
+        {
+          "source": "LocalLLaMA community deployment report",
+          "source_url": "https://www.reddit.com/r/LocalLLaMA/comments/1s10kug/nemotron_super_120b_on_strix_halo/",
+          "artifact": "unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF UD-Q4_K_M, three shards",
+          "hardware": "AMD Strix Halo unified memory",
+          "runtime": "llama.cpp ROCm",
+          "reported_result": "The exact three-shard quant was reported loading and generating at roughly 14-17 tokens/s; the first roughly 7.6MB shard was correctly identified as metadata rather than a complete model.",
+          "independent": true,
+          "controlled": false
+        },
+        {
+          "source": "LocalLLaMA community long-context deployment report",
+          "source_url": "https://www.reddit.com/r/LocalLLaMA/comments/1ugj1sf/nemotron3super120ba12b_hybrid_mambamoe_holds/",
+          "artifact": "mradermacher i1 Q4_K_S sibling quant",
+          "hardware": "4x RTX 3090",
+          "runtime": "llama.cpp",
+          "reported_result": "A sibling Q4 quant was reported retaining full needle-retrieval recall through a 504,482-token prompt.",
+          "independent": true,
+          "controlled": false
+        }
+      ],
       "source_evidence": {
         "model_card": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
         "model_revision": "d51eab0d1f979ebc26b546e634a04f450d99158e",
