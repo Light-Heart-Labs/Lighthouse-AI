@@ -863,6 +863,58 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_kat_coder_v25_dev_records_pinned_evidence_without_recommendation():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["kat-coder-v2.5-dev-apex-q4"]
+
+    assert model["gguf_url"] == (
+        "https://huggingface.co/gbuzhf/KAT-Coder-V2.5-Dev-APEX-MTP-GGUF/"
+        "resolve/b5d04175d9c1d014d61a0c26eef987f50656d8b4/"
+        "Kwaipilot_KAT-Coder-V2.5-Dev-APEX-MTP-I-Balanced.gguf"
+    )
+    assert model["gguf_sha256"] == (
+        "cce1395f842b99c147cc99025267c866aaaec5cd7b8c2c9c11d5530dc10c5e7b"
+    )
+    assert model["size_bytes"] == 26128039552
+    assert model["size_mb"] == 26129
+    assert model["vram_required_gb"] == 32
+    assert model["context_length"] == 131072
+    assert model["max_context_length"] == 262144
+    assert model["total_params_b"] == 35
+    assert model["active_params_b"] == 3
+    assert model["architecture"] == "hybrid-moe"
+    assert model["quantization"] == "APEX-MTP-I-Balanced"
+    assert model["install_recommendation"] is False
+
+    quality = model["quality_evidence"]
+    assert quality["independent"] is True
+    assert quality["score"] == "29/30"
+    assert "120-run" in quality["benchmark"]
+    assert "quantization confound" in quality["note"]
+
+    publisher = model["publisher_evidence"]
+    assert publisher["independent"] is False
+    assert publisher["swe_bench_verified"] == 69.4
+    assert publisher["swe_bench_pro"] == 45.96
+
+    source = model["source_evidence"]
+    assert source["model_revision"] == (
+        "7be56fe773e72b6f5ca93c1ae45d828ddb893922"
+    )
+    assert source["weights_revision"] == (
+        "68466af897fddf5539a9a7179b42868645457a95"
+    )
+    assert source["gguf_revision"] == (
+        "b5d04175d9c1d014d61a0c26eef987f50656d8b4"
+    )
+    assert source["license"] == "apache-2.0"
+    assert "pre-fix chat template" in source["gguf_metadata_note"]
+    assert "3a7d874090df0cd4399401982eca67df2c5a7e82" in (
+        source["gguf_metadata_note"]
+    )
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
@@ -891,6 +943,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.1-8b-instruct-q4",
         "granite3.3-8b-instruct-q4",
         "mistral-nemo-12b-instruct-q4",
+        "kat-coder-v2.5-dev-apex-q4",
     }
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
