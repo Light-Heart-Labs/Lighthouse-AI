@@ -1845,6 +1845,45 @@
       "llama_server_image": null
     },
     {
+      "id": "ornith-1.0-35b-q4",
+      "name": "Ornith 1.0 35B",
+      "family": "ornith",
+      "gguf_file": "ornith-1.0-35b-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B-GGUF/resolve/383064f72a1ef3087b779f268d3ca117eb989aac/ornith-1.0-35b-Q4_K_M.gguf",
+      "gguf_sha256": "ff25291b2599fb927a835e624d2b3540106af61761c3fa57ac4264046dbec002",
+      "size_bytes": 21166757760,
+      "size_mb": 21167,
+      "vram_required_gb": 24,
+      "context_length": 65536,
+      "max_context_length": 262144,
+      "total_params_b": 35,
+      "active_params_b": 3,
+      "architecture": "moe",
+      "quantization": "Q4_K_M",
+      "specialty": "Agentic Coding",
+      "description": "DeepReinforce's MIT-licensed Qwen 3.5 MoE post-training for agentic coding. Its official evaluation reports 75.6% SWE-bench Verified and 64.2% Terminal-Bench 2.1, but ODS keeps it staged pending independent benchmarking and exact six-host app validation.",
+      "tokens_per_sec_estimate": 50,
+      "llm_model_name": "ornith-1.0-35b",
+      "llama_server_image": null,
+      "install_recommendation": false,
+      "quality_evidence": {
+        "source": "DeepReinforce Ornith 1.0 official evaluation",
+        "source_url": "https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B",
+        "benchmark": "SWE-bench Verified",
+        "score": 75.6,
+        "assessed_at": "2026-07-28",
+        "independent": false,
+        "note": "Vendor-reported with methodology disclosed on the model card; Artificial Analysis has not yet published an independent Intelligence Index score. The same table reports Terminal-Bench 2.1 at 64.2, SWE-bench Pro at 50.4, SWE-bench Multilingual at 69.3, and NL2Repo at 34.6."
+      },
+      "source_evidence": {
+        "model_card": "https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B",
+        "model_revision": "5df2ed3f675c7beaa490328cc70bb573b65fb660",
+        "gguf_repository": "deepreinforce-ai/Ornith-1.0-35B-GGUF",
+        "gguf_revision": "383064f72a1ef3087b779f268d3ca117eb989aac",
+        "license": "mit"
+      }
+    },
+    {
       "id": "deepseek-r1-70b-q4",
       "name": "DeepSeek R1 70B",
       "family": "deepseek",
