@@ -863,6 +863,60 @@ def test_jamba_reasoning_3b_records_fleet_compatibility_without_recommendation()
     assert not _agent_viable_for_release(model)
 
 
+def test_gpt_oss_20b_is_staged_as_a_16gb_candidate_with_8gb_profile():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    model = by_id["gpt-oss-20b-mxfp4"]
+
+    assert model["family"] == "gpt-oss"
+    assert model["gguf_url"] == (
+        "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/"
+        "resolve/c9a07b972b8979719fd97b8ff2c10dc79ebf5d26/"
+        "gpt-oss-20b-MXFP4.gguf"
+    )
+    assert model["gguf_sha256"] == "27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901"
+    assert model["size_bytes"] == 12109566624
+    assert model["size_mb"] == 12110
+    assert model["vram_required_gb"] == 16
+    assert model["context_length"] == HERMES_CONTEXT_FLOOR
+    assert model["max_context_length"] == 131072
+    assert model["kv_cache_gb_per_32k"] == 0.8
+    assert model["architecture"] == "moe"
+    assert model["install_recommendation"] is False
+
+    profile = {
+        item["id"]: item for item in model["runtime_profiles"]
+    }["nvidia-8gb-64k-cpu-moe"]
+    assert profile["backend"] == "nvidia"
+    assert profile["host_arch"] == ["amd64"]
+    assert profile["memory_type"] == "discrete"
+    assert profile["vram_min_gb"] == 7.5
+    assert profile["vram_max_gb"] == 8.5
+    assert profile["system_ram_min_gb"] == 31
+    assert profile["context_length"] == HERMES_CONTEXT_FLOOR
+    assert profile["estimated_required_gb"] == 7.4
+    assert profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_N_CPU_MOE": "22",
+    }
+    assert profile["source_url"] == "https://github.com/ggml-org/llama.cpp/discussions/15396"
+    compatibility = model["app_compatibility"]
+    assert compatibility["hermes_talk"]["status"] == "verified"
+    assert compatibility["openai_chat"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["runtime_activation"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["gateway_route"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert compatibility["agent_viability"]["productSha"] == (
+        "d72b40956d3b012d3ee850edc42c329b5ce8c2f3"
+    )
+    assert compatibility["agent_viability"]["harnessSha"] == (
+        "19d43e6f9f2533e8768ed85b33de9f4ace232129"
+    )
+    assert not _agent_viable_for_release(model)
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",

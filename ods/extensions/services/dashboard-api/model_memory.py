@@ -62,6 +62,9 @@ def estimated_context_kv_gb(
     except (TypeError, ValueError):
         context = 0
     context = max(context, 8192)
+    explicit_per_32k = _positive_number(model.get("kv_cache_gb_per_32k"))
+    if explicit_per_32k:
+        return round(explicit_per_32k * (context / 32768.0), 2)
     params_b = estimated_param_billions(model)
     kv_per_32k_gb = min(max(params_b * 0.12, 0.35), 3.5)
     return round(kv_per_32k_gb * (context / 32768.0), 2)
