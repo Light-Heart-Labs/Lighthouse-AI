@@ -143,7 +143,7 @@ def read_env_file_value(key: str, install_dir: str | Path) -> str:
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.startswith(f"{key}="):
                 return line.split("=", 1)[1].strip().strip("\"'")
-    except OSError:
+    except (OSError, UnicodeError):
         pass
     return ""
 

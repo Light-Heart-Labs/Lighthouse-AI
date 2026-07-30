@@ -1671,3 +1671,11 @@ def test_published_exact_matches_gguf_stem_identity(data_dir):
     assert perf["source"] == "published_exact"
     assert perf["tokensPerSec"] == 43.7
     assert perf["sourceUrl"] == "https://example.test/stem-bench"
+
+
+def test_read_env_file_value_handles_unicode_decode_error(tmp_path):
+    from performance_oracle import read_env_file_value
+    (tmp_path / ".env").write_bytes(b"\x80\xff\xfe invalid unicode")
+
+    val = read_env_file_value("KEY", tmp_path)
+    assert val == ""
