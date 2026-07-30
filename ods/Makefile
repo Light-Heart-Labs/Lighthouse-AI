@@ -140,7 +140,7 @@ test: ## Run unit and contract tests
 	@echo "=== fleet host lock behavior ==="
 	@bash tests/test-fleet-host-lock.sh
 	@echo ""
-	@echo "=== issue-to-pr security check ==="
+	@echo "=== workflow security checks ==="
 	@bash tests/test-issue-to-pr-security.sh
 	@echo ""
 	@echo "=== CLI user-extension dependency resolution ==="

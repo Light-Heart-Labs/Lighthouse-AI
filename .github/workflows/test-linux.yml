@@ -240,7 +240,7 @@ jobs:
       - name: Config Migration Tests
         run: bash tests/test-migrate-config.sh
 
-      - name: Issue-to-PR Security Contract Tests
+      - name: Workflow Security Contract Tests
         run: bash tests/test-issue-to-pr-security.sh
 
       - name: Upload Installer Simulation Artifacts
