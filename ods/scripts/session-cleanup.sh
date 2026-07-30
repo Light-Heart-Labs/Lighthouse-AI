@@ -145,29 +145,30 @@ for f in "$SESSIONS_DIR"/*.jsonl; do
     fi
 done
 
-# ── Remove wiped session references from sessions.json ─────────
+# ── Remove wiped session references from sessions.json (atomic) ─
+# Uses os.replace for atomic write: sessions.json is never left in a
+# half-written state, even if the script crashes mid-update.
 if [ -n "$WIPE_IDS" ]; then
     echo "[$(date)] Clearing session references from sessions.json for:$WIPE_IDS"
-    cp "$SESSIONS_JSON" "$SESSIONS_JSON.bak-cleanup"
+    "$PYTHON_CMD" -c "
+import json, sys, os
 
-    for ID in $WIPE_IDS; do
-        "$PYTHON_CMD" -c "
-import json, sys
 sessions_file = sys.argv[1]
-target_id = sys.argv[2]
-with open(sessions_file, 'r') as f:
+wipe_ids = set(sys.argv[2:])
+
+with open(sessions_file) as f:
     data = json.load(f)
-to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get('sessionId') == target_id]
+
+to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get('sessionId') in wipe_ids]
 for k in to_remove:
     del data[k]
     print(f'  Removed session key: {k}', file=sys.stderr)
-with open(sessions_file, 'w') as f:
-    json.dump(data, f, indent=2)
-" "$SESSIONS_JSON" "$ID" 2>&1
-    done
 
-    # Clean up the backup
-    rm -f "$SESSIONS_JSON.bak-cleanup"
+tmp = sessions_file + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, sessions_file)
+" "$SESSIONS_JSON" $WIPE_IDS 2>&1
 fi
 
 # ── Summary ────────────────────────────────────────────────────

@@ -25,10 +25,10 @@ ai "Preparing container runtime..."
 
 # Helper wrappers that are safe even if DOCKER_CMD contains spaces (e.g. "sudo docker")
 _docker_cmd_arr() {
-    case "${DOCKER_CMD:-docker}" in
-        "sudo docker") printf '%s %s\n' "sudo" "docker" ;;
-        *)             printf '%s\n' "docker" ;;
-    esac
+    # Word-split DOCKER_CMD to handle "sudo docker", "nerdctl", "podman", etc.
+    # shellcheck disable=SC2207
+    local -a _parts=(${DOCKER_CMD:-docker})
+    printf '%s\n' "${_parts[@]}"
 }
 
 docker_run() {

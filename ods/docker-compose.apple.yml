@@ -20,5 +20,7 @@ services:
           cpus: '${LLAMA_CPU_RESERVATION:-2.0}'
           memory: 4G
     environment:
-      # Hint to llama.cpp for ARM NEON optimizations
-      - LLAMA_NO_METAL=1
+      # LLAMA_NO_METAL is not meaningful inside a Linux container on macOS
+      # (Metal is not available inside Docker). The env var was removed to
+      # avoid misleading readers into thinking it enables GPU passthrough.
+
