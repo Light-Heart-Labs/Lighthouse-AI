@@ -74,6 +74,11 @@ mesh_cloud_tier_flags="${mesh_cloud_tier_flags//\\//}"
 contains "$mesh_cloud_tier_flags" "docker-compose.base.yml" "mesh at CLOUD tier keeps base stack"
 contains "$mesh_cloud_tier_flags" "docker-compose.cpu.yml" "mesh at CLOUD tier keeps a local llama-server overlay"
 contains "$mesh_cloud_tier_flags" "extensions/services/litellm/compose.yaml" "mesh at CLOUD tier includes the LiteLLM gateway"
+# A converted cloud->mesh node keeps a local llama-server, so it must also get
+# the local depends_on wiring a fresh mesh install gets. Without this the two
+# stacks differ and the local-inference overlay ods-doctor looks for is still
+# present, so ODS-RUNTIME-MESH-LOCAL-OVERLAY-MISSING cannot catch the drift.
+contains "$mesh_cloud_tier_flags" "compose.local.yaml" "mesh at CLOUD tier includes local dependency overlays"
 rejects "$mesh_cloud_tier_flags" "docker-compose.cloud.yml" "mesh overrides the CLOUD tier and does not layer the cloud overlay"
 
 lemonade_flags="$(LEMONADE_EXTERNAL=true AMD_INFERENCE_RUNTIME=lemonade AMD_INFERENCE_MANAGED=false ODS_PYTHON_CMD="$PY" ./scripts/resolve-compose-stack.sh \
