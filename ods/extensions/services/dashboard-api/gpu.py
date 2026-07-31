@@ -570,7 +570,7 @@ def decode_gpu_assignment() -> Optional[dict]:
         return None
     try:
         return _json.loads(base64.b64decode(b64.strip()).decode("utf-8"))
-    except (Exception, _json.JSONDecodeError, UnicodeDecodeError):
+    except (base64.binascii.Error, _json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 

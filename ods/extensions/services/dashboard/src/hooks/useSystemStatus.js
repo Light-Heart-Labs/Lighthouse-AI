@@ -50,7 +50,7 @@ export function useSystemStatus() {
   })
   const [loading, setLoading] = useState(!USE_MOCK_DATA)
   const [error, setError] = useState(null)
-  // Guard against overlapping fetches — if the API is slow (e.g.
+  // Guard against overlapping fetches â€” if the API is slow (e.g.
   // llama-server under inference load) we skip the next poll rather
   // than stacking concurrent requests that can amplify the problem.
   const fetchInFlight = useRef(false)
@@ -71,7 +71,7 @@ export function useSystemStatus() {
         return
       }
 
-      // Pause polling when the tab is hidden — but only after the first
+      // Pause polling when the tab is hidden â€” but only after the first
       // successful fetch so the loading skeleton is never permanent.
       if (document.hidden && hasInitialData.current) return
 
