@@ -42,9 +42,7 @@ class _DirSizeCache:
 
     def set(self, path: Path, value: float):
         now = time.monotonic()
-        expired_keys = [
-            k for k, (expires_at, _) in self._store.items() if now > expires_at
-        ]
+        expired_keys = [k for k, (expires_at, _) in self._store.items() if now > expires_at]
         for k in expired_keys:
             del self._store[k]
         key = str(path.resolve())
@@ -123,16 +121,11 @@ async def _get_httpx_client() -> httpx.AsyncClient:
     return _httpx_client
 
 
-def _service_status_from_config(
-    service_id: str, config: dict, status: str
-) -> ServiceStatus:
+def _service_status_from_config(service_id: str, config: dict, status: str) -> ServiceStatus:
     return ServiceStatus(
-        id=service_id,
-        name=config["name"],
-        port=config["port"],
+        id=service_id, name=config["name"], port=config["port"],
         external_port=config.get("external_port", config["port"]),
-        status=status,
-        response_time_ms=None,
+        status=status, response_time_ms=None,
     )
 
 
@@ -164,12 +157,7 @@ async def _check_host_systemd_health(service_id: str, config: dict) -> ServiceSt
     open. If the proof is unavailable, fail closed so the dashboard does not
     launch users into a dead localhost URL.
     """
-    port = int(
-        config.get("health_port")
-        or config.get("external_port")
-        or config.get("port")
-        or 0
-    )
+    port = int(config.get("health_port") or config.get("external_port") or config.get("port") or 0)
     if port <= 0:
         return _service_status_from_config(service_id, config, "not_deployed")
 
@@ -249,10 +237,7 @@ def is_plausible_single_request_tps(value) -> bool:
         tokens_per_second = float(value)
     except (TypeError, ValueError):
         return False
-    return (
-        math.isfinite(tokens_per_second)
-        and 0 < tokens_per_second <= MAX_SINGLE_REQUEST_TOKENS_PER_SECOND
-    )
+    return math.isfinite(tokens_per_second) and 0 < tokens_per_second <= MAX_SINGLE_REQUEST_TOKENS_PER_SECOND
 
 
 def _read_json_file(path: Path, default):
@@ -265,14 +250,10 @@ def _read_json_file(path: Path, default):
 
 
 def _write_json_file(path: Path, data) -> None:
-    temporary = path.with_name(
-        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-    )
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(
-            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        temporary.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
         # Windows virus scanners and indexers can briefly retain a handle to
         # the destination. Retry only that transient access-denied case; other
         # filesystem failures remain fail-soft as before.
@@ -283,7 +264,7 @@ def _write_json_file(path: Path, data) -> None:
             except PermissionError:
                 if attempt == 3:
                     raise
-                time.sleep(0.025 * (2**attempt))
+                time.sleep(0.025 * (2 ** attempt))
     except OSError as e:
         logger.debug("Failed to write JSON file %s: %s", path, e)
     finally:
@@ -293,14 +274,10 @@ def _write_json_file(path: Path, data) -> None:
             pass
 
 
-def _performance_key(
-    backend: str,
-    gpu_name: str,
-    model_name: str,
-    context_length: Optional[int] = None,
-    gguf: Optional[str] = None,
-    vram_total_mb: Optional[int] = None,
-) -> str:
+def _performance_key(backend: str, gpu_name: str, model_name: str,
+                     context_length: Optional[int] = None,
+                     gguf: Optional[str] = None,
+                     vram_total_mb: Optional[int] = None) -> str:
     parts = [
         _normalize_perf_key(backend or "unknown"),
         _normalize_perf_key(gpu_name),
@@ -340,18 +317,12 @@ def record_model_performance(
     except (TypeError, ValueError):
         return
     if not is_plausible_single_request_tps(tps):
-        logger.warning(
-            "Ignoring implausible single-request throughput sample: %s tok/s", tps
-        )
+        logger.warning("Ignoring implausible single-request throughput sample: %s tok/s", tps)
         return
 
-    data = _read_json_file(
-        _PERF_FILE, {"schema_version": "ods.model-performance.v1", "samples": {}}
-    )
+    data = _read_json_file(_PERF_FILE, {"schema_version": "ods.model-performance.v1", "samples": {}})
     samples = data.setdefault("samples", {})
-    key = _performance_key(
-        backend, gpu_name, model_name, context_length, gguf, vram_total_mb
-    )
+    key = _performance_key(backend, gpu_name, model_name, context_length, gguf, vram_total_mb)
     previous = samples.get(key, {})
     previous_avg = float(previous.get("tokens_per_second", tps))
     previous_count = int(previous.get("sample_count", 0))
@@ -393,9 +364,7 @@ def get_recorded_model_performance(
 ) -> Optional[dict]:
     data = _read_json_file(_PERF_FILE, {"samples": {}})
     keys = [
-        _performance_key(
-            backend, gpu_name, model_name, context_length, gguf, vram_total_mb
-        ),
+        _performance_key(backend, gpu_name, model_name, context_length, gguf, vram_total_mb),
         _performance_key(backend, gpu_name, model_name, context_length, gguf),
         _performance_key(backend, gpu_name, model_name, context_length),
         _performance_key(backend, gpu_name, model_name),
@@ -415,7 +384,6 @@ def get_model_performance_samples() -> list[dict]:
 
 # --- LLM Metrics ---
 
-
 async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
     """Get inference metrics from llama-server Prometheus /metrics endpoint.
 
@@ -425,9 +393,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
     try:
         if LLM_BACKEND == "lemonade":
             if read_live_env_value("AMD_INFERENCE_LOCATION").lower() == "host":
-                host_status = await request_agent_json(
-                    "GET", "/v1/llm/status", timeout=6
-                )
+                host_status = await request_agent_json("GET", "/v1/llm/status", timeout=6)
                 stats = host_status.get("stats")
             else:
                 if "llama-server" not in SERVICES:
@@ -446,8 +412,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                 for prefix in ("/api/v1", "/v1"):
                     try:
                         resp = await client.get(
-                            f"http://{host}:{port}{prefix}/stats",
-                            headers=headers,
+                            f"http://{host}:{port}{prefix}/stats", headers=headers,
                         )
                         resp.raise_for_status()
                         stats = resp.json()
@@ -455,18 +420,14 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                     except (httpx.HTTPError, ValueError) as exc:
                         last_error = exc
                 if stats is None:
-                    raise ValueError(
-                        f"Lemonade stats endpoint is unavailable: {last_error}"
-                    )
+                    raise ValueError(f"Lemonade stats endpoint is unavailable: {last_error}")
             if not isinstance(stats, dict):
                 raise ValueError("Lemonade stats response is unavailable")
             try:
                 tokens_per_second = float(stats.get("tokens_per_second") or 0)
             except (TypeError, ValueError):
                 tokens_per_second = 0.0
-            if tokens_per_second and not is_plausible_single_request_tps(
-                tokens_per_second
-            ):
+            if tokens_per_second and not is_plausible_single_request_tps(tokens_per_second):
                 logger.warning(
                     "Ignoring implausible Lemonade single-request throughput: %s tok/s",
                     tokens_per_second,
@@ -492,9 +453,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
         host = SERVICES["llama-server"]["host"]
         port = SERVICES["llama-server"]["port"]
         metrics_port = int(os.environ.get("LLAMA_METRICS_PORT", port))
-        model_name = (
-            model_hint if model_hint is not None else (await get_loaded_model() or "")
-        )
+        model_name = model_hint if model_hint is not None else (await get_loaded_model() or "")
         url = f"http://{host}:{metrics_port}/metrics"
         params = {"model": model_name} if model_name else {}
         client = await _get_httpx_client()
@@ -534,9 +493,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
         if _prev_tokens["time"] > 0 and curr > _prev_tokens["count"]:
             delta_secs = gen_secs - _prev_tokens.get("gen_secs", 0)
             if delta_secs > 0:
-                _prev_tokens["tps"] = round(
-                    (curr - _prev_tokens["count"]) / delta_secs, 1
-                )
+                _prev_tokens["tps"] = round((curr - _prev_tokens["count"]) / delta_secs, 1)
             else:
                 _prev_tokens["tps"] = 0.0
         else:
@@ -553,14 +510,7 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
             "lifetime_tokens": lifetime,
             "token_count_mode": "cumulative",
         }
-    except (
-        AgentClientError,
-        httpx.HTTPError,
-        httpx.TimeoutException,
-        OSError,
-        ValueError,
-        KeyError,
-    ) as e:
+    except (AgentClientError, httpx.HTTPError, httpx.TimeoutException, OSError, ValueError, KeyError) as e:
         logger.warning("get_llama_metrics failed: %s: %s", type(e).__name__, e)
         if LLM_BACKEND == "lemonade":
             return {
@@ -670,7 +620,6 @@ def get_cached_services() -> Optional[list]:
 
 # --- Service Health ---
 
-
 async def check_service_health(
     service_id: str,
     config: dict,
@@ -691,8 +640,8 @@ async def check_service_health(
             return await _check_tailscale_health(service_id, config)
         return _service_status_from_config(service_id, config, "not_deployed")
 
-    host = config.get("host", "localhost")
-    health_port = config.get("health_port", config["port"])
+    host = config.get('host', 'localhost')
+    health_port = config.get('health_port', config['port'])
     url = f"http://{host}:{health_port}{config['health']}"
     status = "unknown"
     response_time = None
@@ -723,12 +672,9 @@ async def check_service_health(
         status = "down"
 
     return ServiceStatus(
-        id=service_id,
-        name=config["name"],
-        port=config["port"],
+        id=service_id, name=config["name"], port=config["port"],
         external_port=config.get("external_port", config["port"]),
-        status=status,
-        response_time_ms=round(response_time, 1) if response_time else None,
+        status=status, response_time_ms=round(response_time, 1) if response_time else None
     )
 
 
@@ -744,24 +690,15 @@ async def get_all_services() -> list[ServiceStatus]:
     statuses: list[ServiceStatus] = []
     for (sid, cfg), result in zip(SERVICES.items(), results):
         if isinstance(result, BaseException):
-            logger.warning(
-                "Health check for %s raised %s: %s", sid, type(result).__name__, result
-            )
-            statuses.append(
-                ServiceStatus(
-                    id=sid,
-                    name=cfg["name"],
-                    port=cfg["port"],
-                    external_port=cfg.get("external_port", cfg["port"]),
-                    status="down",
-                    response_time_ms=None,
-                )
-            )
+            logger.warning("Health check for %s raised %s: %s", sid, type(result).__name__, result)
+            statuses.append(ServiceStatus(
+                id=sid, name=cfg["name"], port=cfg["port"],
+                external_port=cfg.get("external_port", cfg["port"]),
+                status="down", response_time_ms=None,
+            ))
         else:
             statuses.append(result)
-    if not any(
-        status.status in {"degraded", "down", "unhealthy"} for status in statuses
-    ):
+    if not any(status.status in {"degraded", "down", "unhealthy"} for status in statuses):
         return statuses
 
     try:
@@ -788,9 +725,7 @@ async def get_all_services() -> list[ServiceStatus]:
     reconciled: list[ServiceStatus] = []
     for status in statuses:
         config = SERVICES.get(status.id, {})
-        item = by_service.get(status.id) or by_name.get(
-            str(config.get("container_name") or "")
-        )
+        item = by_service.get(status.id) or by_name.get(str(config.get("container_name") or ""))
         replacement = status.status
         if item and config.get("type", "docker") == "docker":
             health = str(item.get("health") or "none").casefold()
@@ -810,28 +745,16 @@ async def get_all_services() -> list[ServiceStatus]:
             status = status.model_copy(update={"status": replacement})
         reconciled.append(status)
 
-    if (
-        LLM_BACKEND == "lemonade"
-        and read_live_env_value("AMD_INFERENCE_LOCATION").lower() == "host"
-    ):
+    if LLM_BACKEND == "lemonade" and read_live_env_value("AMD_INFERENCE_LOCATION").lower() == "host":
         llama_index = next(
-            (
-                index
-                for index, status in enumerate(reconciled)
-                if status.id == "llama-server"
-            ),
+            (index for index, status in enumerate(reconciled) if status.id == "llama-server"),
             None,
         )
         if llama_index is not None and reconciled[llama_index].status != "healthy":
             try:
-                host_status = await request_agent_json(
-                    "GET", "/v1/llm/status", timeout=6
-                )
+                host_status = await request_agent_json("GET", "/v1/llm/status", timeout=6)
                 health = host_status.get("health")
-                if (
-                    isinstance(health, dict)
-                    and str(health.get("status") or "").casefold() == "ok"
-                ):
+                if isinstance(health, dict) and str(health.get("status") or "").casefold() == "ok":
                     reconciled[llama_index] = reconciled[llama_index].model_copy(
                         update={"status": "healthy"},
                     )
@@ -841,7 +764,6 @@ async def get_all_services() -> list[ServiceStatus]:
 
 
 # --- System Metrics ---
-
 
 def dir_size_gb(path: Path) -> float:
     """Calculate total size of a directory in GB. Returns 0.0 if path doesn't exist.
@@ -887,12 +809,7 @@ def get_disk_usage() -> DiskUsage:
     path = INSTALL_DIR if os.path.exists(INSTALL_DIR) else os.path.expanduser("~")
     total, used, free = shutil.disk_usage(path)
     percent = round(used / total * 100, 1) if total > 0 else 0.0
-    return DiskUsage(
-        path=path,
-        used_gb=round(used / (1024**3), 2),
-        total_gb=round(total / (1024**3), 2),
-        percent=percent,
-    )
+    return DiskUsage(path=path, used_gb=round(used / (1024**3), 2), total_gb=round(total / (1024**3), 2), percent=percent)
 
 
 def get_model_info() -> Optional[ModelInfo]:
@@ -909,7 +826,7 @@ def get_model_info() -> Optional[ModelInfo]:
                     key = key.strip()
                     if not key:
                         continue
-                    value = value.split("#")[0].strip()
+                    value = value.strip()
                     # Strip exactly one matching pair of surrounding quotes.
                     # str.strip("\"'") removes any run of either quote from
                     # both ends, so a value legitimately ending in a quote is
@@ -947,27 +864,27 @@ def get_model_info() -> Optional[ModelInfo]:
                     size_gb = 18.0
                 elif "gemma-4-31b" in name_lower:
                     size_gb = 19.8
-                elif _re.search(r"\b2b\b", name_lower):
+                elif _re.search(r'\b2b\b', name_lower):
                     size_gb = 1.5
-                elif _re.search(r"\b4b\b", name_lower):
+                elif _re.search(r'\b4b\b', name_lower):
                     size_gb = 2.8
-                elif _re.search(r"\b7b\b", name_lower):
+                elif _re.search(r'\b7b\b', name_lower):
                     size_gb = 4.0
-                elif _re.search(r"\b8b\b", name_lower):
+                elif _re.search(r'\b8b\b', name_lower):
                     size_gb = 4.5
-                elif _re.search(r"\b9b\b", name_lower):
+                elif _re.search(r'\b9b\b', name_lower):
                     size_gb = 5.8
-                elif _re.search(r"\b14b\b", name_lower):
+                elif _re.search(r'\b14b\b', name_lower):
                     size_gb = 8.0
-                elif _re.search(r"\b26b\b", name_lower):
+                elif _re.search(r'\b26b\b', name_lower):
                     size_gb = 18.0
-                elif _re.search(r"\b30b\b", name_lower):
+                elif _re.search(r'\b30b\b', name_lower):
                     size_gb = 18.6
-                elif _re.search(r"\b31b\b", name_lower):
+                elif _re.search(r'\b31b\b', name_lower):
                     size_gb = 19.8
-                elif _re.search(r"\b32b\b", name_lower):
+                elif _re.search(r'\b32b\b', name_lower):
                     size_gb = 16.0
-                elif _re.search(r"\b70b\b", name_lower):
+                elif _re.search(r'\b70b\b', name_lower):
                     size_gb = 35.0
 
                 gguf_file = env_values.get("GGUF_FILE", "").lower()
@@ -978,12 +895,7 @@ def get_model_info() -> Optional[ModelInfo]:
                 elif "gguf" in name_lower or gguf_file.endswith(".gguf"):
                     quant = "GGUF"
 
-                return ModelInfo(
-                    name=model_name,
-                    size_gb=size_gb,
-                    context_length=context,
-                    quantization=quant,
-                )
+                return ModelInfo(name=model_name, size_gb=size_gb, context_length=context, quantization=quant)
         except OSError as e:
             logger.warning("Failed to read .env for model info: %s", e)
     return None
@@ -1026,11 +938,7 @@ def get_bootstrap_status() -> BootstrapStatus:
         eta_seconds = None
         if eta_str and eta_str.strip() and eta_str.strip() != "calculating...":
             try:
-                parts = [
-                    p.strip()
-                    for p in eta_str.replace("m", "").replace("s", "").split()
-                    if p.strip()
-                ]
+                parts = [p.strip() for p in eta_str.replace("m", "").replace("s", "").split() if p.strip()]
                 if len(parts) == 2:
                     eta_seconds = int(parts[0]) * 60 + int(parts[1])
                 elif len(parts) == 1:
@@ -1053,13 +961,11 @@ def get_bootstrap_status() -> BootstrapStatus:
             bytes_downloaded = max(0, min(bytes_downloaded, bytes_total))
 
         return BootstrapStatus(
-            active=True,
-            model_name=data.get("model"),
-            percent=percent,
+            active=True, model_name=data.get("model"), percent=percent,
             downloaded_gb=bytes_downloaded / (1024**3) if bytes_downloaded else None,
             total_gb=bytes_total / (1024**3) if bytes_total else None,
             speed_mbps=speed_bps / (1024**2) if speed_bps else None,
-            eta_seconds=eta_seconds,
+            eta_seconds=eta_seconds
         )
     except (json.JSONDecodeError, OSError, KeyError) as e:
         logger.warning("Failed to parse bootstrap status: %s", e)
@@ -1070,7 +976,6 @@ def get_uptime() -> int:
     """Get system uptime in seconds (cross-platform)."""
     _system = platform.system()
     import subprocess
-
     try:
         if _system == "Linux":
             with open("/proc/uptime") as f:
@@ -1078,30 +983,19 @@ def get_uptime() -> int:
         elif _system == "Darwin":
             result = subprocess.run(
                 ["sysctl", "-n", "kern.boottime"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+                capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
                 # Output: "{ sec = 1234567890, usec = 0 } ..."
                 import re
-
                 match = re.search(r"sec\s*=\s*(\d+)", result.stdout)
                 if match:
                     import time as _time
-
                     return int(_time.time()) - int(match.group(1))
         elif _system == "Windows":
             import ctypes
-
             return ctypes.windll.kernel32.GetTickCount64() // 1000
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        ValueError,
-        IndexError,
-        AttributeError,
-    ) as e:
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, AttributeError) as e:
         logger.debug("get_uptime failed on %s: %s", _system, e)
     return 0
 
@@ -1128,14 +1022,10 @@ def _get_cpu_metrics_linux() -> dict:
 
     try:
         import glob
-
         for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*/type")):
             with open(tz) as f:
                 zone_type = f.read().strip()
-            if any(
-                k in zone_type.lower()
-                for k in ("k10temp", "coretemp", "cpu", "soc", "tctl")
-            ):
+            if any(k in zone_type.lower() for k in ("k10temp", "coretemp", "cpu", "soc", "tctl")):
                 with open(tz.replace("/type", "/temp")) as f:
                     result["temp_c"] = int(f.read().strip()) // 1000
                 break
@@ -1157,23 +1047,15 @@ def _get_cpu_metrics_darwin() -> dict:
     result = {"percent": 0, "temp_c": None}
     try:
         import subprocess
-
         out = subprocess.run(
             ["top", "-l", "1", "-n", "0", "-stats", "cpu"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            capture_output=True, text=True, timeout=5,
         )
         if out.returncode == 0:
             import re
-
-            match = re.search(
-                r"CPU usage:\s+([\d.]+)%\s+user.*?([\d.]+)%\s+sys", out.stdout
-            )
+            match = re.search(r"CPU usage:\s+([\d.]+)%\s+user.*?([\d.]+)%\s+sys", out.stdout)
             if match:
-                result["percent"] = round(
-                    float(match.group(1)) + float(match.group(2)), 1
-                )
+                result["percent"] = round(float(match.group(1)) + float(match.group(2)), 1)
     except (subprocess.SubprocessError, OSError, ValueError) as e:
         logger.debug("macOS CPU metrics failed: %s", e)
     return result
@@ -1214,9 +1096,7 @@ def _get_ram_metrics_linux() -> dict:
                 host_ram_gb = float(host_ram_gb_str)
                 if host_ram_gb > 0:
                     result["total_gb"] = round(host_ram_gb, 1)
-                    result["percent"] = round(
-                        used / (host_ram_gb * 1024 * 1024) * 100, 1
-                    )
+                    result["percent"] = round(used / (host_ram_gb * 1024 * 1024) * 100, 1)
             except ValueError:
                 pass
     except OSError as e:
@@ -1229,27 +1109,20 @@ def _get_ram_metrics_sysctl() -> dict:
     result = {"used_gb": 0, "total_gb": 0, "percent": 0}
     try:
         import subprocess
-
         out = subprocess.run(
             ["sysctl", "-n", "hw.memsize"],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            capture_output=True, text=True, timeout=5,
         )
         if out.returncode == 0:
             total_bytes = int(out.stdout.strip())
-            total_gb = total_bytes / (1024**3)
+            total_gb = total_bytes / (1024 ** 3)
             result["total_gb"] = round(total_gb, 1)
             # vm_stat for used memory
             vm = subprocess.run(
-                ["vm_stat"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+                ["vm_stat"], capture_output=True, text=True, timeout=5,
             )
             if vm.returncode == 0:
                 import re
-
                 pages = {}
                 for line in vm.stdout.splitlines():
                     match = re.match(r"(.+?):\s+(\d+)", line)
@@ -1263,7 +1136,7 @@ def _get_ram_metrics_sysctl() -> dict:
                 wired = pages.get("Pages wired down", 0)
                 compressed = pages.get("Pages occupied by compressor", 0)
                 used_bytes = (active + wired + compressed) * page_size
-                result["used_gb"] = round(used_bytes / (1024**3), 1)
+                result["used_gb"] = round(used_bytes / (1024 ** 3), 1)
                 if total_bytes > 0:
                     result["percent"] = round(used_bytes / total_bytes * 100, 1)
     except (subprocess.SubprocessError, OSError, ValueError) as e:

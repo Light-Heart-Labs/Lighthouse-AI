@@ -18,7 +18,8 @@ INSTALL_DIR = os.environ.get("ODS_INSTALL_DIR", os.path.expanduser("~/ods"))
 DATA_DIR = os.environ.get("ODS_DATA_DIR", os.path.expanduser("~/.ods"))
 EXTENSIONS_DIR = Path(
     os.environ.get(
-        "ODS_EXTENSIONS_DIR", str(Path(INSTALL_DIR) / "extensions" / "services")
+        "ODS_EXTENSIONS_DIR",
+        str(Path(INSTALL_DIR) / "extensions" / "services")
     )
 )
 
@@ -72,21 +73,13 @@ def normalize_llm_contract(value: Any) -> dict[str, Any] | None:
     normalized["swapSafe"] = swap_safe
     normalized["badge"] = "swap-safe" if swap_safe else "not-swap-safe"
     if not consumes:
-        normalized["swap_safe_reason"] = (
-            "This service does not declare LLM inference consumption."
-        )
+        normalized["swap_safe_reason"] = "This service does not declare LLM inference consumption."
     elif route == "gateway":
-        normalized["swap_safe_reason"] = (
-            "Routes through the ODS gateway alias and follows model swaps automatically."
-        )
+        normalized["swap_safe_reason"] = "Routes through the ODS gateway alias and follows model swaps automatically."
     elif pinning == "dynamic":
-        normalized["swap_safe_reason"] = (
-            "Declares a dynamic model refresh path and is re-probed after swaps."
-        )
+        normalized["swap_safe_reason"] = "Declares a dynamic model refresh path and is re-probed after swaps."
     else:
-        normalized["swap_safe_reason"] = (
-            "Direct model route without a declared refresh path; swaps may require reconciliation."
-        )
+        normalized["swap_safe_reason"] = "Direct model route without a declared refresh path; swaps may require reconciliation."
 
     return normalized
 
@@ -105,9 +98,7 @@ def _find_env_file_value(key: str) -> tuple[bool, str]:
         for line in env_path.read_text(encoding="utf-8").splitlines():
             if line.startswith(f"{key}="):
                 found = True
-                value = line.split("=", 1)[1].strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                    value = value[1:-1]
+                value = line.split("=", 1)[1].strip().strip("\"'")
     except (OSError, UnicodeError):
         pass
     return found, value
@@ -154,18 +145,12 @@ def _apply_host_native_llm_service_override(
     try:
         port = parsed.port or int(env.get("AMD_INFERENCE_PORT", "8080"))
     except ValueError:
-        logger.warning(
-            "Ignoring invalid host-native LLM port in URL: %s", configured_url
-        )
+        logger.warning("Ignoring invalid host-native LLM port in URL: %s", configured_url)
         return
 
     service["host"] = parsed.hostname
     service["port"] = port
-    logger.info(
-        "Host-native AMD inference detected; routing LLM probes to %s:%d",
-        parsed.hostname,
-        port,
-    )
+    logger.info("Host-native AMD inference detected; routing LLM probes to %s:%d", parsed.hostname, port)
 
 
 def _apply_external_llm_service_override(
@@ -181,7 +166,9 @@ def _apply_external_llm_service_override(
         return
 
     configured_url = (
-        env.get("EXTERNAL_LLM_CONTAINER_URL") or env.get("LLM_API_URL") or ""
+        env.get("EXTERNAL_LLM_CONTAINER_URL")
+        or env.get("LLM_API_URL")
+        or ""
     )
     parsed = urlparse(str(configured_url).strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -243,9 +230,7 @@ def _read_service_public_url_map() -> dict[str, str]:
         logger.warning("Ignoring invalid ODS_SERVICE_PUBLIC_URLS JSON")
         return {}
     if not isinstance(data, dict):
-        logger.warning(
-            "Ignoring ODS_SERVICE_PUBLIC_URLS because it is not a JSON object"
-        )
+        logger.warning("Ignoring ODS_SERVICE_PUBLIC_URLS because it is not a JSON object")
         return {}
     return {
         str(key): _valid_public_url(str(value))
@@ -271,9 +256,7 @@ def _candidate_public_url_env_names(
         if ext_port_env.endswith("_PORT"):
             names.append(f"{ext_port_env.removesuffix('_PORT')}_PUBLIC_URL")
         names.append(f"{ext_port_env}_PUBLIC_URL")
-    return [
-        name for index, name in enumerate(names) if name and name not in names[:index]
-    ]
+    return [name for index, name in enumerate(names) if name and name not in names[:index]]
 
 
 def _resolve_public_service_url(
@@ -310,8 +293,7 @@ def _read_manifest_file(path: Path) -> dict[str, Any]:
 
 
 def load_extension_manifests(
-    manifest_dir: Path,
-    gpu_backend: str,
+    manifest_dir: Path, gpu_backend: str,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
     """Load service and feature definitions from extension manifests.
 
@@ -344,20 +326,14 @@ def load_extension_manifests(
         try:
             # Skip disabled extensions (compose.yaml.disabled convention)
             ext_dir = path.parent
-            if (ext_dir / "compose.yaml.disabled").exists() or (
-                ext_dir / "compose.yml.disabled"
-            ).exists():
+            if (ext_dir / "compose.yaml.disabled").exists() or (ext_dir / "compose.yml.disabled").exists():
                 logger.debug("Skipping disabled extension: %s", ext_dir.name)
                 continue
 
             manifest = _read_manifest_file(path)
             if manifest.get("schema_version") != "ods.services.v1":
-                logger.warning(
-                    "Skipping manifest with unsupported schema_version: %s", path
-                )
-                errors.append(
-                    {"file": str(path), "error": "Unsupported schema_version"}
-                )
+                logger.warning("Skipping manifest with unsupported schema_version: %s", path)
+                errors.append({"file": str(path), "error": "Unsupported schema_version"})
                 continue
 
             service = manifest.get("service")
@@ -377,8 +353,9 @@ def load_extension_manifests(
                         continue
                 supported = service.get("gpu_backends", ["amd", "nvidia", "apple"])
                 if gpu_backend == "apple":
-                    if service.get("type") == "host-systemd" and not service.get(
-                        "macos_host_supported", False
+                    if (
+                        service.get("type") == "host-systemd"
+                        and not service.get("macos_host_supported", False)
                     ):
                         continue  # Linux-only service, not available on macOS
                     # All docker services run on macOS regardless of gpu_backends declaration
@@ -387,25 +364,17 @@ def load_extension_manifests(
 
                 host_env = service.get("host_env")
                 default_host = service.get("default_host", "localhost")
-                host = (
-                    os.environ.get(host_env, default_host) if host_env else default_host
-                )
+                host = os.environ.get(host_env, default_host) if host_env else default_host
 
                 ext_port_env = service.get("external_port_env")
-                ext_port_default = service.get(
-                    "external_port_default", service.get("port", 0)
-                )
+                ext_port_default = service.get("external_port_default", service.get("port", 0))
                 if ext_port_env:
-                    val = os.environ.get(ext_port_env) or _read_env_from_file(
-                        ext_port_env
-                    )
+                    val = os.environ.get(ext_port_env) or _read_env_from_file(ext_port_env)
                     external_port = int(val) if val else int(ext_port_default)
                 else:
                     external_port = int(ext_port_default)
 
-                public_url = _resolve_public_service_url(
-                    service_id, service, ext_port_env, public_url_map
-                )
+                public_url = _resolve_public_service_url(service_id, service, ext_port_env, public_url_map)
                 service_config = {
                     "host": host,
                     "port": int(service.get("port", 0)),
@@ -415,12 +384,8 @@ def load_extension_manifests(
                     "ui_path": service.get("ui_path", "/"),
                     "public_url": public_url,
                     "external_link": bool(service.get("external_link", True)),
-                    "macos_host_supported": bool(
-                        service.get("macos_host_supported", False)
-                    ),
-                    "container_name": service.get(
-                        "container_name", f"ods-{service_id}"
-                    ),
+                    "macos_host_supported": bool(service.get("macos_host_supported", False)),
+                    "container_name": service.get("container_name", f"ods-{service_id}"),
                     "depends_on": service.get("depends_on", []),
                     "category": service.get("category", "optional"),
                     "host_network": bool(service.get("host_network", False)),
@@ -428,11 +393,7 @@ def load_extension_manifests(
                     "hooks": service.get("hooks", {}),
                     "gpu_backends": service.get("gpu_backends", []),
                     **({"type": service["type"]} if "type" in service else {}),
-                    **(
-                        {"health_port": int(service["health_port"])}
-                        if "health_port" in service
-                        else {}
-                    ),
+                    **({"health_port": int(service["health_port"])} if "health_port" in service else {}),
                 }
                 llm_contract = normalize_llm_contract(service.get("llm"))
                 if llm_contract is not None:
@@ -445,65 +406,29 @@ def load_extension_manifests(
                     if not isinstance(feature, dict):
                         continue
                     supported = feature.get("gpu_backends", ["amd", "nvidia", "apple"])
-                    if (
-                        gpu_backend != "apple"
-                        and gpu_backend not in supported
-                        and "all" not in supported
-                    ):
+                    if gpu_backend != "apple" and gpu_backend not in supported and "all" not in supported:
                         continue
                     if feature.get("id") and feature.get("name"):
-                        missing = [
-                            f
-                            for f in (
-                                "description",
-                                "icon",
-                                "category",
-                                "setup_time",
-                                "priority",
-                            )
-                            if f not in feature
-                        ]
+                        missing = [f for f in ("description", "icon", "category", "setup_time", "priority") if f not in feature]
                         if missing:
-                            logger.warning(
-                                "Feature '%s' in %s missing optional fields: %s",
-                                feature["id"],
-                                path,
-                                ", ".join(missing),
-                            )
+                            logger.warning("Feature '%s' in %s missing optional fields: %s", feature["id"], path, ", ".join(missing))
                         features.append(feature)
 
             loaded += 1
-        except (
-            yaml.YAMLError,
-            json.JSONDecodeError,
-            OSError,
-            KeyError,
-            TypeError,
-            ValueError,
-        ) as e:
+        except (yaml.YAMLError, json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as e:
             logger.warning("Failed loading manifest %s: %s", path, e)
             errors.append({"file": str(path), "error": str(e)})
 
-    logger.info(
-        "Loaded %d extension manifests (%d services, %d features)",
-        loaded,
-        len(services),
-        len(features),
-    )
+    logger.info("Loaded %d extension manifests (%d services, %d features)", loaded, len(services), len(features))
     return services, features, errors
 
 
 # --- Service Registry ---
 
-MANIFEST_SERVICES, MANIFEST_FEATURES, MANIFEST_ERRORS = load_extension_manifests(
-    EXTENSIONS_DIR, GPU_BACKEND
-)
+MANIFEST_SERVICES, MANIFEST_FEATURES, MANIFEST_ERRORS = load_extension_manifests(EXTENSIONS_DIR, GPU_BACKEND)
 SERVICES = MANIFEST_SERVICES
 if not SERVICES:
-    logger.error(
-        "No services loaded from manifests in %s — dashboard will have no services",
-        EXTENSIONS_DIR,
-    )
+    logger.error("No services loaded from manifests in %s — dashboard will have no services", EXTENSIONS_DIR)
 
 # Lemonade serves at /api/v1 instead of llama.cpp's /v1. Override the
 # health path so the dashboard poll loop hits the correct endpoint.
@@ -512,9 +437,7 @@ _apply_host_native_llm_service_override(SERVICES, GPU_BACKEND)
 _apply_external_llm_service_override(SERVICES)
 if LLM_BACKEND == "lemonade" and "llama-server" in SERVICES:
     SERVICES["llama-server"]["health"] = "/api/v1/health"
-    logger.info(
-        "Lemonade backend detected — overriding llama-server health to /api/v1/health"
-    )
+    logger.info("Lemonade backend detected — overriding llama-server health to /api/v1/health")
 
 # --- Features ---
 
@@ -540,13 +463,11 @@ WORKFLOW_DIR = resolve_workflow_dir()
 WORKFLOW_CATALOG_FILE = WORKFLOW_DIR / "catalog.json"
 DEFAULT_WORKFLOW_CATALOG = {"workflows": [], "categories": {}}
 
-
 def _default_n8n_url() -> str:
     cfg = SERVICES.get("n8n", {})
     host = cfg.get("host", "n8n")
     port = cfg.get("port", 5678)
     return f"http://{host}:{port}"
-
 
 N8N_URL = os.environ.get("N8N_URL", _default_n8n_url())
 N8N_API_KEY = os.environ.get("N8N_API_KEY", "")
@@ -559,18 +480,18 @@ PERSONAS = {
     "general": {
         "name": "General Helper",
         "system_prompt": "You are a friendly and helpful AI assistant. You're knowledgeable, patient, and aim to be genuinely useful. Keep responses clear and conversational.",
-        "icon": "\U0001f4ac",
+        "icon": "\U0001f4ac"
     },
     "coding": {
         "name": "Coding Buddy",
         "system_prompt": "You are a skilled programmer and technical assistant. You write clean, well-documented code and explain technical concepts clearly. You're precise, thorough, and love solving problems.",
-        "icon": "\U0001f4bb",
+        "icon": "\U0001f4bb"
     },
     "creative": {
         "name": "Creative Writer",
         "system_prompt": "You are an imaginative creative writer and storyteller. You craft vivid descriptions, engaging narratives, and think outside the box. You're expressive and enjoy wordplay.",
-        "icon": "\U0001f3a8",
-    },
+        "icon": "\U0001f3a8"
+    }
 }
 
 # --- Sidebar Icons ---
@@ -590,23 +511,20 @@ SIDEBAR_ICONS = {
 
 # --- Extensions Portal ---
 
-CATALOG_PATH = Path(
-    os.environ.get(
-        "ODS_EXTENSIONS_CATALOG",
-        str(Path(INSTALL_DIR) / "config" / "extensions-catalog.json"),
-    )
-)
+CATALOG_PATH = Path(os.environ.get(
+    "ODS_EXTENSIONS_CATALOG",
+    str(Path(INSTALL_DIR) / "config" / "extensions-catalog.json")
+))
 
-EXTENSIONS_LIBRARY_DIR = Path(
-    os.environ.get(
-        "ODS_EXTENSIONS_LIBRARY_DIR", str(Path(DATA_DIR) / "extensions-library")
-    )
-)
+EXTENSIONS_LIBRARY_DIR = Path(os.environ.get(
+    "ODS_EXTENSIONS_LIBRARY_DIR",
+    str(Path(DATA_DIR) / "extensions-library")
+))
 
-USER_EXTENSIONS_DIR = Path(
-    os.environ.get("ODS_USER_EXTENSIONS_DIR", str(Path(DATA_DIR) / "user-extensions"))
-)
-
+USER_EXTENSIONS_DIR = Path(os.environ.get(
+    "ODS_USER_EXTENSIONS_DIR",
+    str(Path(DATA_DIR) / "user-extensions")
+))
 
 def _load_core_service_ids() -> frozenset:
     core_ids_path = Path(INSTALL_DIR) / "config" / "core-service-ids.json"
@@ -616,51 +534,23 @@ def _load_core_service_ids() -> frozenset:
         except (json.JSONDecodeError, OSError):
             pass
     # Fallback to hardcoded list
-    return frozenset(
-        {
-            "dashboard-api",
-            "dashboard",
-            "llama-server",
-            "model-router",
-            "open-webui",
-            "litellm",
-            "langfuse",
-            "hermes",
-            "hermes-proxy",
-            "n8n",
-            "openclaw",
-            "opencode",
-            "perplexica",
-            "searxng",
-            "qdrant",
-            "remote-provider-egress",
-            "remote-provider-ssh-tunnel",
-            "tts",
-            "whisper",
-            "embeddings",
-            "token-spy",
-            "comfyui",
-            "ape",
-            "privacy-shield",
-        }
-    )
+    return frozenset({
+        "dashboard-api", "dashboard", "llama-server", "model-router", "open-webui",
+        "litellm", "langfuse", "hermes", "hermes-proxy", "n8n", "openclaw", "opencode",
+        "perplexica", "searxng", "qdrant", "remote-provider-egress",
+        "remote-provider-ssh-tunnel", "tts", "whisper",
+        "embeddings", "token-spy", "comfyui", "ape", "privacy-shield",
+    })
 
 
 CORE_SERVICE_IDS = _load_core_service_ids()
 
 # Always-on services defined in docker-compose.base.yml — never manageable via API.
 # Distinct from CORE_SERVICE_IDS (the full built-in service allowlist).
-ALWAYS_ON_SERVICES: frozenset = frozenset(
-    {
-        "llama-server",
-        "model-router",
-        "remote-provider-egress",
-        "remote-provider-ssh-tunnel",
-        "open-webui",
-        "dashboard",
-        "dashboard-api",
-    }
-)
+ALWAYS_ON_SERVICES: frozenset = frozenset({
+    "llama-server", "model-router", "remote-provider-egress",
+    "remote-provider-ssh-tunnel", "open-webui", "dashboard", "dashboard-api",
+})
 
 
 def load_extension_catalog() -> list[dict]:
@@ -680,7 +570,6 @@ EXTENSION_CATALOG = load_extension_catalog()
 
 # --- Host Agent ---
 
-
 def _running_inside_container() -> bool:
     """Best-effort check for Docker/Podman/containerd runtime context."""
     if Path("/.dockerenv").exists():
@@ -689,9 +578,7 @@ def _running_inside_container() -> bool:
         cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8").lower()
     except OSError:
         return False
-    return any(
-        marker in cgroup for marker in ("docker", "containerd", "kubepods", "podman")
-    )
+    return any(marker in cgroup for marker in ("docker", "containerd", "kubepods", "podman"))
 
 
 def _detect_container_default_gateway(route_path: str = "/proc/net/route") -> str:
@@ -725,7 +612,9 @@ def _detect_container_default_gateway(route_path: str = "/proc/net/route") -> st
                 if not (flags & 0x2) or gateway_raw == 0 or len(gw_hex) != 8:
                     continue
                 # Little-endian: 0100A8C0 -> 192.168.0.1
-                return ".".join(str(int(gw_hex[i : i + 2], 16)) for i in (6, 4, 2, 0))
+                return ".".join(
+                    str(int(gw_hex[i:i + 2], 16)) for i in (6, 4, 2, 0)
+                )
     except OSError:
         pass
     return ""
@@ -770,16 +659,16 @@ ODS_AGENT_KEY = os.environ.get("ODS_AGENT_KEY", "") or DASHBOARD_API_KEY
 # --- Templates ---
 
 TEMPLATES_DIR = Path(
-    os.environ.get("ODS_TEMPLATES_DIR", str(Path(INSTALL_DIR) / "templates"))
+    os.environ.get(
+        "ODS_TEMPLATES_DIR",
+        str(Path(INSTALL_DIR) / "templates")
+    )
 )
 
 _TEMPLATE_SCHEMA = None
 try:
     import jsonschema as _jsonschema_mod
-
-    _schema_path = (
-        Path(__file__).parent.parent.parent / "schema" / "service-template.v1.json"
-    )
+    _schema_path = Path(__file__).parent.parent.parent / "schema" / "service-template.v1.json"
     if _schema_path.exists():
         _TEMPLATE_SCHEMA = json.loads(_schema_path.read_text(encoding="utf-8"))
 except ImportError:
@@ -802,28 +691,18 @@ def load_templates() -> list[dict]:
                 logger.warning("Skipping template %s: root is not a mapping", path.name)
                 continue
             if data.get("schema_version") != "ods.templates.v1":
-                logger.warning(
-                    "Skipping template %s: unsupported schema_version", path.name
-                )
+                logger.warning("Skipping template %s: unsupported schema_version", path.name)
                 continue
             # Validate against JSON Schema if available
             if _TEMPLATE_SCHEMA is not None and _jsonschema_mod is not None:
                 try:
                     _jsonschema_mod.validate(data, _TEMPLATE_SCHEMA)
                 except _jsonschema_mod.ValidationError as ve:
-                    logger.warning(
-                        "Template validation failed for %s: %s", path.name, ve.message
-                    )
+                    logger.warning("Template validation failed for %s: %s", path.name, ve.message)
                     continue
             template = data.get("template")
-            if (
-                not isinstance(template, dict)
-                or not template.get("id")
-                or not template.get("services")
-            ):
-                logger.warning(
-                    "Skipping template %s: missing required fields", path.name
-                )
+            if not isinstance(template, dict) or not template.get("id") or not template.get("services"):
+                logger.warning("Skipping template %s: missing required fields", path.name)
                 continue
             templates.append(template)
         except (yaml.YAMLError, OSError, ValueError) as e:

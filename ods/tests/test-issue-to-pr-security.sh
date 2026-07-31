@@ -5,11 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKFLOW="$ROOT_DIR/../.github/workflows/issue-to-pr.yml"
 
-SELF_SKIP_REASON="Workflow .github/workflows/issue-to-pr.yml does not exist in this branch"
-echo "::warning::$SELF_SKIP_REASON"
-echo "SKIPPED"
-exit 0
-
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
