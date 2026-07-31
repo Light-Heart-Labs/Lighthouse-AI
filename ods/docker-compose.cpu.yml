@@ -20,8 +20,6 @@ services:
       - "${CTX_SIZE:-8192}"
       - --batch-size
       - "${LLAMA_BATCH_SIZE:-512}"
-      - --ubatch-size
-      - "${LLAMA_UBATCH_SIZE:-512}"
       - --threads
       - "${LLAMA_THREADS:-4}"
       - --parallel

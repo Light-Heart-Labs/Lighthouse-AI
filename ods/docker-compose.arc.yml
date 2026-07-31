@@ -60,8 +60,6 @@ services:
       # on this overlay.
       - --batch-size
       - "${LLAMA_BATCH_SIZE:-2048}"
-      - --ubatch-size
-      - "${LLAMA_UBATCH_SIZE:-512}"
       - --threads
       - "${LLAMA_THREADS:-4}"
       - --parallel
