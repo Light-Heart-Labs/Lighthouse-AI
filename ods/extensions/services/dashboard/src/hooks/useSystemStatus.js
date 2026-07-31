@@ -50,7 +50,7 @@ export function useSystemStatus() {
   })
   const [loading, setLoading] = useState(!USE_MOCK_DATA)
   const [error, setError] = useState(null)
-  // Guard against overlapping fetches â€” if the API is slow (e.g.
+  // Guard against overlapping fetches — if the API is slow (e.g.
   // llama-server under inference load) we skip the next poll rather
   // than stacking concurrent requests that can amplify the problem.
   const fetchInFlight = useRef(false)
@@ -62,13 +62,16 @@ export function useSystemStatus() {
   const hasInitialData = useRef(false)
 
   useEffect(() => {
+    let mounted = true
+    const abortController = new AbortController()
+
     const fetchStatus = async () => {
       if (USE_MOCK_DATA) {
         setLoading(false)
         return
       }
 
-      // Pause polling when the tab is hidden â€” but only after the first
+      // Pause polling when the tab is hidden — but only after the first
       // successful fetch so the loading skeleton is never permanent.
       if (document.hidden && hasInitialData.current) return
 
@@ -77,17 +80,21 @@ export function useSystemStatus() {
       fetchInFlight.current = true
 
       try {
-        const response = await fetch('/api/status')
+        const response = await fetch('/api/status', { signal: abortController.signal })
+        if (!mounted) return
         if (!response.ok) throw new Error('Failed to fetch status')
         const data = await response.json()
         setStatus(data)
         setError(null)
         hasInitialData.current = true
       } catch (err) {
+        if (!mounted || err.name === 'AbortError') return
         setError(err.message)
       } finally {
-        fetchInFlight.current = false
-        setLoading(false)
+        if (mounted) {
+          fetchInFlight.current = false
+          setLoading(false)
+        }
       }
     }
 
@@ -99,6 +106,8 @@ export function useSystemStatus() {
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
+      mounted = false
+      abortController.abort()
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisibility)
     }

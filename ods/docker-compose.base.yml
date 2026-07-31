@@ -38,11 +38,13 @@ services:
       - --port
       - "8080"
       - --n-gpu-layers
-      - "999"
+      - "${N_GPU_LAYERS:-999}"
       - --ctx-size
       - "${CTX_SIZE:-16384}"
       - --batch-size
       - "${LLAMA_BATCH_SIZE:-2048}"
+      - --ubatch-size
+      - "${LLAMA_UBATCH_SIZE:-512}"
       - --threads
       - "${LLAMA_THREADS:-4}"
       - --parallel

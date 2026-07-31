@@ -63,6 +63,7 @@ def _read_meminfo_mb() -> Optional[tuple[int, int]]:
 def _find_amd_gpu_sysfs() -> Optional[str]:
     """Find the sysfs base path for an AMD GPU device."""
     import glob
+
     for card_dir in sorted(glob.glob("/sys/class/drm/card*/device")):
         vendor = _read_sysfs(f"{card_dir}/vendor")
         if vendor == "0x1002":
@@ -73,6 +74,7 @@ def _find_amd_gpu_sysfs() -> Optional[str]:
 def _find_hwmon_dir(device_path: str) -> Optional[str]:
     """Find the hwmon directory for an AMD GPU device."""
     import glob
+
     hwmon_dirs = sorted(glob.glob(f"{device_path}/hwmon/hwmon*"))
     return hwmon_dirs[0] if hwmon_dirs else None
 
@@ -131,7 +133,9 @@ def get_gpu_info_amd() -> Optional[GPUInfo]:
             name=gpu_name,
             memory_used_mb=mem_used_mb,
             memory_total_mb=mem_total_mb,
-            memory_percent=round(mem_used_mb / mem_total_mb * 100, 1) if mem_total_mb > 0 else 0,
+            memory_percent=round(mem_used_mb / mem_total_mb * 100, 1)
+            if mem_total_mb > 0
+            else 0,
             utilization_percent=gpu_busy,
             temperature_c=temp,
             power_w=power_w,
@@ -150,11 +154,13 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
     Handles multi-GPU systems by summing VRAM across all GPUs and
     reporting aggregate utilization and peak temperature.
     """
-    success, output = run_command([
-        "nvidia-smi",
-        "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
-        "--format=csv,noheader,nounits"
-    ])
+    success, output = run_command(
+        [
+            "nvidia-smi",
+            "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
+            "--format=csv,noheader,nounits",
+        ]
+    )
 
     if not success or not output:
         return None
@@ -172,7 +178,13 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
             if len(parts) < 5:
                 continue
             power_w = None
-            if len(parts) >= 6 and parts[5] not in ("[N/A]", "[Not Supported]", "N/A", "Not Supported", ""):
+            if len(parts) >= 6 and parts[5] not in (
+                "[N/A]",
+                "[Not Supported]",
+                "N/A",
+                "Not Supported",
+                "",
+            ):
                 try:
                     power_w = round(float(parts[5]), 1)
                 except (ValueError, TypeError):
@@ -192,16 +204,18 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
                 mem_total = int(parts[2])
             util = int(parts[3]) if parts[3] not in na_values else 0
             temp = int(parts[4]) if parts[4] not in na_values else 0
-            gpus.append({
-                "name": parts[0],
-                "mem_used": mem_used,
-                "mem_total": mem_total,
-                "util": util,
-                "temp": temp,
-                "utilization_available": parts[3] not in na_values,
-                "temperature_available": parts[4] not in na_values,
-                "power_w": power_w,
-            })
+            gpus.append(
+                {
+                    "name": parts[0],
+                    "mem_used": mem_used,
+                    "mem_total": mem_total,
+                    "util": util,
+                    "temp": temp,
+                    "utilization_available": parts[3] not in na_values,
+                    "temperature_available": parts[4] not in na_values,
+                    "power_w": power_w,
+                }
+            )
 
         if not gpus:
             return None
@@ -215,7 +229,9 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
                 name=g["name"],
                 memory_used_mb=mem_used,
                 memory_total_mb=mem_total,
-                memory_percent=round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
+                memory_percent=round(mem_used / mem_total * 100, 1)
+                if mem_total > 0
+                else 0,
                 utilization_percent=g["util"],
                 temperature_c=g["temp"],
                 power_w=g["power_w"],
@@ -271,7 +287,9 @@ def get_gpu_info_apple() -> Optional[GPUInfo]:
     if platform.system() == "Darwin":
         try:
             # Get chip name
-            success, chip_output = run_command(["sysctl", "-n", "machdep.cpu.brand_string"])
+            success, chip_output = run_command(
+                ["sysctl", "-n", "machdep.cpu.brand_string"]
+            )
             chip_name = chip_output.strip() if success else "Apple Silicon"
 
             # Get total memory (unified memory on Apple Silicon)
@@ -287,6 +305,7 @@ def get_gpu_info_apple() -> Optional[GPUInfo]:
             success, vm_output = run_command(["vm_stat"])
             if success:
                 import re
+
                 pages = {}
                 for line in vm_output.splitlines():
                     match = re.match(r"(.+?):\s+(\d+)", line)
@@ -305,7 +324,9 @@ def get_gpu_info_apple() -> Optional[GPUInfo]:
                 name=chip_name,
                 memory_used_mb=used_mb,
                 memory_total_mb=total_mb,
-                memory_percent=round(used_mb / total_mb * 100, 1) if total_mb > 0 else 0,
+                memory_percent=round(used_mb / total_mb * 100, 1)
+                if total_mb > 0
+                else 0,
                 utilization_percent=0,  # not easily available without IOKit
                 temperature_c=0,
                 power_w=None,
@@ -371,7 +392,8 @@ def _get_windows_host_gpu_payload() -> Optional[dict]:
     if os.environ.get("GPU_BACKEND", "").lower() != "amd":
         return None
     location = _read_env_var_from_file("AMD_INFERENCE_LOCATION") or os.environ.get(
-        "AMD_INFERENCE_LOCATION", "",
+        "AMD_INFERENCE_LOCATION",
+        "",
     )
     if location.lower() != "host":
         return None
@@ -432,24 +454,34 @@ def get_gpu_info_windows_host_detailed() -> Optional[list[IndividualGPU]]:
                 continue
             used_mb = min(total_mb, max(0, int(item.get("memory_used_mb") or 0)))
             utilization = max(0, min(100, int(item.get("utilization_percent") or 0)))
-            result.append(IndividualGPU(
-                index=max(0, min(31, int(item.get("index", position)))),
-                uuid=str(item.get("uuid") or f"amd-windows-host-{position}"),
-                name=str(item["name"]),
-                memory_used_mb=used_mb,
-                memory_total_mb=total_mb,
-                memory_percent=round(used_mb / total_mb * 100, 1),
-                utilization_percent=utilization,
-                temperature_c=int(item.get("temperature_c") or 0),
-                power_w=None,
-                memory_type=(
-                    "unified" if item.get("memory_type") == "unified" else "discrete"
-                ),
-                assigned_services=["llama-server"],
-                memory_usage_available=bool(item.get("memory_usage_available", False)),
-                utilization_available=bool(item.get("utilization_available", False)),
-                temperature_available=bool(item.get("temperature_available", False)),
-            ))
+            result.append(
+                IndividualGPU(
+                    index=max(0, min(31, int(item.get("index", position)))),
+                    uuid=str(item.get("uuid") or f"amd-windows-host-{position}"),
+                    name=str(item["name"]),
+                    memory_used_mb=used_mb,
+                    memory_total_mb=total_mb,
+                    memory_percent=round(used_mb / total_mb * 100, 1),
+                    utilization_percent=utilization,
+                    temperature_c=int(item.get("temperature_c") or 0),
+                    power_w=None,
+                    memory_type=(
+                        "unified"
+                        if item.get("memory_type") == "unified"
+                        else "discrete"
+                    ),
+                    assigned_services=["llama-server"],
+                    memory_usage_available=bool(
+                        item.get("memory_usage_available", False)
+                    ),
+                    utilization_available=bool(
+                        item.get("utilization_available", False)
+                    ),
+                    temperature_available=bool(
+                        item.get("temperature_available", False)
+                    ),
+                )
+            )
     except (TypeError, ValueError):
         return None
     return result or None
@@ -503,6 +535,7 @@ def get_gpu_info() -> Optional[GPUInfo]:
 # Topology — read from file written by installer / ods-cli
 # ============================================================================
 
+
 def read_gpu_topology() -> Optional[dict]:
     """Read GPU topology from config/gpu-topology.json if it exists.
 
@@ -526,6 +559,7 @@ def read_gpu_topology() -> Optional[dict]:
 # Assignment decoding helpers
 # ============================================================================
 
+
 def decode_gpu_assignment() -> Optional[dict]:
     """Decode GPU_ASSIGNMENT_JSON_B64, preferring the live .env file over the
     container startup environment so reassignments are reflected without restart."""
@@ -536,7 +570,7 @@ def decode_gpu_assignment() -> Optional[dict]:
         return None
     try:
         return _json.loads(base64.b64decode(b64.strip()).decode("utf-8"))
-    except (base64.binascii.Error, _json.JSONDecodeError, UnicodeDecodeError):
+    except (Exception, _json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 
@@ -547,7 +581,7 @@ def _read_env_var_from_file_state(key: str) -> tuple[bool, str]:
     try:
         for line in env_path.read_text().splitlines():
             if line.startswith(f"{key}="):
-                return True, line[len(key) + 1:].strip().strip("\"'")
+                return True, line[len(key) + 1 :].strip().strip("\"'")
     except OSError:
         pass
     return False, ""
@@ -580,11 +614,13 @@ def _infer_gpu_services_from_processes() -> dict[str, list[str]]:
     Used when GPU_ASSIGNMENT_JSON_B64 is not set (single-GPU setups).
     Maps GPU UUID -> list of likely service names based on running processes.
     """
-    success, output = run_command([
-        "nvidia-smi",
-        "--query-compute-apps=gpu_uuid,pid,used_memory",
-        "--format=csv,noheader,nounits",
-    ])
+    success, output = run_command(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=gpu_uuid,pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ]
+    )
     if not success or not output:
         return {}
 
@@ -616,16 +652,19 @@ def _infer_gpu_services_from_processes() -> dict[str, list[str]]:
 # Per-GPU detailed detection
 # ============================================================================
 
+
 def get_gpu_info_nvidia_detailed() -> Optional[list[IndividualGPU]]:
     """Return one IndividualGPU per NVIDIA GPU, with assigned_services populated.
 
     Returns None if nvidia-smi is unavailable or returns no data.
     """
-    success, output = run_command([
-        "nvidia-smi",
-        "--query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
-        "--format=csv,noheader,nounits",
-    ])
+    success, output = run_command(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
+            "--format=csv,noheader,nounits",
+        ]
+    )
     if not success or not output:
         return None
 
@@ -662,20 +701,26 @@ def get_gpu_info_nvidia_detailed() -> Optional[list[IndividualGPU]]:
                 mem_used = int(parts[3])
                 mem_total = int(parts[4])
             uuid = parts[1]
-            gpus.append(IndividualGPU(
-                index=int(parts[0]),
-                uuid=uuid,
-                name=parts[2],
-                memory_used_mb=mem_used,
-                memory_total_mb=mem_total,
-                memory_percent=round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0.0,
-                utilization_percent=int(parts[5]) if parts[5] not in na_values else 0,
-                temperature_c=int(parts[6]) if parts[6] not in na_values else 0,
-                power_w=power_w,
-                assigned_services=uuid_service_map.get(uuid, []),
-                utilization_available=parts[5] not in na_values,
-                temperature_available=parts[6] not in na_values,
-            ))
+            gpus.append(
+                IndividualGPU(
+                    index=int(parts[0]),
+                    uuid=uuid,
+                    name=parts[2],
+                    memory_used_mb=mem_used,
+                    memory_total_mb=mem_total,
+                    memory_percent=round(mem_used / mem_total * 100, 1)
+                    if mem_total > 0
+                    else 0.0,
+                    utilization_percent=int(parts[5])
+                    if parts[5] not in na_values
+                    else 0,
+                    temperature_c=int(parts[6]) if parts[6] not in na_values else 0,
+                    power_w=power_w,
+                    assigned_services=uuid_service_map.get(uuid, []),
+                    utilization_available=parts[5] not in na_values,
+                    temperature_available=parts[6] not in na_values,
+                )
+            )
         except (ValueError, IndexError):
             logger.warning("Skipping unparseable nvidia-smi row: %s", line)
 
@@ -685,6 +730,7 @@ def get_gpu_info_nvidia_detailed() -> Optional[list[IndividualGPU]]:
 def _find_hwmon_temp(hwmon_dir: str) -> int:
     """Find GPU temperature via hwmon label-based discovery (junction > edge > temp1)."""
     import glob as _glob
+
     # Map each label to its temp*_input first, so the junction-over-edge
     # preference holds regardless of which tempN node carries each label.
     # On many AMD cards edge is temp1 and junction is temp2; scanning in file
@@ -694,7 +740,9 @@ def _find_hwmon_temp(hwmon_dir: str) -> int:
     for label_path in sorted(_glob.glob(f"{hwmon_dir}/temp*_label")):
         label = _read_sysfs(label_path)
         if label:
-            inputs_by_label.setdefault(label.lower(), label_path.replace("_label", "_input"))
+            inputs_by_label.setdefault(
+                label.lower(), label_path.replace("_label", "_input")
+            )
     for preferred in ("junction", "edge"):
         input_path = inputs_by_label.get(preferred)
         if input_path:
@@ -723,6 +771,7 @@ def get_gpu_info_amd_detailed() -> Optional[list[IndividualGPU]]:
     Returns None if no AMD GPUs are found.
     """
     import glob as _glob
+
     card_dirs = sorted(_glob.glob("/sys/class/drm/card*/device"))
     amd_cards = [d for d in card_dirs if _read_sysfs(f"{d}/vendor") == "0x1002"]
     if not amd_cards:
@@ -769,25 +818,33 @@ def get_gpu_info_amd_detailed() -> Optional[list[IndividualGPU]]:
             # Use topology UUID if available, otherwise fall back to card index
             topo_entry = topo_by_index.get(idx, {})
             gpu_uuid = topo_entry.get("uuid", f"card{idx}")
-            gpu_name = topo_entry.get("name") or _read_sysfs(f"{base}/product_name") or "AMD Radeon"
+            gpu_name = (
+                topo_entry.get("name")
+                or _read_sysfs(f"{base}/product_name")
+                or "AMD Radeon"
+            )
             mem_used_mb = mem_used // (1024 * 1024)
             mem_total_mb = mem_total // (1024 * 1024)
 
-            gpus.append(IndividualGPU(
-                index=idx,
-                uuid=gpu_uuid,
-                name=gpu_name,
-                memory_used_mb=mem_used_mb,
-                memory_total_mb=mem_total_mb,
-                memory_percent=round(mem_used_mb / mem_total_mb * 100, 1) if mem_total_mb > 0 else 0.0,
-                utilization_percent=gpu_busy,
-                temperature_c=temp,
-                power_w=power_w,
-                memory_type="unified" if is_unified else "discrete",
-                assigned_services=uuid_service_map.get(gpu_uuid, []),
-                utilization_available=bool(gpu_busy_str),
-                temperature_available=temp > 0,
-            ))
+            gpus.append(
+                IndividualGPU(
+                    index=idx,
+                    uuid=gpu_uuid,
+                    name=gpu_name,
+                    memory_used_mb=mem_used_mb,
+                    memory_total_mb=mem_total_mb,
+                    memory_percent=round(mem_used_mb / mem_total_mb * 100, 1)
+                    if mem_total_mb > 0
+                    else 0.0,
+                    utilization_percent=gpu_busy,
+                    temperature_c=temp,
+                    power_w=power_w,
+                    memory_type="unified" if is_unified else "discrete",
+                    assigned_services=uuid_service_map.get(gpu_uuid, []),
+                    utilization_available=bool(gpu_busy_str),
+                    temperature_available=temp > 0,
+                )
+            )
         except (ValueError, TypeError):
             continue
 
@@ -810,7 +867,9 @@ def aggregate_gpu_details(gpus: list[IndividualGPU], backend: str) -> GPUInfo:
     available_power = [gpu.power_w for gpu in gpus if gpu.power_w is not None]
     names = [gpu.name for gpu in gpus]
     if len(set(names)) == 1:
-        display_name = names[0] if len(names) == 1 else f"{names[0]} \u00d7 {len(names)}"
+        display_name = (
+            names[0] if len(names) == 1 else f"{names[0]} \u00d7 {len(names)}"
+        )
     else:
         display_name = " + ".join(names[:2])
         if len(names) > 2:
@@ -823,12 +882,14 @@ def aggregate_gpu_details(gpus: list[IndividualGPU], backend: str) -> GPUInfo:
         memory_percent=round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0.0,
         utilization_percent=(
             round(sum(available_utilization) / len(available_utilization))
-            if available_utilization else 0
+            if available_utilization
+            else 0
         ),
         temperature_c=max(available_temperatures) if available_temperatures else 0,
         power_w=round(sum(available_power), 1) if available_power else None,
         memory_type=(
-            "unified" if all(gpu.memory_type == "unified" for gpu in gpus)
+            "unified"
+            if all(gpu.memory_type == "unified" for gpu in gpus)
             else "discrete"
         ),
         gpu_backend=backend,
