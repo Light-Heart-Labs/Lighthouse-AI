@@ -204,6 +204,17 @@ def _install_recommendation_flag(raw: dict[str, Any]) -> bool:
     return normalize_key(raw.get("install_recommendation", True)) not in {"", "0", "false", "off", "no"}
 
 
+def _agent_recommendation_allowed(model: dict[str, Any]) -> bool:
+    """Keep fleet-blocked models visible without promoting them as picks."""
+    compatibility = model.get("app_compatibility")
+    if not isinstance(compatibility, dict):
+        return True
+    viability = compatibility.get("agent_viability")
+    if isinstance(viability, dict):
+        viability = viability.get("status")
+    return normalize_key(viability) != "not-agent-viable"
+
+
 def normalize_catalog_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
     """Convert config/model-library.json entries to the oracle shape."""
     if not isinstance(raw, dict):
@@ -1197,6 +1208,8 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
             continue
         if not model.get("install_recommendation", True):
             continue
+        if not _agent_recommendation_allowed(model):
+            continue
         if not _family_allowed_for_profile(model, normalized_profile):
             continue
         runtime_profile = _matching_runtime_profile(model, gpu_info, system_ram_gb)
@@ -1218,6 +1231,12 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
             model for model in catalog
             if (not installable_only or model.get("gguf_url"))
             and model.get("install_recommendation", True)
+            and _agent_recommendation_allowed(model)
+            and _family_allowed_for_profile(model, normalized_profile)
+        ] or [
+            model for model in catalog
+            if (not installable_only or model.get("gguf_url"))
+            and _agent_recommendation_allowed(model)
             and _family_allowed_for_profile(model, normalized_profile)
         ] or [
             model for model in catalog
