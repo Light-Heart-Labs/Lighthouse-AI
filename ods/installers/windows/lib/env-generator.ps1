@@ -869,8 +869,6 @@ function New-ODSEnv {
     if ([string]::IsNullOrWhiteSpace($embeddingsMemoryLimitDefault)) { $embeddingsMemoryLimitDefault = "4G" }
     $embeddingsMemoryLimit = Get-EnvOrNew "EMBEDDINGS_MEMORY_LIMIT" $embeddingsMemoryLimitDefault
 
-    $bindAddress = Get-EnvOrNew "BIND_ADDRESS" "$(if ($EnableLan) { "0.0.0.0" } else { "127.0.0.1" })"
-
     # Host LAN IP -- only meaningful when BIND_ADDRESS=0.0.0.0. openclaw reads
     # it to extend allowedOrigins, so LAN clients are rejected when it is
     # missing. Empty keeps the compose ${HOST_LAN_IP:-} fallback safe on
