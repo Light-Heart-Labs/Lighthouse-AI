@@ -255,6 +255,7 @@ def test_usage_report_returns_token_spy_payload(test_client, monkeypatch):
         b"[]",
         b'"unexpected"',
         b"null",
+        b"\xff",
         b"{",
         b"{}",
         (

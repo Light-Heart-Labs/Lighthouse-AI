@@ -403,7 +403,7 @@ async def _fetch_token_spy_report(start: str, end: str) -> dict[str, Any]:
         )
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return _empty_report(start, end, detail=f"Token Spy unavailable: {exc}")
-    except (json.JSONDecodeError, TokenSpyProtocolError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, TokenSpyProtocolError) as exc:
         return _empty_report(start, end, detail=f"Token Spy returned an invalid report: {exc}")
 
 
