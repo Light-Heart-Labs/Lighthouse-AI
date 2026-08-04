@@ -1776,7 +1776,7 @@ def load_env(env_path: Path) -> dict:
 
 
 def _switchboard_state_path() -> Path:
-    return INSTALL_DIR / "data" / "model-state.json"
+    return _model_state_path()
 
 
 def _switchboard_state_needs_initial_verification(path: Path) -> bool:
