@@ -84,7 +84,7 @@ install_dir_removal_is_safe() {
     [[ "${canonical_target#/}" == */* ]] || return 1
 
     case "$target_name" in
-        ods|ods-*|*-ods|dream-server|dreamserver) return 0 ;;
+        ods|ods-*|*-ods) return 0 ;;
     esac
     [[ -f "$target_dir/ods-cli" && -f "$target_dir/install-core.sh" ]] \
         || [[ -f "$target_dir/docker-compose.base.yml" && -d "$target_dir/installers" ]]
