@@ -203,15 +203,19 @@ def _completion_content(data: object) -> str:
     if not isinstance(data, dict):
         raise ValueError("completion response must be an object")
     choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("completion response must contain choices")
+    if choices is None or choices == []:
+        return ""
+    if not isinstance(choices, list):
+        raise ValueError("completion choices must be a list")
     choice = choices[0]
+    if choice is None:
+        return ""
     if not isinstance(choice, dict):
         raise ValueError("completion choice must be an object")
-    message = choice.get("message")
+    message = choice.get("message", {})
     if not isinstance(message, dict):
         raise ValueError("completion choice must contain a message")
-    content = message.get("content")
+    content = message.get("content", "")
     if not isinstance(content, str):
         raise ValueError("completion message content must be a string")
     return content
