@@ -748,6 +748,7 @@ evidence = {
 
 evidence_path = bundle_dir / "manifest" / "evidence.json"
 import os
+import pathlib
 import tempfile
 fd, tmp_str = tempfile.mkstemp(dir=str(evidence_path.parent), prefix=f".{evidence_path.name}.", suffix=".tmp")
 tmp_path = pathlib.Path(tmp_str)
