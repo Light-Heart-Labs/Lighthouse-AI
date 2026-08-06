@@ -8,8 +8,10 @@ import json
 import os
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 from typing import Iterator
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -342,6 +344,41 @@ def test_supervisor_uses_restart_cooldown_after_child_exit() -> None:
     assert_true(restarted["status"] == "starting", "restarted child should enter grace period")
 
 
+def test_supervisor_logs_invalid_combined_argv_reason() -> None:
+    ssh_app = _health_app()
+    invalid_plan = {
+        "schema": SSH_SUPERVISOR_PLAN_SCHEMA,
+        "status": "planned",
+        "ready": False,
+        "readyToStart": True,
+        "reason": "tunnel_process_not_started",
+        "tunnelBaseUrl": "http://remote-provider-ssh-tunnel:18091/v1",
+        "tunnels": [{"argv": ["ssh", "gpu.example.test"]}],
+        "secrets": {},
+        "missingSecrets": [],
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        supervisor, factory, _clock = _new_fake_supervisor(
+            root / "routing-state.json",
+            root / "secrets",
+        )
+        with (
+            patch.object(ssh_app, "_supervisor_plan_for_paths", return_value=invalid_plan),
+            unittest.TestCase().assertLogs("remote-provider-ssh-tunnel", level="WARNING") as logs,
+        ):
+            payload = supervisor.reconcile()
+    assert_true(not factory.calls, "invalid SSH argv must not start a child")
+    assert_true(payload["reason"] == "ssh_plan_unavailable", "invalid SSH argv reason drifted")
+    expected_warning = (
+        "SSH plan argv invalid: SSH tunnel argv is missing a local forward"
+    )
+    assert_true(
+        any(expected_warning in line for line in logs.output),
+        "invalid SSH argv warning must include the validation reason",
+    )
+
+
 def test_service_source_avoids_public_secret_names() -> None:
     for path, text in _walk_service_source():
         for key in PUBLIC_SSH_SECRET_ENV:
@@ -365,6 +402,7 @@ def main() -> int:
         test_supervisor_stops_process_when_secret_custody_disappears,
         test_supervisor_restarts_process_when_route_argv_changes,
         test_supervisor_uses_restart_cooldown_after_child_exit,
+        test_supervisor_logs_invalid_combined_argv_reason,
         test_service_source_avoids_public_secret_names,
     ]
     for test in tests:
