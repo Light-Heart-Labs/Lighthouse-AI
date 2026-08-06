@@ -152,8 +152,8 @@ if [ -n "$WIPE_IDS" ]; then
 
     for ID in $WIPE_IDS; do
         "$PYTHON_CMD" -c "
-import json, sys
-sessions_file = sys.argv[1]
+import json, os, pathlib, sys, tempfile
+sessions_file = pathlib.Path(sys.argv[1])
 target_id = sys.argv[2]
 with open(sessions_file, 'r') as f:
     data = json.load(f)
@@ -161,8 +161,17 @@ to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get('sessio
 for k in to_remove:
     del data[k]
     print(f'  Removed session key: {k}', file=sys.stderr)
-with open(sessions_file, 'w') as f:
-    json.dump(data, f, indent=2)
+fd, tmp_str = tempfile.mkstemp(dir=str(sessions_file.parent), prefix=f'.{sessions_file.name}.', suffix='.tmp')
+tmp_path = pathlib.Path(tmp_str)
+try:
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+        f.write('\n')
+    os.replace(tmp_path, sessions_file)
+except Exception:
+    if tmp_path.exists():
+        tmp_path.unlink(missing_ok=True)
+    raise
 " "$SESSIONS_JSON" "$ID" 2>&1
     done
 
