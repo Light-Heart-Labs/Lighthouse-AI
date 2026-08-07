@@ -34,6 +34,7 @@ _SETTINGS_APPLY_ALLOWED_SERVICES = frozenset({
     "hermes", "hermes-proxy", "openclaw", "opencode", "perplexica", "searxng", "qdrant",
     "tts", "whisper", "embeddings", "token-spy", "comfyui",
     "ape", "privacy-shield", "ods-proxy", "model-router",
+    "brave-search",
 })
 _LLAMA_APPLY_KEYS = {
     "CTX_SIZE", "MAX_CONTEXT", "GGUF_FILE", "GGUF_URL", "GGUF_SHA256",
@@ -59,9 +60,6 @@ _PRIVACY_SHIELD_APPLY_KEYS = {
 }
 _BRAVE_SEARCH_APPLY_KEYS = {
     "BRAVE_SEARCH_API_KEY", "BRAVE_SEARCH_PORT",
-}
-_TAILSCALE_APPLY_KEYS = {
-    "TS_AUTHKEY", "TS_EXTRA_ARGS", "TS_HOSTNAME",
 }
 _MANUAL_RESTART_KEYS = {
     "BIND_ADDRESS",
@@ -401,8 +399,6 @@ def _match_apply_service(key: str) -> Optional[str]:
         return "privacy-shield"
     if key in _BRAVE_SEARCH_APPLY_KEYS:
         return "brave-search"
-    if key in _TAILSCALE_APPLY_KEYS:
-        return "tailscale"
     if key.startswith("LITELLM_"):
         return "litellm"
     if key.startswith("LANGFUSE_"):

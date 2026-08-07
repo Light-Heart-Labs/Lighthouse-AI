@@ -1343,9 +1343,6 @@ class TestApplyServiceRouting:
             # Services that had no rule at all.
             ("BRAVE_SEARCH_API_KEY", "brave-search"),
             ("BRAVE_SEARCH_PORT", "brave-search"),
-            ("TS_AUTHKEY", "tailscale"),
-            ("TS_HOSTNAME", "tailscale"),
-            ("TS_EXTRA_ARGS", "tailscale"),
         ],
     )
     def test_key_routes_to_its_service(self, key, service):
@@ -1398,6 +1395,34 @@ class TestApplyServiceRouting:
 
         assert settings._match_apply_service("WEBUI_PUBLIC_URL") is None
         assert settings._match_apply_service("ODS_SERVICE_PUBLIC_URLS") is None
+
+    @pytest.mark.parametrize(
+        "key,service",
+        [
+            ("OPEN_WEBUI_LLM_BASE_URL", "open-webui"),
+            ("TARGET_API_KEY", "privacy-shield"),
+            ("PII_CACHE_TTL", "privacy-shield"),
+            ("BRAVE_SEARCH_API_KEY", "brave-search"),
+        ],
+    )
+    def test_routed_key_actually_schedules_the_service(self, key, service):
+        """Routing is only half of it: the service also has to be in
+        _SETTINGS_APPLY_ALLOWED_SERVICES, or the key falls back to a manual
+        stack restart and the routing changes nothing."""
+        import settings
+
+        plan = settings._compute_env_apply_plan({key: "a"}, {key: "b"})
+        assert plan["services"] == [service]
+        assert "manual stack restart" not in plan["summary"]
+
+    def test_tailscale_keys_still_require_a_manual_restart(self):
+        """Recreating tailscale can sever the operator's own access path, so
+        TS_* deliberately stays out of the automatic apply plan."""
+        import settings
+
+        plan = settings._compute_env_apply_plan({"TS_AUTHKEY": "a"}, {"TS_AUTHKEY": "b"})
+        assert plan["services"] == []
+        assert "TS_AUTHKEY" in plan["summary"]
 
     def test_saving_an_open_webui_key_schedules_only_that_service(self):
         import settings
