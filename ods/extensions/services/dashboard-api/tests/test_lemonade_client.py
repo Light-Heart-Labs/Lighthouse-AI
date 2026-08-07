@@ -106,6 +106,24 @@ async def test_models_returns_data_list():
 
 
 @pytest.mark.asyncio
+async def test_model_percent_encodes_identifier_as_one_path_segment():
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["raw_path"] = request.url.raw_path
+        return httpx.Response(200, json={"id": "org/model name"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    payload = await adapter.model("org/model name")
+
+    assert payload["id"] == "org/model name"
+    assert seen["raw_path"] == b"/api/v1/models/org%2Fmodel%20name"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_http_status_errors_are_classified():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
