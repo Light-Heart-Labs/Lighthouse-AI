@@ -225,6 +225,25 @@ def test_timeout_is_distinct_from_unavailable(monkeypatch):
         client.close()
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_request_rejects_non_finite_timeout_before_transport(monkeypatch, timeout):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(base_url="http://agent", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(agent_client, "_sync_client", client)
+    try:
+        with pytest.raises(ValueError, match="must be finite"):
+            agent_client.request_json("GET", "/health", timeout=timeout)
+        assert calls == 0
+    finally:
+        client.close()
+
+
 @pytest.mark.asyncio
 async def test_async_request_and_shutdown_close_both_pools(monkeypatch):
     async_client = httpx.AsyncClient(

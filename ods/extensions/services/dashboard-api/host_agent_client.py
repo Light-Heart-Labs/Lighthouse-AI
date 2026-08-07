@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import math
 import threading
 import time
 from typing import Any
@@ -99,9 +100,12 @@ def _headers() -> dict[str, str]:
 
 
 def _timeout(read_seconds: float) -> httpx.Timeout:
+    read_timeout = float(read_seconds)
+    if not math.isfinite(read_timeout):
+        raise ValueError("Host-agent read timeout must be finite")
     return httpx.Timeout(
         connect=5.0,
-        read=max(0.1, float(read_seconds)),
+        read=max(0.1, read_timeout),
         write=30.0,
         pool=5.0,
     )
