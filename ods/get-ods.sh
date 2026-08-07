@@ -83,9 +83,11 @@ install_dir_removal_is_safe() {
     # /home, /Users, /Volumes, /mnt, or /opt), regardless of its name.
     [[ "${canonical_target#/}" == */* ]] || return 1
 
-    case "$target_name" in
-        ods|ods-*|*-ods) return 0 ;;
-    esac
+    # The canonical default may be incomplete before it has any ODS marker.
+    # Name patterns alone are not evidence for custom paths: unrelated
+    # directories such as ods-photos or client-ods must never become eligible
+    # for recursive deletion.
+    [[ "$canonical_target" == "${canonical_home%/}/ods" ]] && return 0
     [[ -f "$target_dir/ods-cli" && -f "$target_dir/install-core.sh" ]] \
         || [[ -f "$target_dir/docker-compose.base.yml" && -d "$target_dir/installers" ]]
 }
