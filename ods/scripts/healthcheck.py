@@ -131,6 +131,8 @@ def _parse_expected_status(expr: str) -> Set[int]:
     for part in (p.strip() for p in expr.split(",") if p.strip()):
         if part.endswith("xx") and len(part) == 3 and part[0].isdigit():
             base = int(part[0]) * 100
+            if not 100 <= base <= 500:
+                raise ValueError(f"HTTP status class out of range (1xx-5xx): {part}")
             allowed.update(range(base, base + 100))
             continue
         if "-" in part:

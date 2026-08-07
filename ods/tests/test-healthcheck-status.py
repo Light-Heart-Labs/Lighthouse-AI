@@ -24,11 +24,11 @@ def main() -> int:
     module = load_module()
     assert module._parse_expected_status("200,204,3xx,401-403") >= {200, 204, 399, 401, 403}
 
-    for expression in ("99", "600", "1-999999999", "700-200"):
+    for expression in ("99", "600", "0xx", "6xx", "1-999999999", "700-200"):
         try:
             module._parse_expected_status(expression)
         except ValueError as exc:
-            assert "100-599" in str(exc)
+            assert "range" in str(exc)
         else:
             raise AssertionError(f"accepted invalid HTTP status expression: {expression}")
 
