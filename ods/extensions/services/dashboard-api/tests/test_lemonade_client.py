@@ -171,3 +171,38 @@ async def test_explicit_timeout_override_is_applied():
     await client.aclose()
 
     assert seen["timeout"].get("read") == 5.0
+
+
+@pytest.mark.asyncio
+async def test_speech_classifies_provider_http_error():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                503, json={"error": {"message": "voice model unavailable"}}
+            )
+        )
+    )
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.speech("kokoro", "hello")
+
+    assert exc.value.kind == "provider_error"
+    assert exc.value.status_code == 503
+    assert "voice model unavailable" in str(exc.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_speech_classifies_transport_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow speech", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.speech("kokoro", "hello")
+
+    assert exc.value.kind == "timeout"
+    await client.aclose()
