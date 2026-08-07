@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -244,6 +245,27 @@ def test_usage_report_returns_token_spy_payload(test_client, monkeypatch):
     assert data["summary"]["spend_usd"] == 1.25
     assert data["source"]["status"] == "ok"
     fetch.assert_awaited_once_with("2026-05-01", "2026-05-31")
+
+
+def test_token_spy_invalid_report_degrades_to_unavailable(monkeypatch):
+    import routers.usage as usage_router
+
+    monkeypatch.setattr(usage_router, "TOKEN_SPY_URL", "http://token-spy:8080")
+    monkeypatch.setattr(
+        usage_router,
+        "_request_token_spy_report",
+        lambda *_args: (_ for _ in ()).throw(
+            ValueError("Token Spy report response must be an object")
+        ),
+    )
+
+    report = asyncio.run(
+        usage_router._fetch_token_spy_report("2026-05-01", "2026-05-31")
+    )
+
+    assert report["source"]["status"] == "unavailable"
+    assert report["summary"]["requests"] == 0
+    assert "must be an object" in report["source"]["detail"]
 
 
 def test_usage_report_returns_honest_empty_payload_when_token_spy_disabled(
