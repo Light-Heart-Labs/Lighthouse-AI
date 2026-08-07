@@ -125,6 +125,11 @@ cat > "$STUB_BIN/docker" <<'STUB'
 exit 0
 STUB
 
+# Keep `/usr/bin/env bash` available even when the directory containing the
+# real interpreter also contains GPU tooling and is removed from STUB_PATH.
+# A symlink avoids a shim script that would itself need a PATH-resolved
+# interpreter.
+ln -s "$(command -v bash)" "$STUB_BIN/bash"
 chmod +x "$STUB_BIN"/*
 
 # Deliberately do NOT stub nvidia-smi: `command -v nvidia-smi` must report it
@@ -158,6 +163,17 @@ path_without_gpu_tools() {
 }
 
 STUB_PATH="$STUB_BIN:$(path_without_gpu_tools)"
+
+if ! PATH="$STUB_PATH" command -v bash >/dev/null 2>&1; then
+    fail "filtered PATH must retain a Bash interpreter"
+    exit 1
+fi
+for tool in nvidia-smi nvidia-smi.exe rocm-smi rocm-smi.exe rocminfo; do
+    if PATH="$STUB_PATH" command -v "$tool" >/dev/null 2>&1; then
+        fail "filtered PATH still exposes $tool"
+        exit 1
+    fi
+done
 
 # Run ods-cli under the fixture. Returns captured stdout+stderr via $OUT,
 # rc via $RC (using globals to keep set -e friendly).
