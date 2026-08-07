@@ -44,9 +44,14 @@ def optional_version_file() -> str | None:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return raw
-    if isinstance(data, dict) and data.get("version"):
-        return str(data["version"])
-    return raw
+    if isinstance(data, str):
+        return data.strip() or None
+    if isinstance(data, dict):
+        version = data.get("version")
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+        raise ValueError(".version JSON object must contain a non-empty string version")
+    raise ValueError(".version JSON must be a string or an object with a version field")
 
 
 def add_regex_check(
@@ -132,9 +137,12 @@ def main() -> int:
         r"^> Version ([0-9]+\.[0-9]+\.[0-9]+)\s+\|",
     )
 
-    version_file = optional_version_file()
-    if version_file is not None:
-        checks.append((".version version", version_file))
+    try:
+        version_file = optional_version_file()
+        if version_file is not None:
+            checks.append((".version version", version_file))
+    except ValueError as exc:
+        errors.append(str(exc))
 
     try:
         changelog_version, changelog_date = latest_changelog_release()
