@@ -52,14 +52,20 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 
 
 def _status_port() -> int:
-    raw = os.environ.get("ODS_REMOTE_PROVIDER_SSH_STATUS_PORT", str(DEFAULT_STATUS_PORT))
+    raw = os.environ.get(
+        "ODS_REMOTE_PROVIDER_SSH_STATUS_PORT", str(DEFAULT_STATUS_PORT)
+    )
     try:
         port = int(raw)
     except ValueError:
-        LOGGER.warning("invalid ODS_REMOTE_PROVIDER_SSH_STATUS_PORT=%r; using default", raw)
+        LOGGER.warning(
+            "invalid ODS_REMOTE_PROVIDER_SSH_STATUS_PORT=%r; using default", raw
+        )
         return DEFAULT_STATUS_PORT
     if port < 1 or port > 65535:
-        LOGGER.warning("out-of-range ODS_REMOTE_PROVIDER_SSH_STATUS_PORT=%r; using default", raw)
+        LOGGER.warning(
+            "out-of-range ODS_REMOTE_PROVIDER_SSH_STATUS_PORT=%r; using default", raw
+        )
         return DEFAULT_STATUS_PORT
     return port
 
@@ -86,7 +92,9 @@ def _route_from_state_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "enabled": enabled,
         "mode": doc.get("mode"),
-        "transport": str(provider_dict.get("transport") or "direct") if enabled else "direct",
+        "transport": str(provider_dict.get("transport") or "direct")
+        if enabled
+        else "direct",
         "provider": provider_dict if enabled else None,
         "ssh": dict(ssh) if isinstance(ssh, Mapping) else None,
     }
@@ -120,7 +128,10 @@ def _error_plan(
         "reason": reason,
         "tunnelBaseUrl": None,
         "tunnels": [],
-        "secrets": ssh_secret_status(secret_dir or _env_path("ODS_REMOTE_PROVIDER_SECRET_DIR", DEFAULT_SECRET_DIR)),
+        "secrets": ssh_secret_status(
+            secret_dir
+            or _env_path("ODS_REMOTE_PROVIDER_SECRET_DIR", DEFAULT_SECRET_DIR)
+        ),
         "missingSecrets": [],
     }
 
@@ -188,7 +199,9 @@ def _combined_ssh_argv(plan: Mapping[str, Any]) -> tuple[str, ...] | None:
     if not isinstance(first, Mapping):
         raise ValueError("SSH supervisor plan has an invalid tunnel")
     first_argv = first.get("argv")
-    if not isinstance(first_argv, list) or not all(isinstance(item, str) for item in first_argv):
+    if not isinstance(first_argv, list) or not all(
+        isinstance(item, str) for item in first_argv
+    ):
         raise ValueError("SSH supervisor plan has invalid argv")
     base, destination = _argv_without_single_forward(first_argv)
     forwards: list[str] = []
@@ -213,7 +226,9 @@ def _process_status(
         "status": status,
         "pid": pid,
         "exitCode": exit_code,
-        "uptimeSeconds": round(uptime_seconds, 3) if uptime_seconds is not None else None,
+        "uptimeSeconds": round(uptime_seconds, 3)
+        if uptime_seconds is not None
+        else None,
         "restartAfterSeconds": (
             round(restart_after_seconds, 3)
             if restart_after_seconds is not None
@@ -273,7 +288,9 @@ class SshProcessSupervisor:
 
     def start(self) -> None:
         self.reconcile()
-        self._thread = threading.Thread(target=self._run, name="ssh-supervisor", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="ssh-supervisor", daemon=True
+        )
         self._thread.start()
 
     def close(self) -> None:
@@ -301,7 +318,8 @@ class SshProcessSupervisor:
             self._notice_exited_locked(now)
             try:
                 argv = _combined_ssh_argv(plan)
-            except ValueError:
+            except ValueError as exc:
+                LOGGER.warning("SSH tunnel plan rejected: %s", exc)
                 self._stop_process_locked()
                 self._last_payload = _health_from_plan(
                     _error_plan("ssh_plan_unavailable", secret_dir=self.secret_dir),
@@ -376,8 +394,12 @@ class SshProcessSupervisor:
                 start_new_session=True,
             )
         except OSError as exc:
-            LOGGER.warning("failed to start SSH tunnel process: %s", exc.__class__.__name__)
-            plan = _error_plan("ssh_process_start_failed", status="error", secret_dir=self.secret_dir)
+            LOGGER.warning(
+                "failed to start SSH tunnel process: %s", exc.__class__.__name__
+            )
+            plan = _error_plan(
+                "ssh_process_start_failed", status="error", secret_dir=self.secret_dir
+            )
             return _health_from_plan(
                 plan,
                 _process_status("error", error_type=exc.__class__.__name__),
@@ -389,7 +411,9 @@ class SshProcessSupervisor:
         self._last_exit_at = None
         return None
 
-    def _running_payload_locked(self, plan: Mapping[str, Any], now: float) -> dict[str, Any]:
+    def _running_payload_locked(
+        self, plan: Mapping[str, Any], now: float
+    ) -> dict[str, Any]:
         uptime = 0.0 if self._started_at is None else max(0.0, now - self._started_at)
         starting = uptime < self.start_grace
         status = "starting" if starting else "running"
@@ -459,7 +483,9 @@ class HealthHandler(BaseHTTPRequestHandler):
         LOGGER.info("%s - %s", self.address_string(), fmt % args)
 
     def _write_json(self, payload: Mapping[str, Any], *, status: int = 200) -> None:
-        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -493,7 +519,9 @@ def main() -> int:
     )
     server = ThreadingHTTPServer(("0.0.0.0", _status_port()), HealthHandler)
     server.supervisor = supervisor
-    LOGGER.info("remote-provider SSH tunnel supervisor listening on %s", server.server_address)
+    LOGGER.info(
+        "remote-provider SSH tunnel supervisor listening on %s", server.server_address
+    )
     try:
         supervisor.start()
         server.serve_forever()
