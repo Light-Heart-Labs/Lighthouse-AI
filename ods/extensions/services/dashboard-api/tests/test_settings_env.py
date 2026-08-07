@@ -1320,3 +1320,91 @@ def test_env_example_keys_are_present_in_schema():
     schema_keys = set(schema.get("properties", {}))
 
     assert documented_keys - schema_keys == set()
+
+
+# --- apply-plan routing ---------------------------------------------------
+
+
+class TestApplyServiceRouting:
+    """Every documented, editable key a compose service reads should name that
+    service, so saving it recreates one container instead of asking the user
+    to restart the whole stack."""
+
+    @pytest.mark.parametrize(
+        "key,service",
+        [
+            # OPEN_WEBUI_* does not start with WEBUI_.
+            ("OPEN_WEBUI_LLM_BASE_URL", "open-webui"),
+            ("OPEN_WEBUI_LLM_API_KEY", "open-webui"),
+            # Siblings of keys that were already routed.
+            ("TARGET_API_KEY", "privacy-shield"),
+            ("PII_CACHE_SIZE", "privacy-shield"),
+            ("PII_CACHE_TTL", "privacy-shield"),
+            # Services that had no rule at all.
+            ("BRAVE_SEARCH_API_KEY", "brave-search"),
+            ("BRAVE_SEARCH_PORT", "brave-search"),
+            ("TS_AUTHKEY", "tailscale"),
+            ("TS_HOSTNAME", "tailscale"),
+            ("TS_EXTRA_ARGS", "tailscale"),
+        ],
+    )
+    def test_key_routes_to_its_service(self, key, service):
+        import settings
+
+        assert settings._match_apply_service(key) == service
+
+    @pytest.mark.parametrize(
+        "key,service",
+        [
+            ("WEBUI_PORT", "open-webui"),
+            ("RAG_EMBEDDING_MODEL", "open-webui"),
+            ("SEARXNG_URL", "hermes"),
+            ("SHIELD_PORT", "privacy-shield"),
+            ("TARGET_API_URL", "privacy-shield"),
+            ("PII_CACHE_ENABLED", "privacy-shield"),
+            ("CTX_SIZE", "llama-server"),
+            ("LLAMA_THREADS", "llama-server"),
+            ("GGUF_FILE", "llama-server"),
+            ("TOKEN_SPY_URL", "token-spy"),
+            ("LITELLM_PORT", "litellm"),
+            ("N8N_PORT", "n8n"),
+            ("COMFYUI_BASE_URL", "open-webui"),
+            ("QDRANT_PORT", "qdrant"),
+            ("APE_STRICT_MODE", "ape"),
+        ],
+    )
+    def test_existing_routing_is_unchanged(self, key, service):
+        import settings
+
+        assert settings._match_apply_service(key) == service
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "BIND_ADDRESS",
+            "DASHBOARD_API_KEY",
+            "DASHBOARD_PORT",
+            "ODS_AGENT_PORT",
+        ],
+    )
+    def test_manual_restart_keys_stay_unrouted(self, key):
+        """These deliberately require a manual stack restart."""
+        import settings
+
+        assert settings._match_apply_service(key) is None
+
+    def test_public_url_keys_stay_unrouted(self):
+        import settings
+
+        assert settings._match_apply_service("WEBUI_PUBLIC_URL") is None
+        assert settings._match_apply_service("ODS_SERVICE_PUBLIC_URLS") is None
+
+    def test_saving_an_open_webui_key_schedules_only_that_service(self):
+        import settings
+
+        plan = settings._compute_env_apply_plan(
+            {"OPEN_WEBUI_LLM_BASE_URL": "http://old:8080/v1"},
+            {"OPEN_WEBUI_LLM_BASE_URL": "http://new:8080/v1"},
+        )
+        assert plan["services"] == ["open-webui"]
+        assert "manual stack restart" not in plan["summary"]
