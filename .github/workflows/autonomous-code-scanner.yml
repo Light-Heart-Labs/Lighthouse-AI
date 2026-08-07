@@ -759,6 +759,7 @@ jobs:
     name: Create Pull Requests
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
       pull-requests: write
       issues: write

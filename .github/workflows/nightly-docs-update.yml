@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: nightly-docs-update
@@ -31,6 +30,9 @@ jobs:
     name: Detect Doc-Affecting Changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       affected_docs: ${{ steps.check.outputs.affected_docs }}
