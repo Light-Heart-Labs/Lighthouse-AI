@@ -171,3 +171,42 @@ async def test_explicit_timeout_override_is_applied():
     await client.aclose()
 
     assert seen["timeout"].get("read") == 5.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "kind"),
+    [
+        (httpx.ReadTimeout("slow transcription"), "timeout"),
+        (httpx.ConnectError("provider offline"), "provider_unreachable"),
+    ],
+)
+async def test_transcription_classifies_transport_errors(failure, kind):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        failure.request = request
+        raise failure
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.transcribe_wav("whisper", b"RIFF")
+
+    assert exc.value.kind == kind
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transcription_classifies_invalid_json():
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b"not-json")
+        )
+    )
+    adapter = LemonadeClient(client=client)
+
+    with pytest.raises(LemonadeClientError) as exc:
+        await adapter.transcribe_wav("whisper", b"RIFF")
+
+    assert exc.value.kind == "invalid_response"
+    await client.aclose()

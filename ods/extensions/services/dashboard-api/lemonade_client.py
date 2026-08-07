@@ -256,6 +256,12 @@ class LemonadeClient:
                 status_code=exc.response.status_code,
                 payload=payload,
             ) from exc
+        except httpx.TimeoutException as exc:
+            raise LemonadeClientError("timeout", str(exc)) from exc
+        except httpx.RequestError as exc:
+            raise LemonadeClientError("provider_unreachable", str(exc)) from exc
+        except ValueError as exc:
+            raise LemonadeClientError("invalid_response", str(exc)) from exc
 
 
 def _json_payload(response: httpx.Response) -> dict[str, Any]:
