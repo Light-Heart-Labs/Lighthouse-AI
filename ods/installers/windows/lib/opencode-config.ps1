@@ -194,6 +194,32 @@ function Sync-WindowsOpenCodeConfig {
     }
 }
 
+function Resolve-WindowsOpenCodeModelId {
+    param(
+        [hashtable]$LlmEndpoint,
+        [string]$EnvMapValue,
+        [string]$GgufFile,
+        [string]$Default = ""
+    )
+
+    $modelId = $GgufFile
+    if (-not [string]::IsNullOrWhiteSpace($modelId) -and -not [string]::IsNullOrWhiteSpace($EnvMapValue)) {
+        $modelId = $EnvMapValue
+        $resolver = Get-Command Resolve-ODSLemonadeModelId -ErrorAction SilentlyContinue
+        if ($resolver -and $LlmEndpoint.ContainsKey("Port")) {
+            try {
+                $liveModelId = Resolve-ODSLemonadeModelId `
+                    -Port ([int]$LlmEndpoint.Port) -GgufFile $GgufFile
+                if (-not [string]::IsNullOrWhiteSpace($liveModelId)) {
+                    $modelId = $liveModelId
+                }
+            } catch { }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($modelId)) { $modelId = $Default }
+    return $modelId
+}
+
 function Sync-WindowsOpenCodeConfigFromEnv {
     param(
         [string]$InstallDir = $script:ODS_INSTALL_DIR,
