@@ -238,7 +238,13 @@ function Sync-WindowsOpenCodeConfigFromEnv {
     $_llmEndpoint = Get-WindowsLocalLlmEndpoint -InstallDir $InstallDir -EnvMap $_envMap `
         -GpuBackend $GpuBackend -NativeBackend $NativeBackend `
         -UseLemonade:$UseLemonade -CloudMode:$CloudMode
-    $_modelId = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("GGUF_FILE") -Default $DefaultModelId
+    $_ggufFile = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("GGUF_FILE") -Default $DefaultModelId
+    $_lemonadeModel = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LEMONADE_MODEL") -Default ""
+    $_modelId = Resolve-WindowsOpenCodeModelId `
+        -LlmEndpoint $_llmEndpoint `
+        -EnvMapValue $_lemonadeModel `
+        -GgufFile $_ggufFile `
+        -Default $DefaultModelId
     $_modelName = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LLM_MODEL") -Default $DefaultModelName
     $_apiKey = "no-key"
     $_providerName = "llama-server (local)"
