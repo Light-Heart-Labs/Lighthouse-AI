@@ -28,6 +28,7 @@ const modelsResponse = (models, overrides = {}) => ({
       : (overrides.currentModel ?? null),
     odsMode: 'local',
     configuredMode: 'local',
+    llmBackend: 'llama-server',
     ...overrides,
   })
 })
@@ -155,6 +156,28 @@ describe('useModels', () => {
     expect(result.current.error).toBe('ODS is running in cloud mode. A local-mode installation is required to run downloaded models.')
   })
 
+  test('keeps browsing available but blocks local activation for an external backend', async () => {
+    const target = 'downloaded-model'
+    fetch.mockResolvedValue(modelsResponse(
+      [{ id: target, status: 'downloaded' }],
+      { odsMode: 'local', configuredMode: 'local', llmBackend: 'external' }
+    ))
+
+    const { result } = renderHook(() => useModels())
+    await waitFor(() => expect(result.current.llmBackend).toBe('external'))
+
+    expect(result.current.models).toHaveLength(1)
+    expect(result.current.canActivateModels).toBe(false)
+
+    await act(async () => {
+      await result.current.loadModel(target)
+    })
+
+    const activationPosts = fetch.mock.calls.filter(([, options]) => options?.method === 'POST')
+    expect(activationPosts).toHaveLength(0)
+    expect(result.current.error).toContain('external Ollama or LM Studio backend')
+  })
+
   test('does not activate when effective and configured modes differ', async () => {
     const target = 'downloaded-model'
     fetch.mockResolvedValue(modelsResponse(
@@ -245,6 +268,50 @@ describe('useModels', () => {
         await vi.advanceTimersByTimeAsync(5000)
         await loadPromise
       })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('loadModel sends context and waits for the requested runtime context', async () => {
+    vi.useFakeTimers()
+    const target = 'qwen-long-context'
+    let contextLength = 65536
+    fetch.mockImplementation((_url, options) => {
+      if (options?.method === 'POST') {
+        const body = JSON.parse(options.body)
+        contextLength = body.context_length
+        return Promise.resolve({ ok: true })
+      }
+      return Promise.resolve(modelsResponse(
+        [{ id: target, status: 'loaded', contextLength }],
+        { currentModel: target }
+      ))
+    })
+
+    try {
+      const { result } = renderHook(() => useModels())
+      await act(async () => {})
+
+      let loadPromise
+      act(() => {
+        loadPromise = result.current.loadModel(target, { contextLength: 262144 })
+      })
+
+      const postCall = fetch.mock.calls.find(c => c[1]?.method === 'POST')
+      expect(postCall[0]).toBe('/api/models/qwen-long-context/load')
+      expect(postCall[1]).toMatchObject({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context_length: 262144 }),
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+        await loadPromise
+      })
+      expect(result.current.models[0].contextLength).toBe(262144)
+      expect(result.current.error).toBeNull()
     } finally {
       vi.useRealTimers()
     }

@@ -111,6 +111,20 @@ class TestDecodeGpuAssignment:
         monkeypatch.setenv("GPU_ASSIGNMENT_JSON_B64", bad)
         assert decode_gpu_assignment() is None
 
+    def test_live_empty_assignment_does_not_fall_back_to_stale_container_env(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        (tmp_path / ".env").write_text("GPU_ASSIGNMENT_JSON_B64=\n")
+        monkeypatch.setenv("ODS_INSTALL_DIR", str(tmp_path))
+        monkeypatch.setenv(
+            "GPU_ASSIGNMENT_JSON_B64",
+            _make_assignment_b64(_SAMPLE_ASSIGNMENT),
+        )
+
+        assert decode_gpu_assignment() is None
+
 
 # ============================================================================
 # get_gpu_info_nvidia_detailed
@@ -593,3 +607,52 @@ class TestGpuDetailedEndpointApple:
         finally:
             gpu_mod._detailed_cache["expires"] = 0.0
             gpu_mod._detailed_cache["value"] = None
+
+
+class TestGpuDetailedLiveAssignment:
+    def test_reads_split_contract_from_live_env_after_model_swap(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        import routers.gpu as gpu_mod
+        from models import IndividualGPU
+
+        (tmp_path / ".env").write_text(
+            "LLAMA_ARG_SPLIT_MODE=layer\n"
+            "LLAMA_ARG_TENSOR_SPLIT=\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ODS_INSTALL_DIR", str(tmp_path))
+        monkeypatch.setenv("GPU_BACKEND", "nvidia")
+        monkeypatch.setenv("LLAMA_ARG_SPLIT_MODE", "row")
+        monkeypatch.setenv("LLAMA_ARG_TENSOR_SPLIT", "0.5789,0.4211")
+        monkeypatch.setattr(gpu_mod, "decode_gpu_assignment", lambda: None)
+        monkeypatch.setattr(
+            gpu_mod,
+            "_get_raw_gpus",
+            lambda _backend: [
+                IndividualGPU(
+                    index=0,
+                    uuid="GPU-aaa",
+                    name="GTX 1080 Ti",
+                    memory_used_mb=1024,
+                    memory_total_mb=11264,
+                    memory_percent=9.1,
+                    utilization_percent=10,
+                    temperature_c=45,
+                    assigned_services=["llama_server"],
+                )
+            ],
+        )
+        gpu_mod._detailed_cache["expires"] = 0.0
+        gpu_mod._detailed_cache["value"] = None
+
+        try:
+            result = asyncio.run(gpu_mod.gpu_detailed())
+        finally:
+            gpu_mod._detailed_cache["expires"] = 0.0
+            gpu_mod._detailed_cache["value"] = None
+
+        assert result.split_mode == "layer"
+        assert result.tensor_split is None

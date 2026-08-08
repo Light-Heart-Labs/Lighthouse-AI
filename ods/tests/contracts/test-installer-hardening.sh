@@ -282,6 +282,7 @@ if ! PATH="$tmpdir/bin:$PATH" \
     ODS_INSTALL_DIR="$sha_install" \
     ODS_ALLOW_LEGACY_PARALLEL=1 \
     ODS_TEST_BOOTSTRAP_INSTALL_MARKER="$sha_marker" \
+    OSTYPE=linux-gnu \
     bash get-ods.sh --non-interactive >"$tmpdir/bootstrap-sha.out" 2>&1; then
   cat "$tmpdir/bootstrap-sha.out"
   echo "[FAIL] bootstrap exact-SHA install failed"
@@ -720,6 +721,10 @@ assert_contains "installers/macos/install-macos.sh" 'compose-launch\.txt' "macOS
 assert_contains "installers/macos/install-macos.sh" 'ps -q' "macOS installer does not count compose-managed containers"
 assert_contains "installers/macos/install-macos.sh" 'docker compose up completed but created no managed containers' "macOS installer does not fail loud on zero managed containers"
 assert_contains "installers/macos/install-macos.sh" '_macos_pre_pull_compose_images' "macOS installer does not preflight compose images before launch"
+assert_contains "installers/macos/install-macos.sh" 'docker pull --platform "\$platform"' "macOS pre-pull does not honor compose platform pins (amd64-only images fail on Apple Silicon)"
+assert_contains "installers/macos/install-macos.sh" 'service\.get\("platform"\)' "macOS compose image resolution drops per-service platform pins"
+assert_contains "installers/macos/install-macos.sh" '_macos_cached_image_platform' "macOS pre-pull does not inspect cached image architecture"
+assert_contains "installers/macos/install-macos.sh" 'cached_platform.*requested_platform' "macOS pre-pull may trust a cached image with the wrong architecture"
 assert_contains "installers/macos/install-macos.sh" '--pull never' "macOS installer still allows implicit compose pulls during install launch"
 assert_contains "installers/macos/install-macos.sh" 'ODS_DOCKER_BUILD_MAX_ATTEMPTS' "macOS installer does not retry transient local image build failures"
 assert_contains "installers/macos/install-macos.sh" '_macos_build_failed=\$\(\(_macos_build_failed \+ 1\)\)' "macOS installer does not count failed required local image builds"

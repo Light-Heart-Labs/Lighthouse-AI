@@ -26,8 +26,14 @@ test: ## Run unit and contract tests
 	@bash tests/test-installer-context-parity.sh
 	@bash tests/test-hermes-context-floor.sh
 	@echo ""
+	@echo "=== Hermes slash worker prune ==="
+	@bash tests/test-hermes-slash-worker-prune.sh
+	@python3 tests/contracts/test-hermes-worker-guardrails.py
+	@echo ""
 	@echo "=== Installer contracts ==="
 	@bash tests/contracts/test-installer-contracts.sh
+	@bash tests/test-external-services.sh
+	@bash tests/test-resolve-compose-resilient.sh
 	@bash tests/test-phase03-multigpu-tty.sh
 	@bash tests/contracts/test-preflight-fixtures.sh
 	@bash tests/test-preflight-resolver-bug.sh
@@ -40,6 +46,8 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== ods-doctor rootless subordinate IDs ==="
 	@bash tests/test-ods-doctor-rootless-subid.sh
+	@echo "=== Docker rootless bind-mount ownership ==="
+	@bash tests/test-rootless-docker-ownership.sh
 	@echo ""
 	@echo "=== AMD/Lemonade contracts ==="
 	@bash tests/contracts/test-amd-lemonade-contracts.sh
@@ -48,13 +56,22 @@ test: ## Run unit and contract tests
 	@bash tests/contracts/test-windows-llm-model-readiness.sh
 	@bash tests/contracts/test-windows-lemonade-swap-wait.sh
 	@bash tests/contracts/test-windows-hermes-config-patching.sh
+	@bash tests/contracts/test-llama-metrics-flag.sh
+	@bash tests/contracts/test-llama-reasoning-format.sh
 	@echo ""
 	@echo "=== Overlay/plist contracts ==="
 	@bash tests/contracts/test-overlay-map-coherence.sh
 	@bash tests/contracts/test-plist-log-paths.sh
+	@python3 tests/contracts/test-llama-runtime-tunables.py
 	@echo ""
 	@echo "=== safe .env loading (quote/CRLF handling) ==="
 	@bash tests/test-safe-env.sh
+	@echo ""
+	@echo "=== QR code helper LAN detection ==="
+	@bash tests/test-qrcode-helper.sh
+	@echo ""
+	@echo "=== mode switch status and switching ==="
+	@bash tests/test-mode-switch-status.sh
 	@echo ""
 	@echo "=== Bind address sweep ==="
 	@bash tests/test-bind-address-sweep.sh
@@ -63,8 +80,14 @@ test: ## Run unit and contract tests
 	@echo "=== config migration (version check under set -e) ==="
 	@bash tests/test-migrate-config.sh
 	@echo ""
+	@echo "=== brave-search searxng compat contract ==="
+	@bash tests/test-brave-search-searxng-compat.sh
+	@echo ""
 	@echo "=== ods-cli pipefail tolerance ==="
 	@bash tests/test-ods-cli-pipefail-tolerance.sh
+	@echo ""
+	@echo "=== offline model validation ==="
+	@python3 tests/test-offline-model-validation.py
 	@echo ""
 	@echo "=== Bash 3.2 guard contracts ==="
 	@bash tests/test-bash32-guards.sh
@@ -77,6 +100,9 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== ods config show secret-mask matrix ==="
 	@bash tests/test-ods-config-secret-mask.sh
+	@echo ""
+	@echo "=== Manifest schema source of truth ==="
+	@bash tests/test-validate-manifest-schema.sh
 	@echo ""
 	@echo "=== macOS ods config show secret-mask ==="
 	@bash tests/test-macos-config-show-secret-mask.sh

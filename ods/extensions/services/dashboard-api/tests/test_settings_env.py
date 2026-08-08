@@ -578,6 +578,34 @@ def test_api_settings_env_save_returns_llama_apply_plan(test_client, settings_en
     assert "llama-server" in payload["applyPlan"]["summary"]
 
 
+def test_api_settings_env_save_uses_host_agent_canonical_value(
+    test_client, settings_env_fixture, monkeypatch,
+):
+    def fake_env_update(raw_text):
+        return {
+            "backup_path": "data/config-backups/.env.backup.test",
+            "enforced_values": {"WEBUI_AUTH": "true"},
+        }
+
+    monkeypatch.setattr("main._call_agent_env_update", fake_env_update)
+
+    response = test_client.put(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+        json={
+            "mode": "form",
+            "values": {
+                "WEBUI_AUTH": "false",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["values"]["WEBUI_AUTH"] == "true"
+    assert payload["fields"]["WEBUI_AUTH"]["value"] == "true"
+
+
 def test_api_settings_env_preserves_commented_empty_llama_args(test_client, settings_env_fixture):
     env_path = settings_env_fixture["env_path"]
 
@@ -774,6 +802,34 @@ def test_settings_apply_plan_maps_hermes_env_keys():
     assert plan["status"] == "ready"
     assert plan["services"] == ["hermes", "hermes-proxy"]
     assert plan["manualKeys"] == []
+
+
+def test_settings_apply_plan_treats_public_urls_as_manual_restart():
+    from settings import _compute_env_apply_plan
+
+    previous = {
+        "OPEN_WEBUI_PUBLIC_URL": "",
+        "N8N_PUBLIC_URL": "",
+        "HERMES_PROXY_PUBLIC_URL": "",
+        "ODS_SERVICE_PUBLIC_URLS": "",
+    }
+    updated = {
+        "OPEN_WEBUI_PUBLIC_URL": "https://chat.example.test",
+        "N8N_PUBLIC_URL": "https://n8n.example.test",
+        "HERMES_PROXY_PUBLIC_URL": "https://hermes.example.test",
+        "ODS_SERVICE_PUBLIC_URLS": '{"comfyui":"https://comfy.example.test"}',
+    }
+
+    plan = _compute_env_apply_plan(previous, updated)
+
+    assert plan["status"] == "manual"
+    assert plan["services"] == []
+    assert plan["manualKeys"] == [
+        "HERMES_PROXY_PUBLIC_URL",
+        "N8N_PUBLIC_URL",
+        "ODS_SERVICE_PUBLIC_URLS",
+        "OPEN_WEBUI_PUBLIC_URL",
+    ]
 
 
 def test_settings_apply_plan_maps_agent_and_proxy_env_keys():

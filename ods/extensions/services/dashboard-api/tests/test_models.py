@@ -96,6 +96,116 @@ def test_huggingface_search_count_excludes_non_model_gguf_artifacts():
     assert result["ggufFileCount"] == 1
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_context", "expected_source"),
+    [
+        (
+            {
+                "gguf": {"context_length": 8192},
+                "config": {"max_position_embeddings": 131072},
+            },
+            8192,
+            "gguf_metadata",
+        ),
+        (
+            {"config": {"text_config": {"model_max_length": 262144}}},
+            262144,
+            "hub_config",
+        ),
+        ({}, None, "unavailable"),
+    ],
+)
+def test_huggingface_context_prefers_gguf_metadata_without_inventing_fallback(
+    payload, expected_context, expected_source,
+):
+    import routers.models as models_router
+
+    assert models_router._hf_context_length(payload) == (
+        expected_context,
+        expected_source,
+    )
+
+
+def test_huggingface_context_accepts_large_authoritative_gguf_window():
+    import routers.models as models_router
+
+    assert models_router._hf_context_length({
+        "gguf": {"context_length": 8_388_608},
+        "config": {"max_position_embeddings": 131072},
+    }) == (8_388_608, "gguf_metadata")
+
+
+def test_huggingface_context_rejects_tokenizer_sentinel_from_hub_config():
+    import routers.models as models_router
+
+    assert models_router._hf_context_length({
+        "config": {"model_max_length": 10 ** 30},
+    }) == (None, "unavailable")
+
+
+@pytest.mark.asyncio
+async def test_huggingface_repository_requests_gguf_metadata_with_blob_integrity(
+    monkeypatch,
+):
+    import routers.models as models_router
+
+    seen = {}
+
+    async def fake_get(
+        path,
+        *,
+        params=None,
+        timeout_seconds=20.0,
+        connect_timeout_seconds=8.0,
+    ):
+        seen["path"] = path
+        seen["params"] = params
+        seen["timeout_seconds"] = timeout_seconds
+        seen["connect_timeout_seconds"] = connect_timeout_seconds
+        return {
+            "id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+            "sha": "a" * 40,
+            "pipeline_tag": "text-generation",
+            "gguf": {"context_length": 8192},
+            "siblings": [{
+                "rfilename": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                "lfs": {"size": 400_000_000, "sha256": "b" * 64},
+            }],
+        }, httpx.Headers()
+
+    monkeypatch.setattr(models_router, "_hf_get_json", fake_get)
+    monkeypatch.setattr(models_router, "_read_model_records", lambda *_args, **_kwargs: [])
+
+    details = await models_router._hf_repo_details(
+        "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    )
+
+    assert seen == {
+        "path": "/api/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "params": {
+            "blobs": "true",
+            "expand": [
+                "gguf",
+                "sha",
+                "downloads",
+                "likes",
+                "lastModified",
+                "pipeline_tag",
+                "gated",
+                "private",
+                "tags",
+                "cardData",
+            ],
+        },
+        "timeout_seconds": 60.0,
+        "connect_timeout_seconds": 20.0,
+    }
+    assert details["contextLength"] == 8192
+    assert details["contextSource"] == "gguf_metadata"
+    assert details["sha"] == "a" * 40
+    assert details["artifacts"][0]["files"][0]["sha256"] == "b" * 64
+
+
 def test_huggingface_search_tolerates_malformed_activity_counts():
     import routers.models as models_router
 
@@ -457,7 +567,9 @@ def test_huggingface_import_record_pins_revision_and_renames_remote_paths():
 
     assert record["source"] == "huggingface"
     assert record["source_revision"] == "c" * 40
-    assert record["context_length"] == 65536
+    assert record["context_length"] == 32768
+    assert record["max_context_length"] == 65536
+    assert record["context_limit_known"] is True
     assert "/resolve/" + ("c" * 40) + "/quant/model-Q4_K_M.gguf" in record["gguf_url"]
     assert "/" not in record["gguf_file"]
     assert record["gguf_sha256"] == "e" * 64
@@ -497,6 +609,35 @@ def test_huggingface_import_uses_distinct_local_files_for_distinct_revisions():
     assert first["gguf_file"] != second["gguf_file"]
     assert first["gguf_file"].endswith(".gguf")
     assert second["gguf_file"].endswith(".gguf")
+
+
+def test_huggingface_import_uses_conservative_context_when_metadata_is_absent():
+    import routers.models as models_router
+
+    details = {
+        "id": "org/repo",
+        "sha": "c" * 40,
+        "contextLength": None,
+        "contextSource": "unavailable",
+        "license": "apache-2.0",
+        "url": "https://huggingface.co/org/repo",
+    }
+    artifact = {
+        "id": "d" * 20,
+        "quantization": "Q4_K_M",
+        "files": [{
+            "filename": "model-Q4_K_M.gguf",
+            "sizeBytes": 1024,
+            "sha256": "e" * 64,
+        }],
+    }
+
+    record = models_router._hf_import_record(details, artifact)
+
+    assert record["context_length"] == 8192
+    assert record["max_context_length"] is None
+    assert record["context_limit_known"] is False
+    assert record["context_source"] == "unavailable"
 
 
 def test_model_library_merges_hub_imports_without_curated_override(monkeypatch, tmp_path):
@@ -1113,6 +1254,103 @@ def test_already_active_model_uses_env_file_before_stale_process_env(
     assert loaded_model == "extra.Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
 
 
+def test_false_context_receipt_is_not_activation_ready(monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(
+        monkeypatch, tmp_path
+    )
+    model = {
+        "id": "qwen3.5-2b-q4",
+        "gguf_file": "Qwen3.5-2B-Q4_K_M.gguf",
+    }
+    (data_dir / "model-activation-receipt.json").write_text(
+        json.dumps({
+            "schema": "ods.model-activation-receipt.v1",
+            "status": "complete",
+            "modelId": model["id"],
+            "ggufFile": model["gguf_file"],
+            "runtimeModelId": f"extra.{model['gguf_file']}",
+            "contextLength": 65536,
+            "contextVerified": False,
+            "consumers": {"dashboard": "live_env"},
+        }),
+        encoding="utf-8",
+    )
+
+    assert models_router._activation_receipt_matches(
+        model["id"], model, f"extra.{model['gguf_file']}"
+    ) is False
+    assert models_router._verified_activation_context(
+        f"extra.{model['gguf_file']}"
+    ) is None
+
+
+def test_verified_context_receipt_supplies_runtime_context(monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(
+        monkeypatch, tmp_path
+    )
+    (data_dir / "model-activation-receipt.json").write_text(
+        json.dumps({
+            "schema": "ods.model-activation-receipt.v1",
+            "status": "complete",
+            "modelId": "qwen3.5-2b-q4",
+            "ggufFile": "Qwen3.5-2B-Q4_K_M.gguf",
+            "runtimeModelId": "extra.Qwen3.5-2B-Q4_K_M.gguf",
+            "contextLength": 65536,
+            "contextVerified": True,
+            "consumers": {"dashboard": "live_env"},
+        }),
+        encoding="utf-8",
+    )
+
+    assert models_router._verified_activation_context(
+        "extra.Qwen3.5-2B-Q4_K_M.gguf"
+    ) == 65536
+
+
+def test_configured_context_empty_file_value_falls_through_to_file_max_context(
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, _data_dir = _patch_model_router_paths(
+        monkeypatch, tmp_path
+    )
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CTX_SIZE", "8192")
+
+    assert models_router._configured_context_length() == 65536
+
+
+def test_configured_context_legacy_file_max_precedes_stale_process_context(
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, _data_dir = _patch_model_router_paths(
+        monkeypatch, tmp_path
+    )
+    (install_dir / ".env").write_text(
+        "MAX_CONTEXT=131072\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CTX_SIZE", "8192")
+
+    assert models_router._configured_context_length() == 131072
+
+
+def test_configured_context_falls_back_to_process_env_without_persisted_values(
+    monkeypatch,
+    tmp_path,
+):
+    models_router, _install_dir, _data_dir = _patch_model_router_paths(
+        monkeypatch, tmp_path
+    )
+    monkeypatch.setenv("CTX_SIZE", "32768")
+
+    assert models_router._configured_context_length() == 32768
+
+
 def test_load_model_noops_lemonade_active_identity_without_chat_probe(
     test_client,
     monkeypatch,
@@ -1256,7 +1494,27 @@ def _patch_model_router_paths(monkeypatch, tmp_path):
 def test_model_activation_mode_policy_allows_matching_local_modes(mode):
     import routers.models as models_router
 
-    assert models_router._model_activation_mode_denial(mode, mode) is None
+    assert models_router._model_activation_mode_denial(mode, mode, "llama-server") is None
+
+
+def test_model_activation_mode_policy_rejects_external_backend():
+    import routers.models as models_router
+
+    denial = models_router._model_activation_mode_denial("local", "local", "external")
+
+    assert denial == {
+        "error": "local_mode_required",
+        "code": "external_llm_managed",
+        "reason": "external_backend_selected",
+        "message": (
+            "Local model activation is unavailable while ODS is using an "
+            "external Ollama or LM Studio backend. Re-run the installer with "
+            "--no-external-llm before activating a downloaded local model."
+        ),
+        "effectiveMode": "local",
+        "configuredMode": "local",
+        "llmBackend": "external",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1284,6 +1542,7 @@ def test_load_model_rejects_unsafe_mode_before_lookup_or_agent_call(
         encoding="utf-8",
     )
     monkeypatch.setattr(models_router, "ODS_MODE_EFFECTIVE", effective_mode)
+    monkeypatch.setattr(models_router, "LLM_BACKEND", "llama-server")
     monkeypatch.setattr(
         models_router,
         "_call_agent_model",
@@ -1307,8 +1566,39 @@ def test_load_model_rejects_unsafe_mode_before_lookup_or_agent_call(
         "reason": expected_reason,
         "effectiveMode": models_router.normalize_ods_mode(effective_mode),
         "configuredMode": models_router.normalize_ods_mode(configured_mode),
+        "llmBackend": "llama-server",
         "requestedModelId": "not-installed",
     }
+
+
+def test_load_model_rejects_external_backend_before_lookup_or_agent_call(
+    test_client,
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    (install_dir / ".env").write_text("ODS_MODE=local\n", encoding="utf-8")
+    monkeypatch.setattr(models_router, "ODS_MODE_EFFECTIVE", "local")
+    monkeypatch.setattr(models_router, "LLM_BACKEND", "external")
+    monkeypatch.setattr(
+        models_router,
+        "_find_loadable_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("external activation reached model lookup")
+        ),
+    )
+
+    response = test_client.post(
+        "/api/models/downloaded-model/load",
+        headers=test_client.auth_headers,
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "external_llm_managed"
+    assert detail["reason"] == "external_backend_selected"
+    assert detail["llmBackend"] == "external"
+    assert detail["requestedModelId"] == "downloaded-model"
 
 
 def _gpu():
@@ -1721,6 +2011,145 @@ def test_load_model_noops_when_requested_model_already_loaded(test_client, monke
     }
 
 
+def test_load_model_reconfigures_active_model_when_context_changes(
+    test_client,
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    model = {
+        "id": "qwen3.5-4b-q4",
+        "name": "Qwen 3.5 4B",
+        "gguf_file": "Qwen3.5-4B-Q4_K_M.gguf",
+        "size_mb": 2741,
+        "vram_required_gb": 5,
+        "context_length": 8192,
+        "max_context_length": 262144,
+        "quantization": "Q4_K_M",
+        "specialty": "Balanced",
+        "description": "Long-context model.",
+        "llm_model_name": "qwen3.5-4b",
+    }
+    _write_model_library(install_dir, [model])
+    (data_dir / "models" / model["gguf_file"]).write_text("model", encoding="utf-8")
+    (install_dir / ".env").write_text(
+        "ODS_MODE=local\n"
+        "LLM_MODEL=qwen3.5-4b\n"
+        f"GGUF_FILE={model['gguf_file']}\n"
+        "CTX_SIZE=65536\n"
+        "MAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_fetch_loaded_model_sync",
+        lambda: f"extra.{model['gguf_file']}",
+    )
+    monkeypatch.setattr(models_router, "_loaded_model_backend_ready_sync", lambda _loaded: True)
+    _write_activation_receipt(
+        data_dir,
+        model["id"],
+        model["gguf_file"],
+        f"extra.{model['gguf_file']}",
+    )
+    calls = []
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda path, body, timeout=30, **kwargs: calls.append(
+            (path, body, timeout, kwargs)
+        )
+        or {"status": "activated", "context_length": body.get("context_length")},
+    )
+
+    resp = test_client.post(
+        f"/api/models/{model['id']}/load",
+        headers=test_client.auth_headers,
+        json={"context_length": 262144},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["context_length"] == 262144
+    assert calls == [(
+        "/v1/model/activate",
+        {"model_id": model["id"], "context_length": 262144},
+        2700,
+        {
+            "retry_download_busy_seconds":
+                models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
+        },
+    )]
+
+
+def test_load_model_allows_advanced_context_override_but_rejects_invalid_range(
+    test_client,
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    model = {
+        "id": "small-context-model",
+        "name": "Small Context",
+        "gguf_file": "small-context.gguf",
+        "size_mb": 512,
+        "vram_required_gb": 2,
+        "context_length": 32768,
+        "quantization": "Q4_K_M",
+        "specialty": "Chat",
+        "description": "Small context model.",
+        "llm_model_name": "small-context",
+    }
+    _write_model_library(install_dir, [model])
+    (data_dir / "models" / model["gguf_file"]).write_text("model", encoding="utf-8")
+    (install_dir / ".env").write_text("ODS_MODE=local\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda path, body, timeout=30, **kwargs: calls.append(
+            (path, body, timeout, kwargs)
+        )
+        or {"status": "activated", "context_length": body["context_length"]},
+    )
+
+    invalid_type = test_client.post(
+        f"/api/models/{model['id']}/load",
+        headers=test_client.auth_headers,
+        json={"context_length": True},
+    )
+    advanced_override = test_client.post(
+        f"/api/models/{model['id']}/load",
+        headers=test_client.auth_headers,
+        json={"context_length": 65536},
+    )
+    unrestricted_override = test_client.post(
+        f"/api/models/{model['id']}/load",
+        headers=test_client.auth_headers,
+        json={"context_length": 2097152},
+    )
+    unsafe_integer = test_client.post(
+        f"/api/models/{model['id']}/load",
+        headers=test_client.auth_headers,
+        json={"context_length": 9007199254740992},
+    )
+
+    assert invalid_type.status_code == 400
+    assert "must be an integer" in invalid_type.json()["detail"]
+    assert advanced_override.status_code == 200
+    assert advanced_override.json()["context_length"] == 65536
+    assert calls[0][1] == {
+        "model_id": model["id"],
+        "context_length": 65536,
+    }
+    assert unrestricted_override.status_code == 200
+    assert calls[1][1] == {
+        "model_id": model["id"],
+        "context_length": 2097152,
+    }
+    assert unsafe_integer.status_code == 400
+    assert "must be a safe integer of at least 1024" in unsafe_integer.json()["detail"]
+
+
 def test_load_model_reconciles_matching_runtime_without_completion_receipt(
     test_client,
     monkeypatch,
@@ -1912,6 +2341,41 @@ def test_load_model_delegates_local_gguf_without_catalog_entry(test_client, monk
         "body": {"model_id": "OpenAI-20B-NEO-CODE-DI-Uncensored-Q8_0"},
         "timeout": 2700,
     }
+
+
+def test_local_gguf_prefers_canonical_context_when_upgrade_aliases_diverge(
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [])
+    (data_dir / "models" / "LocalUpgrade.gguf").write_text("model", encoding="utf-8")
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=131072\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+
+    model = models_router._find_loadable_model("LocalUpgrade")
+
+    assert model["context_length"] == 131072
+
+
+def test_local_gguf_prefers_persisted_legacy_context_over_stale_process_value(
+    monkeypatch,
+    tmp_path,
+):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [])
+    (data_dir / "models" / "LocalUpgrade.gguf").write_text("model", encoding="utf-8")
+    (install_dir / ".env").write_text(
+        "CTX_SIZE=\nMAX_CONTEXT=65536\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CTX_SIZE", "8192")
+
+    model = models_router._find_loadable_model("LocalUpgrade")
+
+    assert model["context_length"] == 65536
 
 
 def test_local_gguf_scan_keeps_mixed_case_and_skips_empty(monkeypatch, tmp_path):
