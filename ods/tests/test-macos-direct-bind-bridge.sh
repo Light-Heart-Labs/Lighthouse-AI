@@ -38,8 +38,10 @@ pass() {
 [[ -f "$INSTALLER" ]] || fail "missing $INSTALLER"
 [[ -f "$BRIDGE_MANAGER" ]] || fail "missing $BRIDGE_MANAGER"
 
-python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-[[ -n "$python_cmd" ]] || fail "python is required to parse embedded installer programs"
+# shellcheck source=lib/python-cmd.sh
+. "$ROOT_DIR/lib/python-cmd.sh"
+python_cmd="$(ods_detect_python_cmd)" \
+    || fail "python is required to parse embedded installer programs"
 
 "$python_cmd" - "$INSTALLER" "$BRIDGE_MANAGER" <<'PY'
 import ast
