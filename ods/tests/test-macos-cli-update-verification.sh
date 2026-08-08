@@ -29,7 +29,7 @@ cp "$root_dir/docker-compose.base.yml" "$install_dir/docker-compose.base.yml"
 printf '%s\n' '-f docker-compose.base.yml' > "$install_dir/.compose-flags"
 
 cat > "$install_dir/.env" <<'ENV'
-ODS_VERSION=2.5.3
+ODS_VERSION=2.6.0
 ODS_MODE=local
 GPU_BACKEND=apple
 GPU_COUNT=1

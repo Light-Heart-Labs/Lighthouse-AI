@@ -168,10 +168,10 @@ switchboard_litellm_rendered="$(
     config litellm
 )"
 
-grep -q 'CONFIG_PATH=/app/config.yaml' <<<"$switchboard_litellm_rendered" \
-  || { echo "[FAIL] AMD LiteLLM render must keep the base CONFIG_PATH command"; exit 1; }
-grep -q 'CONFIG_PATH=/app/switchboard.yaml' <<<"$switchboard_litellm_rendered" \
-  || { echo "[FAIL] AMD LiteLLM render must keep switchboard.yaml selection"; exit 1; }
+grep -q 'ODS_MODE: local' <<<"$switchboard_litellm_rendered" \
+  || { echo "[FAIL] AMD LiteLLM render must receive the active ODS mode"; exit 1; }
+grep -q 'ods-select-config.sh' <<<"$switchboard_litellm_rendered" \
+  || { echo "[FAIL] AMD LiteLLM render must keep the mode-aware config selector"; exit 1; }
 
 # Match the Windows installer's precedence: platform overlays are loaded before
 # extension base/GPU overlays. Rendering the complete stack catches a later

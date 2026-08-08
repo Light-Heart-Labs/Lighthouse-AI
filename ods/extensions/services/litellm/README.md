@@ -25,6 +25,10 @@ ODS does not expose LiteLLM as a normal dashboard quicklink. The upstream LiteLL
 
 The active mode is controlled by `ODS_MODE` in `.env`. The corresponding config file is loaded automatically from `config/litellm/`.
 
+`ODS_MODEL_SWITCHBOARD=enabled` selects the local Switchboard route only when
+the active mode has a local runtime. `ODS_MODE=cloud` always keeps
+`config/litellm/cloud.yaml` authoritative.
+
 ### local (default)
 
 Routes all requests to llama-server. No cloud API keys required.
