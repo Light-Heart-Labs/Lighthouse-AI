@@ -74,14 +74,14 @@ def test_get_version_with_mock_github(test_client, monkeypatch):
 
 def test_build_version_result_strips_v_prefix_from_current():
     """Current versions stored with a 'v' prefix (matching the release tag
-    convention, e.g. a .version file of 'v2.5.3') must normalize before
+    convention, e.g. a .version file of 'v2.6.0') must normalize before
     comparison. Otherwise the numeric parser misreads them and a real update
     is reported as unavailable.
     """
     from routers.updates import _build_version_result
 
-    result = _build_version_result("v2.5.3", {"latest": "2.6.0"})
-    assert result["current"] == "2.5.3"
+    result = _build_version_result("v2.6.0", {"latest": "2.7.0"})
+    assert result["current"] == "2.6.0"
     assert result["update_available"] is True
 
 
