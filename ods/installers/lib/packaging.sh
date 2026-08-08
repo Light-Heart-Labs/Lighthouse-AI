@@ -70,22 +70,41 @@ _pkg_prepare_pacman_keyrings() {
     done
 }
 
+_pkg_bounded_positive_int() {
+    local value="$1"
+    local default="$2"
+    local max="$3"
+
+    if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 )); then
+        value="$default"
+    elif (( value > max )); then
+        value="$max"
+    fi
+
+    printf '%s\n' "$value"
+}
+
 _pkg_configure_zypper_ci_network() {
     [[ "$PKG_MANAGER" == "zypper" ]] || return 0
     [[ -n "${GITHUB_ACTIONS:-}" || -n "${CI:-}" ]] || return 0
 
-    local conf_dir="/etc/zypp/zypp.conf.d"
+    local conf_dir="${ODS_ZYPPER_CI_CONF_DIR:-/etc/zypp/zypp.conf.d}"
     local conf_file="${conf_dir}/99-ods-ci-network.conf"
+    local transfer_timeout connect_timeout max_silent_tries
     local tmp
+
+    transfer_timeout="$(_pkg_bounded_positive_int "${ODS_ZYPPER_CI_TRANSFER_TIMEOUT:-180}" 180 180)"
+    connect_timeout="$(_pkg_bounded_positive_int "${ODS_ZYPPER_CI_CONNECT_TIMEOUT:-30}" 30 30)"
+    max_silent_tries="$(_pkg_bounded_positive_int "${ODS_ZYPPER_CI_MAX_SILENT_TRIES:-3}" 3 3)"
 
     tmp="$(mktemp "${TMPDIR:-/tmp}/ods-zypp-ci-network.XXXXXX")" || return 0
 
-    cat >"$tmp" <<'EOF'
+    cat >"$tmp" <<EOF
 [main]
-download.transfer_timeout = 600
-download.connect_timeout = 120
+download.transfer_timeout = ${transfer_timeout}
+download.connect_timeout = ${connect_timeout}
 download.min_download_speed = 0
-download.max_silent_tries = 3
+download.max_silent_tries = ${max_silent_tries}
 download.max_concurrent_connections = 2
 EOF
 

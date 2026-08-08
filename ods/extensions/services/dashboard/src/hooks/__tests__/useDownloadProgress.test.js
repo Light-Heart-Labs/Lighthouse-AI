@@ -302,6 +302,9 @@ describe('useDownloadProgress', () => {
 
     expect(result.current.formatEta(90)).toBe('1m 30s')
     expect(result.current.formatEta(30)).toBe('30s')
+    // Fractional eta (bytes-remaining / rate) must not leak float noise.
+    expect(result.current.formatEta(90.7)).toBe('1m 30s')
+    expect(result.current.formatEta(30.9)).toBe('30s')
     expect(result.current.formatEta(null)).toBe('calculating...')
     expect(result.current.formatEta('calculating...')).toBe('calculating...')
   })

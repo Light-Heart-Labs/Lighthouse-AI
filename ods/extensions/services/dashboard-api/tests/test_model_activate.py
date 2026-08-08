@@ -1,16 +1,20 @@
 """Tests for AMD model activation helpers in ods-host-agent.py."""
 
+import base64
 import hashlib
 import importlib.util
 import http.client
 import io
 import json
+import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
 import pytest
+
+_real_subprocess_run = subprocess.run
 
 # Import the host agent module from bin/ using importlib.
 # The module has an ``if __name__ == "__main__":`` guard so no server starts.
@@ -61,6 +65,15 @@ def _isolate_opencode_config(monkeypatch, tmp_path):
         lambda: {"system": _mod.platform.system(), "active": False},
     )
     monkeypatch.setattr(_mod, "_opencode_installed", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _install_runtime_renderer(tmp_path):
+    """Exercise host-agent rendering through the shipped canonical script."""
+    source = _agent_path.parents[1] / "scripts" / "render-runtime-configs.py"
+    target = tmp_path / "scripts" / "render-runtime-configs.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
 
 
 def test_host_agent_backlog_handles_dashboard_poll_bursts():
@@ -213,6 +226,42 @@ class TestCheckLemonadeHealth:
             131072,
         ) is True
 
+    def test_legacy_health_matching_loaded_row_without_context_is_not_a_false_red(self):
+        body = json.dumps({
+            "status": "ok",
+            "version": "10.0.0",
+            "model_loaded": "extra.Model.gguf",
+            "all_models_loaded": [{
+                "model_name": "extra.Model.gguf",
+                "checkpoint": r"C:\ods\data\models\Model.gguf",
+                "recipe_options": {"llamacpp_backend": "vulkan"},
+            }],
+        })
+        assert _check_lemonade_health(
+            body,
+            "Model.gguf",
+            "extra.Model.gguf",
+            8192,
+        ) is True
+
+    def test_modern_health_matching_loaded_row_without_context_is_rejected(self):
+        body = json.dumps({
+            "status": "ok",
+            "version": "10.7.0",
+            "model_loaded": "Model",
+            "all_models_loaded": [{
+                "model_name": "Model",
+                "checkpoint": r"C:\ods\data\models\Model.gguf",
+                "recipe_options": {"llamacpp_backend": "vulkan"},
+            }],
+        })
+        assert _check_lemonade_health(
+            body,
+            "Model.gguf",
+            "Model",
+            8192,
+        ) is False
+
     def test_legacy_health_with_loaded_list_requires_matching_row(self):
         body = json.dumps({
             "status": "ok",
@@ -243,12 +292,29 @@ class TestResolveLemonadeModelId:
         assert _resolve_lemonade_model_id(
             {
                 "GGUF_FILE": "Model.gguf",
-                "LEMONADE_MODEL": "persisted-exact-id",
+                "LEMONADE_MODEL": "Model",
             },
             "Model.gguf",
             host="127.0.0.1",
             port="8080",
-        ) == "persisted-exact-id"
+        ) == "Model"
+
+    def test_stale_persisted_model_does_not_mask_107_stem_fallback(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            body = '{"data":[]}' if cmd[-1].endswith("/models") else '{"version":"10.7.0"}'
+            return subprocess.CompletedProcess(cmd, 0, body, "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _resolve_lemonade_model_id(
+            {
+                "GGUF_FILE": "Model.gguf",
+                "LEMONADE_MODEL": "Old-Model",
+            },
+            "Model.gguf",
+            host="127.0.0.1",
+            port="8080",
+        ) == "Model"
 
     def test_ignores_persisted_model_for_a_different_gguf(self, monkeypatch):
         def fake_run(cmd, **_kwargs):
@@ -453,14 +519,14 @@ class TestLemonadeCompletionReady:
 
         assert _lemonade_completion_ready("127.0.0.1", "8080", "model.gguf") is False
 
-    def test_readiness_uses_persisted_exact_model_for_completion(self, monkeypatch):
+    def test_readiness_uses_runtime_identity_for_lemonade_completion(self, monkeypatch):
         completion_calls = []
 
         def fake_run(cmd, **_kwargs):
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout='{"status":"ok","model_loaded":"Modern-Model"}',
+                stdout='{"status":"ok","version":"10.7.0","model_loaded":"Modern-Model"}',
                 stderr="",
             )
 
@@ -475,12 +541,12 @@ class TestLemonadeCompletionReady:
             {
                 "GPU_BACKEND": "amd",
                 "OLLAMA_PORT": "8080",
-                "GGUF_FILE": "Model.gguf",
-                "LEMONADE_MODEL": "Modern-Model",
+                "GGUF_FILE": "Modern-Model.gguf",
             },
             model_id="catalog-model",
-            gguf_file="Model.gguf",
+            gguf_file="Modern-Model.gguf",
             llm_model_name="model",
+            lemonade_model_id="extra.Modern-Model.gguf",
             attempts=1,
             initial_delay=0,
             interval=0,
@@ -493,7 +559,7 @@ class TestLemonadeCompletionReady:
                 "/api/v1",
                 {
                     "expected_model_id": "Modern-Model",
-                    "expected_gguf_file": "Model.gguf",
+                    "expected_gguf_file": "Modern-Model.gguf",
                     "expected_llm_model_name": "model",
                 },
             ),
@@ -535,6 +601,100 @@ class TestLemonadeCompletionReady:
             "contextVerified": False,
             "verifiedAt": proof["verifiedAt"],
         }
+
+    def test_windows_legacy_lemonade_requires_exact_process_context(
+        self, monkeypatch
+    ):
+        def fake_run(cmd, **_kwargs):
+            executable = str(cmd[0]).casefold()
+            if executable == "powershell.exe":
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="65536\n", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({
+                    "status": "ok",
+                    "version": "10.0.0",
+                    "model_loaded": "extra.Model.gguf",
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_a, **_k: True)
+        env = {
+            "GPU_BACKEND": "amd",
+            "LLM_BACKEND": "lemonade",
+            "AMD_INFERENCE_RUNTIME": "lemonade",
+            "AMD_INFERENCE_LOCATION": "host",
+            "AMD_INFERENCE_PORT": "8080",
+            "CTX_SIZE": "65536",
+        }
+
+        proof = _mod._wait_for_model_readiness(
+            env,
+            model_id="model",
+            gguf_file="Model.gguf",
+            llm_model_name="model",
+            lemonade_model_id="extra.Model.gguf",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+            require_exact_context=True,
+        )
+
+        assert proof["contextLength"] == 65536
+        assert proof["contextVerified"] is True
+
+    def test_windows_legacy_lemonade_rejects_wrong_process_context(
+        self, monkeypatch
+    ):
+        def fake_run(cmd, **_kwargs):
+            executable = str(cmd[0]).casefold()
+            if executable == "powershell.exe":
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="4096\n", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({
+                    "status": "ok",
+                    "version": "10.0.0",
+                    "model_loaded": "extra.Model.gguf",
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_a, **_k: True)
+
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "amd",
+                "LLM_BACKEND": "lemonade",
+                "AMD_INFERENCE_RUNTIME": "lemonade",
+                "AMD_INFERENCE_LOCATION": "host",
+                "AMD_INFERENCE_PORT": "8080",
+                "CTX_SIZE": "65536",
+            },
+            model_id="model",
+            gguf_file="Model.gguf",
+            llm_model_name="model",
+            lemonade_model_id="extra.Model.gguf",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+            require_exact_context=True,
+        )
+
+        assert proof == {}
 
     def test_catalog_non_agent_viability_overrides_context_floor(self):
         model = {
@@ -680,17 +840,20 @@ class TestWriteLemonadeConfig:
         assert "request_timeout: 900" in content
         assert "stream_timeout: 900" in content
 
-    def test_fallback_writer_keeps_long_model_timeouts(self, monkeypatch, tmp_path):
+    def test_renderer_failure_preserves_existing_config(self, monkeypatch, tmp_path):
         litellm_dir = tmp_path / "config" / "litellm"
         litellm_dir.mkdir(parents=True)
+        config = litellm_dir / "lemonade.yaml"
+        config.write_text("known-good\n", encoding="utf-8")
         monkeypatch.setattr(_mod, "_render_runtime_config", lambda *args, **kwargs: False)
 
-        _write_lemonade_config(tmp_path, "fallback-model.gguf")
+        with pytest.raises(
+            RuntimeError,
+            match="Failed to render required litellm-lemonade config",
+        ):
+            _write_lemonade_config(tmp_path, "fallback-model.gguf")
 
-        content = (litellm_dir / "lemonade.yaml").read_text()
-        assert "model: openai/extra.fallback-model.gguf" in content
-        assert "request_timeout: 900" in content
-        assert "stream_timeout: 900" in content
+        assert config.read_text(encoding="utf-8") == "known-good\n"
 
     def test_reads_lemonade_key_from_env_file_when_process_env_unset(
         self, monkeypatch, tmp_path,
@@ -740,6 +903,77 @@ class TestWriteLemonadeConfig:
         litellm_dir.mkdir(parents=True)
         _write_lemonade_config(tmp_path, "model.gguf")
         assert (litellm_dir / "lemonade.yaml").exists()
+
+
+class TestSwitchboardRuntimeConfig:
+    def test_render_runtime_config_passes_switchboard_and_runtime_args(
+        self, monkeypatch, tmp_path,
+    ):
+        renderer = tmp_path / "scripts" / "render-runtime-configs.py"
+        renderer.parent.mkdir(parents=True, exist_ok=True)
+        renderer.write_text("# renderer placeholder\n", encoding="utf-8")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._render_runtime_config(
+            tmp_path,
+            "litellm-switchboard",
+            model="qwen",
+            gguf_file="Qwen.gguf",
+            lemonade_model_id="",
+            lemonade_api_key="sk-runtime",
+            lemonade_api_base="http://lemonade:8080/api/v1",
+            llm_base_url="http://runtime:8080/v1",
+            ods_mode="hybrid",
+            gpu_backend="nvidia",
+            context_length=65536,
+            switchboard_mode="enabled",
+        ) is True
+
+        cmd = calls[0][0]
+        assert cmd[cmd.index("--switchboard-mode") + 1] == "enabled"
+        assert cmd[cmd.index("--model") + 1] == "qwen"
+        assert cmd[cmd.index("--llm-base-url") + 1] == "http://runtime:8080/v1"
+        assert cmd[cmd.index("--context-length") + 1] == "65536"
+
+    def test_enabled_mode_renderer_failure_aborts(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake_render(_install_dir, surface, **_kwargs):
+            calls.append(surface)
+            return False
+
+        monkeypatch.setattr(_mod, "_render_runtime_config", fake_render)
+
+        with pytest.raises(RuntimeError, match="model-router-endpoints"):
+            _mod._render_model_router_runtime_configs(
+                tmp_path,
+                {"ODS_MODEL_SWITCHBOARD": "enabled"},
+                model="qwen",
+                gguf_file="Qwen.gguf",
+                lemonade_model_id="",
+                context_length=65536,
+            )
+
+        assert calls == ["model-router-endpoints"]
+
+    def test_router_runtime_base_never_points_to_litellm(self):
+        assert _mod._runtime_llama_api_base({
+            "LLM_API_URL": "http://litellm:4000/v1",
+        }) == "http://llama-server:8080/v1"
+
+    def test_windows_native_runtime_base_uses_host_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_is_windows_host_llama_server", lambda _env: True)
+
+        assert _mod._runtime_llama_api_base({
+            "AMD_INFERENCE_PORT": "9234",
+            "LLM_API_URL": "http://litellm:4000/v1",
+        }) == "http://host.docker.internal:9234/v1"
 
 
 class TestOpenCodeModelRoute:
@@ -858,6 +1092,23 @@ class TestPerplexicaModelRoute:
         )
 
         assert model == "Modern-Model"
+        assert base_url == "http://litellm:4000/v1"
+        assert api_key == "secret-key"
+
+    def test_switchboard_mode_uses_stable_alias_through_litellm(self):
+        model, base_url, api_key = _mod._perplexica_model_route(
+            {
+                "ODS_MODEL_SWITCHBOARD": "enabled",
+                "GPU_BACKEND": "amd",
+                "AMD_INFERENCE_RUNTIME": "lemonade",
+                "LEMONADE_MODEL": "Modern-Model",
+                "LITELLM_KEY": "secret-key",
+            },
+            "Modern-Model.gguf",
+            lemonade_model_id="Modern-Model",
+        )
+
+        assert model == "ods/current"
         assert base_url == "http://litellm:4000/v1"
         assert api_key == "secret-key"
 
@@ -1190,6 +1441,34 @@ class TestComposeRestartLlamaServer:
             ],
         ]
 
+    def test_amd_without_compose_flags_recreates_to_apply_rocm_visibility(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        recreated = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: [])
+        monkeypatch.setattr(
+            _mod,
+            "_recreate_llama_server",
+            lambda env: recreated.append(dict(env)),
+        )
+
+        _compose_restart_llama_server(
+            {
+                "GPU_BACKEND": "amd",
+                "ROCR_VISIBLE_DEVICES": "0,1,2",
+            }
+        )
+
+        assert recreated == [
+            {
+                "GPU_BACKEND": "amd",
+                "ROCR_VISIBLE_DEVICES": "0,1,2",
+            }
+        ]
+
 
 class TestRecreateLlamaServerFromInspect:
 
@@ -1226,6 +1505,10 @@ class TestRecreateLlamaServerFromInspect:
                     "CTX_SIZE=4096",
                     "MAX_CONTEXT=4096",
                     "LLAMA_SERVER_IMAGE=host.example/lemonade:amd",
+                    "ROCR_VISIBLE_DEVICES=0,1",
+                    "LLAMA_SERVER_GPU_INDICES=0,1",
+                    "HSA_OVERRIDE_GFX_VERSION=11.5.1",
+                    "LEMONADE_LLAMACPP_ROCM_BIN=/opt/llama-custom/llama-server",
                 ],
                 "Labels": {"com.docker.compose.service": "llama-server"},
                 "Hostname": "llama-amd",
@@ -1282,6 +1565,9 @@ class TestRecreateLlamaServerFromInspect:
             "MAX_CONTEXT": "65536",
             "LLM_MODEL": "new-amd",
             "LLAMA_SERVER_IMAGE": "host.example/lemonade:amd",
+            "GPU_BACKEND": "amd",
+            "ROCR_VISIBLE_DEVICES": "0,1,2",
+            "LLAMA_SERVER_GPU_INDICES": "0,1,2",
         }
 
         argv, calls = self._capture_recreate(monkeypatch, inspect_config, env)
@@ -1311,6 +1597,10 @@ class TestRecreateLlamaServerFromInspect:
         assert "CTX_SIZE=65536" in argv
         assert "MAX_CONTEXT=65536" in argv
         assert "LLAMA_SERVER_IMAGE=host.example/lemonade:amd" in argv
+        assert "ROCR_VISIBLE_DEVICES=0,1,2" in argv
+        assert "LLAMA_SERVER_GPU_INDICES=0,1,2" in argv
+        assert not any(arg.startswith("HSA_OVERRIDE_GFX_VERSION=") for arg in argv)
+        assert not any(arg.startswith("LEMONADE_LLAMACPP_ROCM_BIN=") for arg in argv)
         image_index = argv.index("host.example/lemonade:amd")
         assert argv[argv.index("--entrypoint"):argv.index("--entrypoint") + 2] == [
             "--entrypoint", "/bin/sh",
@@ -1318,6 +1608,80 @@ class TestRecreateLlamaServerFromInspect:
         assert argv[image_index + 1:] == [
             "-lc", "exec lemonade-server serve --port 8080",
         ]
+
+    def test_amd_recreate_refreshes_lemonade_split_contract(
+        self, monkeypatch,
+    ):
+        inspect_config = {
+            "Config": {
+                "Image": "host.example/lemonade:amd",
+                "Entrypoint": ["/bin/sh", "/opt/lemonade-entrypoint.sh"],
+                "Cmd": [
+                    "serve",
+                    "--port",
+                    "8080",
+                    "--llamacpp-args",
+                    "--metrics --host 0.0.0.0 --split-mode=row "
+                    "--tensor-split 3,1",
+                ],
+                "Env": [
+                    "GPU_BACKEND=amd",
+                    "LLAMA_ARG_SPLIT_MODE=row",
+                    "LLAMA_ARG_TENSOR_SPLIT=3,1",
+                    "ROCR_VISIBLE_DEVICES=0,1",
+                ],
+            },
+            "HostConfig": {},
+            "NetworkSettings": {"Networks": {}},
+            "Mounts": [],
+        }
+        env = {
+            "GPU_BACKEND": "amd",
+            "LLAMA_ARG_SPLIT_MODE": "layer",
+            "LLAMA_ARG_TENSOR_SPLIT": "",
+            "ROCR_VISIBLE_DEVICES": "0,1,2",
+            "LLAMA_SERVER_GPU_INDICES": "0,1,2",
+        }
+
+        argv, _calls = self._capture_recreate(monkeypatch, inspect_config, env)
+
+        passthrough_index = argv.index("--llamacpp-args")
+        assert argv[passthrough_index + 1] == (
+            "--metrics --host 0.0.0.0 --split-mode layer"
+        )
+        assert "LLAMA_ARG_SPLIT_MODE=layer" in argv
+        assert "LLAMA_ARG_TENSOR_SPLIT=" in argv
+        assert "ROCR_VISIBLE_DEVICES=0,1,2" in argv
+
+    @pytest.mark.parametrize(
+        ("original", "expected"),
+        [
+            (
+                "--metrics --split-mode row --tensor-split=2,1",
+                "--metrics --split-mode layer",
+            ),
+            (
+                "--metrics --split-mode=row",
+                "--metrics --split-mode layer",
+            ),
+            (
+                "--metrics",
+                "--metrics --split-mode layer",
+            ),
+        ],
+    )
+    def test_refresh_lemonade_passthrough_handles_supported_flag_forms(
+        self,
+        original,
+        expected,
+    ):
+        assert _mod._refresh_llamacpp_passthrough(
+            original,
+            {
+                "LLAMA_ARG_SPLIT_MODE": "layer",
+                "LLAMA_ARG_TENSOR_SPLIT": "",
+            },
+        ) == expected
 
     def test_nvidia_recreate_preserves_device_request_full_command_and_networks(
         self, monkeypatch,
@@ -1330,7 +1694,13 @@ class TestRecreateLlamaServerFromInspect:
                     "--model", "/models/old.gguf", "--ctx-size=4096",
                     "--parallel", "2", "--metrics",
                 ],
-                "Env": ["GGUF_FILE=old.gguf", "CTX_SIZE=4096", "LLAMA_PARALLEL=2"],
+                "Env": [
+                    "GGUF_FILE=old.gguf",
+                    "CTX_SIZE=4096",
+                    "LLAMA_PARALLEL=2",
+                    "NVIDIA_VISIBLE_DEVICES=GPU-ti-0,GPU-1080",
+                    "LLAMA_ARG_TENSOR_SPLIT=0.5789,0.4211",
+                ],
                 "Labels": {"com.docker.compose.project": "ods"},
                 "Hostname": "llama-nvidia",
             },
@@ -1339,8 +1709,8 @@ class TestRecreateLlamaServerFromInspect:
                 "Binds": ["/srv/models:/models:ro"],
                 "DeviceRequests": [{
                     "Driver": "nvidia",
-                    "Count": -1,
-                    "DeviceIDs": None,
+                    "Count": 0,
+                    "DeviceIDs": ["GPU-ti-0", "GPU-1080"],
                     "Capabilities": [["gpu"]],
                     "Options": {},
                 }],
@@ -1361,6 +1731,10 @@ class TestRecreateLlamaServerFromInspect:
             "CTX_SIZE": "32768",
             "MAX_CONTEXT": "32768",
             "LLAMA_PARALLEL": "1",
+            "GPU_BACKEND": "nvidia",
+            "LLAMA_SERVER_GPU_UUIDS": "GPU-ti-0,GPU-1080,GPU-ti-2",
+            "LLAMA_ARG_SPLIT_MODE": "layer",
+            "LLAMA_ARG_TENSOR_SPLIT": "",
         }
 
         argv, calls = self._capture_recreate(
@@ -1377,6 +1751,10 @@ class TestRecreateLlamaServerFromInspect:
         assert argv[argv.index("--runtime"):argv.index("--runtime") + 2] == [
             "--runtime", "nvidia",
         ]
+        assert "NVIDIA_VISIBLE_DEVICES=GPU-ti-0,GPU-1080,GPU-ti-2" in argv
+        assert "LLAMA_ARG_SPLIT_MODE=layer" in argv
+        assert "LLAMA_ARG_TENSOR_SPLIT=" in argv
+        assert "LLAMA_ARG_TENSOR_SPLIT=0.5789,0.4211" not in argv
         image_index = argv.index("catalog.example/llama:target")
         assert argv[image_index + 1:] == [
             "--factory-mode",
@@ -1597,10 +1975,25 @@ class TestRestartWindowsLemonade:
         assert "Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog" in script
         assert "no healthy owned router was found" in script
         assert "Refusing to stop unowned process" in script
+        assert "[switch]$AllowStaleReference" in script
+        assert (
+            "$owned = Get-CimInstance Win32_Process" in script
+            and "$liveProcess = Get-Process -Id $ProcId" in script
+            and "if (-not $liveProcess -or $AllowStaleReference)" in script
+        )
+        assert (
+            "Stop-ODSProcessId -ProcId ([int]$rawPid) -AllowStaleReference"
+            in script
+        )
+        assert (
+            "Stop-ODSProcessId -ProcId ([int]$listener.OwningProcess)"
+            in script
+        )
         assert "Get-ODSHealthyRouter" in script
         assert "/api/v1/health" in script
         assert "$proc = Get-ODSHealthyRouter" in script
         assert "Get-ODSLemonadeLaunchContract" in script
+        assert "-ContextSize $contextSize" in script
         assert "New-ODSLemonadeScheduledTaskAction" not in script
         assert "Set-ODSLemonadeModernRuntimeConfig" in script
         assert "$existingTaskMatches" not in script
@@ -1612,6 +2005,138 @@ class TestRestartWindowsLemonade:
             "installers/windows/lib/backend-contract.ps1"
         )
         assert captured["env"]["ODS_WIN_ENV_PATH"] == str(tmp_path / ".env")
+
+    def test_restart_ignores_listener_that_exits_before_cim_lookup(
+        self, monkeypatch, tmp_path
+    ):
+        shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+        if not shell:
+            pytest.skip("PowerShell is unavailable")
+
+        local_app_data = tmp_path / "AppData" / "Local"
+        lemonade_exe = (
+            local_app_data / "lemonade_server" / "bin" / "LemonadeServer.exe"
+        )
+        lemonade_exe.parent.mkdir(parents=True)
+        lemonade_exe.write_text("", encoding="utf-8")
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["script"] = cmd[-1]
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+        monkeypatch.delenv("ProgramFiles", raising=False)
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        _restart_windows_lemonade({"AMD_INFERENCE_PORT": "13305"})
+
+        script = captured["script"]
+        function_start = script.index("function Get-ODSPortOwners")
+        invocation_start = script.index("if (Test-Path $pidPath)")
+        function_block = script[function_start:invocation_start]
+        base_harness = (
+            '$port = 13305\n'
+            '$exe = "C:\\ODS\\LemonadeServer.exe"\n'
+            '$modelsDir = "C:\\ODS\\data\\models"\n'
+            "$binPrefix = 'C:\\ODS\\bin\\'\n"
+            '$cachePrefix = $null\n'
+            '$knownProcessNames = @("LemonadeServer.exe", "lemonade-server.exe", '
+            '"lemonade-router.exe", "lemonade.exe")\n'
+            f"{function_block}\n"
+            "function Get-ODSPortOwners { return @{} }\n"
+        )
+        stale_harness = base_harness + (
+            "function Get-CimInstance { return $null }\n"
+            "function Get-Process { return $null }\n"
+            "Stop-ODSProcessId -ProcId 424242\n"
+            'Write-Output "STALE_LISTENER_IGNORED"\n'
+        )
+        unverifiable_live_harness = base_harness + (
+            "function Get-CimInstance { return $null }\n"
+            "function Get-Process { return [pscustomobject]@{ Id = 424243 } }\n"
+            "try {\n"
+            "    Stop-ODSProcessId -ProcId 424243\n"
+            '    Write-Error "UNVERIFIABLE_LIVE_PROCESS_ACCEPTED"\n'
+            "    exit 2\n"
+            "} catch {\n"
+            '    if ($_.Exception.Message -notlike "Refusing to stop unowned process*") {\n'
+            "        throw\n"
+            "    }\n"
+            '    Write-Output "UNVERIFIABLE_LIVE_PROCESS_REJECTED"\n'
+            "}\n"
+        )
+        reused_pid_harness = base_harness + (
+            "function Get-CimInstance { return $null }\n"
+            "function Get-Process { return [pscustomobject]@{ Id = 424244 } }\n"
+            "Stop-ODSProcessId -ProcId 424244 -AllowStaleReference\n"
+            'Write-Output "REUSED_STALE_PID_IGNORED"\n'
+        )
+        unowned_harness = base_harness + (
+            "function Get-CimInstance {\n"
+            "    return [pscustomobject]@{\n"
+            "        ProcessId = 424243\n"
+            '        Name = "unrelated-server.exe"\n'
+            '        ExecutablePath = "C:\\Other\\unrelated-server.exe"\n'
+            '        CommandLine = "unrelated-server.exe --port 13305"\n'
+            "    }\n"
+            "}\n"
+            "try {\n"
+            "    Stop-ODSProcessId -ProcId 424243\n"
+            '    Write-Error "UNOWNED_PROCESS_ACCEPTED"\n'
+            "    exit 2\n"
+            "} catch {\n"
+            '    if ($_.Exception.Message -notlike "Refusing to stop unowned process*") {\n'
+            "        throw\n"
+            "    }\n"
+            '    Write-Output "UNOWNED_PROCESS_REJECTED"\n'
+            "}\n"
+        )
+        stale_result = _real_subprocess_run(
+            [shell, "-NoProfile", "-NonInteractive", "-Command", stale_harness],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        unverifiable_live_result = _real_subprocess_run(
+            [
+                shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                unverifiable_live_harness,
+            ],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        reused_pid_result = _real_subprocess_run(
+            [shell, "-NoProfile", "-NonInteractive", "-Command", reused_pid_harness],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        unowned_result = _real_subprocess_run(
+            [shell, "-NoProfile", "-NonInteractive", "-Command", unowned_harness],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+
+        assert stale_result.returncode == 0, stale_result.stderr
+        assert "STALE_LISTENER_IGNORED" in stale_result.stdout
+        assert unverifiable_live_result.returncode == 0, unverifiable_live_result.stderr
+        assert (
+            "UNVERIFIABLE_LIVE_PROCESS_REJECTED"
+            in unverifiable_live_result.stdout
+        )
+        assert reused_pid_result.returncode == 0, reused_pid_result.stderr
+        assert "REUSED_STALE_PID_IGNORED" in reused_pid_result.stdout
+        assert unowned_result.returncode == 0, unowned_result.stderr
+        assert "UNOWNED_PROCESS_REJECTED" in unowned_result.stdout
 
     def test_installer_and_cli_lemonade_tasks_are_always_on(self):
         ods_root = Path(__file__).resolve().parents[4]
@@ -1806,6 +2331,7 @@ class TestModelActivateRequest:
         [
             {"model_id": "target", "context_length": True},
             {"model_id": "target", "context_length": 512},
+            {"model_id": "target", "context_length": 9007199254740992},
             {"model_id": "target", "tier": "UNKNOWN"},
             {"model_id": "target", "tier": "../1"},
             {"model_id": "target\nINJECTED=value"},
@@ -1882,6 +2408,10 @@ def _write_model_activation_fixture(
     models_dir.mkdir(parents=True)
     llama_dir.mkdir(parents=True)
     litellm_dir.mkdir(parents=True)
+    renderer_source = _agent_path.parents[1] / "scripts" / "render-runtime-configs.py"
+    renderer_target = install_dir / "scripts" / "render-runtime-configs.py"
+    renderer_target.parent.mkdir(parents=True)
+    shutil.copyfile(renderer_source, renderer_target)
 
     (models_dir / "new-model.gguf").write_text("model", encoding="utf-8")
     (config_dir / "model-library.json").write_text(
@@ -1936,6 +2466,902 @@ def test_text_snapshot_restores_exact_line_endings(tmp_path):
 
     assert path.read_bytes() == original
     assert (path.stat().st_uid, path.stat().st_gid) == original_owner
+
+
+def test_atomic_write_text_retries_windows_replace_race(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("MODEL=old\n", encoding="utf-8")
+    monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+    real_replace = _mod.os.replace
+    calls = []
+
+    def flaky_replace(src, dst):
+        calls.append((src, dst))
+        if len(calls) < 3:
+            raise PermissionError("[WinError 5] Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_mod.os, "replace", flaky_replace)
+
+    _mod._atomic_write_text(path, "MODEL=new\n")
+
+    assert len(calls) == 3
+    assert path.read_text(encoding="utf-8") == "MODEL=new\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_atomic_write_text_cleans_temp_after_replace_race_exhausted(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / ".env"
+    path.write_text("MODEL=old\n", encoding="utf-8")
+    monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    def locked_replace(src, dst):
+        calls.append((src, dst))
+        raise PermissionError("[WinError 5] Access is denied")
+
+    monkeypatch.setattr(_mod.os, "replace", locked_replace)
+
+    with pytest.raises(PermissionError):
+        _mod._atomic_write_text(path, "MODEL=new\n")
+
+    assert len(calls) == 10
+    assert path.read_text(encoding="utf-8") == "MODEL=old\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def _davep_gpu_contract():
+    topology = {
+        "vendor": "nvidia",
+        "gpu_count": 3,
+        "gpus": [
+            {"index": 0, "uuid": "GPU-ti-0", "name": "GTX 1080 Ti", "memory_gb": 11},
+            {"index": 1, "uuid": "GPU-1080", "name": "GTX 1080", "memory_gb": 8},
+            {"index": 2, "uuid": "GPU-ti-2", "name": "GTX 1080 Ti", "memory_gb": 11},
+        ],
+        "links": [
+            {"gpu_a": 0, "gpu_b": 1, "link_type": "PHB", "link_label": "PHB", "rank": 30},
+            {"gpu_a": 0, "gpu_b": 2, "link_type": "PHB", "link_label": "PHB", "rank": 30},
+            {"gpu_a": 1, "gpu_b": 2, "link_type": "PHB", "link_label": "PHB", "rank": 30},
+        ],
+    }
+    assignment = {
+        "gpu_assignment": {
+            "version": "1.0",
+            "strategy": "colocated",
+            "services": {
+                "llama_server": {
+                    "gpus": ["GPU-ti-0", "GPU-1080"],
+                    "gpu_indices": [0, 1],
+                    "parallelism": {
+                        "mode": "pipeline",
+                        "tensor_parallel_size": 1,
+                        "pipeline_parallel_size": 2,
+                        "gpu_memory_utilization": 0.95,
+                        "tensor_split": [0.5789, 0.4211],
+                    },
+                },
+                "whisper": {"gpus": ["GPU-ti-2"], "gpu_indices": [2]},
+                "comfyui": {"gpus": ["GPU-ti-2"], "gpu_indices": [2]},
+                "embeddings": {"gpus": ["GPU-ti-2"], "gpu_indices": [2]},
+            },
+        }
+    }
+    return topology, assignment
+
+
+def _install_davep_gpu_contract(install_dir, env_path):
+    config_dir = install_dir / "config"
+    scripts_dir = install_dir / "scripts"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    planner_source = _agent_path.parents[1] / "scripts" / "assign_gpus.py"
+    (scripts_dir / "assign_gpus.py").write_text(
+        planner_source.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    topology, assignment = _davep_gpu_contract()
+    (config_dir / "gpu-topology.json").write_text(
+        json.dumps(topology),
+        encoding="utf-8",
+    )
+    encoded = base64.b64encode(
+        json.dumps(assignment, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "GPU_COUNT=3\n"
+            f"GPU_ASSIGNMENT_JSON_B64={encoded}\n"
+            "LLAMA_SERVER_GPU_UUIDS=GPU-ti-0,GPU-1080\n"
+            "LLAMA_SERVER_GPU_INDICES=0,1\n"
+            "LLAMA_ARG_SPLIT_MODE=layer\n"
+            "LLAMA_ARG_TENSOR_SPLIT=0.5789,0.4211\n"
+        )
+    return encoded
+
+
+def _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    models_dir = install_dir / "data" / "models"
+    models_dir.mkdir(parents=True)
+    env_path = install_dir / ".env"
+    env_path.write_text("GPU_BACKEND=nvidia\n", encoding="utf-8")
+    encoded = _install_davep_gpu_contract(install_dir, env_path)
+    target = models_dir / "target.gguf"
+    target.write_bytes(b"model")
+    env = {
+        "GPU_BACKEND": "nvidia",
+        "GPU_COUNT": "3",
+        "GPU_ASSIGNMENT_JSON_B64": encoded,
+    }
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+    return install_dir, target, env
+
+
+def _amd_gpu_contract():
+    topology = {
+        "vendor": "amd",
+        "gpu_count": 3,
+        "gpus": [
+            {
+                "index": 0,
+                "uuid": "AMD-card-0",
+                "name": "Radeon PRO W7900",
+                "memory_gb": 16,
+                "gfx_version": "gfx1100",
+                "memory_type": "discrete",
+            },
+            {
+                "index": 1,
+                "uuid": "AMD-card-1",
+                "name": "Radeon PRO W7900",
+                "memory_gb": 16,
+                "gfx_version": "gfx1100",
+                "memory_type": "discrete",
+            },
+            {
+                "index": 2,
+                "uuid": "AMD-card-2",
+                "name": "Radeon PRO W7900",
+                "memory_gb": 16,
+                "gfx_version": "gfx1100",
+                "memory_type": "discrete",
+            },
+        ],
+        "links": [
+            {"gpu_a": 0, "gpu_b": 1, "link_type": "PCIE", "link_label": "PHB", "rank": 30},
+            {"gpu_a": 0, "gpu_b": 2, "link_type": "PCIE", "link_label": "PHB", "rank": 30},
+            {"gpu_a": 1, "gpu_b": 2, "link_type": "PCIE", "link_label": "PHB", "rank": 30},
+        ],
+    }
+    assignment = {
+        "gpu_assignment": {
+            "version": "1.0",
+            "strategy": "colocated",
+            "services": {
+                "llama_server": {
+                    "gpus": ["AMD-card-0", "AMD-card-1"],
+                    "gpu_indices": [0, 1],
+                    "parallelism": {
+                        "mode": "pipeline",
+                        "tensor_parallel_size": 1,
+                        "pipeline_parallel_size": 2,
+                        "gpu_memory_utilization": 0.95,
+                    },
+                },
+                "whisper": {"gpus": ["AMD-card-2"], "gpu_indices": [2]},
+            },
+        }
+    }
+    return topology, assignment
+
+
+def _install_amd_gpu_contract(install_dir, env_path):
+    config_dir = install_dir / "config"
+    scripts_dir = install_dir / "scripts"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    planner_source = _agent_path.parents[1] / "scripts" / "assign_gpus.py"
+    (scripts_dir / "assign_gpus.py").write_text(
+        planner_source.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    topology, assignment = _amd_gpu_contract()
+    (config_dir / "gpu-topology.json").write_text(
+        json.dumps(topology),
+        encoding="utf-8",
+    )
+    encoded = base64.b64encode(
+        json.dumps(assignment, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "GPU_COUNT=3\n"
+            "AMD_INFERENCE_LOCATION=container\n"
+            "AMD_INFERENCE_MANAGED=true\n"
+            f"GPU_ASSIGNMENT_JSON_B64={encoded}\n"
+            "LLAMA_SERVER_GPU_UUIDS=AMD-card-0,AMD-card-1\n"
+            "LLAMA_SERVER_GPU_INDICES=0,1\n"
+            "ROCR_VISIBLE_DEVICES=0,1\n"
+            "LLAMA_ARG_SPLIT_MODE=layer\n"
+            "LLAMA_ARG_TENSOR_SPLIT=\n"
+        )
+    return encoded
+
+
+def _write_amd_gpu_plan_fixture(tmp_path, monkeypatch):
+    install_dir = tmp_path / "install"
+    models_dir = install_dir / "data" / "models"
+    models_dir.mkdir(parents=True)
+    env_path = install_dir / ".env"
+    env_path.write_text("GPU_BACKEND=amd\n", encoding="utf-8")
+    _install_amd_gpu_contract(install_dir, env_path)
+    target = models_dir / "target.gguf"
+    target.write_bytes(b"model")
+    env = _mod.load_env(env_path)
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+    return install_dir, target, env
+
+
+def test_amd_model_gpu_plan_expands_persisted_rocm_subset(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+
+    assert plan is not None
+    assert plan["previous_gpus"] == ["AMD-card-0", "AMD-card-1"]
+    assert plan["planned_gpus"] == ["AMD-card-0", "AMD-card-1", "AMD-card-2"]
+    assert plan["env_updates"]["LLAMA_SERVER_GPU_INDICES"] == "0,1,2"
+    assert plan["env_updates"]["ROCR_VISIBLE_DEVICES"] == "0,1,2"
+
+
+def test_amd_model_gpu_plan_preserves_sufficient_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    assert _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 28, "size_mb": 24000},
+        target,
+    ) is None
+
+
+def test_amd_selected_context_can_expand_persisted_gpu_subset(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    model = {
+        "id": "amd-context-test",
+        "vram_required_gb": 28,
+        "size_mb": 24000,
+    }
+
+    assert _mod._plan_amd_model_gpu_assignment(env, model, target) is None
+
+    plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        model,
+        target,
+        context_length=131072,
+    )
+
+    assert plan is not None
+    assert plan["required_mb"] == 38339
+    assert plan["previous_gpus"] == ["AMD-card-0", "AMD-card-1"]
+    assert plan["planned_gpus"] == ["AMD-card-0", "AMD-card-1", "AMD-card-2"]
+
+
+def test_amd_model_gpu_plan_is_idempotent_after_expansion(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    first_plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+    env.update(first_plan["env_updates"])
+
+    assert _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    ) is None
+
+
+def test_amd_model_gpu_plan_migrates_legacy_rocm_indices(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.pop("GPU_ASSIGNMENT_JSON_B64")
+    env.pop("LLAMA_SERVER_GPU_UUIDS")
+
+    plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+
+    assert plan["previous_gpus"] == ["AMD-card-0", "AMD-card-1"]
+    migrated = _mod._decode_gpu_assignment(
+        plan["env_updates"]["GPU_ASSIGNMENT_JSON_B64"]
+    )
+    assert migrated["gpu_assignment"]["services"]["llama_server"]["gpu_indices"] == [
+        0,
+        1,
+        2,
+    ]
+
+
+def test_amd_model_gpu_plan_rejects_invalid_legacy_rocm_indices(
+    tmp_path,
+    monkeypatch,
+):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.pop("GPU_ASSIGNMENT_JSON_B64")
+    env.pop("LLAMA_SERVER_GPU_UUIDS")
+    env["LLAMA_SERVER_GPU_INDICES"] = "0,9"
+    env["ROCR_VISIBLE_DEVICES"] = "0,9"
+
+    with pytest.raises(RuntimeError, match="Legacy ROCm GPU assignment is invalid"):
+        _mod._plan_amd_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 40, "size_mb": 35000},
+            target,
+        )
+
+
+def test_amd_model_gpu_plan_preserves_unrestricted_all_gpu_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    for key in (
+        "GPU_ASSIGNMENT_JSON_B64",
+        "LLAMA_SERVER_GPU_UUIDS",
+        "LLAMA_SERVER_GPU_INDICES",
+        "ROCR_VISIBLE_DEVICES",
+    ):
+        env.pop(key, None)
+
+    assert _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    ) is None
+
+
+def test_amd_model_gpu_plan_rejects_small_manual_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    assignment = _mod._decode_gpu_assignment(env["GPU_ASSIGNMENT_JSON_B64"])
+    assignment["gpu_assignment"]["strategy"] = "manual"
+    env["GPU_ASSIGNMENT_JSON_B64"] = base64.b64encode(
+        json.dumps(assignment, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+    with pytest.raises(RuntimeError, match="ods gpu reassign --manual"):
+        _mod._plan_amd_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 40, "size_mb": 35000},
+            target,
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"AMD_INFERENCE_LOCATION": "host"},
+        {"AMD_INFERENCE_LOCATION": "external"},
+        {"AMD_INFERENCE_MANAGED": "false"},
+        {"GPU_COUNT": "1"},
+    ],
+)
+def test_amd_model_gpu_plan_leaves_unmanaged_or_single_gpu_runtime_unchanged(
+    tmp_path,
+    monkeypatch,
+    overrides,
+):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.update(overrides)
+
+    assert _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    ) is None
+
+
+def test_amd_model_gpu_plan_rejects_non_amd_topology(tmp_path, monkeypatch):
+    install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    topology["vendor"] = "nvidia"
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="does not describe AMD"):
+        _mod._plan_amd_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 40, "size_mb": 35000},
+            target,
+        )
+
+
+def test_amd_model_gpu_plan_rejects_unknown_planned_gfx(tmp_path, monkeypatch):
+    install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    topology["gpus"][2]["gfx_version"] = "unknown"
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing a gfx architecture"):
+        _mod._plan_amd_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 40, "size_mb": 35000},
+            target,
+        )
+
+
+def test_amd_model_gpu_plan_rejects_mixed_gfx1151_runtime(tmp_path, monkeypatch):
+    install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    topology["gpus"][2]["gfx_version"] = "gfx1151"
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="cannot safely combine gfx1151"):
+        _mod._plan_amd_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 40, "size_mb": 35000},
+            target,
+        )
+
+
+def test_amd_model_gpu_plan_sets_strix_halo_runtime_contract(tmp_path, monkeypatch):
+    install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    for gpu in topology["gpus"]:
+        gpu["gfx_version"] = "gfx1151"
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+
+    plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+
+    assert plan["env_updates"]["HSA_OVERRIDE_GFX_VERSION"] == "11.5.1"
+    assert (
+        plan["env_updates"]["LEMONADE_LLAMACPP_ROCM_BIN"]
+        == "/opt/llama-custom/llama-server"
+    )
+    assert plan["env_removals"] == []
+
+
+def test_amd_model_gpu_plan_removes_only_ods_managed_strix_overrides(
+    tmp_path,
+    monkeypatch,
+):
+    _install_dir, target, env = _write_amd_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.update(
+        {
+            "HSA_OVERRIDE_GFX_VERSION": "11.5.1",
+            "LEMONADE_LLAMACPP_ROCM_BIN": "/opt/llama-custom/llama-server",
+        }
+    )
+
+    plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+
+    assert set(plan["env_removals"]) == {
+        "HSA_OVERRIDE_GFX_VERSION",
+        "LEMONADE_LLAMACPP_ROCM_BIN",
+    }
+
+    env["HSA_OVERRIDE_GFX_VERSION"] = "10.3.0"
+    env["LEMONADE_LLAMACPP_ROCM_BIN"] = "/opt/operator/llama-server"
+    custom_plan = _mod._plan_amd_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 40, "size_mb": 35000},
+        target,
+    )
+    assert custom_plan["env_removals"] == []
+
+
+def test_model_gpu_plan_expands_davep_two_gpu_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    )
+
+    assert plan is not None
+    assert plan["previous_gpus"] == ["GPU-ti-0", "GPU-1080"]
+    assert plan["planned_gpus"] == ["GPU-ti-0", "GPU-1080", "GPU-ti-2"]
+    assert plan["required_mb"] == 24 * 1024
+    assert plan["planned_capacity_mb"] == 30 * 1024
+    assert plan["split_mode"] == "layer"
+    assert plan["tensor_split"] == []
+    updates = plan["env_updates"]
+    assert updates["LLAMA_SERVER_GPU_UUIDS"] == "GPU-ti-0,GPU-1080,GPU-ti-2"
+    assert updates["LLAMA_SERVER_GPU_INDICES"] == "0,1,2"
+    assert updates["LLAMA_ARG_SPLIT_MODE"] == "layer"
+    assert updates["LLAMA_ARG_TENSOR_SPLIT"] == ""
+    merged = _mod._decode_gpu_assignment(updates["GPU_ASSIGNMENT_JSON_B64"])
+    assert merged["gpu_assignment"]["strategy"] == "colocated"
+    assert merged["gpu_assignment"]["services"]["whisper"]["gpus"] == ["GPU-ti-2"]
+
+
+def test_model_gpu_plan_preserves_sufficient_existing_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 18, "size_mb": 15000},
+        target,
+    )
+
+    assert plan is None
+
+
+def test_model_gpu_plan_is_idempotent_after_expansion(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    first_plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    )
+    env.update(first_plan["env_updates"])
+
+    assert _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    ) is None
+
+
+def test_model_gpu_plan_migrates_legacy_uuid_only_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.pop("GPU_ASSIGNMENT_JSON_B64")
+    env.update(
+        {
+            "LLAMA_SERVER_GPU_UUIDS": "GPU-ti-0,GPU-1080",
+            "LLAMA_SERVER_GPU_INDICES": "0,1",
+            "LLAMA_ARG_SPLIT_MODE": "layer",
+            "WHISPER_GPU_UUID": "GPU-ti-2",
+        }
+    )
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    )
+
+    assert plan is not None
+    assert plan["previous_gpus"] == ["GPU-ti-0", "GPU-1080"]
+    assert plan["planned_gpus"] == ["GPU-ti-0", "GPU-1080", "GPU-ti-2"]
+    migrated = _mod._decode_gpu_assignment(
+        plan["env_updates"]["GPU_ASSIGNMENT_JSON_B64"]
+    )
+    assert migrated["gpu_assignment"]["services"]["whisper"] == {
+        "gpus": ["GPU-ti-2"],
+        "gpu_indices": [2],
+    }
+
+
+def test_model_gpu_plan_migrates_legacy_index_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.pop("GPU_ASSIGNMENT_JSON_B64")
+    env["LLAMA_SERVER_GPU_UUIDS"] = "0,1"
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    )
+
+    assert plan is not None
+    assert plan["previous_gpus"] == ["GPU-ti-0", "GPU-1080"]
+    assert plan["planned_gpus"] == ["GPU-ti-0", "GPU-1080", "GPU-ti-2"]
+
+
+@pytest.mark.parametrize("visibility", ["all", "none", "void"])
+def test_model_gpu_plan_preserves_special_nvidia_visibility_override(
+    tmp_path,
+    monkeypatch,
+    visibility,
+):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    env.pop("GPU_ASSIGNMENT_JSON_B64")
+    env["LLAMA_SERVER_GPU_UUIDS"] = visibility
+
+    assert _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    ) is None
+
+
+def test_model_gpu_plan_does_not_overwrite_manual_assignment(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    assignment = _mod._decode_gpu_assignment(env["GPU_ASSIGNMENT_JSON_B64"])
+    assignment["gpu_assignment"]["strategy"] = "manual"
+    env["GPU_ASSIGNMENT_JSON_B64"] = base64.b64encode(
+        json.dumps(assignment, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+    with pytest.raises(RuntimeError, match="ods gpu reassign --manual"):
+        _mod._plan_nvidia_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 24, "size_mb": 21110},
+            target,
+        )
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "not-base64",
+        base64.b64encode(
+            json.dumps(
+                {
+                    "gpu_assignment": {
+                        "services": {
+                            "llama_server": {
+                                "gpus": ["GPU-ti-0", "GPU-ti-0"],
+                            }
+                        }
+                    }
+                }
+            ).encode("utf-8")
+        ).decode("ascii"),
+    ],
+)
+def test_model_gpu_plan_rejects_malformed_or_duplicate_assignment(
+    tmp_path,
+    monkeypatch,
+    encoded,
+):
+    install_dir = tmp_path / "install"
+    target = tmp_path / "model.gguf"
+    target.write_bytes(b"model")
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    with pytest.raises(RuntimeError, match="assignment is malformed"):
+        _mod._plan_nvidia_model_gpu_assignment(
+            {
+                "GPU_BACKEND": "nvidia",
+                "GPU_COUNT": "3",
+                "GPU_ASSIGNMENT_JSON_B64": encoded,
+            },
+            {"size_mb": 22000},
+            target,
+        )
+
+
+def test_model_gpu_plan_rejects_non_nvidia_topology(tmp_path, monkeypatch):
+    install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))
+    topology["vendor"] = "amd"
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="does not describe NVIDIA"):
+        _mod._plan_nvidia_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 24, "size_mb": 21110},
+            target,
+        )
+
+
+def test_model_gpu_plan_rejects_physical_gpu_mig_topology_without_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    topology_path = install_dir / "config" / "gpu-topology.json"
+    topology_text = topology_path.read_text(encoding="utf-8")
+    topology = json.loads(topology_text)
+    topology["mig_enabled"] = True
+    topology_path.write_text(json.dumps(topology), encoding="utf-8")
+    original_env = dict(env)
+    monkeypatch.setattr(
+        _mod,
+        "_run_nvidia_gpu_planner",
+        lambda *_args: pytest.fail("MIG rejection must happen before planning"),
+    )
+
+    with pytest.raises(RuntimeError, match="MIG hosts"):
+        _mod._plan_nvidia_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 24, "size_mb": 21110},
+            target,
+        )
+
+    assert env == original_env
+    assert json.loads(topology_path.read_text(encoding="utf-8")) == topology
+
+
+def test_model_gpu_plan_rejects_target_larger_than_total_vram(
+    tmp_path,
+    monkeypatch,
+):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="exceeds assignable free VRAM"):
+        _mod._plan_nvidia_model_gpu_assignment(
+            env,
+            {"vram_required_gb": 48, "size_mb": 42500},
+            target,
+        )
+
+
+def test_selected_context_crosses_exact_assignment_boundary(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    model = {
+        "id": "qwen2.5-8b-q4",
+        "vram_required_gb": 19,
+        "size_mb": 16000,
+    }
+
+    assert _mod._plan_nvidia_model_gpu_assignment(env, model, target) is None
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        model,
+        target,
+        context_length=131072,
+    )
+
+    assert plan is not None
+    assert plan["required_mb"] == 19928
+    assert plan["previous_gpus"] == ["GPU-ti-0", "GPU-1080"]
+    assert plan["planned_gpus"] == ["GPU-ti-0", "GPU-ti-2"]
+
+
+def test_runtime_profile_memory_floor_can_trigger_expansion(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 19, "size_mb": 15000},
+        target,
+        runtime_profile={"estimated_required_gb": 20},
+    )
+
+    assert plan is not None
+    assert plan["required_mb"] == 20 * 1024
+
+
+def test_unknown_local_model_gpu_budget_includes_runtime_headroom(tmp_path):
+    target = tmp_path / "local.gguf"
+    target.write_bytes(b"model")
+
+    assert _mod._target_model_vram_budget_mb({"size_mb": 22000}, target) == 30724
+
+
+def test_unknown_qwen_27b_replans_davep_assignment_for_runtime_overhead(
+    tmp_path,
+    monkeypatch,
+):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+
+    plan = _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {
+            # DaveP's llama.cpp log reports 16.39 GiB for this exact GGUF.
+            "size_mb": 16784,
+            "context_length": 65536,
+            "local": True,
+        },
+        target,
+    )
+
+    assert plan is not None
+    assert plan["required_mb"] == 23683
+    assert plan["previous_gpus"] == ["GPU-ti-0", "GPU-1080"]
+    assert plan["planned_gpus"] == ["GPU-ti-0", "GPU-1080", "GPU-ti-2"]
+
+
+def test_huggingface_import_uses_conservative_floor_over_size_estimate(tmp_path):
+    target = tmp_path / "import.gguf"
+    target.write_bytes(b"model")
+
+    assert _mod._target_model_vram_budget_mb(
+        {
+            "source": "huggingface",
+            "size_mb": 16000,
+            "vram_required_gb": 19,
+        },
+        target,
+    ) == 22624
+
+
+def test_curated_model_preserves_validated_vram_contract(tmp_path):
+    target = tmp_path / "curated.gguf"
+    target.write_bytes(b"model")
+
+    assert _mod._target_model_vram_budget_mb(
+        {
+            "size_mb": 21110,
+            "vram_required_gb": 24,
+        },
+        target,
+    ) == 24 * 1024
+
+
+def test_model_weight_size_counts_complete_split_gguf(tmp_path):
+    first = tmp_path / "model-00001-of-00002.gguf"
+    second = tmp_path / "model-00002-of-00002.gguf"
+    first.write_bytes(b"a" * (2 * 1024 * 1024))
+    second.write_bytes(b"b" * (3 * 1024 * 1024))
+    model = {
+        "gguf_file": first.name,
+        "gguf_parts": [
+            {"file": first.name, "url": "https://example.invalid/first"},
+            {"file": second.name, "url": "https://example.invalid/second"},
+        ],
+    }
+
+    assert _mod._model_weight_size_mb(model, first) == 5
+
+
+@pytest.mark.parametrize("invalid", ["nan", "inf", "-inf"])
+def test_model_gpu_budget_ignores_non_finite_metadata(tmp_path, invalid):
+    target = tmp_path / "model.gguf"
+    target.write_bytes(b"model")
+
+    assert _mod._target_model_vram_budget_mb(
+        {
+            "size_mb": invalid,
+            "vram_required_gb": invalid,
+        },
+        target,
+    ) == 3073
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"GPU_BACKEND": "amd", "GPU_COUNT": "3"},
+        {"GPU_BACKEND": "nvidia", "GPU_COUNT": "1"},
+        {"GPU_BACKEND": "nvidia", "GPU_COUNT": "3"},
+    ],
+)
+def test_model_gpu_plan_leaves_non_applicable_runtimes_unchanged(
+    tmp_path,
+    monkeypatch,
+    env,
+):
+    install_dir = tmp_path / "install"
+    target = tmp_path / "model.gguf"
+    target.write_bytes(b"model")
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    assert _mod._plan_nvidia_model_gpu_assignment(env, {"size_mb": 22000}, target) is None
+
+
+def test_model_gpu_plan_explicitly_skips_wsl_auto_replan(tmp_path, monkeypatch):
+    _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(
+        _mod,
+        "_run_nvidia_gpu_planner",
+        lambda *_args: pytest.fail("WSL must not enter automatic replanning"),
+    )
+
+    assert _mod._plan_nvidia_model_gpu_assignment(
+        env,
+        {"vram_required_gb": 24, "size_mb": 21110},
+        target,
+    ) is None
 
 
 class TestModelActivateRollback:
@@ -2057,7 +3483,76 @@ class TestModelActivateRollback:
         assert handler.response_code == 200
         assert len(launches) == 1
         curl_calls = [cmd for cmd in calls if cmd and cmd[0] == "curl"]
-        assert [cmd[-1] for cmd in curl_calls] == [expected_identity_url]
+        assert [cmd[-1] for cmd in curl_calls] == [
+            expected_identity_url,
+            expected_identity_url,
+        ]
+
+    def test_apple_native_activation_applies_advanced_context_override(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="apple")
+        )
+        llama_bin = install_dir / "bin" / "llama-server"
+        llama_bin.parent.mkdir(parents=True)
+        llama_bin.write_text("", encoding="utf-8")
+        lib_dir = install_dir / "lib"
+        lib_dir.mkdir(parents=True)
+        (lib_dir / "constants.sh").write_text("# test fixture\n", encoding="utf-8")
+        (lib_dir / "bridge-manager.sh").write_text("# test fixture\n", encoding="utf-8")
+        launched_envs = []
+
+        def fake_launch(runtime_env_path, *_args):
+            launched_envs.append(_mod.load_env(runtime_env_path))
+
+        def fake_readiness(*_args, **kwargs):
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": "new-model.gguf",
+                    "contextLength": 524288,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-25T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return "new-model.gguf"
+            return True
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Darwin")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_configure_macos_llm_bridge", lambda _env_path: None)
+        monkeypatch.setattr(_mod, "_launch_native_llama_server", fake_launch)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", fake_readiness)
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda cmd, **_kwargs: subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="",
+                stderr="",
+            ),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=524288,
+        )
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["context_length"] == 524288
+        assert len(launched_envs) == 1
+        assert launched_envs[0]["CTX_SIZE"] == "524288"
+        assert launched_envs[0]["MAX_CONTEXT"] == "524288"
+        persisted = _mod.load_env(env_path)
+        assert persisted["CTX_SIZE"] == "524288"
+        assert persisted["MAX_CONTEXT"] == "524288"
 
     def test_apple_missing_native_binary_fails_before_config_mutation(
         self,
@@ -2108,6 +3603,232 @@ class TestModelActivateRollback:
         assert "GGUF_FILE=new-model.gguf" in env_path.read_text(encoding="utf-8")
         assert "LLM_MODEL=new-model" in env_path.read_text(encoding="utf-8")
         assert "filename = new-model.gguf" in models_ini.read_text(encoding="utf-8")
+
+    def test_larger_model_replans_and_commits_nvidia_gpu_assignment(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        catalog_path = install_dir / "config" / "model-library.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["models"][0].update({
+            "size_mb": 21110,
+            "vram_required_gb": 24,
+        })
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+        _install_davep_gpu_contract(install_dir, env_path)
+        restart_envs = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda env: restart_envs.append(dict(env)),
+        )
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        response = handler.parse_response()
+        assert response["gpu_assignment_changed"] is True
+        assert len(restart_envs) == 1
+        assert restart_envs[0]["LLAMA_SERVER_GPU_UUIDS"] == (
+            "GPU-ti-0,GPU-1080,GPU-ti-2"
+        )
+        assert restart_envs[0]["LLAMA_ARG_TENSOR_SPLIT"] == ""
+        persisted = _mod.load_env(env_path)
+        assert persisted["LLAMA_SERVER_GPU_UUIDS"] == "GPU-ti-0,GPU-1080,GPU-ti-2"
+        assert persisted["LLAMA_ARG_TENSOR_SPLIT"] == ""
+        assert persisted["LLM_MODEL_SIZE_MB"] == "21110"
+        assignment = _mod._decode_gpu_assignment(
+            persisted["GPU_ASSIGNMENT_JSON_B64"]
+        )
+        assert assignment["gpu_assignment"]["services"]["llama_server"]["gpus"] == [
+            "GPU-ti-0",
+            "GPU-1080",
+            "GPU-ti-2",
+        ]
+        receipt = json.loads(
+            (install_dir / "data" / "model-activation-receipt.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert receipt["gpuAssignment"] == {
+            "changed": True,
+            "previousGpus": ["GPU-ti-0", "GPU-1080"],
+            "activeGpus": ["GPU-ti-0", "GPU-1080", "GPU-ti-2"],
+            "requiredMiB": 24576,
+            "assignedMiB": 30720,
+            "splitMode": "layer",
+            "tensorSplit": [],
+        }
+
+    def test_failed_activation_rolls_back_nvidia_gpu_assignment(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        catalog_path = install_dir / "config" / "model-library.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["models"][0].update({
+            "size_mb": 21110,
+            "vram_required_gb": 24,
+        })
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+        original_assignment = _install_davep_gpu_contract(install_dir, env_path)
+        original_env = env_path.read_text(encoding="utf-8")
+        restart_envs = []
+
+        def readiness(env, *_args, **kwargs):
+            if env.get("GGUF_FILE") == "new-model.gguf":
+                return None if (kwargs.get("return_identity") or kwargs.get("return_proof")) else False
+            return _mock_verified_readiness(*_args, **kwargs)
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda env: restart_envs.append(dict(env)),
+        )
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert [env["GGUF_FILE"] for env in restart_envs] == [
+            "new-model.gguf",
+            "old-model.gguf",
+        ]
+        assert restart_envs[0]["LLAMA_SERVER_GPU_UUIDS"] == (
+            "GPU-ti-0,GPU-1080,GPU-ti-2"
+        )
+        assert restart_envs[1]["LLAMA_SERVER_GPU_UUIDS"] == "GPU-ti-0,GPU-1080"
+        assert env_path.read_text(encoding="utf-8") == original_env
+        assert _mod.load_env(env_path)["GPU_ASSIGNMENT_JSON_B64"] == original_assignment
+
+    def test_larger_model_replans_and_commits_amd_rocm_assignment(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="amd", lemonade=True)
+        )
+        catalog_path = install_dir / "config" / "model-library.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["models"][0].update({
+            "size_mb": 35000,
+            "vram_required_gb": 40,
+        })
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+        _install_amd_gpu_contract(install_dir, env_path)
+        restart_envs = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_lemonade_model_id",
+            lambda *_args, **_kwargs: "extra.new-model.gguf",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda env: restart_envs.append(dict(env)),
+        )
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["gpu_assignment_changed"] is True
+        assert restart_envs[0]["ROCR_VISIBLE_DEVICES"] == "0,1,2"
+        assert restart_envs[0]["LLAMA_SERVER_GPU_INDICES"] == "0,1,2"
+        persisted = _mod.load_env(env_path)
+        assert persisted["ROCR_VISIBLE_DEVICES"] == "0,1,2"
+        assignment = _mod._decode_gpu_assignment(
+            persisted["GPU_ASSIGNMENT_JSON_B64"]
+        )
+        assert assignment["gpu_assignment"]["services"]["llama_server"]["gpus"] == [
+            "AMD-card-0",
+            "AMD-card-1",
+            "AMD-card-2",
+        ]
+        receipt = json.loads(
+            (install_dir / "data" / "model-activation-receipt.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert receipt["gpuAssignment"]["activeGpus"] == [
+            "AMD-card-0",
+            "AMD-card-1",
+            "AMD-card-2",
+        ]
+
+    def test_failed_activation_rolls_back_amd_rocm_assignment(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="amd", lemonade=True)
+        )
+        catalog_path = install_dir / "config" / "model-library.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["models"][0].update({
+            "size_mb": 35000,
+            "vram_required_gb": 40,
+        })
+        catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+        original_assignment = _install_amd_gpu_contract(install_dir, env_path)
+        original_env = env_path.read_text(encoding="utf-8")
+        restart_envs = []
+
+        def readiness(env, *_args, **kwargs):
+            if env.get("GGUF_FILE") == "new-model.gguf":
+                return None if (kwargs.get("return_identity") or kwargs.get("return_proof")) else False
+            return _mock_verified_readiness(*_args, **kwargs)
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_lemonade_model_id",
+            lambda env, gguf_file, **_kwargs: f"extra.{gguf_file}",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda env: restart_envs.append(dict(env)),
+        )
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert restart_envs[0]["ROCR_VISIBLE_DEVICES"] == "0,1,2"
+        assert restart_envs[1]["ROCR_VISIBLE_DEVICES"] == "0,1"
+        assert env_path.read_text(encoding="utf-8") == original_env
+        assert _mod.load_env(env_path)["GPU_ASSIGNMENT_JSON_B64"] == original_assignment
 
     @pytest.mark.parametrize(
         "runtime_kind",
@@ -2299,6 +4020,54 @@ class TestModelActivateRollback:
         assert "LLAMA_ARG_SPEC_DRAFT_N_MAX=" not in env_text
         assert "filename = Research.Model-Q8_0.gguf" in models_ini.read_text(encoding="utf-8")
 
+    def test_local_gguf_activation_prefers_canonical_ctx_size_on_upgrade(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        (install_dir / "config" / "model-library.json").write_text(
+            json.dumps({"models": []}),
+            encoding="utf-8",
+        )
+        (install_dir / "data" / "models" / "LocalUpgrade.gguf").write_text(
+            "model",
+            encoding="utf-8",
+        )
+        env_path.write_text(
+            "GPU_BACKEND=nvidia\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "CTX_SIZE=131072\n"
+            "MAX_CONTEXT=65536\n"
+            "OLLAMA_PORT=8080\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+
+        def fake_run(cmd, **_kwargs):
+            stdout = (
+                _llama_identity_response("LocalUpgrade.gguf")
+                if cmd and cmd[0] == "curl"
+                else ""
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "LocalUpgrade")
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["context_length"] == 131072
+        persisted = _mod.load_env(env_path)
+        assert persisted["CTX_SIZE"] == "131072"
+        assert persisted["MAX_CONTEXT"] == "131072"
+
     def test_activation_resolves_local_gguf_by_stem_with_mixed_case_extension(
         self, tmp_path, monkeypatch,
     ):
@@ -2470,12 +4239,17 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
 
         def fake_run(cmd, **_kwargs):
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 stdout = json.dumps({
                     "data": [{"id": "extra.new-model.gguf"}]
                 })
             elif cmd and cmd[0] == "curl":
-                stdout = _lemonade_health_response("extra.new-model.gguf")
+                stdout = _lemonade_health_response(
+                    "extra.new-model.gguf",
+                    context_length=524288,
+                )
             else:
                 stdout = ""
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
@@ -2483,14 +4257,21 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         handler = _ResponseHandler()
 
-        _mod.AgentHandler._do_model_activate(handler, "target-model")
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=524288,
+        )
 
         assert handler.response_code == 200
         content = lemonade_yaml.read_text(encoding="utf-8")
         assert "api_key: sk-inline-from-env-file-67890" in content
         assert "api_key: sk-lemonade" not in content
         assert "enable_thinking: false" in content
-        assert "LEMONADE_MODEL=extra.new-model.gguf" in env_path.read_text(encoding="utf-8")
+        env = _mod.load_env(env_path)
+        assert env["LEMONADE_MODEL"] == "extra.new-model.gguf"
+        assert env["CTX_SIZE"] == "524288"
+        assert env["MAX_CONTEXT"] == "524288"
 
     def test_windows_lemonade_107_persists_and_propagates_exact_model_id(
         self, tmp_path, monkeypatch,
@@ -2549,6 +4330,8 @@ class TestModelActivateRollback:
         )
 
         def fake_run(cmd, **_kwargs):
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 return subprocess.CompletedProcess(
                     cmd,
@@ -2609,6 +4392,117 @@ class TestModelActivateRollback:
             models = config["provider"]["llama-server"]["models"]
             assert "Modern-Model" in models
             assert "Old-Model" not in models
+
+    def test_windows_lemonade_final_runtime_flip_rolls_back_before_state_publish(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, lemonade_yaml, yaml_text = (
+            _write_model_activation_fixture(
+                tmp_path,
+                gpu_backend="amd",
+                lemonade=True,
+            )
+        )
+        env_path.write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=amd\n"
+            "LLM_BACKEND=lemonade\n"
+            "AMD_INFERENCE_RUNTIME=lemonade\n"
+            "AMD_INFERENCE_LOCATION=host\n"
+            "AMD_INFERENCE_PORT=8080\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "LEMONADE_MODEL=Old-Model\n"
+            "CTX_SIZE=2048\n",
+            encoding="utf-8",
+        )
+        state_path = install_dir / "data" / "model-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        old_state = {"active": {"runtimeModelId": "Old-Model"}}
+        state_path.write_text(json.dumps(old_state), encoding="utf-8")
+        states = {
+            "ods-litellm": {"exists": True, "running": True},
+            "ods-hermes": {"exists": False, "running": False},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        events = []
+        target_readiness_attempts = 0
+        state_records = []
+
+        class FakeSwitchboardState:
+            def record_verified_route(self, *_args, **kwargs):
+                state_records.append(kwargs)
+
+        def resolve_model_id(_env, gguf_file, **_kwargs):
+            return "Modern-Model" if gguf_file == "new-model.gguf" else "Old-Model"
+
+        def restart_windows_lemonade(env):
+            events.append(f"runtime:{env['GGUF_FILE']}")
+
+        def readiness(_env, **kwargs):
+            nonlocal target_readiness_attempts
+            gguf_file = kwargs["gguf_file"]
+            events.append(f"ready:{gguf_file}")
+            if gguf_file == "new-model.gguf":
+                target_readiness_attempts += 1
+                if target_readiness_attempts > 1:
+                    if kwargs.get("return_proof"):
+                        return {}
+                    if kwargs.get("return_identity"):
+                        return ""
+                    return False
+            identity = resolve_model_id({}, gguf_file)
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": identity,
+                    "contextLength": 4096,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return identity
+            return True
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod, "_switchboard_state", FakeSwitchboardState())
+        monkeypatch.setattr(_mod, "_resolve_lemonade_model_id", resolve_model_id)
+        monkeypatch.setattr(_mod, "_restart_windows_lemonade", restart_windows_lemonade)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None: events.append(f"restart:{name}") or name == "ods-litellm",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restore_container_state",
+            lambda name, _state, recreate=False: events.append(f"restore:{name}") or True,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_verify_litellm_route",
+            lambda env: events.append(f"litellm:{env['LEMONADE_MODEL']}"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert "Final runtime proof failed" in response["error"]
+        assert _mod.load_env(env_path)["GGUF_FILE"] == "old-model.gguf"
+        assert _mod.load_env(env_path)["LEMONADE_MODEL"] == "Old-Model"
+        assert lemonade_yaml.read_text(encoding="utf-8") == yaml_text
+        assert json.loads(state_path.read_text(encoding="utf-8")) == old_state
+        assert state_records == []
+        first_ready = events.index("ready:new-model.gguf")
+        final_ready = events.index("ready:new-model.gguf", first_ready + 1)
+        assert events.index("restart:ods-litellm") < final_ready
 
     def test_windows_lemonade_rollback_removes_new_litellm_config(
         self, tmp_path, monkeypatch,
@@ -2714,6 +4608,8 @@ class TestModelActivateRollback:
 
         def fake_run(cmd, **_kwargs):
             calls.append(cmd)
+            if cmd and cmd[0] == sys.executable:
+                return _real_subprocess_run(cmd, **_kwargs)
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
                 stdout = json.dumps({
                     "data": [{"id": "extra.new-model.gguf"}]
@@ -2767,8 +4663,8 @@ class TestModelActivateRollback:
             "AMD_INFERENCE_RUNTIME=lemonade\n"
             "AMD_INFERENCE_LOCATION=host\n"
             "AMD_INFERENCE_PORT=8080\n"
-            "GGUF_FILE=new-model.gguf\n"
-            "LLM_MODEL=new-model\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
             "LEMONADE_MODEL=Old-Model\n"
             "CTX_SIZE=2048\n"
             "LITELLM_LEMONADE_API_KEY=sk-inline-from-env-file-67890\n",
@@ -2806,8 +4702,82 @@ class TestModelActivateRollback:
             "lemonade_model_id": "Modern-Model",
         }
         assert restarts == ["new-model.gguf"]
-        assert "LEMONADE_MODEL=Modern-Model" in env_path.read_text(encoding="utf-8")
+        updated_env = env_path.read_text(encoding="utf-8")
+        assert "GGUF_FILE=new-model.gguf" in updated_env
+        assert "LLM_MODEL=target-model" in updated_env
+        assert "LEMONADE_MODEL=Modern-Model" in updated_env
         assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
+
+    def test_windows_lemonade_runtime_ensure_rolls_back_renderer_failure(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, lemonade_yaml, _yaml_text = (
+            _write_model_activation_fixture(
+                tmp_path,
+                gpu_backend="amd",
+                lemonade=True,
+                lemonade_api_key="sk-inline-from-env-file-67890",
+            )
+        )
+        old_env = (
+            "ODS_MODE=lemonade\r\n"
+            "GPU_BACKEND=amd\r\n"
+            "LLM_BACKEND=lemonade\r\n"
+            "AMD_INFERENCE_RUNTIME=lemonade\r\n"
+            "AMD_INFERENCE_LOCATION=host\r\n"
+            "AMD_INFERENCE_PORT=8080\r\n"
+            "GGUF_FILE=old-model.gguf\r\n"
+            "LLM_MODEL=old-model\r\n"
+            "LEMONADE_MODEL=Old-Model\r\n"
+            "CTX_SIZE=2048\r\n"
+            "LITELLM_LEMONADE_API_KEY=sk-inline-from-env-file-67890\r\n"
+        ).encode()
+        old_yaml = b"model_list:\r\n  - model_name: old\r\n"
+        env_path.write_bytes(old_env)
+        lemonade_yaml.write_bytes(old_yaml)
+        restarts = []
+        readiness_calls = []
+
+        def record_restart(env):
+            restarts.append(env["GGUF_FILE"])
+
+        def prove_previous(env, **kwargs):
+            readiness_calls.append((dict(env), dict(kwargs)))
+            return {
+                "identity": "Old-Model",
+                "contextLength": 2048,
+                "contextVerified": True,
+                "verifiedAt": "2026-07-25T00:00:00+00:00",
+            }
+
+        def fail_renderer(*_args, **_kwargs):
+            raise RuntimeError("simulated renderer failure")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod, "_live_runtime_has_model", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(_mod, "_restart_windows_lemonade", record_restart)
+        monkeypatch.setattr(_mod, "_resolve_lemonade_model_id", lambda *_args, **_kwargs: "Modern-Model")
+        monkeypatch.setattr(_mod, "_write_lemonade_config", fail_renderer)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", prove_previous)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_windows_lemonade_runtime_ensure(
+            handler,
+            model_id="target-model",
+            gguf_file="new-model.gguf",
+        )
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert restarts == ["new-model.gguf", "old-model.gguf"]
+        assert env_path.read_bytes() == old_env
+        assert lemonade_yaml.read_bytes() == old_yaml
+        assert len(readiness_calls) == 1
+        assert readiness_calls[0][1]["gguf_file"] == "old-model.gguf"
+        assert readiness_calls[0][1]["lemonade_model_id"] == "Old-Model"
+        assert readiness_calls[0][1]["return_proof"] is True
 
     def test_windows_native_llama_activation_uses_plain_health_and_litellm_local(
         self, tmp_path, monkeypatch,
@@ -2898,6 +4868,67 @@ class TestModelActivateRollback:
         assert "api_base: http://host.docker.internal:9090/v1" in content
         assert ["docker", "restart", "ods-litellm"] in calls
         assert ["docker", "restart", "ods-hermes"] in calls
+
+    def test_windows_native_llama_applies_advanced_context_override(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="amd")
+        )
+        env_path.write_text(
+            "GPU_BACKEND=amd\n"
+            "LLM_BACKEND=llama-server\n"
+            "AMD_INFERENCE_RUNTIME=llama-server\n"
+            "AMD_INFERENCE_RUNTIME_MODE=windows-llama-server-fallback\n"
+            "AMD_INFERENCE_LOCATION=host\n"
+            "AMD_INFERENCE_MANAGED=true\n"
+            "AMD_INFERENCE_PORT=9090\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "CTX_SIZE=2048\n"
+            "MAX_CONTEXT=2048\n",
+            encoding="utf-8",
+        )
+        restart_envs = []
+
+        def record_native_restart(_path, env):
+            restart_envs.append(dict(env))
+
+        def verified_readiness(*_args, **kwargs):
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": "new-model.gguf",
+                    "contextLength": 524288,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-25T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return "new-model.gguf"
+            return True
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_restart_windows_native_llama_server", record_native_restart)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", verified_readiness)
+        monkeypatch.setattr(_mod, "_container_exists", lambda _container: False)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=524288,
+        )
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["context_length"] == 524288
+        assert len(restart_envs) == 1
+        assert restart_envs[0]["CTX_SIZE"] == "524288"
+        assert restart_envs[0]["MAX_CONTEXT"] == "524288"
+        persisted = _mod.load_env(env_path)
+        assert persisted["CTX_SIZE"] == "524288"
+        assert persisted["MAX_CONTEXT"] == "524288"
 
     def test_windows_native_litellm_local_rolls_back_on_late_failure(self, tmp_path, monkeypatch):
         install_dir, env_path, env_text, models_ini, ini_text, _yaml, _yaml_text = (
@@ -3251,6 +5282,28 @@ class TestModelActivateRollback:
         assert '  default: "new-model.gguf"' in hermes_template.read_text(encoding="utf-8")
         assert ["docker", "restart", "ods-hermes"] in calls
 
+    def test_capture_hermes_config_falls_back_when_stat_is_denied(
+        self, tmp_path, monkeypatch,
+    ):
+        hermes_live = tmp_path / "data" / "hermes" / "config.yaml"
+        container_text = "model:\n  default: \"old-live\"\n"
+        original_lstat = Path.lstat
+
+        def fake_lstat(path, *args, **kwargs):
+            if path == hermes_live:
+                raise PermissionError("container-owned directory")
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", fake_lstat)
+        monkeypatch.setattr(_mod, "_container_running", lambda name: name == "ods-hermes")
+        monkeypatch.setattr(_mod, "_read_hermes_container_config", lambda: container_text)
+
+        snapshot = _mod._capture_hermes_live_config(hermes_live)
+
+        assert snapshot["exists"] is True
+        assert snapshot["source"] == "container"
+        assert snapshot["text"] == container_text
+
     def test_activation_repairs_malformed_models_ini_directory(
         self, tmp_path, monkeypatch,
     ):
@@ -3344,6 +5397,112 @@ class TestModelActivateRollback:
         assert "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS=-1" in env_text
         assert "LLAMA_ARG_SPEC_TYPE=draft-mtp" in env_text
         assert "LLAMA_ARG_SPEC_DRAFT_N_MAX=3" in env_text
+
+    def test_explicit_context_overrides_profile_and_installer_recommendation(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.write_text(
+            env_path.read_text(encoding="utf-8")
+            + "MODEL_RECOMMENDED_MODEL=new-model\n"
+            + "MODEL_RECOMMENDED_GGUF=new-model.gguf\n"
+            + "MODEL_RECOMMENDED_CONTEXT=65536\n",
+            encoding="utf-8",
+        )
+        model_library = install_dir / "config" / "model-library.json"
+        model_library.write_text(json.dumps({
+            "models": [{
+                "id": "target-model",
+                "gguf_file": "new-model.gguf",
+                "gguf_url": "https://example.test/new-model.gguf",
+                "gguf_sha256": hashlib.sha256(b"model").hexdigest(),
+                "llm_model_name": "new-model",
+                "context_length": 8192,
+                "max_context_length": 262144,
+                "runtime_profiles": [{
+                    "id": "nvidia-8gb-64k",
+                    "backend": "nvidia",
+                    "memory_type": "discrete",
+                    "context_length": 65536,
+                    "env": {
+                        "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+                        "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+                    },
+                }],
+            }]
+        }), encoding="utf-8")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_select_runtime_profile",
+            lambda _model, _env: {
+                "id": "nvidia-8gb-64k",
+                "context_length": 65536,
+                "env": {
+                    "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+                    "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+                },
+            },
+        )
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+
+        def verified_requested_context(env, *_args, **kwargs):
+            context = int(env["MAX_CONTEXT"])
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": "new-model.gguf",
+                    "contextLength": context,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return "new-model.gguf"
+            return True
+
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_model_readiness",
+            verified_requested_context,
+        )
+
+        def fake_run(cmd, **_kwargs):
+            stdout = _llama_identity_response("new-model.gguf") if cmd and cmd[0] == "curl" else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=524288,
+        )
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["context_length"] == 524288
+        env = _mod.load_env(env_path)
+        assert env["MAX_CONTEXT"] == "524288"
+        assert env["CTX_SIZE"] == "524288"
+        assert env["MODEL_RUNTIME_PROFILE"] == "nvidia-8gb-64k"
+        assert env["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
+        assert env["LLAMA_ARG_CACHE_TYPE_V"] == "q4_0"
+        assert "n-ctx = 524288" in (
+            install_dir / "config" / "llama-server" / "models.ini"
+        ).read_text(encoding="utf-8")
+        receipt = json.loads(
+            (install_dir / "data" / "model-activation-receipt.json").read_text(
+                encoding="utf-8",
+            )
+        )
+        assert receipt["contextLength"] == 524288
+        assert receipt["contextVerified"] is True
+        assert receipt["consumers"]["open-webui"] == "dynamic_route"
+        assert receipt["consumers"]["dashboard"] == "live_env"
 
     def test_unexpected_failure_rolls_back_all_config_backups(self, tmp_path, monkeypatch):
         install_dir, env_path, env_text, models_ini, ini_text, lemonade_yaml, lemonade_text = (
@@ -3614,6 +5773,70 @@ class TestModelActivateRollback:
         assert primary_config["provider"]["llama-server"]["options"]["timeout"] == 900
         assert compat_config["compat_only"] is True
 
+    def test_switchboard_activation_routes_opencode_through_stable_alias(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.write_text(
+            env_text
+            + "ODS_MODEL_SWITCHBOARD=enabled\n"
+            + "LITELLM_KEY=switchboard-secret\n"
+            + "LITELLM_PORT=4100\n",
+            encoding="utf-8",
+        )
+        config_dir = tmp_path / "home" / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        primary = config_dir / "opencode.json"
+        compat = config_dir / "config.json"
+        stale = {
+            "model": "llama-server/qwen3-coder-next",
+            "small_model": "llama-server/qwen3-coder-next",
+            "theme": "system",
+            "provider": {
+                "llama-server": {
+                    "options": {
+                        "baseURL": "http://127.0.0.1:11434/v1",
+                        "apiKey": "no-key",
+                    },
+                    "models": {
+                        "qwen3-coder-next": {"name": "Qwen 3 Coder Next"},
+                    },
+                },
+            },
+        }
+        primary.write_text(json.dumps(stale), encoding="utf-8")
+        compat.write_text(json.dumps(stale), encoding="utf-8")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
+        monkeypatch.setattr(_mod, "_restart_managed_opencode", lambda _state=None: False)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(_mod, "_render_model_router_runtime_configs", lambda *_a, **_k: None)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        for path in (primary, compat):
+            config = json.loads(path.read_text(encoding="utf-8"))
+            assert config["theme"] == "system"
+            assert config["model"] == "llama-server/ods/current"
+            assert config["small_model"] == "llama-server/ods/current"
+            provider = config["provider"]["llama-server"]
+            assert provider["name"] == "ODS switchboard"
+            assert provider["options"] == {
+                "baseURL": "http://127.0.0.1:4100/v1",
+                "apiKey": "switchboard-secret",
+            }
+            assert "qwen3-coder-next" not in provider["models"]
+            assert provider["models"]["ods/current"]["limit"] == {
+                "context": 4096,
+                "output": 4096,
+            }
+
     def test_opencode_update_failure_restores_exact_files(self, tmp_path, monkeypatch):
         install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
             _write_model_activation_fixture(tmp_path)
@@ -3713,6 +5936,17 @@ class TestModelActivateRollback:
         assert receipt["context_length"] == 2048
         assert receipt["consumers"]["dashboard"] == "live_env"
         assert receipt["consumers"]["open-webui"] == "dynamic_route"
+        completion_receipt = json.loads(
+            (install_dir / "data" / "model-activation-receipt.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert completion_receipt["schema"] == "ods.model-activation-receipt.v1"
+        assert completion_receipt["status"] == "complete"
+        assert completion_receipt["modelId"] == "target-model"
+        assert completion_receipt["ggufFile"] == "new-model.gguf"
+        assert completion_receipt["runtimeModelId"] == "new-model.gguf"
+        assert completion_receipt["consumers"] == receipt["consumers"]
         env = _mod.load_env(env_path)
         assert env["TIER"] == "0"
         assert env["CTX_SIZE"] == "2048"
@@ -3720,7 +5954,7 @@ class TestModelActivateRollback:
         assert env["GGUF_URL"] == "https://example.test/new-model.gguf"
         assert env["GGUF_SHA256"] == hashlib.sha256(b"model").hexdigest()
 
-    def test_activation_rejects_context_above_catalog_limit(
+    def test_activation_rejects_context_above_explicit_tier_limit(
         self, tmp_path, monkeypatch,
     ):
         install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
@@ -3731,17 +5965,27 @@ class TestModelActivateRollback:
         monkeypatch.setattr(
             _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
         )
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_requested_tier_contract",
+            lambda _tier, _env: {
+                "GGUF_FILE": "new-model.gguf",
+                "LLM_MODEL": "new-model",
+                "MAX_CONTEXT": "4096",
+            },
+        )
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(
             handler,
             "target-model",
             requested_context_length=8192,
-            requested_tier="4",
+            requested_tier="1",
         )
 
         assert handler.response_code == 400
-        assert "exceeds the catalog limit" in handler.parse_response()["error"]
+        assert handler.parse_response()["code"] == "tier_context_mismatch"
+        assert "exceeds tier 1 limit 4096" in handler.parse_response()["error"]
         assert env_path.read_text(encoding="utf-8") == env_text
         assert restarts == []
 
@@ -4011,6 +6255,16 @@ class TestModelActivateRollback:
         )
         hermes_live.write_text(old_config, encoding="utf-8")
         hermes_template.write_text(old_config, encoding="utf-8")
+        completion_receipt = install_dir / "data" / "model-activation-receipt.json"
+        old_receipt = {
+            "schema": "ods.model-activation-receipt.v1",
+            "status": "complete",
+            "modelId": "old-model",
+            "ggufFile": "old-model.gguf",
+            "runtimeModelId": "old-model.gguf",
+            "consumers": {"hermes": "restarted"},
+        }
+        completion_receipt.write_text(json.dumps(old_receipt), encoding="utf-8")
         states = {
             "ods-litellm": {"exists": False, "running": False},
             "ods-hermes": {"exists": True, "running": True},
@@ -4059,6 +6313,7 @@ class TestModelActivateRollback:
         assert health_checks == 2
         assert env_path.read_text(encoding="utf-8") == env_text
         assert hermes_live.read_text(encoding="utf-8") == old_config
+        assert json.loads(completion_receipt.read_text(encoding="utf-8")) == old_receipt
 
     def test_runtime_profile_cannot_exceed_requested_tier_context(
         self, tmp_path, monkeypatch,

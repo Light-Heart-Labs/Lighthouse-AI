@@ -139,6 +139,30 @@ ods disable my-service   # Stops container, renames compose.yaml → compose.yam
 ods list                 # Shows all services with status
 ```
 
+## Portal Updates and Rollback
+
+Extensions installed from the bundled library receive a content receipt. The
+Dashboard Extensions page compares that receipt with both the current library
+definition and the installed definition:
+
+- `current`: installed files still match the receipt and the library
+- `available`: ODS ships a newer library definition
+- `modified`: installed definition files changed locally after installation
+- `untracked`: legacy install created before content receipts were introduced
+
+An update is staged and security-scanned on the same filesystem before the
+installed directory is atomically replaced. Enabled services are reconciled
+through the host agent; disabled and one-shot CLI extensions remain disabled.
+Existing service configuration is preserved, while new default config files
+may be added when they do not already exist. Those newly added defaults are
+also preserved if the definition is rolled back.
+
+Local definition changes are never overwritten without an explicit
+confirmation. The previous definition is retained as a single rollback backup,
+and the portal exposes **Rollback** after a successful update. Update and
+rollback replace extension definitions only: service data, Docker volumes,
+secrets, and existing configuration remain in place.
+
 ## Audit Extensions Before You Ship
 
 ODS now includes an extension audit workflow so new services can be
@@ -335,7 +359,11 @@ services:
       - "${VIDEO_GID:-44}"
       - "${RENDER_GID:-992}"
     environment:
-      - HSA_OVERRIDE_GFX_VERSION=11.5.1
+      - MIOPEN_FIND_MODE=FAST
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+    volumes:
+      - ./data/comfyui/ComfyUI:/opt/ComfyUI:z
+      - ./data/comfyui/miopen:/root/.config/miopen:z
     # ... ports, volumes, healthcheck, deploy, etc.
 ```
 
@@ -354,7 +382,7 @@ services:
 AMD ROCm requires additional container configuration compared to NVIDIA:
 - **Device passthrough:** `/dev/dri` (rendering) and `/dev/kfd` (compute)
 - **Group membership:** Container user must be in the host's `video` and `render` groups
-- **GFX version override:** Set `HSA_OVERRIDE_GFX_VERSION` to match your GPU (check with `rocminfo | grep gfx`)
+- **GFX version override:** Avoid setting `HSA_OVERRIDE_GFX_VERSION` unless a specific image requires emulation. A wrong value can dispatch incompatible kernels; an empty value is also invalid. Prefer an image that contains kernels for the native `rocminfo` architecture.
 - **Security relaxation:** `cap_add: SYS_PTRACE` and `seccomp:unconfined` may be needed for ROCm profiling
 
 ## Compatibility Checklist

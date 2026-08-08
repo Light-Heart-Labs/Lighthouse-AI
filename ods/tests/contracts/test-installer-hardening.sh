@@ -282,6 +282,7 @@ if ! PATH="$tmpdir/bin:$PATH" \
     ODS_INSTALL_DIR="$sha_install" \
     ODS_ALLOW_LEGACY_PARALLEL=1 \
     ODS_TEST_BOOTSTRAP_INSTALL_MARKER="$sha_marker" \
+    OSTYPE=linux-gnu \
     bash get-ods.sh --non-interactive >"$tmpdir/bootstrap-sha.out" 2>&1; then
   cat "$tmpdir/bootstrap-sha.out"
   echo "[FAIL] bootstrap exact-SHA install failed"
@@ -378,6 +379,18 @@ assert_contains "$win_lemonade_helper" 'RedirectStandardError' "Windows Lemonade
 assert_contains "$win_lemonade_helper" 'Start-Process -FilePath \$Contract\.ExecutablePath' "Windows Lemonade direct fallback should launch in the user session"
 assert_contains "$win_lemonade_helper" 'LaunchMethod = "start-process"' "Windows Lemonade direct fallback should report the user-session launch method"
 assert_not_contains "$win_lemonade_helper" 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create' "Windows Lemonade direct fallback must not create session-0 WMI orphans"
+assert_contains "$win_lemonade_helper" 'ChangeExtension\(\$DiagnosticLogPath, "\.task\.ps1"\)' "Windows Lemonade scheduled-task wrapper should be written to a launcher file"
+assert_contains "$win_lemonade_helper" '-File `"\$escapedLauncherPath`"' "Windows Lemonade scheduled-task action should use a short launcher-file command"
+assert_not_contains "$win_lemonade_helper" 'EncodedCommand' "Windows Lemonade scheduled-task action must not embed a long encoded wrapper"
+assert_contains "$win_lemonade_helper" 'function Resolve-ODSInteractiveScheduledTaskUser' "Windows scheduled task helper should resolve the interactive user centrally"
+assert_contains "$win_lemonade_helper" 'whoami\.exe' "Windows scheduled task helper should prefer a fully qualified interactive identity"
+assert_contains "$win_lemonade_helper" 'New-ODSInteractiveScheduledTaskPrincipal' "Windows scheduled task helper should expose a shared principal constructor"
+assert_not_contains "$win_installer" 'New-ScheduledTaskPrincipal -UserId \$env:USERNAME' "Windows installer must not register interactive tasks with an unqualified USERNAME"
+assert_not_contains "installers/windows/ods.ps1" 'New-ScheduledTaskPrincipal -UserId \$env:USERNAME' "ods.ps1 must not register interactive tasks with an unqualified USERNAME"
+assert_not_contains "installers/windows/phases/07-devtools.ps1" 'New-ScheduledTaskPrincipal -UserId \$env:USERNAME' "Windows host-agent phase must not register interactive tasks with an unqualified USERNAME"
+assert_contains "$win_installer" 'New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited' "Windows installer should register limited interactive tasks through the shared principal helper"
+assert_contains "installers/windows/ods.ps1" 'New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited' "ods.ps1 should register limited interactive tasks through the shared principal helper"
+assert_contains "installers/windows/phases/07-devtools.ps1" 'New-ODSInteractiveScheduledTaskPrincipal -RunLevel Limited' "Windows host-agent phase should register limited interactive tasks through the shared principal helper"
 assert_contains "$win_installer" 'Lemonade scheduled task did not start a server process' "Windows installer should recover when Task Scheduler reports success without a Lemonade process"
 assert_contains "$win_installer" 'Start-Process msiexec\.exe .* -PassThru' "Windows installer should capture Lemonade MSI exit codes"
 assert_contains "$win_installer" 'Lemonade MSI exited with code' "Windows installer should report failed Lemonade MSI exit codes honestly"
@@ -431,6 +444,7 @@ for needle in (
     "Register-ScheduledTask -TaskName $upgradeTaskName",
     "-Settings $upgradeSettings",
     "Start-ScheduledTask -TaskName $upgradeTaskName",
+    "$upgradePrincipal = New-ODSInteractiveScheduledTaskPrincipal",
     "-RunLevel Limited",
 ):
     if needle not in block:
@@ -458,7 +472,7 @@ block = text[start:end]
 for needle in (
     "New-ScheduledTaskAction",
     "-Execute $script:LLAMA_SERVER_EXE",
-    "$nativeLlamaPrincipal = New-ScheduledTaskPrincipal",
+    "$nativeLlamaPrincipal = New-ODSInteractiveScheduledTaskPrincipal",
     "-RunLevel Limited",
     "Register-ScheduledTask -TaskName $nativeLlamaTaskName",
     "Start-ScheduledTask -TaskName $nativeLlamaTaskName",
@@ -707,6 +721,10 @@ assert_contains "installers/macos/install-macos.sh" 'compose-launch\.txt' "macOS
 assert_contains "installers/macos/install-macos.sh" 'ps -q' "macOS installer does not count compose-managed containers"
 assert_contains "installers/macos/install-macos.sh" 'docker compose up completed but created no managed containers' "macOS installer does not fail loud on zero managed containers"
 assert_contains "installers/macos/install-macos.sh" '_macos_pre_pull_compose_images' "macOS installer does not preflight compose images before launch"
+assert_contains "installers/macos/install-macos.sh" 'docker pull --platform "\$platform"' "macOS pre-pull does not honor compose platform pins (amd64-only images fail on Apple Silicon)"
+assert_contains "installers/macos/install-macos.sh" 'service\.get\("platform"\)' "macOS compose image resolution drops per-service platform pins"
+assert_contains "installers/macos/install-macos.sh" '_macos_cached_image_platform' "macOS pre-pull does not inspect cached image architecture"
+assert_contains "installers/macos/install-macos.sh" 'cached_platform.*requested_platform' "macOS pre-pull may trust a cached image with the wrong architecture"
 assert_contains "installers/macos/install-macos.sh" '--pull never' "macOS installer still allows implicit compose pulls during install launch"
 assert_contains "installers/macos/install-macos.sh" 'ODS_DOCKER_BUILD_MAX_ATTEMPTS' "macOS installer does not retry transient local image build failures"
 assert_contains "installers/macos/install-macos.sh" '_macos_build_failed=\$\(\(_macos_build_failed \+ 1\)\)' "macOS installer does not count failed required local image builds"

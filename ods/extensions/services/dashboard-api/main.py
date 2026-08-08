@@ -33,7 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # --- Local modules ---
 from config import (
-    SERVICES, DATA_DIR, INSTALL_DIR, SIDEBAR_ICONS, MANIFEST_ERRORS,
+    SERVICES, DATA_DIR, INSTALL_DIR, SIDEBAR_ICONS, MANIFEST_ERRORS, ALWAYS_ON_SERVICES,
     AGENT_HOST, AGENT_PORT, AGENT_URL, ODS_AGENT_KEY,
     _detect_container_default_gateway, _running_inside_container,
     _read_env_from_file,
@@ -62,13 +62,15 @@ from host_agent_client import (
 from agent_monitor import collect_metrics
 from routers import (
     workflows, features, setup, updates, agents, privacy, extensions,
-    gpu as gpu_router, resources, voice, models as models_router, model_state as model_state_router, templates,
+    gpu as gpu_router, resources, voice, models as models_router, model_state as model_state_router,
+    model_routes as model_routes_router, remote_provider_status, templates,
     auth as auth_router,
     magic_link,
     oauth_passthrough,
     talk,
     tailscale,
     usage,
+    node,
 )
 from settings import (
     _ENV_ASSIGNMENT_RE, _ENV_COMMENTED_ASSIGNMENT_RE, _SETTINGS_APPLY_ALLOWED_SERVICES, _parse_env_text, _read_env_map_from_path,
@@ -147,7 +149,9 @@ def _read_installed_version() -> str:
         try:
             for line in env_file.read_text().splitlines():
                 if line.startswith("ODS_VERSION="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
+                    env_version = line.split("=", 1)[1].strip().strip("\"'")
+                    if env_version:
+                        return env_version
         except OSError:
             pass
 
@@ -468,6 +472,9 @@ def _infer_tier(gpu_info) -> str:
 
 def _infer_gpu_count(gpu_info) -> int:
     """Infer GPU count from the GPU_COUNT env var or the display name."""
+    observed_count = int(getattr(gpu_info, "gpu_count", 1) or 1)
+    if observed_count > 1:
+        return observed_count
     gpu_count_env = os.environ.get("GPU_COUNT", "")
     if gpu_count_env.isdigit():
         return int(gpu_count_env)
@@ -489,10 +496,13 @@ def _serialize_gpu(gpu_info) -> Optional[dict]:
 
     gpu_data = {
         "name": gpu_info.name,
-        "vramUsed": round(gpu_info.memory_used_mb / 1024, 1),
+        "vramUsed": (
+            round(gpu_info.memory_used_mb / 1024, 1)
+            if gpu_info.memory_usage_available else None
+        ),
         "vramTotal": round(gpu_info.memory_total_mb / 1024, 1),
-        "utilization": gpu_info.utilization_percent,
-        "temperature": gpu_info.temperature_c,
+        "utilization": gpu_info.utilization_percent if gpu_info.utilization_available else None,
+        "temperature": gpu_info.temperature_c if gpu_info.temperature_available else None,
         "memoryType": gpu_info.memory_type,
         "backend": gpu_info.gpu_backend,
         "gpu_count": gpu_count,
@@ -629,6 +639,7 @@ def _service_public_url(service_id: str, port: int | None) -> Optional[str]:
 def _serialize_services(service_statuses: list[ServiceStatus], uptime: int) -> list[dict]:
     serialized = []
     for service in service_statuses:
+        config = SERVICES.get(service.id, {})
         url = _service_public_url(service.id, service.external_port)
         item = {
             "id": service.id,
@@ -640,7 +651,11 @@ def _serialize_services(service_statuses: list[ServiceStatus], uptime: int) -> l
         if url:
             item["url"] = url
             item["href"] = url
-        llm_contract = SERVICES.get(service.id, {}).get("llm")
+        if config.get("public_url"):
+            item["public_url"] = config["public_url"]
+        if config.get("ui_path"):
+            item["ui_path"] = config["ui_path"]
+        llm_contract = config.get("llm")
         if isinstance(llm_contract, dict):
             item["llm"] = llm_contract
         item.update(_service_semantics(service.id, service.status))
@@ -665,6 +680,10 @@ def _fallback_services() -> list[dict]:
         if url:
             item["url"] = url
             item["href"] = url
+        if config.get("public_url"):
+            item["public_url"] = config["public_url"]
+        if config.get("ui_path"):
+            item["ui_path"] = config["ui_path"]
         llm_contract = config.get("llm")
         if isinstance(llm_contract, dict):
             item["llm"] = llm_contract
@@ -830,6 +849,16 @@ def _clear_settings_caches():
         _cache.invalidate(key)
 
 
+def _active_settings_apply_services() -> set[str]:
+    active = set(ALWAYS_ON_SERVICES)
+    services_root = _resolve_install_root() / "extensions" / "services"
+    for service_id in _SETTINGS_APPLY_ALLOWED_SERVICES - active:
+        service_dir = services_root / service_id
+        if (service_dir / "compose.yaml").is_file() or (service_dir / "compose.yml").is_file():
+            active.add(service_id)
+    return active
+
+
 def _call_agent_core_recreate(service_ids: list[str]) -> dict[str, Any]:
     return request_agent_json(
         "POST",
@@ -921,6 +950,31 @@ def _prepare_env_save(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]
         )
 
     base_fields = _build_env_fields(schema_properties, required_keys, current_values)
+    clear_secrets = payload.get("clearSecrets", [])
+    if not isinstance(clear_secrets, list) or any(not isinstance(key, str) for key in clear_secrets):
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "clearSecrets must be a list of field names."},
+        )
+    clear_secrets = sorted(set(clear_secrets))
+    invalid_clear_secrets = [
+        key for key in clear_secrets
+        if key not in base_fields
+        or not base_fields[key].get("secret")
+        or not base_fields[key].get("clearable")
+    ]
+    if invalid_clear_secrets:
+        return _render_env_from_values(current_values), [
+            {
+                "key": key,
+                "message": "This secret cannot be cleared from the dashboard.",
+            }
+            for key in invalid_clear_secrets
+        ], _compute_env_apply_plan(
+            current_values,
+            current_values,
+            active_services=_active_settings_apply_services(),
+        )
     invalid_keys = sorted(set(submitted_values.keys()) - set(base_fields.keys()))
     if invalid_keys:
         return _render_env_from_values(current_values), [
@@ -929,7 +983,11 @@ def _prepare_env_save(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]
                 "message": "Field is not editable from the dashboard. Only schema-backed fields and existing local overrides can be changed here.",
             }
             for key in invalid_keys
-        ], _compute_env_apply_plan(current_values, current_values)
+        ], _compute_env_apply_plan(
+            current_values,
+            current_values,
+            active_services=_active_settings_apply_services(),
+        )
 
     read_only_changes = []
     for key, submitted_value in submitted_values.items():
@@ -946,17 +1004,27 @@ def _prepare_env_save(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]
         return (
             _render_env_from_values(current_values),
             read_only_changes,
-            _compute_env_apply_plan(current_values, current_values),
+            _compute_env_apply_plan(
+                current_values,
+                current_values,
+                active_services=_active_settings_apply_services(),
+            ),
         )
 
     normalized_values = _serialize_form_values(submitted_values, base_fields, current_values)
     merged_values = {**current_values, **normalized_values}
+    for key in clear_secrets:
+        merged_values.pop(key, None)
     for key, field in base_fields.items():
         if _empty_value_unsets_env_key(key, field) and str(merged_values.get(key, "")).strip() == "":
             merged_values.pop(key, None)
     merged_fields = _build_env_fields(schema_properties, required_keys, merged_values)
     issues = _validate_env_values(merged_values, merged_fields)
-    apply_plan = _compute_env_apply_plan(current_values, merged_values)
+    apply_plan = _compute_env_apply_plan(
+        current_values,
+        merged_values,
+        active_services=_active_settings_apply_services(),
+    )
     return _render_env_from_values(merged_values), issues, apply_plan
 
 # --- App ---
@@ -986,7 +1054,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ODS Dashboard API",
-    version="2.5.3",
+    version="2.6.0",
     description="System status API for ODS Dashboard",
     lifespan=_lifespan,
 )
@@ -1034,6 +1102,8 @@ app.include_router(resources.router)
 app.include_router(voice.router)
 # Static switchboard state route registers before the dynamic model-ID routes.
 app.include_router(model_state_router.router)
+app.include_router(model_routes_router.router)
+app.include_router(remote_provider_status.router)
 app.include_router(models_router.router)
 app.include_router(templates.router)
 app.include_router(auth_router.router)
@@ -1042,6 +1112,7 @@ app.include_router(oauth_passthrough.router)
 app.include_router(talk.router)
 app.include_router(tailscale.router)
 app.include_router(usage.router)
+app.include_router(node.router)
 
 
 # ================================================================
@@ -1278,6 +1349,7 @@ async def api_status(api_key: str = Depends(verify_api_key)):
             "disk": {"used_gb": 0, "total_gb": 0, "percent": 0},
             "system": {"uptime": 0, "hostname": os.environ.get("HOSTNAME", "ods")},
             "inference": {"tokensPerSecond": 0, "lifetimeTokens": 0,
+                          "tokenCountMode": "unavailable",
                           "loadedModel": None, "contextSize": None},
             "manifest_errors": MANIFEST_ERRORS,
         }
@@ -1343,21 +1415,7 @@ async def _build_api_status() -> dict:
         get_llama_context_size(model_hint=loaded_model),
     )
 
-    gpu_data = None
-    if gpu_info:
-        gpu_data = {
-            "name": gpu_info.name,
-            "vramUsed": round(gpu_info.memory_used_mb / 1024, 1),
-            "vramTotal": round(gpu_info.memory_total_mb / 1024, 1),
-            "utilization": gpu_info.utilization_percent,
-            "temperature": gpu_info.temperature_c,
-            "memoryType": gpu_info.memory_type,
-            "backend": gpu_info.gpu_backend,
-            "gpu_count": _infer_gpu_count(gpu_info),
-        }
-        if gpu_info.power_w is not None:
-            gpu_data["powerDraw"] = gpu_info.power_w
-        gpu_data["memoryLabel"] = "VRAM Partition" if gpu_info.memory_type == "unified" else "VRAM"
+    gpu_data = _serialize_gpu(gpu_info)
 
     services_data = _serialize_services(service_statuses, uptime)
 
@@ -1400,6 +1458,7 @@ async def _build_api_status() -> dict:
         "inference": {
             "tokensPerSecond": llama_metrics_data.get("tokens_per_second", 0),
             "lifetimeTokens": llama_metrics_data.get("lifetime_tokens", 0),
+            "tokenCountMode": llama_metrics_data.get("token_count_mode", "unavailable"),
             "loadedModel": loaded_model_name,
             "contextSize": context_size or (model_data["contextLength"] if model_data else None),
         },
@@ -1448,6 +1507,7 @@ async def get_external_links(api_key: str = Depends(verify_api_key)):
         links.append({
             "id": sid, "label": cfg.get("name", sid), "port": ext_port,
             "ui_path": cfg.get("ui_path", "/"),
+            "public_url": cfg.get("public_url", ""),
             "icon": SIDEBAR_ICONS.get(sid, "ExternalLink"),
             "healthNeedles": [sid, cfg.get("name", sid).lower()],
         })
@@ -1569,11 +1629,19 @@ async def api_settings_env_save(
             detail={"message": "Could not contact host agent to write environment file."},
         ) from exc
     backup_relative = agent_resp.get("backup_path")
+    saved_raw_text = raw_text
+    enforced_values = agent_resp.get("enforced_values")
+    if isinstance(enforced_values, dict):
+        saved_values, _ = _parse_env_text(raw_text)
+        for key, value in enforced_values.items():
+            if isinstance(key, str) and isinstance(value, str):
+                saved_values[key] = value
+        saved_raw_text = _render_env_from_values(saved_values)
 
     _clear_settings_caches()
     result = await asyncio.to_thread(
         _build_settings_env_payload,
-        raw_text=raw_text,
+        raw_text=saved_raw_text,
         backup_path=backup_relative,
         apply_plan=apply_plan,
     )

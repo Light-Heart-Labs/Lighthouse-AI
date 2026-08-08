@@ -39,6 +39,12 @@ read_env_value() {
     grep -E "^${key}=" "$env_path" 2>/dev/null | sed -n '1p' | cut -d'=' -f2- | tr -d '\r' || true
 }
 
+env_key_exists() {
+    local env_path="$1"
+    local key="$2"
+    [[ -f "$env_path" ]] && grep -q -E "^${key}=" "$env_path" 2>/dev/null
+}
+
 read_token_spy_api_key() {
     local install_dir="$1"
     local token_spy_key_path="${install_dir}/data/token-spy/token-spy-api-key.txt"
@@ -159,6 +165,13 @@ detect_timezone() {
     echo "${tz:-UTC}"
 }
 
+normalize_ods_model_switchboard() {
+    case "${1:-observe}" in
+        legacy|observe|enabled) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "observe" ;;
+    esac
+}
+
 generate_ods_env() {
     local install_dir="$1"
     local tier="$2"
@@ -219,6 +232,20 @@ generate_ods_env() {
         upsert_env_value "$env_path" "COMFYUI_CPU_LIMIT" "$comfyui_cpu_limit"
         upsert_env_value "$env_path" "COMFYUI_CPU_RESERVATION" "$comfyui_cpu_reservation"
 
+        local _switchboard_mode
+        _switchboard_mode="$(read_env_value "$env_path" "ODS_MODEL_SWITCHBOARD")"
+        [[ -n "$_switchboard_mode" ]] || _switchboard_mode="${ODS_MODEL_SWITCHBOARD:-observe}"
+        _switchboard_mode="$(normalize_ods_model_switchboard "$_switchboard_mode")"
+        upsert_env_value "$env_path" "ODS_MODEL_SWITCHBOARD" "$_switchboard_mode"
+        if [[ "$_switchboard_mode" == "enabled" ]]; then
+            local _litellm_key
+            _litellm_key="$(read_env_value "$env_path" "LITELLM_KEY")"
+            upsert_env_value "$env_path" "OPEN_WEBUI_LLM_BASE_URL" "http://litellm:4000"
+            upsert_env_value "$env_path" "OPEN_WEBUI_LLM_API_KEY" "$_litellm_key"
+            upsert_env_value "$env_path" "HERMES_LLM_BASE_URL" "http://litellm:4000/v1"
+            upsert_env_value "$env_path" "HERMES_LLM_API_KEY" "$_litellm_key"
+        fi
+
         # Upsert ODS_AGENT_KEY when missing (pre-PR-#979 upgrade path)
         if [[ -z "$(read_env_value "$env_path" "ODS_AGENT_KEY")" ]]; then
             upsert_env_value "$env_path" "ODS_AGENT_KEY" "$(new_secure_hex 32)"
@@ -256,6 +283,24 @@ generate_ods_env() {
         if [[ -z "$(read_env_value "$env_path" "ODS_DEVICE_NAME")" ]]; then
             upsert_env_value "$env_path" "ODS_DEVICE_NAME" "$(detect_device_name)"
         fi
+        # Backfill the TEI/RAG contract without replacing persisted operator
+        # values. Explicit process env values populate keys absent from older
+        # installations, matching Linux and Windows rerun behavior.
+        if [[ -z "$(read_env_value "$env_path" "EMBEDDING_MODEL")" ]]; then
+            upsert_env_value "$env_path" "EMBEDDING_MODEL" "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}"
+        fi
+        if ! env_key_exists "$env_path" "RAG_EMBEDDING_MODEL"; then
+            upsert_env_value "$env_path" "RAG_EMBEDDING_MODEL" "${RAG_EMBEDDING_MODEL:-}"
+        fi
+        if ! env_key_exists "$env_path" "RAG_OPENAI_API_BASE_URL"; then
+            upsert_env_value "$env_path" "RAG_OPENAI_API_BASE_URL" "${RAG_OPENAI_API_BASE_URL:-}"
+        fi
+        if ! env_key_exists "$env_path" "RAG_OPENAI_API_KEY"; then
+            upsert_env_value "$env_path" "RAG_OPENAI_API_KEY" "${RAG_OPENAI_API_KEY:-}"
+        fi
+        if [[ -z "$(read_env_value "$env_path" "EMBEDDINGS_MEMORY_LIMIT")" ]]; then
+            upsert_env_value "$env_path" "EMBEDDINGS_MEMORY_LIMIT" "${EMBEDDINGS_MEMORY_LIMIT:-4G}"
+        fi
 
         # HOST_LAN_IP backfill: the fresh-install heredoc below populates
         # HOST_LAN_IP when BIND_ADDRESS=0.0.0.0 was pre-set, so openclaw can
@@ -274,6 +319,19 @@ generate_ods_env() {
             if [[ -n "$_host_lan_ip" ]]; then
                 upsert_env_value "$env_path" "HOST_LAN_IP" "$_host_lan_ip"
             fi
+        fi
+
+        # A local install may later be exposed by editing BIND_ADDRESS or
+        # enabling the ODS proxy. Do not preserve an authless localhost value
+        # across that transition.
+        local _existing_proxy
+        _existing_proxy="$(read_env_value "$env_path" "ENABLE_ODS_PROXY")"
+        if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]] \
+            || [[ "${_existing_proxy:-false}" == "true" ]] \
+            || [[ "$_existing_bind" != "127.0.0.1" && "$_existing_bind" != "::1" && "$_existing_bind" != "localhost" ]]; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "true"
+        elif ! env_key_exists "$env_path" "WEBUI_AUTH"; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "false"
         fi
         return 0
     fi
@@ -355,6 +413,8 @@ generate_ods_env() {
     local macos_vm_ip=""
     local agent_host="host.docker.internal"
     local llm_api_url="http://host.docker.internal:8080"
+    local switchboard_mode
+    switchboard_mode="$(normalize_ods_model_switchboard "${ODS_MODEL_SWITCHBOARD:-observe}")"
     if [[ "${DOCKER_BACKEND:-unknown}" == "colima" ]]; then
         macos_llm_bridge_enabled="true"
         macos_host_agent_bridge_enabled="true"
@@ -381,6 +441,31 @@ generate_ods_env() {
     tz=$(detect_timezone)
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local hermes_llm_base_url="${llm_api_url}/v1"
+    local hermes_llm_api_key="sk-ods-hermes-local"
+    local open_webui_llm_base_url=""
+    local open_webui_llm_api_key=""
+    if [[ "$switchboard_mode" == "enabled" ]]; then
+        hermes_llm_base_url="http://litellm:4000/v1"
+        hermes_llm_api_key="$litellm_key"
+        open_webui_llm_base_url="http://litellm:4000"
+        open_webui_llm_api_key="$litellm_key"
+    fi
+    local embedding_model="${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}"
+    local rag_embedding_model="${RAG_EMBEDDING_MODEL:-}"
+    local rag_openai_api_base_url="${RAG_OPENAI_API_BASE_URL:-}"
+    local rag_openai_api_key="${RAG_OPENAI_API_KEY:-}"
+    local embeddings_memory_limit="${EMBEDDINGS_MEMORY_LIMIT:-4G}"
+    local bind_address="${BIND_ADDRESS:-127.0.0.1}"
+    local webui_auth
+    if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]]; then
+        webui_auth="true"
+    else
+        case "$bind_address" in
+            127.0.0.1|::1|localhost) webui_auth="${WEBUI_AUTH:-false}" ;;
+            *) webui_auth="true" ;;
+        esac
+    fi
 
     # Build .env content (matches Phase 06 format)
     cat > "$env_path" << ENVEOF
@@ -391,6 +476,7 @@ generate_ods_env() {
 #=== Network Binding ===
 # macOS has no --lan flag; operators opt in by setting BIND_ADDRESS=0.0.0.0
 # manually. HOST_LAN_IP is only populated when that pre-existed at install time.
+BIND_ADDRESS=${bind_address}
 HOST_LAN_IP=${host_lan_ip}
 # Device name used by ods-mdns/ods-proxy hostnames and magic-link URLs.
 # Derived from the macOS LocalHostName/hostname so multiple installs on one LAN
@@ -401,6 +487,7 @@ ODS_AGENT_HOST=${ODS_AGENT_HOST:-${agent_host}}
 
 #=== LLM Backend Mode ===
 ODS_MODE=local
+ODS_MODEL_SWITCHBOARD=${switchboard_mode}
 LLM_BACKEND=llama-server
 LLM_API_URL=${llm_api_url}
 LLM_BACKEND=llama-server
@@ -473,9 +560,9 @@ OPENCLAW_PORT=7860
 LANGFUSE_PORT=3006
 
 #=== Hermes Agent ===
-# macOS runs llama-server natively with Metal; containers use the scoped host route above.
-HERMES_LLM_BASE_URL=${llm_api_url}/v1
-HERMES_LLM_API_KEY=sk-ods-hermes-local
+# macOS runs llama-server natively with Metal; switchboard consumers use LiteLLM.
+HERMES_LLM_BASE_URL=${hermes_llm_base_url}
+HERMES_LLM_API_KEY=${hermes_llm_api_key}
 HERMES_LANGUAGE=en
 HERMES_PROXY_PORT=9120
 HERMES_PROXY_UPSTREAM=ods-hermes:9119
@@ -509,10 +596,22 @@ WHISPER_MODEL=base
 AUDIO_STT_MODEL=Systran/faster-whisper-base
 TTS_VOICE=en_US-lessac-medium
 
+#=== Embeddings / RAG ===
+# Open WebUI uses this canonical model at first boot unless an explicit
+# external-provider override is configured.
+EMBEDDING_MODEL=${embedding_model}
+RAG_EMBEDDING_MODEL=${rag_embedding_model}
+RAG_OPENAI_API_BASE_URL=${rag_openai_api_base_url}
+RAG_OPENAI_API_KEY=${rag_openai_api_key}
+EMBEDDINGS_MEMORY_LIMIT=${embeddings_memory_limit}
+
 #=== Web UI Settings ===
-WEBUI_AUTH=true
+# Loopback installs open directly. Network-bound installs require a login.
+WEBUI_AUTH=${webui_auth}
 ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
+OPEN_WEBUI_LLM_BASE_URL=${open_webui_llm_base_url}
+OPEN_WEBUI_LLM_API_KEY=${open_webui_llm_api_key}
 
 #=== n8n Settings ===
 N8N_HOST=localhost

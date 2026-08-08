@@ -53,6 +53,14 @@ function Get-HostArchitecture {
     }
 }
 
+function Test-CatalogModelSourceAllowed {
+    param([object]$Model)
+
+    $prop = $Model.PSObject.Properties["source"]
+    if (-not $prop -or $null -eq $prop.Value) { return $true }
+    return ("$($prop.Value)".Trim().ToLowerInvariant() -in @("", "curated"))
+}
+
 function Get-CatalogModelById {
     param(
         [object]$Catalog,
@@ -60,6 +68,7 @@ function Get-CatalogModelById {
     )
 
     foreach ($model in $Catalog.models) {
+        if (-not (Test-CatalogModelSourceAllowed -Model $model)) { continue }
         if ("$($model.id)".ToLowerInvariant() -eq $ModelId) {
             return $model
         }
@@ -196,7 +205,7 @@ function Resolve-QwenTierConfig {
                 LlmModel   = "qwen3-30b-a3b"
                 GgufFile   = "Qwen3-30B-A3B-Q4_K_M.gguf"
                 GgufUrl    = "https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf"
-                GgufSha256 = "84b5f7f112156d63836a01a69dc3f11a6ba63b10a23b8ca7a7efaf52d5a2d806"
+                GgufSha256 = "9f1a24700a339b09c06009b729b5c809e0b64c213b8af5b711b3dbdfd0c5ba48"
                 MaxContext = 32768
                 ModelProfileRequested = "qwen"
                 ModelProfileEffective = "qwen"
@@ -369,9 +378,12 @@ function Resolve-GemmaTierConfig {
 }
 
 function Resolve-TierConfig {
-    param([string]$Tier)
+    param(
+        [string]$Tier,
+        [string]$ModelProfile = $env:MODEL_PROFILE
+    )
 
-    $requestedProfile = Normalize-ModelProfile
+    $requestedProfile = Normalize-ModelProfile -ModelProfile $ModelProfile
     $effectiveProfile = Resolve-EffectiveModelProfile -Tier $Tier -RequestedProfile $requestedProfile
 
     switch ($effectiveProfile) {
@@ -660,6 +672,7 @@ function Resolve-CatalogModelRecommendation {
 
     $candidates = @()
     foreach ($model in $catalog.models) {
+        if (-not (Test-CatalogModelSourceAllowed -Model $model)) { continue }
         if (-not $model.gguf_url) { continue }
         if (-not (Test-CatalogModelInstallRecommendationAllowed -Model $model)) { continue }
         if (-not (Test-CatalogModelFamilyAllowed -Model $model -ModelProfileName $modelProfileName)) { continue }

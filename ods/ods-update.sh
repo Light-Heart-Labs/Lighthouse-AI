@@ -365,7 +365,7 @@ wait_for_healthy() {
     local attempt=0
     local delay=10
     local health_log
-    health_log=$(mktemp /tmp/ods-health-XXXXXX.log)
+    health_log=$(mktemp "${TMPDIR:-/tmp}/ods-health-XXXXXX.log")
 
     log_info "Waiting for services (timeout: ${HEALTH_TIMEOUT}s)..."
 
@@ -499,7 +499,10 @@ cmd_check() {
     else
         version_data='{}'
     fi
-    echo "$version_data" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.last_check = $ts' > "$VERSION_FILE"
+    local tmp_version_file
+    tmp_version_file=$(mktemp "${VERSION_FILE}.tmp.XXXXXX")
+    echo "$version_data" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.last_check = $ts' > "$tmp_version_file"
+    mv -f "$tmp_version_file" "$VERSION_FILE"
 }
 
 #==============================================================================
@@ -709,12 +712,15 @@ cmd_update() {
     new_version=$(git describe --tags 2>/dev/null || git rev-parse --short HEAD)
     local version_data='{}'
     [[ -f "$VERSION_FILE" ]] && version_data=$(cat "$VERSION_FILE")
+    local tmp_version_file
+    tmp_version_file=$(mktemp "${VERSION_FILE}.tmp.XXXXXX")
     echo "$version_data" | jq \
         --arg v    "$new_version" \
         --arg ts   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg snap "$snap_dir" \
         '.version = $v | .last_update = $ts | .last_rollback_point = $snap' \
-        > "$VERSION_FILE"
+        > "$tmp_version_file"
+    mv -f "$tmp_version_file" "$VERSION_FILE"
 
     log_ok "Update complete! Version: ${new_version}"
     log_info "Rollback point retained at: ${snap_dir}"
