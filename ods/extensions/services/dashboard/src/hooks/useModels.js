@@ -145,7 +145,10 @@ function normalizeOdsMode(value) {
   return ODS_MODES.has(mode) ? mode : 'unknown'
 }
 
-function modelActivationModeError(effectiveMode, configuredMode) {
+function modelActivationModeError(effectiveMode, configuredMode, llmBackend) {
+  if (llmBackend === 'external') {
+    return 'ODS is using an external Ollama or LM Studio backend. Re-run the installer with --no-external-llm before activating a downloaded local model.'
+  }
   if (effectiveMode === 'unknown' || configuredMode === 'unknown') {
     return 'ODS could not verify the active runtime mode. Repair or restart ODS before running a local model.'
   }
@@ -167,6 +170,7 @@ export function useModels() {
   const [modelLifecycle, setModelLifecycle] = useState(null)
   const [odsMode, setOdsMode] = useState(USE_MOCK_DATA ? MOCK_MODES.odsMode : 'unknown')
   const [configuredMode, setConfiguredMode] = useState(USE_MOCK_DATA ? MOCK_MODES.configuredMode : 'unknown')
+  const [llmBackend, setLlmBackend] = useState(USE_MOCK_DATA ? 'llama-server' : 'unknown')
   const [recommendationAlternatives, setRecommendationAlternatives] = useState([])
   const [hermesMinimumContext, setHermesMinimumContext] = useState(DEFAULT_HERMES_MIN_CONTEXT)
   const [loading, setLoading] = useState(USE_MOCK_DATA ? false : true)
@@ -245,6 +249,7 @@ export function useModels() {
       const effectiveMode = normalizeOdsMode(data.odsMode)
       setOdsMode(effectiveMode)
       setConfiguredMode(normalizeOdsMode(data.configuredMode ?? data.odsMode))
+      setLlmBackend(typeof data.llmBackend === 'string' ? data.llmBackend.trim().toLowerCase() : 'unknown')
       setRecommendationAlternatives(data.recommendationAlternatives ?? [])
       setHermesMinimumContext(Number(data.hermesMinimumContext || DEFAULT_HERMES_MIN_CONTEXT))
       setFetchError(null)
@@ -329,8 +334,8 @@ export function useModels() {
     }
   }
 
-  const loadModel = async (modelId) => {
-    const modeError = modelActivationModeError(odsMode, configuredMode)
+  const loadModel = async (modelId, options = {}) => {
+    const modeError = modelActivationModeError(odsMode, configuredMode, llmBackend)
     if (modeError) {
       setMutationError(modeError)
       return
@@ -355,18 +360,36 @@ export function useModels() {
     const startedAt = Date.now()
     let activationError = null
     let targetLoaded = false
+    const requestedContextLength = Number(options.contextLength || 0) || null
+    const activationMatches = (data) => {
+      if (
+        data?.currentModel !== modelId ||
+        data?.activationReadyModel !== modelId ||
+        hasActiveModelActivation(data)
+      ) return false
+      if (!requestedContextLength) return true
+      const activeModel = data?.models?.find(model => model.id === modelId)
+      return Number(activeModel?.contextLength || 0) === requestedContextLength
+    }
 
-    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, {
+    const activationRequestOptions = {
       method: 'POST',
       signal: controller.signal,
-    })
+    }
+    if (requestedContextLength) {
+      activationRequestOptions.headers = { 'Content-Type': 'application/json' }
+      activationRequestOptions.body = JSON.stringify({
+        context_length: requestedContextLength,
+      })
+    }
+    const activationRequest = fetch(`/api/models/${encodeURIComponent(modelId)}/load`, activationRequestOptions)
       .then(async (response) => {
         if (response.ok) return
 
         const body = await responseJson(response)
         if (response.status === 409) {
           const activeModelId = conflictActiveModelId(body)
-          if (activeModelId === modelId) return
+          if (activeModelId === modelId && !requestedContextLength) return
 
           const detail = errorMessageFromPayload(body, 'Another model activation is in progress')
           activationError = activeModelId
@@ -388,11 +411,7 @@ export function useModels() {
 
         if (activationError) break
         const data = await fetchModels()
-        if (
-          data?.currentModel === modelId &&
-          data?.activationReadyModel === modelId &&
-          !hasActiveModelActivation(data)
-        ) {
+        if (activationMatches(data)) {
           targetLoaded = true
           break
         }
@@ -401,12 +420,7 @@ export function useModels() {
       // Take one final authoritative snapshot at the deadline or after a POST
       // failure. This cannot turn an unverified 409 into same-target success.
       const finalData = await fetchModels()
-      if (
-        !activationError &&
-        finalData?.currentModel === modelId &&
-        finalData?.activationReadyModel === modelId &&
-        !hasActiveModelActivation(finalData)
-      ) targetLoaded = true
+      if (!activationError && activationMatches(finalData)) targetLoaded = true
 
       if (!targetLoaded) {
         setMutationError(activationError ||
@@ -467,7 +481,7 @@ export function useModels() {
     ].filter(Boolean)),
   ]
   const error = mutationError || fetchError
-  const activationModeError = modelActivationModeError(odsMode, configuredMode)
+  const activationModeError = modelActivationModeError(odsMode, configuredMode, llmBackend)
 
   return {
     models,
@@ -478,6 +492,7 @@ export function useModels() {
     modelLifecycle,
     odsMode,
     configuredMode,
+    llmBackend,
     canActivateModels: activationModeError === null,
     activationModeError,
     recommendationAlternatives,

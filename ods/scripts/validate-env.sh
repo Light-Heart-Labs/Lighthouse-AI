@@ -80,6 +80,12 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 3
 fi
 
+jq_raw() {
+  # Native Windows jq emits CRLF under Git Bash. Normalize raw scalar/list
+  # output before Bash compares schema keys and values.
+  jq -r "$@" | tr -d '\r'
+}
+
 # -----------------------------
 # .env parsing (robust)
 # -----------------------------
@@ -186,9 +192,9 @@ length_errors=()
 contract_errors=()
 duplicate_errors=()
 
-mapfile -t required_keys < <(jq -r '.required[]?' "$SCHEMA_FILE")
+mapfile -t required_keys < <(jq_raw '.required[]?' "$SCHEMA_FILE")
 
-mapfile -t schema_keys < <(jq -r '.properties | keys[]' "$SCHEMA_FILE")
+mapfile -t schema_keys < <(jq_raw '.properties | keys[]' "$SCHEMA_FILE")
 declare -A SCHEMA_KEY_SET
 for key in "${schema_keys[@]}"; do
     SCHEMA_KEY_SET["$key"]=1
@@ -223,7 +229,7 @@ for key in "${schema_keys[@]}"; do
     val="${ENV_MAP[$key]-}"
     [[ -z "$val" ]] && continue
 
-    expected_type="$(jq -r --arg k "$key" '.properties[$k].type // "string"' "$SCHEMA_FILE")"
+    expected_type="$(jq_raw --arg k "$key" '.properties[$k].type // "string"' "$SCHEMA_FILE")"
 
     # Type validation
     case "$expected_type" in
@@ -253,7 +259,7 @@ for key in "${schema_keys[@]}"; do
         : # enums in our schema are for strings; ignore otherwise
       else
         if ! jq -e --arg k "$key" --arg v "$val" '.properties[$k].enum | index($v) != null' "$SCHEMA_FILE" >/dev/null 2>&1; then
-          allowed="$(jq -r --arg k "$key" '.properties[$k].enum | join(", ")' "$SCHEMA_FILE")"
+          allowed="$(jq_raw --arg k "$key" '.properties[$k].enum | join(", ")' "$SCHEMA_FILE")"
           enum_errors+=("$key: invalid value '$val' (allowed: $allowed) (line ${ENV_LINE[$key]:-?})")
         fi
       fi
@@ -262,13 +268,13 @@ for key in "${schema_keys[@]}"; do
     # Range validation (minimum/maximum) for numbers/integers
     if [[ "$expected_type" == "integer" || "$expected_type" == "number" ]]; then
       if jq -e --arg k "$key" '.properties[$k].minimum? != null' "$SCHEMA_FILE" >/dev/null 2>&1; then
-        minv="$(jq -r --arg k "$key" '.properties[$k].minimum' "$SCHEMA_FILE")"
+        minv="$(jq_raw --arg k "$key" '.properties[$k].minimum' "$SCHEMA_FILE")"
         if awk "BEGIN{exit !($val < $minv)}" 2>/dev/null; then
           range_errors+=("$key: value $val is < minimum $minv (line ${ENV_LINE[$key]:-?})")
         fi
       fi
       if jq -e --arg k "$key" '.properties[$k].maximum? != null' "$SCHEMA_FILE" >/dev/null 2>&1; then
-        maxv="$(jq -r --arg k "$key" '.properties[$k].maximum' "$SCHEMA_FILE")"
+        maxv="$(jq_raw --arg k "$key" '.properties[$k].maximum' "$SCHEMA_FILE")"
         if awk "BEGIN{exit !($val > $maxv)}" 2>/dev/null; then
           range_errors+=("$key: value $val is > maximum $maxv (line ${ENV_LINE[$key]:-?})")
         fi
@@ -279,7 +285,7 @@ for key in "${schema_keys[@]}"; do
     # CHANGEME so secrets must be replaced with real values before the stack runs.
     if [[ "$expected_type" == "string" ]]; then
       if jq -e --arg k "$key" '.properties[$k].minLength? != null' "$SCHEMA_FILE" >/dev/null 2>&1; then
-        minlen="$(jq -r --arg k "$key" '.properties[$k].minLength' "$SCHEMA_FILE")"
+        minlen="$(jq_raw --arg k "$key" '.properties[$k].minLength' "$SCHEMA_FILE")"
         if (( ${#val} < minlen )); then
           length_errors+=("$key: value length ${#val} is < minLength $minlen (line ${ENV_LINE[$key]:-?})")
         fi
@@ -311,6 +317,153 @@ _valid_http_endpoint() {
         [[ ${#port} -le 5 ]] && (( 10#$port >= 1 && 10#$port <= 65535 ))
     }
 }
+
+_http_authority() {
+    local value="$1" remainder
+    remainder="${value#*://}"
+    printf '%s' "${remainder%%[/?]*}"
+}
+
+_http_host() {
+    local authority="$1" host
+    if [[ "$authority" =~ ^\[([^]]+)\](:[0-9]+)?$ ]]; then
+        host="${BASH_REMATCH[1]}"
+    else
+        host="${authority%%:*}"
+    fi
+    printf '%s' "${host,,}"
+}
+
+_remote_base_path_allowed() {
+    local value="$1" remainder path
+    [[ "$value" != *"?"* ]] || return 1
+    remainder="${value#*://}"
+    if [[ "$remainder" == */* ]]; then
+        path="/${remainder#*/}"
+    else
+        path="/"
+    fi
+    while [[ "$path" == */ && "$path" != "/" ]]; do
+        path="${path%/}"
+    done
+    [[ "$path" == "/" || "$path" == "/v1" || "$path" == "/api/v1" ]]
+}
+
+_remote_direct_host_allowed() {
+    local host="$1"
+    case "$host" in
+        localhost|localhost.*|0|0.0.0.0|127.*|169.254.*)
+            return 1
+            ;;
+    esac
+    [[ "$host" != "::" && "$host" != "::1" && "$host" != fe80:* ]]
+}
+
+remote_text_keys=(
+    REMOTE_LLM_TRANSPORT
+    REMOTE_LLM_BASE_URL
+    REMOTE_LLM_MODEL
+    REMOTE_LLM_TLS_CA_FILE
+    REMOTE_LLM_SSH_HOST
+    REMOTE_LLM_SSH_USER
+    REMOTE_LLM_SSH_INFERENCE_HOST
+    REMOTE_LLM_SSH_CONTROL_HOST
+    REMOTE_ODS_PEER_URL
+)
+for key in "${remote_text_keys[@]}"; do
+    val="${ENV_MAP[$key]-}"
+    if [[ -n "$val" && "$val" =~ [[:cntrl:]] ]]; then
+        contract_errors+=(
+          "$key: control characters are not allowed in remote provider metadata (line ${ENV_LINE[$key]:-?})"
+        )
+    fi
+done
+
+remote_enabled="${ENV_MAP[REMOTE_LLM_ENABLED]-}"
+remote_transport="${ENV_MAP[REMOTE_LLM_TRANSPORT]-}"
+remote_base="${ENV_MAP[REMOTE_LLM_BASE_URL]-}"
+remote_base_lc="${remote_base,,}"
+while [[ "$remote_base_lc" == */ ]]; do
+    remote_base_lc="${remote_base_lc%/}"
+done
+remote_model="${ENV_MAP[REMOTE_LLM_MODEL]-}"
+
+if [[ -n "$remote_base" ]]; then
+    if ! _valid_http_endpoint "$remote_base_lc"; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: expected an HTTP(S) OpenAI-compatible provider base URL (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    elif ! _remote_base_path_allowed "$remote_base_lc"; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: expected a provider root, /v1, or /api/v1 base path without query parameters (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    fi
+fi
+
+if [[ -n "${ENV_MAP[REMOTE_ODS_PEER_URL]-}" ]]; then
+    remote_peer_lc="${ENV_MAP[REMOTE_ODS_PEER_URL],,}"
+    while [[ "$remote_peer_lc" == */ ]]; do
+        remote_peer_lc="${remote_peer_lc%/}"
+    done
+    if ! _valid_http_endpoint "$remote_peer_lc"; then
+        contract_errors+=(
+          "REMOTE_ODS_PEER_URL: expected an HTTP(S) ODS peer control-plane root (line ${ENV_LINE[REMOTE_ODS_PEER_URL]:-?})"
+        )
+    fi
+fi
+
+if [[ -n "$remote_model" && ! "$remote_model" =~ ^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$ ]]; then
+    contract_errors+=(
+      "REMOTE_LLM_MODEL: expected a concrete provider model id without spaces or shell metacharacters (line ${ENV_LINE[REMOTE_LLM_MODEL]:-?})"
+    )
+fi
+
+if [[ "$remote_enabled" == "true" ]]; then
+    if [[ "${ENV_MAP[ODS_MODE]-local}" != "cloud" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_ENABLED: remote routing is active only when ODS_MODE=cloud (line ${ENV_LINE[REMOTE_LLM_ENABLED]:-?})"
+        )
+    fi
+    if [[ "$remote_transport" != "direct" && "$remote_transport" != "ssh" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_TRANSPORT: remote routing requires direct or ssh transport (line ${ENV_LINE[REMOTE_LLM_TRANSPORT]:-?})"
+        )
+    fi
+    if [[ -z "$remote_base" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_BASE_URL: remote routing requires a provider base URL (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+        )
+    fi
+    if [[ -z "$remote_model" ]]; then
+        contract_errors+=(
+          "REMOTE_LLM_MODEL: remote routing requires a concrete provider model id (line ${ENV_LINE[REMOTE_LLM_MODEL]:-?})"
+        )
+    fi
+
+    if [[ "$remote_transport" == "direct" && -n "$remote_base" ]]; then
+        if [[ "$remote_base_lc" != https://* ]]; then
+            contract_errors+=(
+              "REMOTE_LLM_BASE_URL: direct remote transport requires HTTPS in this provider slice (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+            )
+        fi
+        remote_host="$(_http_host "$(_http_authority "$remote_base_lc")")"
+        if ! _remote_direct_host_allowed "$remote_host"; then
+            contract_errors+=(
+              "REMOTE_LLM_BASE_URL: direct remote transport must not target loopback or link-local addresses from LiteLLM's container namespace (line ${ENV_LINE[REMOTE_LLM_BASE_URL]:-?})"
+            )
+        fi
+    fi
+
+    if [[ "$remote_transport" == "ssh" ]]; then
+        for key in REMOTE_LLM_SSH_HOST REMOTE_LLM_SSH_USER REMOTE_LLM_SSH_PORT REMOTE_LLM_SSH_INFERENCE_HOST REMOTE_LLM_SSH_INFERENCE_PORT; do
+            if [[ -z "${ENV_MAP[$key]-}" ]]; then
+                contract_errors+=(
+                  "$key: SSH remote transport requires this value (line ${ENV_LINE[REMOTE_LLM_TRANSPORT]:-?})"
+                )
+            fi
+        done
+    fi
+fi
 
 embedding_model="${ENV_MAP[EMBEDDING_MODEL]-BAAI/bge-base-en-v1.5}"
 embedding_model_lower="${embedding_model,,}"
@@ -442,7 +595,7 @@ log_info "Keys in schema: ${#schema_keys[@]}"
 log_info "Required keys: ${#required_keys[@]}"
 
 # Optional: print helpful summary of secrets (without values)
-secret_count=$(jq -r '.properties | to_entries[] | select(.value.secret==true) | .key' "$SCHEMA_FILE" | wc -l | tr -d ' ')
+secret_count=$(jq_raw '.properties | to_entries[] | select(.value.secret==true) | .key' "$SCHEMA_FILE" | wc -l | tr -d ' ')
 if [[ "$secret_count" =~ ^[0-9]+$ ]] && (( secret_count > 0 )); then
   log_info "Schema marks ${secret_count} key(s) as secrets (values not printed)."
 fi

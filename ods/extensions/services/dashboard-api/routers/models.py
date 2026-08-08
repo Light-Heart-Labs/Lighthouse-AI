@@ -83,6 +83,8 @@ _HF_AVATAR_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
 _HF_AVATAR_CACHE_LOCK = threading.Lock()
 _IMPORTED_MODELS_LOCK = threading.Lock()
 _MODEL_DISCOVERY_TIMEOUT_SECONDS = float(os.environ.get("DASHBOARD_MODEL_DISCOVERY_TIMEOUT", "15.0"))
+_MIN_MODEL_CONTEXT = 1024
+_MAX_MODEL_CONTEXT = 9007199254740991
 _AGENT_MODEL_STATUS_CACHE_TTL_SECONDS = float(
     os.environ.get("DASHBOARD_AGENT_MODEL_STATUS_CACHE_TTL", "0.5")
 )
@@ -145,11 +147,21 @@ def _configured_ods_mode() -> str:
 def _model_activation_mode_denial(
     effective_mode: str,
     configured_mode: str,
+    llm_backend: str = "",
 ) -> dict[str, str] | None:
     """Describe why this runtime cannot safely perform a local model swap."""
     effective_mode = normalize_ods_mode(effective_mode)
     configured_mode = normalize_ods_mode(configured_mode)
-    if "unknown" in {effective_mode, configured_mode}:
+    normalized_backend = str(llm_backend or "").strip().lower()
+    if normalized_backend == "external":
+        code = "external_llm_managed"
+        reason = "external_backend_selected"
+        message = (
+            "Local model activation is unavailable while ODS is using an "
+            "external Ollama or LM Studio backend. Re-run the installer with "
+            "--no-external-llm before activating a downloaded local model."
+        )
+    elif "unknown" in {effective_mode, configured_mode}:
         code = "ods_mode_unknown"
         reason = "mode_unknown"
         message = (
@@ -180,6 +192,7 @@ def _model_activation_mode_denial(
         "message": message,
         "effectiveMode": effective_mode,
         "configuredMode": configured_mode,
+        "llmBackend": normalized_backend or "unknown",
     }
 
 try:
@@ -443,6 +456,7 @@ def _activation_receipt_matches(
         receipt.get("schema") != "ods.model-activation-receipt.v1"
         or receipt.get("status") != "complete"
         or receipt.get("modelId") != model_id
+        or receipt.get("contextVerified") is False
     ):
         return False
 
@@ -455,6 +469,24 @@ def _activation_receipt_matches(
     runtime_tokens = _model_name_tokens(receipt.get("runtimeModelId"))
     loaded_tokens = _model_name_tokens(loaded_model)
     return bool(runtime_tokens and loaded_tokens and runtime_tokens & loaded_tokens)
+
+
+def _verified_activation_context(loaded_model: str | None) -> int | None:
+    if not loaded_model:
+        return None
+    receipt = _read_activation_receipt()
+    if (
+        receipt.get("schema") != "ods.model-activation-receipt.v1"
+        or receipt.get("status") != "complete"
+        or receipt.get("contextVerified") is not True
+        or not (_model_name_tokens(receipt.get("runtimeModelId")) & _model_name_tokens(loaded_model))
+    ):
+        return None
+    try:
+        context = int(receipt.get("contextLength") or 0)
+    except (TypeError, ValueError):
+        return None
+    return context if context > 0 else None
 
 
 def _already_active_model(model_id: str, model: dict) -> tuple[bool, str | None]:
@@ -484,6 +516,39 @@ def _already_active_model(model_id: str, model: dict) -> tuple[bool, str | None]
         ):
             return True, loaded_model
     return False, loaded_model
+
+
+def _requested_activation_context(
+    body: dict[str, Any] | None,
+) -> int | None:
+    if body is None or "context_length" not in body:
+        return None
+    value = body.get("context_length")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(
+            status_code=400,
+            detail="context_length must be an integer",
+        )
+    if not _MIN_MODEL_CONTEXT <= value <= _MAX_MODEL_CONTEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"context_length must be a safe integer of at least {_MIN_MODEL_CONTEXT}",
+        )
+    return value
+
+
+def _configured_context_length() -> int | None:
+    keys = ("CTX_SIZE", "MAX_CONTEXT")
+    for reader in (read_env_file_value, read_env_value):
+        for key in keys:
+            value = reader(key, INSTALL_DIR)
+            try:
+                parsed = int(str(value).strip())
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+    return None
 
 
 async def _await_or_default(coro, default, label: str, timeout_seconds: float = 2.0):
@@ -643,15 +708,40 @@ def _hf_quantization(filename: str) -> str | None:
     return match.group("quant").upper() if match else None
 
 
-def _hf_context_length(payload: dict[str, Any]) -> tuple[int, str]:
-    config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
-    text_config = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
+def _hf_context_length(payload: dict[str, Any]) -> tuple[int | None, str]:
+    raw_gguf = payload.get("gguf")
+    gguf = raw_gguf if isinstance(raw_gguf, dict) else {}
+    value = gguf.get("context_length")
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 512 <= value <= _MAX_MODEL_CONTEXT
+    ):
+        return value, "gguf_metadata"
+
+    raw_config = payload.get("config")
+    config = raw_config if isinstance(raw_config, dict) else {}
+    raw_text_config = config.get("text_config")
+    text_config = raw_text_config if isinstance(raw_text_config, dict) else {}
     for source in (text_config, config):
-        for key in ("max_position_embeddings", "max_sequence_length", "seq_length"):
+        for key in (
+            "max_position_embeddings",
+            "max_sequence_length",
+            "model_max_length",
+            "n_ctx",
+            "seq_length",
+        ):
             value = source.get(key)
-            if isinstance(value, int) and 512 <= value <= 4_194_304:
+            # Generic model configs sometimes publish enormous tokenizer
+            # sentinels instead of a usable runtime window. Keep that defensive
+            # ceiling for config fallbacks; the GGUF summary above is authoritative.
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and 512 <= value <= 4_194_304
+            ):
                 return value, "hub_config"
-    return 32768, "ods_safe_default"
+    return None, "unavailable"
 
 
 def _hf_file_metadata(sibling: Any) -> tuple[int | None, str | None]:
@@ -807,13 +897,25 @@ def _hf_search_item(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-async def _hf_get_json(path: str, *, params: dict[str, Any] | None = None) -> tuple[Any, httpx.Headers]:
-    timeout = httpx.Timeout(20.0, connect=8.0)
+async def _hf_get_json(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout_seconds: float = 20.0,
+    connect_timeout_seconds: float = 8.0,
+) -> tuple[Any, httpx.Headers]:
+    timeout = httpx.Timeout(
+        timeout_seconds,
+        connect=min(connect_timeout_seconds, timeout_seconds),
+    )
     response: httpx.Response | None = None
     last_error: HTTPException | None = None
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=False,
+            ) as client:
                 response = await client.get(
                     f"{_HF_API_BASE}{path}",
                     params=params,
@@ -853,7 +955,23 @@ async def _hf_repo_details(repo_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid Hugging Face repository id")
     payload, _headers = await _hf_get_json(
         f"/api/models/{quote(repo_id, safe='/')}",
-        params={"blobs": "true"},
+        params={
+            "blobs": "true",
+            "expand": [
+                "gguf",
+                "sha",
+                "downloads",
+                "likes",
+                "lastModified",
+                "pipeline_tag",
+                "gated",
+                "private",
+                "tags",
+                "cardData",
+            ],
+        },
+        timeout_seconds=60.0,
+        connect_timeout_seconds=20.0,
     )
     if not isinstance(payload, dict):
         raise HTTPException(status_code=502, detail="Hugging Face returned an invalid repository record")
@@ -921,6 +1039,8 @@ def _hf_import_record(details: dict[str, Any], artifact: dict[str, Any]) -> dict
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", revision):
         raise HTTPException(status_code=502, detail="Hugging Face did not provide an immutable repository revision")
     remote_files = artifact["files"]
+    if not remote_files:
+        raise HTTPException(status_code=422, detail="The selected artifact contains no files")
     local_files = [
         _hf_local_filename(repo_id, item["filename"], revision)
         for item in remote_files
@@ -942,7 +1062,13 @@ def _hf_import_record(details: dict[str, Any], artifact: dict[str, Any]) -> dict
         f"{repo_id}\n{revision}\n{artifact['id']}".encode("utf-8")
     ).hexdigest()[:12]
     model_id = f"hf-{re.sub(r'[^a-z0-9]+', '-', repo_id.lower()).strip('-')[:72]}-{digest}"
-    context_length = int(details.get("contextLength") or 32768)
+    declared_context = details.get("contextLength")
+    try:
+        max_context_length = int(declared_context) if declared_context is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        max_context_length = 0
+    context_limit_known = 512 <= max_context_length <= _MAX_MODEL_CONTEXT
+    context_length = min(max_context_length, 32768) if context_limit_known else 8192
     size_gb = total_size / (1024 ** 3)
     record: dict[str, Any] = {
         "id": model_id,
@@ -955,6 +1081,8 @@ def _hf_import_record(details: dict[str, Any], artifact: dict[str, Any]) -> dict
         "size_mb": round(total_size / (1024 ** 2), 2),
         "vram_required_gb": round(size_gb + min(max(size_gb * 0.18, 0.5), 3.5), 2),
         "context_length": context_length,
+        "max_context_length": max_context_length if context_limit_known else None,
+        "context_limit_known": context_limit_known,
         "quantization": quantization,
         "specialty": "Community GGUF",
         "description": f"Imported from Hugging Face repository {repo_id}. Not validated by ODS.",
@@ -1179,6 +1307,7 @@ async def list_models(api_key: str = Depends(verify_api_key)):
             "llama context",
         ),
     )
+    context_size = context_size or _verified_activation_context(loaded_model)
     live_tps = float(metrics.get("tokens_per_second") or 0)
     payload = await asyncio.to_thread(
         build_models_payload,
@@ -1222,6 +1351,7 @@ async def list_models(api_key: str = Depends(verify_api_key)):
         )
     payload["odsMode"] = ODS_MODE_EFFECTIVE
     payload["configuredMode"] = _configured_ods_mode()
+    payload["llmBackend"] = LLM_BACKEND or "unknown"
     loaded_entry = next((model for model in payload["models"] if model["status"] == "loaded"), None)
     payload["activationReadyModel"] = (
         payload.get("currentModel")
@@ -1561,17 +1691,18 @@ def _find_local_gguf_model(model_id: str) -> Optional[dict]:
         return None
 
     context_length = 32768
-    for key in ("MAX_CONTEXT", "CTX_SIZE"):
-        try:
-            value = int(
-                read_env_file_value(key, INSTALL_DIR)
-                or read_env_value(key, INSTALL_DIR)
-                or 0
-            )
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            context_length = value
+    context_found = False
+    for reader in (read_env_file_value, read_env_value):
+        for key in ("CTX_SIZE", "MAX_CONTEXT"):
+            try:
+                value = int(reader(key, INSTALL_DIR) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                context_length = value
+                context_found = True
+                break
+        if context_found:
             break
 
     model_name = _local_model_name_from_gguf(gguf_file)
@@ -1850,11 +1981,16 @@ def cancel_download(api_key: str = Depends(verify_api_key)):
 
 
 @router.post("/api/models/{model_id}/load")
-def load_model(model_id: str, api_key: str = Depends(verify_api_key)):
+def load_model(
+    model_id: str,
+    body: dict[str, Any] | None = Body(default=None),
+    api_key: str = Depends(verify_api_key),
+):
     """Activate a model — update config and restart llama-server."""
     mode_denial = _model_activation_mode_denial(
         ODS_MODE_EFFECTIVE,
         _configured_ods_mode(),
+        LLM_BACKEND,
     )
     if mode_denial is not None:
         raise HTTPException(
@@ -1866,9 +2002,21 @@ def load_model(model_id: str, api_key: str = Depends(verify_api_key)):
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in library or local GGUF files")
 
+    requested_context = _requested_activation_context(body)
     already_active, loaded_model = _already_active_model(model_id, model)
-    if already_active:
-        return {"status": "already_active", "model_id": model_id, "loadedModel": loaded_model}
+    if already_active and (
+        requested_context is None
+        or requested_context == _verified_activation_context(loaded_model)
+    ):
+        response: dict[str, Any] = {
+            "status": "already_active",
+            "model_id": model_id,
+            "loadedModel": loaded_model,
+        }
+        configured_context = _configured_context_length()
+        if configured_context is not None:
+            response["context_length"] = configured_context
+        return response
 
     bootstrap_conflict = _bootstrap_upgrade_download_conflict()
     if bootstrap_conflict is not None:
@@ -1878,9 +2026,12 @@ def load_model(model_id: str, api_key: str = Depends(verify_api_key)):
         )
 
     # Activation includes downstream synchronization and a bounded rollback.
+    activation_body: dict[str, Any] = {"model_id": model_id}
+    if requested_context is not None:
+        activation_body["context_length"] = requested_context
     result = _call_agent_model(
         "/v1/model/activate",
-        {"model_id": model_id},
+        activation_body,
         timeout=2700,
         retry_download_busy_seconds=_MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
     )

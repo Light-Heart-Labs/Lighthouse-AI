@@ -97,8 +97,8 @@ fi
 echo "[contract] Linux Lemonade Hermes timeout is lifted from the ODS default"
 if grep -q '_hermes_request_timeout=900' installers/phases/11-services.sh \
    && grep -q -- '--request-timeout-seconds "$_hermes_request_timeout"' installers/phases/11-services.sh \
-   && grep -q 'is_windows_bash || \[\[ "$runtime" == "lemonade" || "$llm_backend" == "lemonade" \]\]' scripts/bootstrap-upgrade.sh \
-   && grep -q 'is_windows_bash || \[\[ "$_gpu_backend_for_hermes" == "amd" || "$_hermes_llm_backend_for_timeout" == "lemonade" \]\]' scripts/bootstrap-upgrade.sh; then
+   && grep -Fq 'elif [[ "${ODS_MODE:-local}" != "cloud" ]] && { [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; }; then' installers/phases/11-services.sh \
+   && grep -Fq 'if is_windows_bash || [[ "$switchboard_mode" == "enabled" || "$runtime" == "lemonade" || "$llm_backend" == "lemonade" ]]; then' scripts/bootstrap-upgrade.sh; then
     pass "Linux Lemonade Hermes provider timeout is upgraded to 900s"
 else
     fail "Linux Lemonade Hermes config must pass --request-timeout-seconds 900 at install and after bootstrap swap"
@@ -157,6 +157,14 @@ if grep -q 'LEMONADE_CTX_SIZE' docker-compose.amd.yml; then
     pass "CTX_SIZE passed to Lemonade container"
 else
     fail "docker-compose.amd.yml must pass LEMONADE_CTX_SIZE"
+fi
+if grep -q '\[long\]\$ContextSize' installers/windows/lib/backend-contract.ps1 \
+    && grep -q '\[long\]::TryParse' installers/windows/install-windows.ps1 \
+    && grep -q '\[long\]::TryParse' installers/windows/ods.ps1 \
+    && grep -q '\[long\]::TryParse' bin/ods-host-agent.py; then
+    pass "Windows Lemonade preserves context values above the Int32 range"
+else
+    fail "Windows Lemonade context parsing must match the API safe-integer contract"
 fi
 
 # ---------------------------------------------------------------------------
@@ -356,8 +364,10 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
         $programFiles = Join-Path $probeRoot "Program Files"
         $programFilesX86 = Join-Path $probeRoot "Program Files (x86)"
+        $localAppData = Join-Path $probeRoot "LocalAppData"
         ${env:ProgramFiles} = $programFiles
         ${env:ProgramFiles(x86)} = $programFilesX86
+        $env:LOCALAPPDATA = $localAppData
         $script:LEMONADE_EXE = Join-Path (Join-Path (Join-Path $programFiles "Lemonade Server") "bin") "lemonade-server.exe"
         $x86Exe = Join-Path (Join-Path (Join-Path $programFilesX86 "Lemonade Server") "bin") "LemonadeServer.exe"
         New-Item -ItemType Directory -Path (Split-Path $x86Exe) -Force | Out-Null
@@ -384,11 +394,20 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
 
         $legacy = Get-ODSLemonadeLaunchContract `
             -ExecutablePath $x86Exe -VersionOverride "10.6.9" `
-            -Port 8080 -BindAddress "127.0.0.1" -ModelsDir $modelsDir
-        foreach ($required in @("serve", "--no-tray", "--llamacpp", "--extra-models-dir")) {
+            -Port 8080 -BindAddress "127.0.0.1" -ModelsDir $modelsDir `
+            -ContextSize 65536
+        foreach ($required in @("serve", "--no-tray", "--llamacpp", "--extra-models-dir", "--ctx-size")) {
             if ($legacy.ArgumentList -notcontains $required) {
                 throw "Legacy Lemonade contract lost required argument: $required"
             }
+        }
+        $ctxIndex = [Array]::IndexOf($legacy.ArgumentList, "--ctx-size")
+        if ($ctxIndex -lt 0 -or $legacy.ArgumentList[$ctxIndex + 1] -ne "65536" -or
+            $legacy.ArgumentString -notmatch "--ctx-size 65536$") {
+            throw "Legacy Lemonade contract did not carry the selected context: $($legacy.ArgumentString)"
+        }
+        if ($modern.ArgumentList -contains "--ctx-size") {
+            throw "Modern Lemonade startup received ctx-size instead of using /internal/set"
         }
 
         try {

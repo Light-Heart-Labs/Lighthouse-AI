@@ -28,7 +28,7 @@ function New-WindowsOpenCodeConfigObject {
         [hashtable]$LlmEndpoint,
         [string]$ModelId,
         [string]$ModelName,
-        [int]$ContextLimit,
+        [long]$ContextLimit,
         [string]$ApiKey = "no-key",
         [string]$ProviderName = "llama-server (local)"
     )
@@ -65,7 +65,7 @@ function Update-WindowsOpenCodeConfigObject {
         [hashtable]$LlmEndpoint,
         [string]$ModelId,
         [string]$ModelName,
-        [int]$ContextLimit,
+        [long]$ContextLimit,
         [string]$ApiKey = "no-key",
         [string]$ProviderName = "llama-server (local)"
     )
@@ -128,7 +128,7 @@ function Sync-WindowsOpenCodeConfig {
         [hashtable]$LlmEndpoint,
         [string]$ModelId,
         [string]$ModelName,
-        [int]$ContextLimit,
+        [long]$ContextLimit,
         [string]$ConfigDir = $script:OPENCODE_CONFIG_DIR,
         [string]$ApiKey = "no-key",
         [string]$ProviderName = "llama-server (local)",
@@ -214,7 +214,6 @@ function Sync-WindowsOpenCodeConfigFromEnv {
         -UseLemonade:$UseLemonade -CloudMode:$CloudMode
     $_modelId = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("GGUF_FILE") -Default $DefaultModelId
     $_modelName = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LLM_MODEL") -Default $DefaultModelName
-    $_contextRaw = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("MAX_CONTEXT", "CTX_SIZE") -Default "$DefaultContextLimit"
     $_apiKey = "no-key"
     $_providerName = "llama-server (local)"
     $_switchboardMode = (Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("ODS_MODEL_SWITCHBOARD") -Default "observe").ToLowerInvariant()
@@ -238,9 +237,14 @@ function Sync-WindowsOpenCodeConfigFromEnv {
         $_apiKey = $_litellmKey
         $_providerName = "ODS switchboard"
     }
-    $_contextLimit = 0
-    if (-not [int]::TryParse($_contextRaw, [ref]$_contextLimit)) {
-        $_contextLimit = $DefaultContextLimit
+    $_contextLimit = $DefaultContextLimit
+    foreach ($_contextKey in @("CTX_SIZE", "MAX_CONTEXT")) {
+        $_contextRaw = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @($_contextKey) -Default ""
+        [long]$_candidateContext = 0
+        if ([long]::TryParse($_contextRaw, [ref]$_candidateContext) -and $_candidateContext -gt 0) {
+            $_contextLimit = $_candidateContext
+            break
+        }
     }
 
     return Sync-WindowsOpenCodeConfig `
