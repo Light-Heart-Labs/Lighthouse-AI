@@ -1812,6 +1812,10 @@ class TestInstallHookEnvAllowlist:
         import inspect
         return inspect.getsource(_mod.AgentHandler._handle_install)
 
+    def _generic_hook_source(self):
+        import inspect
+        return inspect.getsource(_mod.AgentHandler._execute_hook)
+
     def test_setup_hook_subprocess_run_passes_env_kwarg(self):
         src = self._hook_helper_source()
         assert "env=hook_env" in src, (
@@ -1837,6 +1841,14 @@ class TestInstallHookEnvAllowlist:
             assert f'"{key}"' in src, (
                 f"setup_hook env allowlist missing required key {key}"
             )
+
+    def test_setup_hook_preserves_rootless_docker_routing(self):
+        for src in (self._hook_helper_source(), self._generic_hook_source()):
+            for key in ("DOCKER_HOST", "XDG_RUNTIME_DIR"):
+                assert f'"{key}"' in src, (
+                    f"extension hooks must preserve {key} so rootless Docker "
+                    "operations address the same daemon as the host agent"
+                )
 
     def test_setup_hook_uses_resolve_hook_with_post_install(self):
         src = self._hook_helper_source()
@@ -2832,6 +2844,8 @@ def env_update_env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
     monkeypatch.setattr(_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(_mod, "EXTENSIONS_DIR", install_dir / "extensions" / "services")
+    monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", data_dir / "user-extensions")
     monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
     return install_dir, data_dir
 
@@ -2859,6 +2873,26 @@ class TestHandleEnvUpdate:
         # backup file actually exists where the response says it does
         backup_files = list((data_dir / "config-backups").glob(".env.backup.*"))
         assert len(backup_files) == 1
+
+    def test_proxy_enabled_forces_auth_and_reports_saved_value(self, env_update_env):
+        install_dir, _ = env_update_env
+        proxy_dir = _mod.EXTENSIONS_DIR / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        body = _make_body(
+            "ODS_AGENT_KEY=newvalue\n WEBUI_AUTH = false\nWEBUI_AUTH=false\n"
+        )
+        handler = _FakeHandler(body)
+
+        _mod.AgentHandler._handle_env_update(handler)
+
+        assert handler.response_code == 200
+        env_text = (install_dir / ".env").read_text(encoding="utf-8")
+        assert env_text.count("WEBUI_AUTH=true") == 1
+        assert "WEBUI_AUTH=false" not in env_text
+        response = handler.parse_response()
+        assert response["enforced_values"] == {"WEBUI_AUTH": "true"}
+        assert "raw_text" not in response
 
     def test_413_oversize_body(self, env_update_env):
         # Construct headers claiming body is too large; rfile content is irrelevant.
@@ -4066,6 +4100,216 @@ class TestPrecreateDataDirs:
         # Named volume must not materialize as a directory anywhere we own.
         assert not (ext_dir / "named_vol").exists()
         assert not (install_dir / "named_vol").exists()
+
+
+class TestRootlessDataOwnershipRepair:
+    def test_runs_targeted_helper_for_builtin_linux_service(
+        self, tmp_path, monkeypatch,
+    ):
+        helper = tmp_path / "lib" / "rootless-ownership.sh"
+        helper.parent.mkdir()
+        helper.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(_mod, "_find_usable_bash", lambda: "/bin/bash")
+        monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return _mod.subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        _mod._repair_rootless_data_ownership("hermes")
+
+        assert calls[0][0] == [
+            "/bin/bash", str(helper), str(tmp_path), "hermes",
+        ]
+        assert calls[0][1]["env"]["DOCKER_HOST"].endswith("docker.sock")
+        assert calls[0][1]["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+
+    @pytest.mark.parametrize("system", ["Windows", "Darwin"])
+    def test_non_linux_is_side_effect_free(self, system, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: system)
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("helper ran outside Linux"),
+        )
+
+        _mod._repair_rootless_data_ownership("hermes")
+
+    def test_unsupported_service_is_side_effect_free(self, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("helper ran for unsupported service"),
+        )
+
+        _mod._repair_rootless_data_ownership("custom-extension")
+
+    def test_failure_prevents_compose_start(self, monkeypatch):
+        compose_calls = []
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: ["-f", "base.yml"])
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod,
+            "_repair_rootless_data_ownership",
+            lambda _sid: (_ for _ in ()).throw(RuntimeError("ownership mismatch")),
+        )
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: compose_calls.append(args),
+        )
+
+        ok, error = _mod.docker_compose_action("hermes", "start")
+
+        assert ok is False
+        assert error == "ownership mismatch"
+        assert compose_calls == []
+
+
+class TestProxyAuthStart:
+    def test_auth_is_persisted_and_applied_before_proxy_start(
+        self, tmp_path, monkeypatch,
+    ):
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "BIND_ADDRESS=127.0.0.1\nWEBUI_AUTH=false\nWEBUI_AUTH=false\n",
+            encoding="utf-8",
+        )
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod, "_repair_rootless_data_ownership", lambda _sid: None,
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("ods-proxy", "start")
+
+        assert ok is True
+        assert error == ""
+        assert env_path.read_text(encoding="utf-8").count("WEBUI_AUTH=true") == 1
+        assert "WEBUI_AUTH=false" not in env_path.read_text(encoding="utf-8")
+        assert calls[0][0][-5:] == [
+            "up", "-d", "--no-deps", "--force-recreate", "open-webui",
+        ]
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
+        assert calls[1][0][-3:] == ["up", "-d", "ods-proxy"]
+
+    def test_proxy_does_not_start_when_auth_recreate_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        (tmp_path / ".env").write_text(
+            "WEBUI_AUTH=false\n",
+            encoding="utf-8",
+        )
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, "", "recreate failed")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("ods-proxy", "start")
+
+        assert ok is False
+        assert "ods-proxy was not started" in error
+        assert len(calls) == 1
+        assert calls[0][-1] == "open-webui"
+        assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+            "WEBUI_AUTH=true\n"
+        )
+
+    def test_open_webui_start_keeps_auth_on_when_proxy_is_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        env_path = tmp_path / ".env"
+        env_path.write_text("WEBUI_AUTH=false\n", encoding="utf-8")
+        extensions_dir = tmp_path / "extensions" / "services"
+        proxy_dir = extensions_dir / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", extensions_dir)
+        monkeypatch.setattr(
+            _mod, "USER_EXTENSIONS_DIR", tmp_path / "data" / "user-extensions",
+        )
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod, "_repair_rootless_data_ownership", lambda _sid: None,
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("open-webui", "start")
+
+        assert ok is True
+        assert error == ""
+        assert env_path.read_text(encoding="utf-8") == "WEBUI_AUTH=true\n"
+        assert calls[0][0][-3:] == ["up", "-d", "open-webui"]
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
+
+    def test_core_recreate_keeps_auth_on_when_proxy_is_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        extensions_dir = tmp_path / "extensions" / "services"
+        proxy_dir = extensions_dir / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", extensions_dir)
+        monkeypatch.setattr(
+            _mod, "USER_EXTENSIONS_DIR", tmp_path / "data" / "user-extensions",
+        )
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"open-webui"})
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_recreate(["open-webui"])
+
+        assert ok is True
+        assert error == ""
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
 
 
 class TestInstallRunningStateVerification:

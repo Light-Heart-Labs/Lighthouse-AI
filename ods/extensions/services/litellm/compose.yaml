@@ -29,6 +29,10 @@ services:
     command:
       - |
         CONFIG_PATH=$$(sh /app/ods-select-config.sh)
+        if [ -z "$$CONFIG_PATH" ] || [ ! -r "$$CONFIG_PATH" ]; then
+          echo "ERROR: LiteLLM config selector returned an unreadable path: $${CONFIG_PATH:-<empty>}" >&2
+          exit 1
+        fi
         export CONFIG_PATH
         python3 -c "
         import os

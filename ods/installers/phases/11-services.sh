@@ -240,6 +240,14 @@ else
         [[ "${external,,}" == "true" ]] || [[ "${mode,,}" == "lemonade" && "${managed,,}" == "false" ]]
     }
 
+    _phase11_external_llm() {
+        local url model skip
+        url="${EXTERNAL_LLM_URL:-$(_phase11_env_get EXTERNAL_LLM_URL "")}"
+        model="${EXTERNAL_LLM_MODEL:-$(_phase11_env_get EXTERNAL_LLM_MODEL "")}"
+        skip="${SKIP_MODEL_DOWNLOAD:-$(_phase11_env_get SKIP_MODEL_DOWNLOAD false)}"
+        [[ -n "$url" && -n "$model" && "${skip,,}" == "true" ]]
+    }
+
     _phase11_close_inherited_fds_for_daemon() {
         local fd fd_dir fd_name
 
@@ -390,6 +398,30 @@ else
             "ods-external-lemonade" \
             "" \
             "external Lemonade"
+    }
+
+    _phase11_allow_external_llm_firewall() {
+        _phase11_external_llm || return 0
+
+        local network_name="${1:-ods-network}"
+        local base without_scheme host_port port
+        base="${EXTERNAL_LLM_URL:-$(_phase11_env_get EXTERNAL_LLM_URL "")}"
+        base="${base%/}"
+        case "$base" in
+            http://localhost:*|http://127.0.0.1:*|http://\[::1\]:*) ;;
+            *) return 0 ;;
+        esac
+        without_scheme="${base#*://}"
+        host_port="${without_scheme%%/*}"
+        port="${host_port##*:}"
+        [[ "$port" =~ ^[0-9]+$ ]] || return 0
+
+        _phase11_allow_container_host_firewall \
+            "$network_name" \
+            "$port" \
+            "ods-external-llm" \
+            "" \
+            "external ${EXTERNAL_LLM_PROVIDER:-LLM}"
     }
 
     if [[ "${GPU_BACKEND:-}" == "amd" ]] && ! amd_gpu_runtime_devices_available; then
@@ -587,6 +619,8 @@ else
             mv "$litellm_disabled" "$litellm_cf"
             ai_ok "Auto-enabled litellm for external Lemonade mode"
         fi
+    elif _phase11_external_llm; then
+        ai "External ${EXTERNAL_LLM_PROVIDER:-LLM} mode - skipping ODS-managed GGUF download"
     fi
 
     # Ensure model directory exists
@@ -597,7 +631,7 @@ else
     # immediately. The full model downloads in the background and hot-swaps.
     [[ -f "$SCRIPT_DIR/installers/lib/bootstrap-model.sh" ]] && . "$SCRIPT_DIR/installers/lib/bootstrap-model.sh"
     _BOOTSTRAP_ACTIVE=false
-    if type bootstrap_needed &>/dev/null && bootstrap_needed; then
+    if ! _phase11_external_llm && type bootstrap_needed &>/dev/null && bootstrap_needed; then
         _BOOTSTRAP_ACTIVE=true
         # Save full model config for the background upgrade
         FULL_GGUF_FILE="$GGUF_FILE"
@@ -620,7 +654,9 @@ else
     # Download GGUF model if not already present (with retry and integrity verification)
     ods_progress 76 "services" "Checking AI model"
     GGUF_DIR="$INSTALL_DIR/data/models"
-    if [[ "${ODS_MODE:-local}" != "cloud" && -n "$GGUF_URL" ]] && ! _phase11_external_lemonade; then
+    if [[ "${ODS_MODE:-local}" != "cloud" && -n "$GGUF_URL" ]] \
+        && ! _phase11_external_lemonade \
+        && ! _phase11_external_llm; then
         # Check if model exists and verify integrity
         if [[ -f "$GGUF_DIR/$GGUF_FILE" ]]; then
             if [[ -n "$GGUF_SHA256" ]]; then
@@ -652,6 +688,21 @@ else
         if [[ ! -f "$GGUF_DIR/$GGUF_FILE" ]]; then
             ods_progress 77 "services" "Downloading AI model"
             ai "Downloading GGUF model: $GGUF_FILE"
+
+            # Expected size drives the progress percentage. LLM_MODEL_SIZE_MB
+            # tracks the full model, which is not what fast-start downloads
+            # here, so the bootstrap branch carries its own number.
+            _model_total_mb="${LLM_MODEL_SIZE_MB:-0}"
+            [[ "$_BOOTSTRAP_ACTIVE" == "true" ]] && _model_total_mb="${BOOTSTRAP_GGUF_SIZE_MB:-0}"
+            [[ "$_model_total_mb" =~ ^[0-9]+$ ]] || _model_total_mb=0
+            ODS_ACTIVE_DOWNLOAD_PART="$GGUF_DIR/$GGUF_FILE.part"
+            ODS_ACTIVE_DOWNLOAD_TOTAL_MB="$_model_total_mb"
+
+            # curl resumes into the same .part file (-C -), so an interrupted
+            # install keeps its bytes. Say so instead of looking like a restart.
+            if [[ -s "$ODS_ACTIVE_DOWNLOAD_PART" ]]; then
+                ai "Found partial download: $(format_download_progress "$(download_part_bytes "$ODS_ACTIVE_DOWNLOAD_PART")" "$_model_total_mb"). Resuming..."
+            fi
             signal "This is the big one. I've got it — sit back."
             echo ""
 
@@ -661,11 +712,14 @@ else
                 [[ $_attempt -gt 1 ]] && ai "Retry attempt $_attempt of 3..."
                 curl -fSL -C - --connect-timeout 30 --max-time 3600 \
                     --retry 3 --retry-delay 5 --retry-all-errors \
-                    -o "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_URL" \
+                    -o "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_URL" \
                     >> "$INSTALL_DIR/logs/model-download.log" 2>&1 &
                 dl_pid=$!
+                ODS_ACTIVE_DOWNLOAD_PID="$dl_pid"
 
-                if spin_task $dl_pid "Downloading $GGUF_FILE"; then
+                if spin_task $dl_pid "Downloading $GGUF_FILE" \
+                    "$ODS_ACTIVE_DOWNLOAD_PART" "$_model_total_mb"; then
+                    ODS_ACTIVE_DOWNLOAD_PID=""
                     # Verify the file actually landed before claiming success.
                     # Today's chain (spin_task → mv → printf) trusts each step's
                     # exit code separately and can race: mv can silently fail if
@@ -673,7 +727,7 @@ else
                     # another process can remove the file before the printf
                     # fires. A spurious "Model downloaded" line then misleads
                     # later phases that depend on the file existing.
-                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                    if mv "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
                         printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded: $GGUF_FILE"
                         _dl_success=true
                         break
@@ -681,14 +735,17 @@ else
                         rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
                         printf "\r  ${AMB}⚠${NC} %-60s\n" "Download claimed to succeed but $GGUF_FILE is missing/empty"
                     fi
-                elif _phase11_download_hf_artifact "$GGUF_URL" "$GGUF_DIR/$GGUF_FILE.part" "$INSTALL_DIR/logs/model-download.log"; then
-                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
-                        printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
-                        _dl_success=true
-                        break
-                    else
-                        rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
-                        printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
+                else
+                    ODS_ACTIVE_DOWNLOAD_PID=""
+                    if _phase11_download_hf_artifact "$GGUF_URL" "$ODS_ACTIVE_DOWNLOAD_PART" "$INSTALL_DIR/logs/model-download.log"; then
+                        if mv "$ODS_ACTIVE_DOWNLOAD_PART" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                            printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
+                            _dl_success=true
+                            break
+                        else
+                            rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
+                            printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
+                        fi
                     fi
                 fi
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"
@@ -702,6 +759,10 @@ else
 
             if [[ "$_dl_success" != "true" ]]; then
                 printf "\r  ${RED}✗${NC} %-60s\n" "Download failed after 3 attempts: $GGUF_FILE"
+                # Nothing above deletes the .part, so the bytes already on disk
+                # are still usable. Users who do not know that re-download from
+                # zero or clear the directory by hand.
+                report_active_download_preserved
                 ai "Manual retry: curl -fSL -C - --connect-timeout 30 --max-time 3600 --retry 3 --retry-delay 5 --retry-all-errors -o '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_URL' && mv '$GGUF_DIR/$GGUF_FILE.part' '$GGUF_DIR/$GGUF_FILE'"
             else
                 # Verify freshly downloaded file
@@ -728,10 +789,13 @@ else
                     fi
                 fi
             fi
+            unset ODS_ACTIVE_DOWNLOAD_PID ODS_ACTIVE_DOWNLOAD_PART ODS_ACTIVE_DOWNLOAD_TOTAL_MB
         fi
 
         # Abort if model download/verification failed
-        if [[ "${ODS_MODE:-local}" != "cloud" && -n "$GGUF_URL" && ! -f "$GGUF_DIR/$GGUF_FILE" ]] && ! _phase11_external_lemonade; then
+        if [[ "${ODS_MODE:-local}" != "cloud" && -n "$GGUF_URL" && ! -f "$GGUF_DIR/$GGUF_FILE" ]] \
+            && ! _phase11_external_lemonade \
+            && ! _phase11_external_llm; then
             ai_bad "Model file missing or verification failed. Cannot proceed without a valid model."
             ai "Re-run the installer to retry the download."
             exit 1
@@ -822,7 +886,9 @@ else
     fi
 
     # Generate models.ini for llama-server (skip in cloud mode)
-    if [[ "${ODS_MODE:-local}" != "cloud" ]] && ! _phase11_external_lemonade; then
+    if [[ "${ODS_MODE:-local}" != "cloud" ]] \
+        && ! _phase11_external_lemonade \
+        && ! _phase11_external_llm; then
         mkdir -p "$INSTALL_DIR/config/llama-server"
         cat > "$INSTALL_DIR/config/llama-server/models.ini" << MODELS_INI_EOF
 [${LLM_MODEL}]
@@ -915,6 +981,8 @@ MODELS_INI_EOF
                 _hermes_model="ods/current"
             elif [[ "${ODS_MODE:-local}" == "cloud" ]]; then
                 _hermes_model="${LLM_MODEL:-default}"
+            elif _phase11_external_llm; then
+                _hermes_model="${EXTERNAL_LLM_MODEL:-$(_phase11_env_get EXTERNAL_LLM_MODEL "${LLM_MODEL:-default}")}"
             elif _phase11_external_lemonade; then
                 _hermes_model="${LEMONADE_MODEL:-$(_phase11_env_get LEMONADE_MODEL "${LLM_MODEL:-default}")}"
             else
@@ -940,6 +1008,9 @@ MODELS_INI_EOF
             elif [[ "${ODS_MODE:-local}" == "cloud" ]]; then
                 _hermes_base_url="${HERMES_LLM_BASE_URL:-http://litellm:4000/v1}"
                 _hermes_api_key="${HERMES_LLM_API_KEY:-${LITELLM_KEY:-}}"
+            elif _phase11_external_llm; then
+                _hermes_base_url="${HERMES_LLM_BASE_URL:-$(_phase11_env_get HERMES_LLM_BASE_URL "")}"
+                _hermes_api_key="${HERMES_LLM_API_KEY:-$(_phase11_env_get HERMES_LLM_API_KEY not-needed)}"
             elif [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; then
                 _hermes_base_url="http://litellm:4000/v1"
                 _hermes_api_key="${LITELLM_KEY:-}"
@@ -949,6 +1020,8 @@ MODELS_INI_EOF
             if [[ "$_hermes_switchboard_mode" == "enabled" ]]; then
                 _hermes_request_timeout=900
             elif [[ "${ODS_MODE:-local}" != "cloud" ]] && { [[ "${GPU_BACKEND:-}" == "amd" ]] || _phase11_external_lemonade; }; then
+                _hermes_request_timeout=900
+            elif _phase11_external_llm; then
                 _hermes_request_timeout=900
             fi
             _hermes_patcher="$INSTALL_DIR/scripts/patch-hermes-config.py"
@@ -1127,6 +1200,7 @@ MODELS_INI_EOF
     # so we allow the actual Docker subnet instead of a broad RFC1918 range.
     _phase11_allow_host_agent_firewall ods-network
     _phase11_allow_external_lemonade_firewall ods-network
+    _phase11_allow_external_llm_firewall ods-network
 
     _compose_started_with_delayed_health=false
     if ! $compose_ok && _phase11_compose_failure_is_delayed_health && _phase11_has_managed_containers; then

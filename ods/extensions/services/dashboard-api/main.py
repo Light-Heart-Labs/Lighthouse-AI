@@ -639,6 +639,7 @@ def _service_public_url(service_id: str, port: int | None) -> Optional[str]:
 def _serialize_services(service_statuses: list[ServiceStatus], uptime: int) -> list[dict]:
     serialized = []
     for service in service_statuses:
+        config = SERVICES.get(service.id, {})
         url = _service_public_url(service.id, service.external_port)
         item = {
             "id": service.id,
@@ -650,7 +651,11 @@ def _serialize_services(service_statuses: list[ServiceStatus], uptime: int) -> l
         if url:
             item["url"] = url
             item["href"] = url
-        llm_contract = SERVICES.get(service.id, {}).get("llm")
+        if config.get("public_url"):
+            item["public_url"] = config["public_url"]
+        if config.get("ui_path"):
+            item["ui_path"] = config["ui_path"]
+        llm_contract = config.get("llm")
         if isinstance(llm_contract, dict):
             item["llm"] = llm_contract
         item.update(_service_semantics(service.id, service.status))
@@ -675,6 +680,10 @@ def _fallback_services() -> list[dict]:
         if url:
             item["url"] = url
             item["href"] = url
+        if config.get("public_url"):
+            item["public_url"] = config["public_url"]
+        if config.get("ui_path"):
+            item["ui_path"] = config["ui_path"]
         llm_contract = config.get("llm")
         if isinstance(llm_contract, dict):
             item["llm"] = llm_contract
@@ -1045,7 +1054,7 @@ async def _lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ODS Dashboard API",
-    version="2.5.3",
+    version="2.6.0",
     description="System status API for ODS Dashboard",
     lifespan=_lifespan,
 )
@@ -1498,6 +1507,7 @@ async def get_external_links(api_key: str = Depends(verify_api_key)):
         links.append({
             "id": sid, "label": cfg.get("name", sid), "port": ext_port,
             "ui_path": cfg.get("ui_path", "/"),
+            "public_url": cfg.get("public_url", ""),
             "icon": SIDEBAR_ICONS.get(sid, "ExternalLink"),
             "healthNeedles": [sid, cfg.get("name", sid).lower()],
         })
@@ -1619,11 +1629,19 @@ async def api_settings_env_save(
             detail={"message": "Could not contact host agent to write environment file."},
         ) from exc
     backup_relative = agent_resp.get("backup_path")
+    saved_raw_text = raw_text
+    enforced_values = agent_resp.get("enforced_values")
+    if isinstance(enforced_values, dict):
+        saved_values, _ = _parse_env_text(raw_text)
+        for key, value in enforced_values.items():
+            if isinstance(key, str) and isinstance(value, str):
+                saved_values[key] = value
+        saved_raw_text = _render_env_from_values(saved_values)
 
     _clear_settings_caches()
     result = await asyncio.to_thread(
         _build_settings_env_payload,
-        raw_text=raw_text,
+        raw_text=saved_raw_text,
         backup_path=backup_relative,
         apply_plan=apply_plan,
     )

@@ -23,11 +23,16 @@ def estimated_param_billions(model: dict[str, Any]) -> float:
             return value
 
     numbers: list[float] = []
+    # config/model-library.json spells the filename `gguf_file`; the oracle's
+    # normalized shape carries `gguf`. Read both — the filename is the only
+    # place some entries state their scale, and losing it drops the estimate
+    # onto the size heuristic, which disagrees with scripts/select-model.py.
     for text in (
         model.get("id"),
         model.get("name"),
         model.get("llm_model_name"),
         model.get("gguf"),
+        model.get("gguf_file"),
     ):
         numbers.extend(
             float(match)

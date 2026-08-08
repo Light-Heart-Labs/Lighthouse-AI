@@ -428,6 +428,60 @@ else
     fail "Remote provider API key must not be added as an ordinary .env field"
 fi
 
+# 20. Service manifests promise user-settable .env keys. validate-env.sh
+# rejects any key absent from the schema as "unknown", so a manifest key that
+# never made it into .env.schema.json turns following the service README into
+# a hard validation failure.
+manifest_env_contract() {
+    awk '
+        /^[[:space:]]+external_port_env:[[:space:]]*/ {
+            print FILENAME "	" $2
+            next
+        }
+        /^[[:space:]]+-[[:space:]]+key:[[:space:]]*/ {
+            pending = $3
+            next
+        }
+        pending != "" && /^[[:space:]]+required:[[:space:]]*true[[:space:]]*$/ {
+            print FILENAME "	" pending
+            pending = ""
+        }
+        /^[[:space:]]+-[[:space:]]+key:/ { pending = $3 }
+    ' "$ROOT_DIR"/extensions/services/*/manifest.yaml | sort -u
+}
+
+undeclared=""
+while IFS=$'	' read -r manifest key; do
+    [[ -n "$key" ]] || continue
+    if ! grep -q "\"$key\":" "$ROOT_DIR/.env.schema.json"; then
+        undeclared+="${key} (${manifest##*/services/}) "
+    fi
+done < <(manifest_env_contract)
+
+if [[ -z "$undeclared" ]]; then
+    pass "Every manifest port override and required env key is declared in the schema"
+else
+    fail "Manifest keys missing from .env.schema.json: ${undeclared% }"
+fi
+
+# 21. The same gap, from the user's side: setting the documented Brave Search
+# keys in .env must not be reported as unknown.
+cp "$TMP_DIR/valid.env" "$TMP_DIR/brave.env"
+cat >> "$TMP_DIR/brave.env" <<'EOF'
+BRAVE_SEARCH_API_KEY=brave-subscription-token
+BRAVE_SEARCH_PORT=8585
+EOF
+set +e
+out=$("$VALIDATE_ENV_BASH" "$ROOT_DIR/scripts/validate-env.sh" "$TMP_DIR/brave.env" "$ROOT_DIR/.env.schema.json" 2>&1)
+r=$?
+set -e
+if [[ $r -eq 0 ]]; then
+    pass "Documented Brave Search keys validate cleanly"
+else
+    fail "Brave Search keys should validate, got exit $r: $(echo "$out" | grep -i brave | tr '
+' ' ')"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
