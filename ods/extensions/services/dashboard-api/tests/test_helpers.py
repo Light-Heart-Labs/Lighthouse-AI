@@ -92,6 +92,30 @@ class TestGetModelInfo:
         assert info is not None
         assert info.context_length == 8192
 
+    def test_prefers_canonical_context_when_upgrade_aliases_diverge(self, install_dir):
+        env_file = install_dir / ".env"
+        env_file.write_text(
+            "LLM_MODEL=Qwen2.5-7B-Instruct\n"
+            "CTX_SIZE=131072\n"
+            "MAX_CONTEXT=65536\n"
+        )
+
+        info = get_model_info()
+        assert info is not None
+        assert info.context_length == 131072
+
+    def test_invalid_canonical_context_falls_back_to_valid_legacy_alias(self, install_dir):
+        env_file = install_dir / ".env"
+        env_file.write_text(
+            "LLM_MODEL=Qwen2.5-7B-Instruct\n"
+            "CTX_SIZE=auto\n"
+            "MAX_CONTEXT=65536\n"
+        )
+
+        info = get_model_info()
+        assert info is not None
+        assert info.context_length == 65536
+
     def test_non_numeric_context_falls_back_to_default(self, install_dir):
         # A non-numeric CTX_SIZE/MAX_CONTEXT (e.g. "auto") must not 500 every
         # caller of get_model_info(); it falls back to the default context.
@@ -643,11 +667,24 @@ class TestGetLlamaMetrics:
         assert helpers._get_lifetime_tokens() == 100
         assert json.loads(helpers._TOKEN_FILE.read_text())["last_server_counter"] == 100
 
+    @pytest.mark.asyncio
+    async def test_returns_fallback_when_llama_server_not_in_services(self, monkeypatch):
+        monkeypatch.setattr("helpers.SERVICES", {})
+        result = await get_llama_metrics(model_hint="test-model")
+        assert result["tokens_per_second"] == 0
+        assert result["token_count_mode"] == "cumulative"
+
 
 # --- get_loaded_model ---
 
 
 class TestGetLoadedModel:
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_llama_server_not_in_services(self, monkeypatch):
+        monkeypatch.setattr("helpers.SERVICES", {})
+        result = await get_loaded_model()
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_model_with_loaded_status(self, monkeypatch):
@@ -720,6 +757,12 @@ class TestGetLoadedModel:
 
 
 class TestGetLlamaContextSize:
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_llama_server_not_in_services(self, monkeypatch):
+        monkeypatch.setattr("helpers.SERVICES", {})
+        result = await get_llama_context_size(model_hint="test-model")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_n_ctx(self, monkeypatch):

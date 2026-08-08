@@ -320,6 +320,19 @@ generate_ods_env() {
                 upsert_env_value "$env_path" "HOST_LAN_IP" "$_host_lan_ip"
             fi
         fi
+
+        # A local install may later be exposed by editing BIND_ADDRESS or
+        # enabling the ODS proxy. Do not preserve an authless localhost value
+        # across that transition.
+        local _existing_proxy
+        _existing_proxy="$(read_env_value "$env_path" "ENABLE_ODS_PROXY")"
+        if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]] \
+            || [[ "${_existing_proxy:-false}" == "true" ]] \
+            || [[ "$_existing_bind" != "127.0.0.1" && "$_existing_bind" != "::1" && "$_existing_bind" != "localhost" ]]; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "true"
+        elif ! env_key_exists "$env_path" "WEBUI_AUTH"; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "false"
+        fi
         return 0
     fi
 
@@ -443,6 +456,16 @@ generate_ods_env() {
     local rag_openai_api_base_url="${RAG_OPENAI_API_BASE_URL:-}"
     local rag_openai_api_key="${RAG_OPENAI_API_KEY:-}"
     local embeddings_memory_limit="${EMBEDDINGS_MEMORY_LIMIT:-4G}"
+    local bind_address="${BIND_ADDRESS:-127.0.0.1}"
+    local webui_auth
+    if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]]; then
+        webui_auth="true"
+    else
+        case "$bind_address" in
+            127.0.0.1|::1|localhost) webui_auth="${WEBUI_AUTH:-false}" ;;
+            *) webui_auth="true" ;;
+        esac
+    fi
 
     # Build .env content (matches Phase 06 format)
     cat > "$env_path" << ENVEOF
@@ -453,6 +476,7 @@ generate_ods_env() {
 #=== Network Binding ===
 # macOS has no --lan flag; operators opt in by setting BIND_ADDRESS=0.0.0.0
 # manually. HOST_LAN_IP is only populated when that pre-existed at install time.
+BIND_ADDRESS=${bind_address}
 HOST_LAN_IP=${host_lan_ip}
 # Device name used by ods-mdns/ods-proxy hostnames and magic-link URLs.
 # Derived from the macOS LocalHostName/hostname so multiple installs on one LAN
@@ -582,7 +606,8 @@ RAG_OPENAI_API_KEY=${rag_openai_api_key}
 EMBEDDINGS_MEMORY_LIMIT=${embeddings_memory_limit}
 
 #=== Web UI Settings ===
-WEBUI_AUTH=true
+# Loopback installs open directly. Network-bound installs require a login.
+WEBUI_AUTH=${webui_auth}
 ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
 OPEN_WEBUI_LLM_BASE_URL=${open_webui_llm_base_url}

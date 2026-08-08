@@ -13,20 +13,21 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8", errors="replace")
 
 
-def test_linux_installer_uses_renderer_with_fallback() -> None:
+def test_linux_installer_uses_renderer_as_sole_writer() -> None:
     text = read("installers/phases/06-directories.sh")
     assert "scripts/render-runtime-configs.py" in text
     assert "--surface litellm-lemonade" in text
-    assert "LITELLM_EOF" in text
-    assert "falling back to inline writer" in text
+    assert "LITELLM_EOF" not in text
+    assert "falling back to inline writer" not in text
 
 
-def test_bootstrap_upgrade_uses_renderer_with_fallback() -> None:
+def test_bootstrap_upgrade_uses_renderer_as_sole_writer() -> None:
     text = read("scripts/bootstrap-upgrade.sh")
     assert "scripts/render-runtime-configs.py" in text
     assert "--surface litellm-lemonade" in text
-    assert "LITELLM_UPGRADE_EOF" in text
-    assert "falling back to inline writer" in text
+    assert "LITELLM_UPGRADE_EOF" not in text
+    assert "LITELLM_WINDOWS_LEMONADE_EOF" not in text
+    assert "falling back to inline writer" not in text
 
 
 def test_bootstrap_upgrade_promotes_lemonade_model_id() -> None:
@@ -37,14 +38,34 @@ def test_bootstrap_upgrade_promotes_lemonade_model_id() -> None:
     assert 'json_has_id "$models_json" "$model_id"' in text
 
 
-def test_host_agent_uses_renderer_with_fallback() -> None:
+def test_host_agent_uses_renderer_as_sole_writer() -> None:
     text = read("bin/ods-host-agent.py")
     assert "def _render_runtime_config" in text
     assert "--surface" in text
     assert '"--lemonade-model-id"' in text
     assert "litellm-lemonade" in text
     assert "Runtime config renderer failed" in text
-    assert "model_list:\\n" in text
+    lemonade_writer = text.split("def _write_lemonade_config(", 1)[1].split(
+        "def _write_windows_native_litellm_config(", 1
+    )[0]
+    assert "model_list:\\n" not in lemonade_writer
+
+
+def test_windows_lemonade_uses_renderer_as_sole_writer() -> None:
+    text = read("installers/windows/lib/env-generator.ps1")
+    assert "scripts" in text
+    assert "render-runtime-configs.py" in text
+    assert '"litellm-lemonade"' in text
+    assert '"--lemonade-model-id"' in text
+    assert "Install-WindowsODSRuntimeConfigPython" in text
+    assert "sys.version_info >= (3, 8)" in text
+    assert "IsNullOrWhiteSpace($env:LOCALAPPDATA)" in text
+    assert 'Join-Path $env:LOCALAPPDATA "Programs\\Python"' in text
+    assert "winget install --exact --id Python.Python.3.12" in text
+    lemonade_writer = text.split("function Write-WindowsODSLemonadeLiteLlmConfig", 1)[
+        1
+    ].split("function Set-WindowsODSLemonadeModelConfiguration", 1)[0]
+    assert "model_list:" not in lemonade_writer
 
 
 def test_openclaw_receives_persisted_lemonade_model_id() -> None:
@@ -55,13 +76,24 @@ def test_openclaw_receives_persisted_lemonade_model_id() -> None:
     assert "`extra.${GGUF_FILE}`" in injector
 
 
+def test_cloud_callers_do_not_render_local_switchboard() -> None:
+    linux = read("installers/phases/06-directories.sh")
+    macos = read("installers/macos/install-macos.sh")
+    host_agent = read("bin/ods-host-agent.py")
+    assert 'if [[ "$_router_ods_mode" != "cloud" ]]' in linux
+    assert '"ODS_MODE")" != "cloud"' in macos
+    assert 'str(common["ods_mode"]).strip().lower() != "cloud"' in host_agent
+
+
 def main() -> int:
     for test in (
-        test_linux_installer_uses_renderer_with_fallback,
-        test_bootstrap_upgrade_uses_renderer_with_fallback,
+        test_linux_installer_uses_renderer_as_sole_writer,
+        test_bootstrap_upgrade_uses_renderer_as_sole_writer,
         test_bootstrap_upgrade_promotes_lemonade_model_id,
-        test_host_agent_uses_renderer_with_fallback,
+        test_host_agent_uses_renderer_as_sole_writer,
+        test_windows_lemonade_uses_renderer_as_sole_writer,
         test_openclaw_receives_persisted_lemonade_model_id,
+        test_cloud_callers_do_not_render_local_switchboard,
     ):
         test()
         print(f"[PASS] {test.__name__}")

@@ -17,6 +17,7 @@ pass() {
 }
 
 tmp="$(mktemp -d)"
+tmp="$(cd "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 
 fakebin="$tmp/bin"
@@ -117,6 +118,7 @@ locked_install_dir="$tmp/install-lock-held"
 mkdir -p "$locked_install_dir/data/models" "$locked_install_dir/config/llama-server" "$locked_install_dir/bin" "$tmp/locks"
 cp "$install_dir/.env" "$locked_install_dir/.env"
 printf 'bootstrap model\n' > "$locked_install_dir/data/models/Bootstrap.gguf"
+printf '999999\n' > "$locked_install_dir/data/.llama-server.pid"
 printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' \
     > "$locked_install_dir/data/models/Full.gguf.part"
 
