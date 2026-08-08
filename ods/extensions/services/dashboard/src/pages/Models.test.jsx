@@ -1,5 +1,5 @@
 import { createElement } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Models from './Models'
 
@@ -31,7 +31,12 @@ function baseDownloadState(overrides = {}) {
 }
 
 beforeEach(() => {
+  document.documentElement.dataset.theme = 'light'
   useDownloadProgressMock.mockReturnValue(baseDownloadState())
+})
+
+afterEach(() => {
+  delete document.documentElement.dataset.theme
 })
 
 function baseState(overrides = {}) {
@@ -80,6 +85,7 @@ function model(overrides = {}) {
     specialty: 'General',
     description: 'Balanced local model.',
     quantization: 'Q4_K_M',
+    publisher: { name: 'Qwen', huggingFaceAuthor: 'Qwen' },
     status: 'available',
     fitsVram: true,
     tokensPerSec: 51.7,
@@ -89,6 +95,10 @@ function model(overrides = {}) {
 
 function renderModels() {
   return render(createElement(MemoryRouter, null, createElement(Models)))
+}
+
+function confirmModelRun() {
+  fireEvent.click(screen.getByRole('button', { name: 'Run model' }))
 }
 
 test('renders the model library layout from catalog fields only', () => {
@@ -106,6 +116,7 @@ test('renders the model library layout from catalog fields only', () => {
         contextLength: 128000,
         specialty: 'Reasoning',
         description: 'Compact reasoning model.',
+        publisher: { name: 'Microsoft', huggingFaceAuthor: 'microsoft' },
         tokensPerSec: 69.8,
       }),
     ],
@@ -121,6 +132,266 @@ test('renders the model library layout from catalog fields only', () => {
   expect(screen.getByText('51.7 tok/s')).toBeInTheDocument()
   expect(screen.getByText('69.8 tok/s')).toBeInTheDocument()
   expect(screen.getByText('~3.2 GB incl. KV')).toBeInTheDocument()
+  expect(screen.getAllByAltText('Qwen logo')).toHaveLength(2)
+  expect(screen.getByAltText('Microsoft logo')).toBeInTheDocument()
+})
+
+test('uses theme-responsive surfaces instead of fixed dark model panels', () => {
+  useModelsMock.mockReturnValue(baseState({
+    currentModel: 'qwen3.5-9b-q4',
+    models: [model({ status: 'loaded', recommended: true })],
+  }))
+
+  renderModels()
+
+  const currentModelPanel = screen.getByText('Currently running: qwen3.5-9b-q4').closest('section')
+  const sourceTabs = screen.getByRole('tablist', { name: 'Model sources' })
+
+  expect(currentModelPanel.getAttribute('style')).toContain('background: var(--tech-tile-fill)')
+  expect(currentModelPanel.getAttribute('style')).toContain('border-color: var(--tech-tile-border)')
+  expect(sourceTabs.getAttribute('style')).toContain('background: var(--tech-tabs-fill)')
+  expect(sourceTabs.getAttribute('style')).toContain('border-color: var(--tech-tabs-border)')
+  expect(currentModelPanel.getAttribute('style')).not.toContain('rgba(10, 10, 18')
+})
+
+test('does not present impossible runtime counters as measured model speed', () => {
+  useModelsMock.mockReturnValue(baseState({
+    currentModel: 'qwen3.5-9b-q4',
+    models: [model({
+      status: 'loaded',
+      tokensPerSec: 1_000_000,
+      performanceLabel: '1000000.0 tok/s measured locally',
+      performance: { source: 'measured_local' },
+    })],
+  }))
+
+  renderModels()
+
+  expect(screen.queryByText(/1000000/)).not.toBeInTheDocument()
+  expect(screen.getAllByText('Benchmark required').length).toBeGreaterThan(0)
+})
+
+test('uses the publisher logo and retains a styled fallback when it cannot load', () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+
+  renderModels()
+
+  const avatar = screen.getByAltText('Qwen logo')
+  expect(avatar).toHaveAttribute('src', '/api/models/huggingface/authors/Qwen/avatar')
+  fireEvent.error(avatar)
+  expect(screen.queryByAltText('Qwen logo')).not.toBeInTheDocument()
+  expect(document.querySelector('svg.lucide-box')).toBeInTheDocument()
+})
+
+test('separates installed, ODS catalog, and Hugging Face sources', () => {
+  useModelsMock.mockReturnValue(baseState({
+    models: [
+      model({ id: 'ods-model', name: 'ODS Model', status: 'available' }),
+      model({
+        id: 'hf-community',
+        name: 'Community Model',
+        status: 'downloaded',
+        metadata: { catalogSource: 'huggingface' },
+      }),
+    ],
+  }))
+
+  renderModels()
+
+  expect(screen.getByRole('tab', { name: /ods recommended/i })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByText('ODS Model')).toBeInTheDocument()
+  expect(screen.queryByText('Community Model')).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('tab', { name: /installed/i }))
+  expect(screen.getByText('Community Model')).toBeInTheDocument()
+  expect(screen.queryByText('ODS Model')).not.toBeInTheDocument()
+})
+
+test('queries the real Hugging Face browser only after selecting its source', async () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      authenticated: false,
+      models: [{
+        id: 'unsloth/Qwen3.5-9B-GGUF',
+        author: 'unsloth',
+        name: 'Qwen3.5-9B-GGUF',
+        downloads: 900000,
+        likes: 700,
+        lastModified: '2026-07-20T00:00:00Z',
+        pipelineTag: 'text-generation',
+        gated: false,
+        private: false,
+        license: 'apache-2.0',
+        ggufFileCount: 20,
+      }],
+    }),
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    renderModels()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('tab', { name: /hugging face/i }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/models/huggingface/search?'),
+      expect.objectContaining({ signal: expect.anything() }),
+    ))
+    expect(await screen.findByText('unsloth/Qwen3.5-9B-GGUF')).toBeInTheDocument()
+    expect(screen.getByText('Public access')).toBeInTheDocument()
+    expect(screen.getByText('20 GGUF')).toBeInTheDocument()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('shows immediate Hub search progress and real provider identity while results load', async () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+  let resolveSearch
+  const fetchMock = vi.fn(() => new Promise(resolve => { resolveSearch = resolve }))
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    renderModels()
+    fireEvent.click(screen.getByRole('tab', { name: /hugging face/i }))
+
+    const searchInput = screen.getByPlaceholderText(/search repositories/i)
+    expect(searchInput).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByText('Searching...')).toBeInTheDocument()
+    expect(document.querySelector('img[src="/huggingface-logo.svg"]')).toBeInTheDocument()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      resolveSearch({
+        ok: true,
+        json: async () => ({
+          authenticated: false,
+          models: [{
+            id: 'unsloth/Qwen3.5-9B-GGUF',
+            author: 'unsloth',
+            name: 'Qwen3.5-9B-GGUF',
+            downloads: 900000,
+            likes: 700,
+            pipelineTag: 'text-generation',
+            ggufFileCount: 20,
+          }],
+        }),
+      })
+    })
+
+    expect(await screen.findByText('unsloth/Qwen3.5-9B-GGUF')).toBeInTheDocument()
+    await waitFor(() => expect(searchInput).toHaveAttribute('aria-busy', 'false'))
+    const avatar = document.querySelector('img[src="/api/models/huggingface/authors/unsloth/avatar"]')
+    expect(avatar).toBeInTheDocument()
+    fireEvent.error(avatar)
+    expect(document.querySelector('img[src="/api/models/huggingface/authors/unsloth/avatar"]')).not.toBeInTheDocument()
+    expect(screen.getByText('UN')).toBeInTheDocument()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('ignores repository metadata that arrives after its dialog was replaced', async () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+  let resolveFirstDetails
+  let resolveSecondDetails
+  const searchModels = ['first', 'second'].map(name => ({
+    id: `org/${name}`,
+    author: 'org',
+    name,
+    downloads: 10,
+    likes: 2,
+    pipelineTag: 'text-generation',
+    ggufFileCount: 1,
+  }))
+  const details = (name) => ({
+    id: `org/${name}`,
+    sha: name.repeat(40).slice(0, 40),
+    contextLength: 32768,
+    contextSource: 'hub_config',
+    license: 'apache-2.0',
+    runtimeCompatible: true,
+    artifacts: [{
+      id: name.repeat(20).slice(0, 20),
+      label: `${name}-only-Q4.gguf`,
+      quantization: 'Q4_K_M',
+      sizeBytes: 1024,
+      files: [{ filename: `${name}.gguf` }],
+    }],
+    url: `https://huggingface.co/org/${name}`,
+  })
+  const fetchMock = vi.fn((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({ ok: true, json: async () => ({ authenticated: false, models: searchModels }) })
+    }
+    if (url.endsWith('/org/first')) {
+      return new Promise(resolve => { resolveFirstDetails = resolve })
+    }
+    return new Promise(resolve => { resolveSecondDetails = resolve })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    renderModels()
+    fireEvent.click(screen.getByRole('tab', { name: /hugging face/i }))
+    expect(await screen.findByText('org/first')).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /choose file/i })[0])
+    fireEvent.click(screen.getByTitle('Close'))
+    fireEvent.click(screen.getAllByRole('button', { name: /choose file/i })[1])
+
+    await act(async () => {
+      resolveFirstDetails({ ok: true, json: async () => details('first') })
+    })
+    expect(screen.queryByText('first-only-Q4.gguf')).not.toBeInTheDocument()
+    expect(screen.getByText('Reading repository metadata...')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveSecondDetails({ ok: true, json: async () => details('second') })
+    })
+    expect(await screen.findByText('second-only-Q4.gguf')).toBeInTheDocument()
+    expect(screen.getByText('Hub config')).toBeInTheDocument()
+    expect(screen.queryByText('first-only-Q4.gguf')).not.toBeInTheDocument()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('lets the user retry a transient Hugging Face search failure', async () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ detail: 'Hugging Face did not respond in time' }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        authenticated: false,
+        models: [{
+          id: 'org/recovered-model-GGUF',
+          author: 'org',
+          name: 'recovered-model-GGUF',
+          downloads: 10,
+          likes: 2,
+          pipelineTag: 'text-generation',
+          ggufFileCount: 1,
+        }],
+      }),
+    })
+  vi.stubGlobal('fetch', fetchMock)
+  try {
+    renderModels()
+    fireEvent.click(screen.getByRole('tab', { name: /hugging face/i }))
+
+    expect(await screen.findByText('Hugging Face did not respond in time')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /retry search/i }))
+
+    expect(await screen.findByText('org/recovered-model-GGUF')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
 
 test('running model surfaces GGUF architecture details when readable', () => {
@@ -233,8 +504,9 @@ test('keeps Run and Delete visible for downloaded models', () => {
 
   renderModels()
   fireEvent.click(screen.getByRole('button', { name: /^run$/i }))
+  confirmModelRun()
 
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 65536 })
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
   fireEvent.click(deleteButton)
@@ -243,6 +515,151 @@ test('keeps Run and Delete visible for downloaded models', () => {
   expect(screen.getByRole('dialog', { name: /delete qwen 3\.5 9b/i })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /delete model/i }))
   expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+})
+
+test('chooses the full catalog context before running a downloaded model', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      status: 'downloaded',
+      contextLength: 65536,
+      maxContextLength: 262144,
+      contextOptions: [
+        {
+          contextLength: 65536,
+          estimatedRequired: 7.2,
+          recommended: true,
+          fullContext: false,
+          fitsVram: true,
+        },
+        {
+          contextLength: 262144,
+          estimatedRequired: 9.1,
+          recommended: false,
+          fullContext: true,
+          fitsVram: false,
+        },
+      ],
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+  expect(screen.getByRole('dialog', { name: 'Qwen 3.5 9B' })).toBeInTheDocument()
+  expect(screen.getByText('Declared limit 256K')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /256K Full context/i }))
+  expect(screen.getByText('~9.1 GB')).toBeInTheDocument()
+  expect(screen.getByText(/exceeds the reported GPU memory estimate/i)).toBeInTheDocument()
+
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', {
+      contextLength: 262144,
+    })
+  })
+})
+
+test('allows a custom context beyond the declared model limit with a warning', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      status: 'downloaded',
+      contextLength: 8192,
+      maxContextLength: 262144,
+      contextOptions: [{
+        contextLength: 8192,
+        estimatedRequired: 3,
+        recommended: true,
+        fullContext: false,
+        fitsVram: true,
+      }],
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+  fireEvent.change(screen.getByRole('spinbutton', {
+    name: 'Custom context in tokens',
+  }), {
+    target: { value: '2097152' },
+  })
+
+  expect(screen.getByText(/exceeds the model's declared context/i)).toBeInTheDocument()
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', {
+      contextLength: 2097152,
+    })
+  })
+})
+
+test('does not invent a declared limit for imports with unknown context metadata', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      id: 'hf-community',
+      name: 'Community model',
+      status: 'downloaded',
+      contextLength: 8192,
+      maxContextLength: null,
+      contextOptions: [{
+        contextLength: 8192,
+        estimatedRequired: 3,
+        recommended: true,
+        fullContext: false,
+        fitsVram: true,
+      }],
+      metadata: {
+        catalogSource: 'huggingface',
+        contextSource: 'unavailable',
+        contextLimitKnown: false,
+      },
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('tab', { name: /installed/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+  fireEvent.change(screen.getByRole('spinbutton', {
+    name: 'Custom context in tokens',
+  }), {
+    target: { value: '131072' },
+  })
+
+  expect(screen.queryByText(/exceeds the model's declared context/i)).not.toBeInTheDocument()
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('hf-community', {
+      contextLength: 131072,
+    })
+  })
+})
+
+test('opens context configuration for the active model without replacing benchmark', () => {
+  useModelsMock.mockReturnValue(baseState({
+    currentModel: 'qwen3.5-9b-q4',
+    models: [model({
+      status: 'loaded',
+      contextLength: 65536,
+      maxContextLength: 262144,
+    })],
+  }))
+
+  renderModels()
+
+  expect(screen.getByRole('button', { name: 'Benchmark' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Configure context for Qwen 3.5 9B',
+  }))
+  expect(screen.getByRole('button', { name: 'Already active' })).toBeDisabled()
+  expect(screen.getByText('Active: 64K')).toBeInTheDocument()
 })
 
 test('allows low-context downloaded models to run with an agent-readiness warning', () => {
@@ -260,7 +677,8 @@ test('allows low-context downloaded models to run with an agent-readiness warnin
   expect(runButton).toBeEnabled()
   expect(runButton).toHaveAttribute('title', 'Run Qwen 3.5 9B')
   fireEvent.click(runButton)
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 8192 })
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
   expect(screen.getByText('Needs 64K')).toBeInTheDocument()
 
@@ -300,7 +718,8 @@ test('allows explicit Talk-incompatible models to run with an agent-readiness wa
   expect(runButton).toBeEnabled()
   expect(runButton).toHaveAttribute('title', 'Run Phi-4 Mini')
   fireEvent.click(runButton)
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 128000 })
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
   expect(screen.getByText('Agent blocked')).toBeInTheDocument()
 
@@ -561,6 +980,8 @@ test('keeps Delete visible but disabled while that model is working', () => {
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeDisabled()
   expect(deleteButton).toHaveAttribute('title', 'Wait for the current model action to finish before deleting it.')
+  const row = screen.getByText('Qwen 3.5 9B').closest('.grid')
+  expect(row).toHaveClass('lg:grid-cols-[minmax(250px,1.7fr)_184px_70px_110px_120px_90px_130px]')
 })
 
 test('locks every model action while activation is in progress, including rollback and downloads', () => {
@@ -626,6 +1047,29 @@ test('keeps Run visible with the VRAM requirement when the model does not fit', 
   expect(runButton).toHaveAttribute('title', 'Requires 12 GB VRAM; the detected GPU has 8.0 GB total.')
   fireEvent.click(runButton)
   expect(loadModel).not.toHaveBeenCalled()
+})
+
+test('allows the selected install model to run even when the VRAM estimate is high', () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      status: 'downloaded',
+      fitsVram: false,
+      vramRequired: 12,
+      recommended: true,
+    })],
+  }))
+
+  renderModels()
+
+  expect(screen.getByText('Selected install')).toBeInTheDocument()
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeEnabled()
+  expect(runButton).toHaveAttribute('title', 'Run Qwen 3.5 9B')
+  fireEvent.click(runButton)
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 65536 })
 })
 
 test('shows effective and configured runtime modes when they differ', () => {

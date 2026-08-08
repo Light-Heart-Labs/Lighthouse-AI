@@ -29,7 +29,7 @@ assert_in_order() {
     shift 2
     local previous=0 pattern line
     for pattern in "$@"; do
-        line="$(grep -nF "$pattern" <<<"$block" | head -1 | cut -d: -f1 || true)"
+        line="$(grep -nF -- "$pattern" <<<"$block" | head -1 | cut -d: -f1 || true)"
         [[ -n "$line" ]] || fail "$label is missing ordered step: $pattern"
         (( line > previous )) || fail "$label has out-of-order step: $pattern"
         previous="$line"
@@ -184,6 +184,25 @@ assert_in_order "$restart_windows_lemonade_block" "Windows Lemonade context prop
     'write_env_value LEMONADE_MODEL "$model_id"'
 pass "Windows Lemonade restart propagates and verifies the promoted context before commit"
 
+host_agent_notify_block="$(function_block notify_host_agent_model_status | grep -v '^[[:space:]]*#')"
+grep -qF '/v1/model/status' <<<"$host_agent_notify_block" \
+    || fail "bootstrap upgrade must notify host-agent model status after full-model completion"
+grep -qF 'Authorization: Bearer $key' <<<"$host_agent_notify_block" \
+    || fail "host-agent model status notification must authenticate with ODS_AGENT_KEY"
+grep -qF 'ss -ltnH' <<<"$host_agent_notify_block" \
+    || fail "host-agent model status notification must discover the actual listening bind"
+grep -qF 'ip -o -4 addr show' <<<"$host_agent_notify_block" \
+    || fail "host-agent model status notification must include docker bridge interface fallbacks"
+grep -qF 'for host in "${hosts[@]}"' <<<"$host_agent_notify_block" \
+    || fail "host-agent model status notification must use the discovered host set"
+grep -qF '172.17.0.1' <<<"$host_agent_notify_block" \
+    || fail "host-agent model status notification must retain the legacy Linux docker-bridge fallback"
+final_status_block="$(tail -n 90 "$TARGET" | grep -v '^[[:space:]]*#')"
+assert_in_order "$final_status_block" "full-model route reconciliation" \
+    'write_status "complete" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 ""' \
+    'notify_host_agent_model_status || true'
+pass "bootstrap upgrade reconciles host-agent route after full-model completion"
+
 verify_context_block="$(function_block verify_windows_lemonade_loaded_context | grep -v '^[[:space:]]*#')"
 grep -qF 'all_models_loaded' <<<"$verify_context_block" \
     || fail "Windows Lemonade loaded-context verifier must inspect health all_models_loaded"
@@ -205,7 +224,16 @@ assert_in_order "$windows_activation_block" "Windows Lemonade activation" \
     'patch_hermes_model_after_swap' \
     'recreate_windows_lemonade_openclaw' \
     'verify_windows_lemonade_openclaw_model_env "$model_id"' \
+    'request_windows_switchboard_route_reconciliation' \
     'verify_windows_lemonade_downstream_route "$model_id" "full model route"'
+
+switchboard_reconcile_block="$(function_block request_windows_switchboard_route_reconciliation | grep -v '^[[:space:]]*#')"
+grep -qF 'ODS_MODEL_SWITCHBOARD' <<<"$switchboard_reconcile_block" \
+    || fail "Windows Lemonade bootstrap reconciliation must be gated by enabled switchboard mode"
+grep -qF '/v1/model/status' <<<"$switchboard_reconcile_block" \
+    || fail "Windows Lemonade bootstrap reconciliation must schedule host-agent route proof"
+grep -qF 'Authorization: Bearer $key' <<<"$switchboard_reconcile_block" \
+    || fail "Windows Lemonade bootstrap reconciliation must authenticate with ODS_AGENT_KEY"
 
 windows_lemonade_block="$(awk '
     /^if \[\[ "\$_windows_lemonade_swap_applies" == "true" \]\]; then/ { in_block=1 }
@@ -220,6 +248,8 @@ assert_in_order "$windows_lemonade_block" "Windows Lemonade main path" \
 pass "Windows Lemonade verifies the exact downstream route before commit"
 
 snapshot_block="$(function_block snapshot_active_model_config | grep -v '^[[:space:]]*#')"
+grep -qF '"$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade"' <<<"$snapshot_block" \
+    || fail "every model transaction must snapshot the canonical Lemonade route"
 grep -qF 'extensions/services/hermes/cli-config.yaml.template' <<<"$snapshot_block" \
     || fail "Windows Lemonade transaction must snapshot the Hermes template"
 grep -qF 'data/hermes/config.yaml' <<<"$snapshot_block" \
@@ -230,6 +260,8 @@ grep -qF 'windows-lemonade.included' <<<"$snapshot_block" \
     || fail "dependent snapshots must be explicitly scoped to Windows Lemonade"
 
 restore_block="$(function_block restore_active_model_config | grep -v '^[[:space:]]*#')"
+grep -qF '"$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade"' <<<"$restore_block" \
+    || fail "every model rollback must restore the canonical Lemonade route"
 grep -qF 'windows-lemonade/hermes-template' <<<"$restore_block" \
     || fail "Windows Lemonade rollback must restore the Hermes template"
 grep -qF 'windows-lemonade/hermes-live' <<<"$restore_block" \
@@ -242,7 +274,7 @@ litellm_refresh_block="$(function_block refresh_windows_lemonade_litellm_after_s
 grep -qF -- '--lemonade-model-id "$model_id"' <<<"$litellm_refresh_block" \
     || fail "Windows Lemonade LiteLLM renderer must receive the exact resolved model ID"
 grep -qF 'model: openai/${model_id}' <<<"$litellm_refresh_block" \
-    || fail "Windows Lemonade LiteLLM fallback must use the exact resolved model ID"
+    || fail "Windows Lemonade rendered config must verify the exact resolved model ID"
 grep -qF '$DOCKER_CMD restart ods-litellm' <<<"$litellm_refresh_block" \
     || fail "Windows Lemonade must reload LiteLLM after regenerating its config"
 
@@ -294,7 +326,7 @@ assert_in_order "$rollback_block" "Windows Lemonade rollback" \
     'Rollback verified: the previous model completed through the restored downstream route.'
 pass "Windows Lemonade rollback restarts and proves the previous routed model"
 
-for injected_failure in native model-id litellm hermes openclaw openclaw-env route; do
+for injected_failure in native model-id litellm hermes openclaw openclaw-env reconcile route; do
     if ! (
         eval "$windows_activation_block"
         failure_stage="$injected_failure"
@@ -325,6 +357,10 @@ for injected_failure in native model-id litellm hermes openclaw openclaw-env rou
             calls+=(openclaw-env)
             [[ "$failure_stage" != "openclaw-env" ]]
         }
+        request_windows_switchboard_route_reconciliation() {
+            calls+=(reconcile)
+            [[ "$failure_stage" != "reconcile" ]]
+        }
         verify_windows_lemonade_downstream_route() {
             calls+=(route)
             [[ "$failure_stage" != "route" ]]
@@ -349,7 +385,8 @@ for injected_failure in native model-id litellm hermes openclaw openclaw-env rou
             hermes) expected+=(litellm hermes) ;;
             openclaw) expected+=(litellm hermes openclaw) ;;
             openclaw-env) expected+=(litellm hermes openclaw openclaw-env) ;;
-            route) expected+=(litellm hermes openclaw openclaw-env route) ;;
+            reconcile) expected+=(litellm hermes openclaw openclaw-env reconcile) ;;
+            route) expected+=(litellm hermes openclaw openclaw-env reconcile route) ;;
         esac
         expected+=(rollback)
         [[ "${calls[*]}" == "${expected[*]}" ]]
@@ -358,6 +395,55 @@ for injected_failure in native model-id litellm hermes openclaw openclaw-env rou
     fi
 done
 pass "Windows Lemonade activation rolls back every injected post-swap failure"
+
+docker_swap_block="$(awk '
+    /^elif \[\[ -n "\$DOCKER_CMD" \]\] && \$DOCKER_CMD ps/ { in_block=1 }
+    in_block { print }
+    in_block && /^elif \[\[ -f "\$INSTALL_DIR\/data\/\.llama-server\.pid" \]\]/ { exit }
+' "$TARGET" | grep -v '^[[:space:]]*#')"
+grep -qF 'if [[ "$_gpu_backend" == "amd" ]]' <<<"$docker_swap_block" \
+    || fail "Docker Lemonade route rendering must be gated to the AMD backend"
+assert_in_order "$docker_swap_block" "Docker model transaction commit" \
+    '--surface litellm-lemonade' \
+    '$DOCKER_CMD restart ods-litellm' \
+    'verify_model_completion_route' \
+    'HOT_SWAP_VERIFIED=true' \
+    'discard_active_model_config_snapshot'
+pass "Docker model transaction commits only after renderer, reload, and completion proof"
+
+docker_rollback_block="$(function_block restore_docker_llama_server_after_swap_failure | grep -v '^[[:space:]]*#')"
+assert_in_order "$docker_rollback_block" "Docker model transaction rollback" \
+    'previous_model_id="$(snapshot_env_value LEMONADE_MODEL)"' \
+    'restore_active_model_config' \
+    'compose_recreate_llama_server_with_retry' \
+    '$DOCKER_CMD restart ods-litellm' \
+    'verify_model_completion_route'
+pass "Docker rollback restores and proves the previous routed model"
+
+completion_route_block="$(function_block verify_model_completion_route | grep -v '^[[:space:]]*#')"
+grep -qF '"choices"[[:space:]]*:' <<<"$completion_route_block" \
+    || fail "model route proof must require a completion choices payload"
+grep -qF '"error"[[:space:]]*:' <<<"$completion_route_block" \
+    || fail "model route proof must reject an error payload"
+grep -qF 'ODS_MODEL_ROUTE_ATTEMPTS' <<<"$completion_route_block" \
+    || fail "model route proof must expose a bounded attempt count"
+grep -qF 'ODS_MODEL_ROUTE_TIMEOUT' <<<"$completion_route_block" \
+    || fail "model route proof must expose a bounded request timeout"
+pass "Docker model route proof is bounded and rejects error responses"
+
+grep -qF 'switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD' <<<"$active_code" \
+    || fail "Hermes post-swap patch helper must read switchboard mode"
+grep -qF '_hermes_switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD' <<<"$active_code" \
+    || fail "Docker full-model swap must read switchboard mode before patching Hermes"
+grep -qF 'new_model="ods/current"' <<<"$active_code" \
+    || fail "Hermes post-swap patch helper must use the stable switchboard alias"
+grep -qF '_hermes_new_model="ods/current"' <<<"$active_code" \
+    || fail "Docker full-model swap must patch Hermes to the stable switchboard alias"
+grep -qF 'hermes_base_url="http://litellm:4000/v1"' <<<"$active_code" \
+    || fail "Switchboard Hermes patch helper must route through LiteLLM"
+grep -qF '_hermes_base_url="http://litellm:4000/v1"' <<<"$active_code" \
+    || fail "Switchboard Docker swap must route Hermes through LiteLLM"
+pass "Hermes post-swap patch uses switchboard stable alias when enabled"
 
 perplexica_update_block="$(awk '
     /Updating Perplexica config to point at/ { in_block=1 }
@@ -370,7 +456,13 @@ grep -qF 'read_env_value HERMES_LLM_BASE_URL' <<<"$perplexica_update_block" \
     || fail "Lemonade Perplexica updates must use the working LiteLLM route"
 grep -qF 'read_env_value LEMONADE_MODEL' <<<"$perplexica_update_block" \
     || fail "Perplexica post-swap update must use the exact Lemonade model ID"
-pass "Perplexica post-swap update uses runnable Python and the exact LiteLLM model route"
+grep -qF 'read_env_value ODS_MODEL_SWITCHBOARD' <<<"$perplexica_update_block" \
+    || fail "Perplexica post-swap update must branch on switchboard mode"
+grep -qF '_px_model="ods/current"' <<<"$perplexica_update_block" \
+    || fail "Switchboard Perplexica updates must keep the stable model alias"
+grep -qF '_px_base_url="http://litellm:4000/v1"' <<<"$perplexica_update_block" \
+    || fail "Switchboard Perplexica updates must route through LiteLLM"
+pass "Perplexica post-swap update uses runnable Python and the exact LiteLLM/switchboard model route"
 
 grep -qF 'HOT_SWAP_VERIFIED=true' <<<"$active_code" \
     || fail "hot-swap must record when the full model is verified serving"

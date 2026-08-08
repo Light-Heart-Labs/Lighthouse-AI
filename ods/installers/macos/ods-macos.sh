@@ -400,6 +400,32 @@ upsert_env_value() {
     fi
 }
 
+proxy_is_enabled() {
+    [[ -f "${INSTALL_DIR}/extensions/services/ods-proxy/compose.yaml" ]] \
+        || [[ -f "${INSTALL_DIR}/data/user-extensions/ods-proxy/compose.yaml" ]]
+}
+
+require_proxy_auth() {
+    local env_file="${INSTALL_DIR}/.env"
+    [[ -f "$env_file" ]] || {
+        ai_err "Cannot enable network access without ${env_file}."
+        return 1
+    }
+    if [[ "$(read_env_value "$env_file" "WEBUI_AUTH")" != "true" ]]; then
+        upsert_env_value "$env_file" "WEBUI_AUTH" "true"
+        ai "Network access requires sign-in; set WEBUI_AUTH=true."
+    fi
+    export WEBUI_AUTH=true
+}
+
+prepare_proxy_start() {
+    local flags="$1"
+    require_proxy_auth || return 1
+    ai "Applying authenticated Open WebUI configuration..."
+    # shellcheck disable=SC2086
+    docker compose $flags up -d --no-deps --force-recreate open-webui
+}
+
 select_auto_cpu_value() {
     local existing="$1"
     local detected="$2"
@@ -731,6 +757,12 @@ cmd_start() {
     local flags
     flags=$(get_compose_flags)
 
+    if [[ "$service" == "ods-proxy" ]]; then
+        prepare_proxy_start "$flags" || return 1
+    elif [[ -z "$service" || "$service" == "open-webui" ]] && proxy_is_enabled; then
+        require_proxy_auth || return 1
+    fi
+
     if [[ "$service" == "llama-server" || "$service" == "llama" ]]; then
         macos_wait_for_bootstrap_compose_safe "start" || return 1
         start_native_llama
@@ -788,6 +820,12 @@ cmd_restart() {
 
     local flags
     flags=$(get_compose_flags)
+
+    if [[ "$service" == "ods-proxy" ]]; then
+        prepare_proxy_start "$flags" || return 1
+    elif [[ -z "$service" || "$service" == "open-webui" ]] && proxy_is_enabled; then
+        require_proxy_auth || return 1
+    fi
 
     if [[ "$service" == "llama-server" || "$service" == "llama" ]]; then
         macos_wait_for_bootstrap_compose_safe "restart" || return 1

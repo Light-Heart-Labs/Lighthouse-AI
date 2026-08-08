@@ -275,6 +275,12 @@ async def get_update_dry_run():
         for line in _read_utf8(env_file).splitlines():
             if line.startswith("ODS_VERSION="):
                 current = line.split("=", 1)[1].strip()
+                # Match _read_current_version's quote handling: a quoted
+                # ODS_VERSION would otherwise reach the semver comparison
+                # with its quotes attached, so every digit fails isdigit()
+                # and the update verdict is computed against 0.0.0.
+                if len(current) >= 2 and current[0] == current[-1] and current[0] in "\"'":
+                    current = current[1:-1]
                 break
     if current == "0.0.0" and version_file.exists():
         try:

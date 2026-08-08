@@ -11,6 +11,8 @@ for f in \
   docker-compose.amd.yml \
   installers/windows/docker-compose.windows-amd.yml \
   installers/windows/docker-compose.windows-amd.local.yml \
+  extensions/services/litellm/compose.yaml \
+  extensions/services/litellm/compose.amd.yaml \
   extensions/services/openclaw/compose.yaml \
   extensions/services/openclaw/compose.amd.yaml; do
   test -f "$f" || { echo "[FAIL] missing $f"; exit 1; }
@@ -20,6 +22,12 @@ grep -q 'ODS_TALK_VISION_URL=.*host.docker.internal' installers/windows/docker-c
   || { echo "[FAIL] Windows AMD overlay must route ODS Talk vision calls to the host runtime"; exit 1; }
 grep -q 'ODS_TALK_HERMES_TIMEOUT=${ODS_TALK_HERMES_TIMEOUT:-900}' installers/windows/docker-compose.windows-amd.yml \
   || { echo "[FAIL] Windows AMD overlay must give ODS Talk a long Hermes timeout for host inference"; exit 1; }
+grep -q 'OPEN_WEBUI_LLM_BASE_URL' installers/windows/docker-compose.windows-amd.yml \
+  || { echo "[FAIL] Windows AMD Open WebUI overlay must respect switchboard gateway env"; exit 1; }
+if grep -q 'exec litellm --config /app/config.yaml' extensions/services/litellm/compose.amd.yaml; then
+  echo "[FAIL] AMD LiteLLM overlay must not bypass the base switchboard-aware command"
+  exit 1
+fi
 grep -qF 'ODS_AGENT_HOST=$(Get-EnvOrNew "ODS_AGENT_HOST" "host.docker.internal")' installers/windows/lib/env-generator.ps1 \
   || { echo "[FAIL] Windows env generation must provide the Docker Desktop host gateway used by OpenClaw"; exit 1; }
 grep -q 'config.*litellm' installers/windows/install-windows.ps1 \
@@ -41,13 +49,30 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
 fi
 
 tmp_env="$(mktemp)"
+tmp_custom_port_env="$(mktemp)"
+tmp_switchboard_env="$(mktemp)"
 tmp_openclaw_windows_env="$(mktemp)"
 tmp_openclaw_linux_env="$(mktemp)"
-trap 'rm -f "$tmp_env" "$tmp_openclaw_windows_env" "$tmp_openclaw_linux_env"' EXIT
+trap 'rm -f "$tmp_env" "$tmp_custom_port_env" "$tmp_switchboard_env" "$tmp_openclaw_windows_env" "$tmp_openclaw_linux_env"' EXIT
 cat > "$tmp_env" <<'ENV_EOF'
 WEBUI_SECRET=ci-placeholder
 OLLAMA_PORT=11434
 LLM_API_BASE_PATH=/api/v1
+ENV_EOF
+
+cat > "$tmp_custom_port_env" <<'ENV_EOF'
+WEBUI_SECRET=ci-placeholder
+AMD_INFERENCE_PORT=18080
+ENV_EOF
+
+cat > "$tmp_switchboard_env" <<'ENV_EOF'
+WEBUI_SECRET=ci-placeholder
+OLLAMA_PORT=11434
+LLM_API_BASE_PATH=/api/v1
+ODS_MODEL_SWITCHBOARD=enabled
+LITELLM_KEY=ci-litellm-key
+OPEN_WEBUI_LLM_BASE_URL=http://litellm:4000
+OPEN_WEBUI_LLM_API_KEY=ci-litellm-key
 ENV_EOF
 
 cat > "$tmp_openclaw_windows_env" <<'ENV_EOF'
@@ -89,6 +114,64 @@ if grep -q 'host.docker.internal:11434' <<<"$rendered"; then
 fi
 grep -q 'condition: service_healthy' <<<"$rendered" \
   || { echo "[FAIL] open-webui must wait for llama-server-ready health"; exit 1; }
+
+custom_port_rendered="$(
+  docker compose \
+    --env-file "$tmp_custom_port_env" \
+    -f docker-compose.base.yml \
+    -f installers/windows/docker-compose.windows-amd.yml \
+    -f installers/windows/docker-compose.windows-amd.local.yml \
+    config
+)"
+
+grep -q 'http://host.docker.internal:18080/api/v1/health' <<<"$custom_port_rendered" \
+  || { echo "[FAIL] Lemonade readiness probe must honor AMD_INFERENCE_PORT"; exit 1; }
+grep -q 'http://host.docker.internal:18080/health' <<<"$custom_port_rendered" \
+  || { echo "[FAIL] llama-server readiness probe must honor AMD_INFERENCE_PORT"; exit 1; }
+if grep -q 'host.docker.internal:8080' <<<"$custom_port_rendered"; then
+  echo "[FAIL] custom Windows native port render retained hard-coded 8080"
+  exit 1
+fi
+grep -q 'OLLAMA_URL: http://host.docker.internal:18080' <<<"$custom_port_rendered" \
+  || { echo "[FAIL] dashboard-api must honor AMD_INFERENCE_PORT"; exit 1; }
+grep -q 'OPENAI_API_BASE_URL: http://host.docker.internal:18080/v1' <<<"$custom_port_rendered" \
+  || { echo "[FAIL] Open WebUI must honor AMD_INFERENCE_PORT"; exit 1; }
+
+grep -qF '"http://host.docker.internal:$($script:LEMONADE_PORT)/api"' installers/windows/phases/06-directories.ps1 \
+  || { echo "[FAIL] Windows OpenClaw config must honor the resolved native port"; exit 1; }
+grep -qF '"--port", [string]$script:LEMONADE_PORT' installers/windows/install-windows.ps1 \
+  || { echo "[FAIL] Windows installer must launch native llama-server on the resolved port"; exit 1; }
+grep -qF '$script:LEMONADE_PORT = if ($cloudMode)' installers/windows/install-windows.ps1 \
+  || { echo "[FAIL] AMD cloud installs must retain a valid native-port default"; exit 1; }
+grep -qF '"http://host.docker.internal:$($llmEndpoint['"'"'Port'"'"'])/v1"' installers/windows/install-windows.ps1 \
+  || { echo "[FAIL] Windows Perplexica config must honor the resolved native port"; exit 1; }
+
+switchboard_webui_rendered="$(
+  docker compose \
+    --env-file "$tmp_switchboard_env" \
+    -f docker-compose.base.yml \
+    -f installers/windows/docker-compose.windows-amd.yml \
+    -f installers/windows/docker-compose.windows-amd.local.yml \
+    config open-webui
+)"
+
+grep -q 'OPENAI_API_BASE_URL: http://litellm:4000' <<<"$switchboard_webui_rendered" \
+  || { echo "[FAIL] Windows AMD switchboard mode must route Open WebUI through LiteLLM"; exit 1; }
+grep -q 'OPENAI_API_KEY: ci-litellm-key' <<<"$switchboard_webui_rendered" \
+  || { echo "[FAIL] Windows AMD switchboard mode must pass the LiteLLM key to Open WebUI"; exit 1; }
+
+switchboard_litellm_rendered="$(
+  docker compose \
+    --env-file "$tmp_switchboard_env" \
+    -f extensions/services/litellm/compose.yaml \
+    -f extensions/services/litellm/compose.amd.yaml \
+    config litellm
+)"
+
+grep -q 'ODS_MODE: local' <<<"$switchboard_litellm_rendered" \
+  || { echo "[FAIL] AMD LiteLLM render must receive the active ODS mode"; exit 1; }
+grep -q 'ods-select-config.sh' <<<"$switchboard_litellm_rendered" \
+  || { echo "[FAIL] AMD LiteLLM render must keep the mode-aware config selector"; exit 1; }
 
 # Match the Windows installer's precedence: platform overlays are loaded before
 # extension base/GPU overlays. Rendering the complete stack catches a later

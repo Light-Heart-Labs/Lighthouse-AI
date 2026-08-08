@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Box,
+  Check,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -11,29 +12,27 @@ import {
   Play,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useModels } from '../hooks/useModels'
 import { useDownloadProgress } from '../hooks/useDownloadProgress'
+import HuggingFaceModelBrowser from '../components/model-library/HuggingFaceModelBrowser'
 
 const PAGE_SIZE = 10
 const DOWNLOAD_STATUS_TIMEOUT_MS = 15000
+const MAX_SINGLE_REQUEST_TOKENS_PER_SECOND = 10000
 const TECH_PANEL_STYLE = {
-  background: 'linear-gradient(180deg, rgba(10,10,18,0.96), rgba(7,7,13,0.92))',
-  borderColor: 'rgba(255,255,255,0.08)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.035), 0 20px 60px rgba(0,0,0,0.22)',
+  background: 'var(--tech-panel-fill)',
+  borderColor: 'var(--tech-panel-border)',
+  boxShadow: 'var(--tech-panel-shadow)',
 }
 const TECH_TILE_STYLE = {
-  background: `
-    linear-gradient(180deg, rgba(14,14,21,0.88), rgba(8,8,14,0.92)),
-    repeating-linear-gradient(90deg, transparent 0 31px, rgba(255,255,255,0.028) 31px 32px),
-    repeating-linear-gradient(180deg, transparent 0 31px, rgba(255,255,255,0.024) 31px 32px),
-    radial-gradient(circle at 18% 0%, rgba(157,0,255,0.08), transparent 30%)
-  `,
-  borderColor: 'rgba(255,255,255,0.11)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.045), inset 0 -18px 34px rgba(0,0,0,0.18)',
+  background: 'var(--tech-tile-fill)',
+  borderColor: 'var(--tech-tile-border)',
+  boxShadow: 'var(--tech-tile-shadow)',
 }
 
 function catalogModelIdForProgress(models, progressModel) {
@@ -90,6 +89,8 @@ export default function Models() {
   const [speedFilter, setSpeedFilter] = useState('any')
   const [contextFloor, setContextFloor] = useState(0)
   const [deleteConfirmModel, setDeleteConfirmModel] = useState(null)
+  const [activationConfigModel, setActivationConfigModel] = useState(null)
+  const [libraryScope, setLibraryScope] = useState('recommended')
   const libraryRef = useRef(null)
 
   useEffect(() => {
@@ -141,30 +142,41 @@ export default function Models() {
       || null
   }, [currentModel, models])
 
+  const installedModels = useMemo(
+    () => models.filter(model => ['downloaded', 'loaded'].includes(model.status)),
+    [models]
+  )
+  const odsCatalogModels = useMemo(
+    () => models
+      .filter(model => model.metadata?.catalogSource !== 'huggingface')
+      .sort((left, right) => Number(Boolean(right.recommended)) - Number(Boolean(left.recommended)) || Number(Boolean(right.fitsVram)) - Number(Boolean(left.fitsVram))),
+    [models]
+  )
+  const scopedModels = libraryScope === 'installed' ? installedModels : odsCatalogModels
   const categoryOptions = useMemo(
-    () => buildCategoryOptions(models, hermesMinimumContext),
-    [hermesMinimumContext, models]
+    () => buildCategoryOptions(scopedModels, hermesMinimumContext),
+    [hermesMinimumContext, scopedModels]
   )
   const maxContext = useMemo(
-    () => Math.max(0, ...models.map(model => Number(model.contextLength || 0))),
-    [models]
+    () => Math.max(0, ...scopedModels.map(model => Number(model.maxContextLength || model.contextLength || 0))),
+    [scopedModels]
   )
   const modelInsights = useMemo(
-    () => buildModelInsights(models),
-    [models]
+    () => buildModelInsights(scopedModels),
+    [scopedModels]
   )
   const filteredModels = useMemo(() => {
     const search = query.trim().toLowerCase()
-    return models.filter(model => {
+    return scopedModels.filter(model => {
       const memory = getMemoryMeta(model, gpu)
       if (search && !matchesModelSearch(model, search)) return false
       if (categoryFilter !== 'all' && !getModelCategoryIds(model, hermesMinimumContext).includes(categoryFilter)) return false
       if (!matchesCompatibilityFilter(model, memory, compatibilityFilter)) return false
       if (!matchesSpeedFilter(model, speedFilter, hermesMinimumContext)) return false
-      if (contextFloor > 0 && Number(model.contextLength || 0) < contextFloor) return false
+      if (contextFloor > 0 && Number(model.maxContextLength || model.contextLength || 0) < contextFloor) return false
       return true
     })
-  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, hermesMinimumContext, models, query, speedFilter])
+  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, hermesMinimumContext, query, scopedModels, speedFilter])
 
   const pageCount = Math.max(1, Math.ceil(filteredModels.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount)
@@ -174,7 +186,7 @@ export default function Models() {
 
   useEffect(() => {
     setPage(1)
-  }, [categoryFilter, compatibilityFilter, contextFloor, models.length, query, speedFilter])
+  }, [categoryFilter, compatibilityFilter, contextFloor, libraryScope, query, scopedModels.length, speedFilter])
 
   const handleDownload = async (modelId) => {
     setDownloadStartFailure(null)
@@ -200,6 +212,23 @@ export default function Models() {
     const modelId = deleteConfirmModel.id
     setDeleteConfirmModel(null)
     await deleteModel(modelId)
+  }
+
+  const handleConfirmActivation = async (contextLength) => {
+    if (!activationConfigModel?.id) return
+    const modelId = activationConfigModel.id
+    setActivationConfigModel(null)
+    await loadModel(modelId, { contextLength })
+  }
+
+  const handleHuggingFaceImportStarted = async (result) => {
+    setDownloadStartFailure(null)
+    setDownloadStarting(result?.modelId || null)
+    setDownloadAwaitingStatus(true)
+    await Promise.allSettled([
+      Promise.resolve().then(() => downloadProgress.refresh()),
+      Promise.resolve().then(() => refresh()),
+    ])
   }
 
   const pendingModelActions = actionLoadingModels ?? (actionLoading ? [actionLoading] : [])
@@ -239,14 +268,14 @@ export default function Models() {
         </div>
 
         <div className="flex max-w-full flex-wrap items-center gap-2">
-          <span className="inline-flex min-h-9 max-w-full items-center rounded-lg border border-white/[0.08] bg-black/20 px-3 py-2 text-center text-xs font-medium text-theme-text-secondary">
+          <span className="inline-flex min-h-9 max-w-full items-center rounded-lg border border-theme-border bg-theme-bg/45 px-3 py-2 text-center text-xs font-medium text-theme-text-secondary">
             Runtime: {formatModeLabel(odsMode)}
             {configuredMode !== odsMode ? ` / configured ${formatModeLabel(configuredMode)}` : ''}
           </span>
           <button
             type="button"
             onClick={() => libraryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-3 text-xs font-medium text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-theme-border bg-theme-bg/45 px-3 text-xs font-medium text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
           >
             <Library size={14} />
             Model Library
@@ -254,7 +283,7 @@ export default function Models() {
           <button
             type="button"
             onClick={refresh}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] bg-black/20 text-theme-text-muted transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-theme-border bg-theme-bg/45 text-theme-text-muted transition-colors hover:border-theme-accent/35 hover:text-theme-text"
             title="Refresh models"
           >
             <RefreshCw size={16} />
@@ -280,7 +309,7 @@ export default function Models() {
           </div>
           <Link
             to="/settings"
-            className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-amber-200/20 bg-black/20 px-3 text-xs font-semibold text-amber-100 transition-colors hover:border-amber-200/40"
+            className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-amber-500/25 bg-theme-bg/45 px-3 text-xs font-semibold text-amber-500 transition-colors hover:border-amber-500/45"
           >
             Review runtime settings
           </Link>
@@ -319,6 +348,26 @@ export default function Models() {
         </section>
       )}
 
+      <ModelSourceTabs
+        value={libraryScope}
+        onChange={setLibraryScope}
+        installedCount={installedModels.length}
+        recommendedCount={odsCatalogModels.length}
+      />
+
+      {libraryScope === 'huggingface' ? (
+        <section
+          ref={libraryRef}
+          className="rounded-lg border p-4 sm:p-5"
+          style={TECH_PANEL_STYLE}
+        >
+          <HuggingFaceModelBrowser
+            gpu={gpu}
+            downloadBusy={downloadProgress.isDownloading || Boolean(downloadStarting)}
+            onImportStarted={handleHuggingFaceImportStarted}
+          />
+        </section>
+      ) : (
       <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
         <ModelsFilterPanel
           query={query}
@@ -349,8 +398,8 @@ export default function Models() {
           style={TECH_PANEL_STYLE}
         >
           <div className="min-w-full overflow-x-auto">
-            <div className="lg:min-w-[1034px]">
-              <div className="hidden grid-cols-[minmax(250px,1.7fr)_144px_70px_110px_120px_90px_130px] gap-5 border-b border-white/[0.055] px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/55 lg:grid">
+            <div className="lg:min-w-[1074px]">
+              <div className="hidden grid-cols-[minmax(250px,1.7fr)_184px_70px_110px_120px_90px_130px] gap-5 border-b border-theme-border px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/75 lg:grid">
                 <span>Model</span>
                 <span>Actions</span>
                 <span>Size</span>
@@ -360,7 +409,7 @@ export default function Models() {
                 <span>Compatibility</span>
               </div>
 
-              <div className="divide-y divide-white/[0.04]">
+              <div className="divide-y divide-theme-border">
                 {visibleModels.map((model, index) => {
                   const rowId = `${model.id || model.name || 'model'}:${startIndex + index}`
                   return (
@@ -378,7 +427,7 @@ export default function Models() {
                       downloadBusy={downloadProgress.isDownloading || !!downloadStarting}
                       downloadStarting={downloadStarting === model.id}
                       onDownload={() => handleDownload(model.id)}
-                      onLoad={() => loadModel(model.id)}
+                      onLoad={() => setActivationConfigModel(model)}
                       onBenchmark={() => benchmarkModel(model.id)}
                       onDelete={() => setDeleteConfirmModel(model)}
                     />
@@ -394,7 +443,7 @@ export default function Models() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 border-t border-white/[0.055] px-4 py-3 text-xs text-theme-text-muted sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 border-t border-theme-border px-4 py-3 text-xs text-theme-text-muted sm:flex-row sm:items-center sm:justify-between">
             <span>
               Showing {startIndex}-{endIndex} of {filteredModels.length} models
             </span>
@@ -402,12 +451,23 @@ export default function Models() {
           </div>
         </section>
       </div>
+      )}
 
       {deleteConfirmModel && (
         <DeleteModelDialog
           model={deleteConfirmModel}
           onCancel={() => setDeleteConfirmModel(null)}
           onConfirm={handleConfirmDelete}
+        />
+      )}
+      {activationConfigModel && (
+        <ModelActivationDialog
+          model={activationConfigModel}
+          gpu={gpu}
+          hermesMinimumContext={hermesMinimumContext}
+          isCurrentModel={activationConfigModel.id === currentModel}
+          onCancel={() => setActivationConfigModel(null)}
+          onConfirm={handleConfirmActivation}
         />
       )}
     </div>
@@ -447,9 +507,7 @@ function CurrentModelPanel({ model, currentModel, gpu }) {
     <section className="mb-4 rounded-xl border p-4" style={TECH_TILE_STYLE}>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_150px] lg:items-center">
         <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-theme-accent/25 bg-theme-accent/10">
-            <Box size={25} className="text-theme-accent" />
-          </div>
+          <ModelPublisherIcon model={model} size="large" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-sm font-semibold text-theme-text sm:text-base">
@@ -475,12 +533,111 @@ function CurrentModelPanel({ model, currentModel, gpu }) {
 
         <Link
           to="/"
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-3 text-xs font-semibold text-theme-text transition-colors hover:border-theme-accent/35 hover:bg-theme-accent/10"
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-theme-border bg-theme-bg/45 px-3 text-xs font-semibold text-theme-text transition-colors hover:border-theme-accent/35 hover:bg-theme-accent/10"
         >
           Dashboard
         </Link>
       </div>
     </section>
+  )
+}
+
+function ModelSourceTabs({ value, onChange, installedCount, recommendedCount }) {
+  const tabs = [
+    {
+      id: 'installed',
+      label: 'Installed',
+      detail: 'Local files',
+      count: installedCount,
+      icon: HardDrive,
+      tone: 'emerald',
+    },
+    {
+      id: 'recommended',
+      label: 'ODS Recommended',
+      detail: 'Curated catalog',
+      count: recommendedCount,
+      image: '/osmantic-os-icon-192.png',
+      tone: 'purple',
+    },
+    {
+      id: 'huggingface',
+      label: 'Hugging Face',
+      detail: 'Community GGUF',
+      count: null,
+      image: '/huggingface-logo.svg',
+      tone: 'amber',
+    },
+  ]
+  const activeStyles = {
+    emerald: {
+      borderColor: 'rgba(52, 211, 153, 0.48)',
+      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(76, 29, 149, 0.14))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 28px rgba(16,185,129,0.1)',
+    },
+    purple: {
+      borderColor: 'rgba(184, 100, 255, 0.58)',
+      background: 'linear-gradient(135deg, rgba(126, 34, 206, 0.22), rgba(71, 25, 120, 0.16))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 30px rgba(157,0,255,0.15)',
+    },
+    amber: {
+      borderColor: 'rgba(251, 191, 106, 0.72)',
+      background: 'linear-gradient(135deg, rgba(120, 53, 15, 0.2), rgba(126, 34, 206, 0.22))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 0 32px rgba(251,191,36,0.14)',
+    },
+  }
+  const iconStyles = {
+    emerald: 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200',
+    purple: 'border-theme-accent/25 bg-theme-accent/10 text-theme-accent-light',
+    amber: 'border-amber-300/20 bg-amber-300/10 text-amber-100',
+  }
+  const indicatorStyles = {
+    emerald: 'bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.75)]',
+    purple: 'bg-theme-accent-light shadow-[0_0_10px_rgba(192,132,252,0.8)]',
+    amber: 'bg-amber-200 shadow-[0_0_12px_rgba(253,230,138,0.9)]',
+  }
+  return (
+    <div
+      className="mb-5 grid gap-2.5 rounded-lg border p-2.5 sm:grid-cols-3 sm:p-3"
+      style={{
+        background: 'var(--tech-tabs-fill)',
+        borderColor: 'var(--tech-tabs-border)',
+        boxShadow: 'var(--tech-tabs-shadow)',
+      }}
+      role="tablist"
+      aria-label="Model sources"
+    >
+      {tabs.map(({ id, label, detail, count, icon: Icon, image, tone }) => {
+        const active = value === id
+        return (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(id)}
+            style={active ? activeStyles[tone] : undefined}
+            className={`group relative flex min-h-[86px] items-center gap-3 overflow-hidden rounded-lg border px-3.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 sm:px-4 ${active ? 'text-theme-text' : 'border-theme-border bg-theme-bg/45 text-theme-text-muted hover:-translate-y-px hover:border-theme-accent/30 hover:bg-theme-surface-hover hover:text-theme-text'}`}
+          >
+            <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ${iconStyles[tone]}`}>
+              {image
+                ? <img src={image} alt="" className={image === '/osmantic-os-icon-192.png' ? 'h-10 w-10 object-contain' : 'h-8 w-8 object-contain'} />
+                : <Icon size={27} strokeWidth={1.75} />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold leading-4 text-theme-text sm:text-[15px] sm:leading-5">{label}</span>
+              <span className={`mt-1 block truncate text-xs ${active && tone === 'amber' ? 'text-amber-200/80' : 'text-theme-text-muted/70'}`}>{detail}</span>
+            </span>
+            {count !== null && (
+              <span className="flex h-10 min-w-10 shrink-0 items-center justify-end border-l border-theme-border pl-3 font-mono text-lg font-semibold text-theme-accent">
+                {count}
+              </span>
+            )}
+            {active && <span className={`absolute bottom-0 left-1/2 h-px w-10 -translate-x-1/2 ${indicatorStyles[tone]}`} />}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -520,7 +677,7 @@ function ModelsFilterPanel({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search models..."
-            className="h-9 w-full rounded-lg border border-white/[0.08] bg-black/25 pl-9 pr-3 text-xs text-theme-text outline-none transition-colors placeholder:text-theme-text-muted/60 focus:border-theme-accent/45"
+            className="h-9 w-full rounded-lg border border-theme-border bg-theme-bg/45 pl-9 pr-3 text-xs text-theme-text outline-none transition-colors placeholder:text-theme-text-muted/60 focus:border-theme-accent/45"
           />
         </label>
 
@@ -536,7 +693,7 @@ function ModelsFilterPanel({
                 className={`flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-xs transition-colors ${
                   categoryFilter === option.id
                     ? 'bg-theme-accent text-white shadow-[0_0_18px_rgba(168,85,247,0.26)]'
-                    : 'text-theme-text-secondary hover:bg-white/[0.045] hover:text-theme-text'
+                    : 'text-theme-text-secondary hover:bg-theme-surface-hover hover:text-theme-text'
                 }`}
               >
                 <span>{option.label}</span>
@@ -550,7 +707,7 @@ function ModelsFilterPanel({
 
         <div className="mt-5">
           <SectionLabel>Compatibility</SectionLabel>
-          <div className="mt-2 grid grid-cols-2 gap-1 overflow-hidden rounded-lg border border-white/[0.06] bg-black/20 p-1">
+          <div className="mt-2 grid grid-cols-2 gap-1 overflow-hidden rounded-lg border border-theme-border bg-theme-bg/45 p-1">
             {[
               ['all', 'All'],
               ['fits', 'Fits GPU'],
@@ -587,7 +744,7 @@ function ModelsFilterPanel({
 
         <div className="mt-5">
           <SectionLabel>Speed Preference</SectionLabel>
-          <div className="mt-2 grid grid-cols-4 gap-1 overflow-hidden rounded-lg border border-white/[0.06] bg-black/20 p-1">
+          <div className="mt-2 grid grid-cols-4 gap-1 overflow-hidden rounded-lg border border-theme-border bg-theme-bg/45 p-1">
             {[
               ['any', 'Any'],
               ['fast', 'Fast'],
@@ -618,7 +775,7 @@ function ModelsFilterPanel({
           {insights.map(item => (
             <div
               key={item.label}
-              className="flex items-center justify-between rounded-lg border border-white/[0.055] bg-black/18 px-3 py-2 text-xs"
+              className="flex items-center justify-between rounded-lg border border-theme-border bg-theme-bg/35 px-3 py-2 text-xs"
             >
               <span className="text-theme-text-muted">{item.label}</span>
               <span className="font-mono font-semibold text-theme-accent-light">{item.value}</span>
@@ -642,7 +799,7 @@ function FilterChip({ active, onClick, children }) {
       className={`rounded-md px-2 py-1.5 text-[10px] font-semibold transition-colors ${
         active
           ? 'bg-theme-accent text-white'
-          : 'text-theme-text-muted hover:bg-white/[0.045] hover:text-theme-text'
+          : 'text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'
       }`}
     >
       {children}
@@ -686,12 +843,10 @@ function ModelTableRow({
   })
 
   return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(250px,1.7fr)_144px_70px_110px_120px_90px_130px] lg:gap-5 lg:px-5 lg:py-3.5">
+    <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4 transition-colors hover:bg-theme-surface-hover/70 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(250px,1.7fr)_184px_70px_110px_120px_90px_130px] lg:gap-5 lg:px-5 lg:py-3.5">
       <div className="col-span-2 min-w-0 sm:col-span-1 lg:col-span-1">
         <div className="flex min-w-0 items-start gap-3">
-          <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${iconTone.border} ${iconTone.bg}`}>
-            <Box size={17} className={iconTone.text} />
-          </div>
+          <ModelPublisherIcon model={model} tone={iconTone} />
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-theme-text">{model.name}</h3>
@@ -723,6 +878,18 @@ function ModelTableRow({
           onLoad={onLoad}
           onBenchmark={onBenchmark}
         />
+        {isLoaded && (
+          <button
+            type="button"
+            onClick={onLoad}
+            disabled={activationBusy}
+            aria-label={`Configure context for ${model.name}`}
+            title={`Configure context for ${model.name}`}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-theme-border bg-theme-bg/45 text-theme-text-muted transition-colors hover:border-theme-accent/35 hover:text-theme-accent disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <SlidersHorizontal size={14} />
+          </button>
+        )}
         <DeleteAction
           model={model}
           isLoaded={isLoaded}
@@ -824,7 +991,7 @@ function PrimaryAction({
           className={`inline-flex h-8 min-w-24 items-center justify-center gap-2 rounded-md px-3 text-xs font-semibold transition-colors ${
             !runDisabled
               ? 'bg-theme-accent text-white shadow-[0_0_18px_rgba(168,85,247,0.32)] hover:bg-theme-accent-hover'
-              : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
+              : 'cursor-not-allowed border border-theme-border bg-theme-bg/45 text-theme-text-muted'
           }`}
         >
           {directChatBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
@@ -850,8 +1017,8 @@ function PrimaryAction({
       disabled={downloadBusy || activationBusy}
       className={`inline-flex h-8 min-w-24 items-center justify-center gap-2 rounded-md border px-3 text-xs font-semibold transition-colors ${
         downloadBusy || activationBusy
-          ? 'cursor-not-allowed border-white/[0.08] bg-black/20 text-theme-text-muted'
-          : 'border-white/[0.08] bg-black/20 text-theme-text-secondary hover:border-theme-accent/35 hover:text-theme-text'
+          ? 'cursor-not-allowed border-theme-border bg-theme-bg/45 text-theme-text-muted'
+          : 'border-theme-border bg-theme-bg/45 text-theme-text-secondary hover:border-theme-accent/35 hover:text-theme-text'
       }`}
     >
       <Download size={13} />
@@ -882,7 +1049,7 @@ function DeleteAction({ model, isLoaded, isDownloaded, isLoading, activationBusy
         title={title}
         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
           disabledReason
-            ? 'cursor-not-allowed border-white/[0.07] bg-black/20 text-theme-text-muted/45'
+            ? 'cursor-not-allowed border-theme-border bg-theme-bg/45 text-theme-text-muted/45'
             : 'border-red-400/20 bg-red-500/[0.07] text-red-300 hover:border-red-300/40 hover:bg-red-500/15'
         }`}
       >
@@ -901,7 +1068,7 @@ function DeleteModelDialog({ model, onCancel, onConfirm }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-md rounded-xl border border-red-300/20 bg-[#08080d] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+        className="w-full max-w-md rounded-xl border border-red-400/25 bg-theme-card p-5 shadow-[0_24px_80px_rgba(0,0,0,0.32)]"
       >
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-300/20 bg-red-500/10 text-red-300">
@@ -921,7 +1088,7 @@ function DeleteModelDialog({ model, onCancel, onConfirm }) {
           <button
             type="button"
             onClick={onCancel}
-            className="inline-flex h-9 items-center justify-center rounded-md border border-white/[0.08] bg-black/20 px-3 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+            className="inline-flex h-9 items-center justify-center rounded-md border border-theme-border bg-theme-bg/45 px-3 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
           >
             Cancel
           </button>
@@ -936,6 +1103,233 @@ function DeleteModelDialog({ model, onCancel, onConfirm }) {
       </div>
     </div>
   )
+}
+
+function ModelActivationDialog({
+  model,
+  gpu,
+  hermesMinimumContext,
+  isCurrentModel,
+  onCancel,
+  onConfirm,
+}) {
+  const options = getContextOptions(model, gpu)
+  const initialContext = Number(model.contextLength || options[0]?.contextLength || 8192)
+  const [selectedContext, setSelectedContext] = useState(initialContext)
+  const [customContext, setCustomContext] = useState(String(initialContext))
+  const selected = options.find(option => option.contextLength === selectedContext)
+    || estimateContextOption(model, gpu, options, selectedContext)
+  const currentContext = Number(model.contextLength || 0)
+  const declaredLimit = Number(model.maxContextLength || 0)
+  const titleId = `activate-model-${model.id || 'model'}`
+  const contextValid = Number.isSafeInteger(selectedContext)
+    && selectedContext >= 1024
+  const sameContext = contextValid && isCurrentModel && selectedContext === currentContext
+  const hermesReady = selectedContext >= Number(hermesMinimumContext || 65536)
+  const memoryCapacity = Number(gpu?.vramTotal || 0)
+  const exceedsMemory = selected?.fitsVram === false
+  const exceedsDeclaredLimit = declaredLimit > 0 && selectedContext > declaredLimit
+
+  const selectContext = (value) => {
+    setSelectedContext(value)
+    setCustomContext(String(value))
+  }
+
+  const updateCustomContext = (event) => {
+    const raw = event.target.value
+    setCustomContext(raw)
+    const value = Number(raw)
+    setSelectedContext(Number.isInteger(value) ? value : 0)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex overflow-y-auto bg-black/75 px-4 py-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="m-auto w-full max-w-2xl overflow-hidden rounded-xl border border-theme-accent/25 bg-theme-card shadow-[0_28px_100px_rgba(0,0,0,0.42)]"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-theme-border px-5 py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <ModelPublisherIcon model={model} size="large" />
+            <div className="min-w-0">
+              <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-accent">
+                Runtime context
+              </div>
+              <h2 id={titleId} className="truncate text-base font-semibold text-theme-text">
+                {model.name}
+              </h2>
+              <p className="mt-1 text-xs text-theme-text-muted">
+                {isCurrentModel ? 'Reconfigure the active runtime' : 'Choose the context before launch'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close context configuration"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-theme-text-muted transition-colors hover:bg-theme-surface-hover hover:text-theme-text"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="px-5 py-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-theme-text">Context window</div>
+              <div className="mt-1 text-[11px] text-theme-text-muted">
+                Declared limit {formatContext(declaredLimit)}
+              </div>
+            </div>
+            <div className="font-mono text-xl font-semibold text-theme-text">
+              {formatContext(selectedContext)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {options.map(option => {
+              const active = option.contextLength === selectedContext
+              return (
+                <button
+                  key={option.contextLength}
+                  type="button"
+                  onClick={() => selectContext(option.contextLength)}
+                  aria-pressed={active}
+                  className={`relative min-h-[68px] rounded-lg border px-3 py-2 text-left transition-colors ${
+                    active
+                      ? 'border-theme-accent bg-theme-accent/12 text-theme-text'
+                      : 'border-theme-border bg-theme-bg/40 text-theme-text-secondary hover:border-theme-accent/35'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-sm font-semibold">{formatContext(option.contextLength)}</span>
+                    {active && <Check size={14} className="text-theme-accent" />}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {option.recommended && <Badge tone="green">Recommended</Badge>}
+                    {option.fullContext && <Badge>Full context</Badge>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          <label className="mt-3 block rounded-lg border border-theme-border bg-theme-bg/35 px-3 py-2.5">
+            <span className="flex items-center justify-between gap-3">
+              <span className="text-[11px] font-semibold text-theme-text">Custom context</span>
+              <span className="text-[10px] text-theme-text-muted">Any whole number from 1,024</span>
+            </span>
+            <input
+              type="number"
+              aria-label="Custom context in tokens"
+              min="1024"
+              step="1024"
+              value={customContext}
+              onChange={updateCustomContext}
+              className="mt-2 h-9 w-full rounded-md border border-theme-border bg-theme-card px-3 font-mono text-sm text-theme-text outline-none transition-colors focus:border-theme-accent"
+            />
+            {!contextValid && (
+              <span className="mt-1.5 block text-[11px] text-red-300">
+                Enter a safe whole number of at least 1,024.
+              </span>
+            )}
+          </label>
+
+          <div className="mt-5 grid divide-y divide-theme-border border-y border-theme-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <ContextMetric
+              label="Estimated memory"
+              value={selected?.estimatedRequired ? `~${selected.estimatedRequired} GB` : '--'}
+            />
+            <ContextMetric
+              label="GPU capacity"
+              value={memoryCapacity > 0 ? `${memoryCapacity.toFixed(1)} GB` : 'Not reported'}
+            />
+            <ContextMetric
+              label="App profile"
+              value={hermesReady ? 'Hermes ready' : 'Chat only'}
+              tone={hermesReady ? 'text-emerald-400' : 'text-amber-300'}
+            />
+          </div>
+
+          {exceedsMemory && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-500/10 px-3 py-2.5 text-xs text-theme-text-secondary">
+              <AlertCircle size={15} className="mt-0.5 shrink-0 text-amber-400" />
+              This context exceeds the reported GPU memory estimate. Activation may use system memory or roll back.
+            </div>
+          )}
+          {contextValid && exceedsDeclaredLimit && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-orange-400/25 bg-orange-500/10 px-3 py-2.5 text-xs text-theme-text-secondary">
+              <AlertCircle size={15} className="mt-0.5 shrink-0 text-orange-400" />
+              This override exceeds the model&apos;s declared context. The runtime may reject it or roll back.
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-theme-border bg-theme-bg/25 px-5 py-4">
+          <span className="text-[11px] text-theme-text-muted">
+            {isCurrentModel ? `Active: ${formatContext(currentContext)}` : model.quantization || 'GGUF'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex h-9 items-center justify-center rounded-md border border-theme-border bg-theme-bg/45 px-3 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfirm(selectedContext)}
+              disabled={!contextValid || sameContext}
+              className="inline-flex h-9 min-w-28 items-center justify-center gap-2 rounded-md bg-theme-accent px-4 text-xs font-semibold text-white shadow-[0_0_18px_rgba(168,85,247,0.28)] transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Play size={13} />
+              {sameContext ? 'Already active' : isCurrentModel ? 'Apply context' : 'Run model'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ContextMetric({ label, value, tone = 'text-theme-text' }) {
+  return (
+    <div className="px-3 py-3 first:pl-0 last:pr-0 sm:px-4">
+      <div className="text-[9px] font-semibold uppercase tracking-[0.15em] text-theme-text-muted/70">{label}</div>
+      <div className={`mt-1.5 text-sm font-semibold ${tone}`}>{value}</div>
+    </div>
+  )
+}
+
+function estimateContextOption(model, gpu, options, contextLength) {
+  if (!Number.isFinite(contextLength) || contextLength <= 0) return null
+  const baseline = options.find(option => option.recommended) || options[0]
+  const baselineContext = Number(baseline?.contextLength || model?.contextLength || 8192)
+  const baselineMemory = Number(
+    baseline?.estimatedRequired
+    || model?.estimatedRequired
+    || model?.vramRequired
+    || 0
+  )
+  const modelSize = Number(model?.sizeGb || 0)
+  const variableMemory = Math.max(baselineMemory - modelSize, 0)
+  const estimatedRequired = baselineMemory > 0
+    ? Number((
+      modelSize
+      + variableMemory * (contextLength / Math.max(baselineContext, 1024))
+    ).toFixed(2))
+    : null
+  const capacity = Number(gpu?.vramTotal || 0)
+  return {
+    contextLength,
+    estimatedRequired,
+    fitsVram: capacity > 0 && estimatedRequired
+      ? estimatedRequired <= capacity + 0.35
+      : null,
+  }
 }
 
 function MobileMetricLabel({ children }) {
@@ -961,7 +1355,7 @@ function DownloadProgressBar({ progress, helpers, onRetry }) {
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-red-400/25 bg-black/20 px-3 text-xs font-semibold text-red-200 transition-colors hover:border-red-300/45 hover:bg-red-500/10"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-md border border-red-400/25 bg-theme-bg/45 px-3 text-xs font-semibold text-red-400 transition-colors hover:border-red-400/45 hover:bg-red-500/10"
             >
               <RefreshCw size={13} />
               Retry
@@ -999,7 +1393,7 @@ function DownloadProgressBar({ progress, helpers, onRetry }) {
             type="button"
             onClick={cancelDownload}
             disabled={isCancelling}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-white/[0.1] bg-black/20 px-2.5 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-red-400/35 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-theme-border bg-theme-bg/45 px-2.5 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-red-400/35 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isCancelling ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
             {isCancelling ? 'Cancelling' : 'Cancel'}
@@ -1031,7 +1425,7 @@ function Pagination({ page, pageCount, onChange }) {
         type="button"
         onClick={() => onChange(Math.max(1, page - 1))}
         disabled={page <= 1}
-        className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.06] text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
+        className="flex h-7 w-7 items-center justify-center rounded-md border border-theme-border text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
         title="Previous page"
       >
         <ChevronLeft size={14} />
@@ -1046,7 +1440,7 @@ function Pagination({ page, pageCount, onChange }) {
           className={`h-7 min-w-7 rounded-md border px-2 text-xs font-semibold transition-colors ${
             item === page
               ? 'border-theme-accent/40 bg-theme-accent text-white'
-              : 'border-white/[0.06] text-theme-text-muted hover:text-theme-text'
+              : 'border-theme-border text-theme-text-muted hover:text-theme-text'
           }`}
           aria-current={item === page ? 'page' : undefined}
         >
@@ -1057,7 +1451,7 @@ function Pagination({ page, pageCount, onChange }) {
         type="button"
         onClick={() => onChange(Math.min(pageCount, page + 1))}
         disabled={page >= pageCount}
-        className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.06] text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
+        className="flex h-7 w-7 items-center justify-center rounded-md border border-theme-border text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
         title="Next page"
       >
         <ChevronRight size={14} />
@@ -1082,7 +1476,7 @@ function getRunDisabledReason({
   if (isOpenAiChatBlocked(openAiChat)) {
     return openAiChat.reason || 'This model is not currently validated for direct local chat.'
   }
-  if (model.fitsVram !== true) {
+  if (model.fitsVram !== true && !model.recommended) {
     const required = Number(model.estimatedRequired || model.vramRequired || 0)
     const total = Number(gpu?.vramTotal || 0)
     if (required > 0 && total > 0) {
@@ -1108,8 +1502,8 @@ function ModelSpeedVisual({ model, speed, compact = false }) {
 
   if (!points.length) {
     return (
-      <div className={`${compact ? 'h-11 w-52' : 'h-7 w-24'} rounded bg-white/[0.025]`}>
-        <div className="mx-2 h-full border-b border-dashed border-white/[0.08]" />
+      <div className={`${compact ? 'h-11 w-52' : 'h-7 w-24'} rounded bg-theme-surface-hover`}>
+        <div className="mx-2 h-full border-b border-dashed border-theme-border" />
       </div>
     )
   }
@@ -1135,8 +1529,8 @@ function ModelSpeedVisual({ model, speed, compact = false }) {
 function Badge({ children, tone = 'neutral', subdued = false }) {
   const classes = {
     neutral: subdued
-      ? 'border-white/[0.08] bg-white/[0.035] text-theme-text-muted'
-      : 'border-white/[0.08] bg-white/[0.055] text-theme-text-secondary',
+      ? 'border-theme-border bg-theme-bg/35 text-theme-text-muted'
+      : 'border-theme-border bg-theme-surface-hover text-theme-text-secondary',
     green: 'border-emerald-400/20 bg-emerald-500/12 text-emerald-300',
     amber: 'border-amber-400/25 bg-amber-500/12 text-amber-300',
     red: 'border-red-400/25 bg-red-500/12 text-red-300',
@@ -1425,10 +1819,11 @@ function isHermesTalkVerified(compatibility) {
 }
 
 function getSpeedDisplay(model) {
-  const value = toNumber(model?.tokensPerSec) || extractTokensPerSecond(model?.performanceLabel)
+  const rawValue = toNumber(model?.tokensPerSec) || extractTokensPerSecond(model?.performanceLabel)
+  const value = rawValue && rawValue <= MAX_SINGLE_REQUEST_TOKENS_PER_SECOND ? rawValue : null
   return {
     value,
-    label: model?.performanceLabel || (value ? `${formatNumber(value)} tok/s` : '--'),
+    label: value ? (model?.performanceLabel || `${formatNumber(value)} tok/s`) : 'Benchmark required',
     tone: model?.fitsVram === false ? 'orange' : 'purple',
   }
 }
@@ -1492,6 +1887,36 @@ function getIconTone(model, compatibility) {
   return { border: 'border-emerald-400/30', bg: 'bg-emerald-500/10', text: 'text-emerald-400' }
 }
 
+function ModelPublisherIcon({ model, tone, size = 'row' }) {
+  const author = model?.publisher?.huggingFaceAuthor
+  const publisherName = model?.publisher?.name || author
+  const [imageFailed, setImageFailed] = useState(false)
+  useEffect(() => setImageFailed(false), [author])
+  const large = size === 'large'
+  const dimensions = large ? 'h-12 w-12 rounded-xl' : 'mt-0.5 h-7 w-7 rounded-lg'
+  const fallbackTone = tone || {
+    border: 'border-theme-accent/25',
+    bg: 'bg-theme-accent/10',
+    text: 'text-theme-accent',
+  }
+
+  return (
+    <div className={`relative flex shrink-0 items-center justify-center overflow-hidden border ${dimensions} ${fallbackTone.border} ${fallbackTone.bg}`}>
+      <Box size={large ? 25 : 17} className={fallbackTone.text} />
+      {author && !imageFailed && (
+        <img
+          src={`/api/models/huggingface/authors/${encodeURIComponent(author)}/avatar`}
+          alt={`${publisherName} logo`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setImageFailed(true)}
+          className="absolute inset-0 h-full w-full bg-theme-surface-hover object-cover"
+        />
+      )}
+    </div>
+  )
+}
+
 function buildPageList(page, pageCount) {
   if (pageCount <= 5) return Array.from({ length: pageCount }, (_, index) => index + 1)
   if (page <= 3) return [1, 2, 3, 'gap', pageCount]
@@ -1503,6 +1928,50 @@ function formatContext(contextLength) {
   const value = Number(contextLength || 0)
   if (!value) return '--'
   return `${Math.round(value / 1024)}K`
+}
+
+function getContextOptions(model, gpu) {
+  const supplied = Array.isArray(model?.contextOptions)
+    ? model.contextOptions
+      .map(option => ({
+        ...option,
+        contextLength: Number(option?.contextLength || 0),
+        estimatedRequired: Number(option?.estimatedRequired || 0) || null,
+      }))
+      .filter(option => option.contextLength > 0)
+    : []
+  if (supplied.length > 0) return supplied
+
+  const recommended = Number(model?.contextLength || 8192)
+  const maximum = Math.max(Number(model?.maxContextLength || recommended), recommended)
+  const values = new Set(
+    [8192, 16384, 32768, 65536, 131072, 262144]
+      .filter(value => value <= maximum)
+  )
+  values.add(recommended)
+  values.add(maximum)
+  const baseEstimate = Number(model?.estimatedRequired || model?.vramRequired || 0)
+  const capacity = Number(gpu?.vramTotal || 0)
+
+  return [...values]
+    .sort((left, right) => left - right)
+    .map(contextLength => {
+      const contextScale = Math.max(contextLength / Math.max(recommended, 8192), 0.25)
+      const modelSize = Number(model?.sizeGb || 0)
+      const variableMemory = Math.max(baseEstimate - modelSize, 0)
+      const estimatedRequired = baseEstimate > 0
+        ? Number((modelSize + variableMemory * contextScale).toFixed(2))
+        : null
+      return {
+        contextLength,
+        estimatedRequired,
+        recommended: contextLength === recommended,
+        fullContext: contextLength === maximum,
+        fitsVram: capacity > 0 && estimatedRequired
+          ? estimatedRequired <= capacity + 0.35
+          : null,
+      }
+    })
 }
 
 function formatNumber(value) {

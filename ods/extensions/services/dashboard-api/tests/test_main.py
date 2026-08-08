@@ -29,6 +29,17 @@ def test_read_installed_version_parses_json_version_file(tmp_path, monkeypatch):
     assert _read_installed_version() == "3.1.4"
 
 
+def test_read_installed_version_ignores_empty_env_override(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("ODS_VERSION=\n", encoding="utf-8")
+    (tmp_path / ".version").write_text(
+        json.dumps({"version": "3.1.4"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("main._resolve_install_root", lambda: tmp_path)
+
+    assert _read_installed_version() == "3.1.4"
+
+
 class TestGetAllowedOrigins:
 
     def test_returns_env_origins_when_set(self, monkeypatch):
@@ -216,7 +227,11 @@ class TestBuildApiStatus:
         monkeypatch.setattr("main.get_model_info", lambda: ModelInfo(name="Test-32B", size_gb=16.0, context_length=32768))
         monkeypatch.setattr("main.get_bootstrap_status", lambda: BootstrapStatus(active=False))
         monkeypatch.setattr("main.get_loaded_model", AsyncMock(return_value="Test-32B"))
-        monkeypatch.setattr("main.get_llama_metrics", AsyncMock(return_value={"tokens_per_second": 25.5, "lifetime_tokens": 10000}))
+        monkeypatch.setattr("main.get_llama_metrics", AsyncMock(return_value={
+            "tokens_per_second": 25.5,
+            "lifetime_tokens": 10000,
+            "token_count_mode": "cumulative",
+        }))
         monkeypatch.setattr("main.get_llama_context_size", AsyncMock(return_value=32768))
         monkeypatch.setattr("main.get_uptime", lambda: 3600)
         monkeypatch.setattr("main.get_cpu_metrics", lambda: {"percent": 15.0, "temp_c": 55})
@@ -234,7 +249,27 @@ class TestBuildApiStatus:
         assert result["model"]["loadedModel"] == "Test-32B"
         assert result["model"]["configuredModel"] == "Test-32B"
         assert result["inference"]["tokensPerSecond"] == 25.5
+        assert result["inference"]["tokenCountMode"] == "cumulative"
         assert result["inference"]["loadedModel"] == "Test-32B"
+
+    def test_detected_gpu_count_overrides_stale_compose_default(self, monkeypatch):
+        from main import _serialize_gpu
+        from models import GPUInfo
+
+        monkeypatch.setenv("GPU_COUNT", "1")
+        gpu = GPUInfo(
+            name="AMD Radeon RX 7900 XTX + AMD Radeon RX 7800 XT",
+            memory_used_mb=8192,
+            memory_total_mb=40960,
+            memory_percent=20.0,
+            utilization_percent=40,
+            temperature_c=0,
+            gpu_backend="amd",
+            gpu_count=2,
+            temperature_available=False,
+        )
+
+        assert _serialize_gpu(gpu)["gpu_count"] == 2
 
     @pytest.mark.asyncio
     async def test_tier_professional(self, monkeypatch):
@@ -439,7 +474,14 @@ class TestExternalLinks:
     def test_returns_links_for_services(self, test_client, monkeypatch):
         import config
         monkeypatch.setattr(config, "SERVICES", {
-            "open-webui": {"name": "Open WebUI", "port": 3000, "external_port": 3000, "health": "/health", "host": "localhost"},
+            "open-webui": {
+                "name": "Open WebUI",
+                "port": 3000,
+                "external_port": 3000,
+                "health": "/health",
+                "host": "localhost",
+                "public_url": "https://chat.example.test",
+            },
             "n8n": {"name": "n8n", "port": 5678, "external_port": 5678, "health": "/healthz", "host": "localhost"},
             "dashboard-api": {"name": "Dashboard API", "port": 3002, "external_port": 3002, "health": "/health", "host": "localhost"},
         })
@@ -452,6 +494,8 @@ class TestExternalLinks:
         link_ids = [link["id"] for link in data]
         assert "open-webui" in link_ids
         assert "n8n" in link_ids
+        open_webui = next(link for link in data if link["id"] == "open-webui")
+        assert open_webui["public_url"] == "https://chat.example.test"
 
     def test_excludes_dashboard_api(self, test_client, monkeypatch):
         import config
@@ -502,6 +546,9 @@ class TestApiStorage:
 
     def test_returns_storage_breakdown(self, test_client, monkeypatch):
         from models import DiskUsage
+        from main import _cache
+
+        _cache.invalidate("storage")
         monkeypatch.setattr("main.get_disk_usage", lambda: DiskUsage(
             path="/tmp", used_gb=100.0, total_gb=500.0, percent=20.0,
         ))
@@ -655,6 +702,16 @@ class TestPreflightPorts:
             headers=test_client.auth_headers,
         )
         assert resp.status_code == 200
+
+    def test_rejects_oversized_port_list(self, test_client):
+        # The list is capped so a caller can't force thousands of synchronous
+        # socket binds on the event loop. Rejected by validation before any bind.
+        resp = test_client.post(
+            "/api/preflight/ports",
+            json={"ports": [8000] * 129},
+            headers=test_client.auth_headers,
+        )
+        assert resp.status_code == 422
 
 
 # --- /gpu endpoint (cached paths) ---
@@ -911,6 +968,30 @@ class TestApiStatusServiceSerialization:
 
         assert serialized[0]["llm"] == llm_contract
 
+    def test_serialize_services_includes_public_url_metadata(self, monkeypatch):
+        from models import ServiceStatus
+        monkeypatch.setattr("main.SERVICES", {
+            "open-webui": {
+                "category": "core",
+                "public_url": "https://chat.example.test",
+                "ui_path": "/",
+            },
+        })
+        services = [
+            ServiceStatus(
+                id="open-webui",
+                name="Open WebUI",
+                port=3000,
+                external_port=3000,
+                status="healthy",
+            )
+        ]
+
+        serialized = _serialize_services(services, uptime=42)
+
+        assert serialized[0]["public_url"] == "https://chat.example.test"
+        assert serialized[0]["ui_path"] == "/"
+
     def test_optional_unknown_does_not_count_as_issue(self, monkeypatch):
         from models import ServiceStatus
         monkeypatch.setattr("main.SERVICES", {
@@ -1152,3 +1233,29 @@ class TestBuildApiStatusTiers:
         assert result["bootstrap"]["active"] is True
         assert result["bootstrap"]["model"] == "Qwen-32B"
         assert result["bootstrap"]["percent"] == 50.0
+
+
+def test_serialize_gpu_preserves_unavailable_sensor_state(monkeypatch):
+    import main
+    from models import GPUInfo
+
+    monkeypatch.setenv("GPU_COUNT", "1")
+    gpu = GPUInfo(
+        name="AMD Radeon RX 9070 XT",
+        memory_used_mb=0,
+        memory_total_mb=16368,
+        memory_percent=0,
+        utilization_percent=0,
+        temperature_c=0,
+        gpu_backend="amd",
+        memory_usage_available=False,
+        utilization_available=False,
+        temperature_available=False,
+    )
+
+    payload = main._serialize_gpu(gpu)
+
+    assert payload["vramTotal"] == 16.0
+    assert payload["vramUsed"] is None
+    assert payload["utilization"] is None
+    assert payload["temperature"] is None
