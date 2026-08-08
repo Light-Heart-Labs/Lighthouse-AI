@@ -133,6 +133,34 @@ def test_api_settings_env_masks_secret_values(test_client, settings_env_fixture)
     assert payload["agentAvailable"] is True
 
 
+def test_api_settings_env_does_not_treat_plural_tokens_as_a_secret(
+    test_client,
+    settings_env_fixture,
+):
+    env_path = settings_env_fixture["env_path"]
+    env_path.write_text(
+        env_path.read_text(encoding="utf-8")
+        + "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS=-1\n",
+        encoding="utf-8",
+    )
+    schema_path = settings_env_fixture["schema_path"]
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS"] = {
+        "type": "integer",
+    }
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+
+    response = test_client.get(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fields"]["LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS"]["secret"] is False
+    assert payload["values"]["LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS"] == "-1"
+
+
 def test_api_settings_env_masks_saves_and_live_reads_hf_token(
     test_client, settings_env_fixture,
 ):
@@ -214,6 +242,81 @@ def test_api_settings_env_marks_runtime_mode_read_only(test_client, settings_env
     field = response.json()["fields"]["ODS_MODE"]
     assert field["readOnly"] is True
     assert "installer" in field["readOnlyReason"].lower()
+
+
+def test_api_settings_env_marks_model_context_and_recommendation_read_only(
+    test_client,
+    settings_env_fixture,
+):
+    keys = (
+        "CTX_SIZE",
+        "MAX_CONTEXT",
+        "MODEL_RECOMMENDED_MODEL",
+        "MODEL_RECOMMENDED_GGUF",
+        "MODEL_RECOMMENDED_CONTEXT",
+        "MODEL_RECOMMENDATION_SOURCE",
+        "MODEL_RECOMMENDATION_POLICY",
+        "MODEL_RECOMMENDATION_CONFIDENCE",
+        "MODEL_RECOMMENDATION_REASON",
+        "MODEL_RECOMMENDED_ALTERNATIVES",
+    )
+    schema_path = settings_env_fixture["schema_path"]
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"].update({
+        key: {"type": "integer" if "CONTEXT" in key else "string"}
+        for key in keys
+    })
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+
+    response = test_client.get(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+    )
+
+    assert response.status_code == 200
+    fields = response.json()["fields"]
+    for key in keys:
+        assert fields[key]["readOnly"] is True
+        assert fields[key]["readOnlyReason"]
+
+
+def test_api_settings_env_rejects_direct_context_override(
+    test_client,
+    settings_env_fixture,
+):
+    env_path = settings_env_fixture["env_path"]
+    env_path.write_text(
+        env_path.read_text(encoding="utf-8") + "CTX_SIZE=8192\n",
+        encoding="utf-8",
+    )
+    schema_path = settings_env_fixture["schema_path"]
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["CTX_SIZE"] = {"type": "integer"}
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    current = test_client.get(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+    ).json()["values"]
+
+    response = test_client.put(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+        json={
+            "mode": "form",
+            "values": {**current, "CTX_SIZE": "65536"},
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["issues"] == [{
+        "key": "CTX_SIZE",
+        "message": (
+            "The active context is managed by Model Manager so the runtime "
+            "and every model consumer remain synchronized."
+        ),
+    }]
+    assert "CTX_SIZE=65536" not in env_path.read_text(encoding="utf-8")
 
 
 def test_api_settings_env_rejects_runtime_mode_change(test_client, settings_env_fixture):
@@ -453,7 +556,7 @@ def test_api_settings_env_rejects_null_byte_in_value(test_client, settings_env_f
 def test_api_settings_env_save_returns_llama_apply_plan(test_client, settings_env_fixture):
     env_path = settings_env_fixture["env_path"]
     env_path.write_text(
-        env_path.read_text(encoding="utf-8") + "CTX_SIZE=8192\n",
+        env_path.read_text(encoding="utf-8") + "LLAMA_BATCH_SIZE=1024\n",
         encoding="utf-8",
     )
 
@@ -463,7 +566,7 @@ def test_api_settings_env_save_returns_llama_apply_plan(test_client, settings_en
         json={
             "mode": "form",
             "values": {
-                "CTX_SIZE": "16384",
+                "LLAMA_BATCH_SIZE": "2048",
             },
         },
     )
@@ -473,6 +576,34 @@ def test_api_settings_env_save_returns_llama_apply_plan(test_client, settings_en
     assert payload["applyPlan"]["status"] == "ready"
     assert payload["applyPlan"]["services"] == ["llama-server"]
     assert "llama-server" in payload["applyPlan"]["summary"]
+
+
+def test_api_settings_env_save_uses_host_agent_canonical_value(
+    test_client, settings_env_fixture, monkeypatch,
+):
+    def fake_env_update(raw_text):
+        return {
+            "backup_path": "data/config-backups/.env.backup.test",
+            "enforced_values": {"WEBUI_AUTH": "true"},
+        }
+
+    monkeypatch.setattr("main._call_agent_env_update", fake_env_update)
+
+    response = test_client.put(
+        "/api/settings/env",
+        headers=test_client.auth_headers,
+        json={
+            "mode": "form",
+            "values": {
+                "WEBUI_AUTH": "false",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["values"]["WEBUI_AUTH"] == "true"
+    assert payload["fields"]["WEBUI_AUTH"]["value"] == "true"
 
 
 def test_api_settings_env_preserves_commented_empty_llama_args(test_client, settings_env_fixture):
@@ -671,6 +802,34 @@ def test_settings_apply_plan_maps_hermes_env_keys():
     assert plan["status"] == "ready"
     assert plan["services"] == ["hermes", "hermes-proxy"]
     assert plan["manualKeys"] == []
+
+
+def test_settings_apply_plan_treats_public_urls_as_manual_restart():
+    from settings import _compute_env_apply_plan
+
+    previous = {
+        "OPEN_WEBUI_PUBLIC_URL": "",
+        "N8N_PUBLIC_URL": "",
+        "HERMES_PROXY_PUBLIC_URL": "",
+        "ODS_SERVICE_PUBLIC_URLS": "",
+    }
+    updated = {
+        "OPEN_WEBUI_PUBLIC_URL": "https://chat.example.test",
+        "N8N_PUBLIC_URL": "https://n8n.example.test",
+        "HERMES_PROXY_PUBLIC_URL": "https://hermes.example.test",
+        "ODS_SERVICE_PUBLIC_URLS": '{"comfyui":"https://comfy.example.test"}',
+    }
+
+    plan = _compute_env_apply_plan(previous, updated)
+
+    assert plan["status"] == "manual"
+    assert plan["services"] == []
+    assert plan["manualKeys"] == [
+        "HERMES_PROXY_PUBLIC_URL",
+        "N8N_PUBLIC_URL",
+        "ODS_SERVICE_PUBLIC_URLS",
+        "OPEN_WEBUI_PUBLIC_URL",
+    ]
 
 
 def test_settings_apply_plan_maps_agent_and_proxy_env_keys():

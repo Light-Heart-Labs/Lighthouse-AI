@@ -24,11 +24,14 @@ echo "[guard] LiteLLM AMD overlay must preserve switchboard command"
 if grep -q 'exec litellm --config /app/config.yaml' \
         extensions/services/litellm/compose.amd.yaml; then
     fail "compose.amd.yaml: hard-coded config.yaml bypasses switchboard.yaml"
-elif grep -q 'CONFIG_PATH=/app/switchboard.yaml' \
-        extensions/services/litellm/compose.yaml; then
-    pass "compose.amd.yaml: does not override the base switchboard-aware command"
+elif grep -q 'ods-select-config.sh' extensions/services/litellm/compose.yaml \
+        && grep -Fq '[ "$mode" != "cloud" ]' \
+            extensions/services/litellm/select-config.sh \
+        && grep -Fq '[ "$switchboard" = "enabled" ]' \
+            extensions/services/litellm/select-config.sh; then
+    pass "compose.amd.yaml: preserves the mode-aware switchboard selector"
 else
-    fail "compose.yaml: missing base switchboard-aware LiteLLM command"
+    fail "compose.yaml: missing mode-aware LiteLLM config selector"
 fi
 
 echo "[guard] open-webui must not hardcode OPENAI_API_KEY=no-key on AMD"
