@@ -74,14 +74,14 @@ def test_get_version_with_mock_github(test_client, monkeypatch):
 
 def test_build_version_result_strips_v_prefix_from_current():
     """Current versions stored with a 'v' prefix (matching the release tag
-    convention, e.g. a .version file of 'v2.5.3') must normalize before
+    convention, e.g. a .version file of 'v2.6.0') must normalize before
     comparison. Otherwise the numeric parser misreads them and a real update
     is reported as unavailable.
     """
     from routers.updates import _build_version_result
 
-    result = _build_version_result("v2.5.3", {"latest": "2.6.0"})
-    assert result["current"] == "2.5.3"
+    result = _build_version_result("v2.6.0", {"latest": "2.7.0"})
+    assert result["current"] == "2.6.0"
     assert result["update_available"] is True
 
 
@@ -334,6 +334,24 @@ def test_update_dry_run_with_env_and_version(test_client, tmp_path, monkeypatch)
     assert "GPU_BACKEND" in data["env_keys"]
     assert "LLM_MODEL" in data["env_keys"]
     assert "SOME_OTHER_KEY" not in data["env_keys"]
+
+
+def test_update_dry_run_parses_quoted_ods_version(test_client, tmp_path, monkeypatch):
+    """A quoted ODS_VERSION must not leak its quotes into the semver compare."""
+    import routers.updates as updates_mod
+
+    install_dir = tmp_path / "ods"
+    install_dir.mkdir()
+    (install_dir / ".env").write_text('ODS_VERSION="1.3.0"\n')
+
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(install_dir))
+
+    with patch("routers.updates.httpx.AsyncClient.get",
+               side_effect=httpx.ConnectError("mocked network failure")):
+        resp = test_client.get("/api/update/dry-run", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["current_version"] == "1.3.0"
 
 
 def test_update_dry_run_version_from_version_file(test_client, tmp_path, monkeypatch):

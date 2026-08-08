@@ -417,7 +417,7 @@ assert_eq "SELECTOR_SOURCE" "catalog_fit_pre_download" "$MODEL_RECOMMENDATION_SO
 assert_eq "SELECTOR_POLICY" "context-aware-largest-capable-general-v1" "$MODEL_RECOMMENDATION_POLICY"
 echo ""
 
-echo "Catalog selector (8GB NVIDIA qwen uses upstream catalog fit):"
+echo "Catalog selector (8GB NVIDIA qwen uses 64K catalog fit):"
 _selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
     --catalog "$SCRIPT_DIR/config/model-library.json" \
     --backend nvidia \
@@ -433,7 +433,7 @@ LLM_MODEL="" GGUF_FILE="" MAX_CONTEXT="" MODEL_RUNTIME_PROFILE="" LLAMA_ARG_N_CP
 load_selector_env "$_selector_env"
 assert_eq "SELECTOR_LLM_MODEL" "qwen3.5-9b" "$LLM_MODEL"
 assert_eq "SELECTOR_GGUF_FILE" "Qwen3.5-9B-Q4_K_M.gguf" "$GGUF_FILE"
-assert_eq "SELECTOR_CONTEXT" "32768" "$MAX_CONTEXT"
+assert_eq "SELECTOR_CONTEXT" "65536" "$MAX_CONTEXT"
 assert_eq "SELECTOR_RUNTIME_PROFILE" "" "$MODEL_RUNTIME_PROFILE"
 assert_eq "SELECTOR_N_CPU_MOE" "" "$LLAMA_ARG_N_CPU_MOE"
 assert_eq "SELECTOR_CACHE_V" "" "$LLAMA_ARG_CACHE_TYPE_V"
@@ -460,6 +460,57 @@ assert_eq "SELECTOR_CONTEXT" "32768" "$MAX_CONTEXT"
 assert_eq "SELECTOR_RUNTIME_PROFILE" "" "$MODEL_RUNTIME_PROFILE"
 assert_eq "SELECTOR_N_CPU_MOE" "" "$LLAMA_ARG_N_CPU_MOE"
 assert_eq "SELECTOR_CACHE_V" "" "$LLAMA_ARG_CACHE_TYPE_V"
+echo ""
+
+echo "Catalog selector excludes Hugging Face imports from a mixed catalog:"
+_selector_catalog="$(mktemp)"
+trap 'rm -f "$_selector_catalog"' EXIT
+python3 - "$_selector_catalog" <<'PY'
+import json
+import sys
+
+models = [
+    {
+        "id": "curated-model",
+        "llm_model_name": "curated-model",
+        "family": "qwen",
+        "gguf_file": "curated.gguf",
+        "gguf_url": "https://huggingface.co/ods/curated/resolve/main/curated.gguf",
+        "size_mb": 1000,
+        "vram_required_gb": 2,
+        "context_length": 65536,
+    },
+    {
+        "id": "imported-model",
+        "source": "huggingface",
+        "llm_model_name": "imported-model",
+        "family": "qwen",
+        "gguf_file": "imported.gguf",
+        "gguf_url": "https://huggingface.co/community/imported/resolve/main/imported.gguf",
+        "size_mb": 7000,
+        "vram_required_gb": 7,
+        "context_length": 131072,
+    },
+]
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({"models": models}, handle)
+PY
+_selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
+    --catalog "$_selector_catalog" \
+    --backend nvidia \
+    --memory-type discrete \
+    --vram-mb 8192 \
+    --ram-gb 32 \
+    --profile qwen \
+    --tier 1 \
+    --host-arch amd64 \
+    --installable-only \
+    --env)"
+rm -f "$_selector_catalog"
+trap - EXIT
+LLM_MODEL="" GGUF_FILE=""
+load_selector_env "$_selector_env"
+assert_eq "SELECTOR_CURATED_SOURCE" "curated-model" "$LLM_MODEL"
 echo ""
 
 # --- Summary ---

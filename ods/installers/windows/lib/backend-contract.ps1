@@ -284,6 +284,9 @@ function Get-ODSLemonadeLaunchContract {
         [Parameter(Mandatory = $true)]
         [string]$ModelsDir,
 
+        [ValidateRange(0, 9007199254740991)]
+        [long]$ContextSize = 0,
+
         [string]$AdminApiKey,
 
         [string]$VersionOverride
@@ -311,6 +314,10 @@ function Get-ODSLemonadeLaunchContract {
             "--no-tray", "--llamacpp", "vulkan", "--extra-models-dir", $ModelsDir
         )
         $argumentString = "serve --port $Port --host $effectiveBind --no-tray --llamacpp vulkan --extra-models-dir `"$escapedModelsDir`""
+        if ($ContextSize -gt 0) {
+            $argumentList += @("--ctx-size", [string]$ContextSize)
+            $argumentString += " --ctx-size $ContextSize"
+        }
     }
 
     return [pscustomobject]@{
@@ -321,6 +328,7 @@ function Get-ODSLemonadeLaunchContract {
         BindAddress = $effectiveBind
         RequestedBindAddress = $BindAddress
         ModelsDir = $ModelsDir
+        ContextSize = $ContextSize
         AdminApiKey = $AdminApiKey
         ArgumentList = $argumentList
         ArgumentString = $argumentString
@@ -332,6 +340,59 @@ function ConvertTo-ODSPowerShellSingleQuotedLiteral {
     param([AllowNull()][string]$Value)
     if ($null -eq $Value) { return "''" }
     return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Resolve-ODSInteractiveScheduledTaskUser {
+    <#
+    .SYNOPSIS
+        Return a Task Scheduler principal for the current interactive user.
+
+    .DESCRIPTION
+        Remote PowerShell sessions can expose USERNAME without the local/domain
+        qualifier that Task Scheduler needs for InteractiveToken tasks. Prefer
+        whoami's fully-qualified identity and only fall back after verifying the
+        account translates to a SID.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    try {
+        $whoami = (& "$env:SystemRoot\System32\whoami.exe" 2>$null | Select-Object -First 1)
+        if (-not [string]::IsNullOrWhiteSpace([string]$whoami)) {
+            $candidates.Add(([string]$whoami).Trim())
+        }
+    } catch { }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:USERDOMAIN) -and
+        -not [string]::IsNullOrWhiteSpace($env:USERNAME)) {
+        $candidates.Add("$($env:USERDOMAIN)\$($env:USERNAME)")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:USERNAME)) {
+        $candidates.Add([string]$env:USERNAME)
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        try {
+            $account = New-Object System.Security.Principal.NTAccount($candidate)
+            $null = $account.Translate([System.Security.Principal.SecurityIdentifier])
+            return $candidate
+        } catch { }
+    }
+
+    throw "Could not resolve the current interactive Windows user for an ODS scheduled task."
+}
+
+function New-ODSInteractiveScheduledTaskPrincipal {
+    [CmdletBinding()]
+    param(
+        [ValidateSet("Limited", "Highest")]
+        [string]$RunLevel = "Limited"
+    )
+
+    $userId = Resolve-ODSInteractiveScheduledTaskUser
+    return New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel $RunLevel
 }
 
 function New-ODSLemonadeScheduledTaskAction {
@@ -395,9 +456,19 @@ try {
     exit 1
 }
 "@
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
+    $launcherPath = if (-not [string]::IsNullOrWhiteSpace($DiagnosticLogPath)) {
+        [IO.Path]::ChangeExtension($DiagnosticLogPath, ".task.ps1")
+    } else {
+        Join-Path ([IO.Path]::GetTempPath()) "ods-lemonade-task-launcher.ps1"
+    }
+    $launcherDir = Split-Path -Parent $launcherPath
+    if (-not [string]::IsNullOrWhiteSpace($launcherDir)) {
+        New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
+    }
+    Set-Content -LiteralPath $launcherPath -Value $wrapper -Encoding UTF8 -Force
+    $escapedLauncherPath = ([string]$launcherPath).Replace('"', '\"')
     return New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$escapedLauncherPath`"" `
         -WorkingDirectory $workingDirectory
 }
 
@@ -471,7 +542,8 @@ function Set-ODSLemonadeModernRuntimeConfig {
 
         [string]$AdminApiKey,
 
-        [int]$ContextSize = 0
+        [ValidateRange(0, 9007199254740991)]
+        [long]$ContextSize = 0
     )
 
     $headers = @{}
@@ -486,7 +558,7 @@ function Set-ODSLemonadeModernRuntimeConfig {
         }
     }
     if ($ContextSize -gt 0) {
-        $payload.ctx_size = [int]$ContextSize
+        $payload.ctx_size = [long]$ContextSize
     }
     $body = $payload | ConvertTo-Json -Compress
     $null = Invoke-RestMethod -Method Post -Uri "$baseUrl/internal/set" `
@@ -512,11 +584,11 @@ function Set-ODSLemonadeModernRuntimeConfig {
     if ($ContextSize -gt 0) {
         $actualContext = 0
         try {
-            $actualContext = [int]$config.ctx_size
+            $actualContext = [long]$config.ctx_size
         } catch {
             $actualContext = 0
         }
-        if ($actualContext -ne [int]$ContextSize) {
+        if ($actualContext -ne [long]$ContextSize) {
             throw "Lemonade ctx_size verification failed: expected '$ContextSize', got '$($config.ctx_size)'."
         }
     }

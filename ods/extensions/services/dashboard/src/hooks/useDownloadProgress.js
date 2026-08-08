@@ -134,7 +134,10 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     if (!eta || eta === 'calculating...') return 'calculating...'
     if (typeof eta === 'number') {
       const mins = Math.floor(eta / 60)
-      const secs = eta % 60
+      // Floor the seconds too — a fractional eta (bytes-remaining / rate is a
+      // float) otherwise renders as "1m 30.700000000000003s". Mirrors the
+      // Math.floor already applied to minutes.
+      const secs = Math.floor(eta % 60)
       if (mins > 0) return `${mins}m ${secs}s`
       return `${secs}s`
     }

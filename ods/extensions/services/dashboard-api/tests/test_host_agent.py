@@ -58,6 +58,59 @@ def can_create_symlinks(tmp_path: Path) -> bool:
     return link.is_symlink()
 
 
+def test_host_agent_model_library_accepts_only_integrity_pinned_hub_imports(monkeypatch, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "config").mkdir(parents=True)
+    (install_dir / "data").mkdir()
+    (install_dir / "config" / "model-library.json").write_text(
+        json.dumps({"models": [{"id": "curated", "gguf_file": "curated.gguf"}]}),
+        encoding="utf-8",
+    )
+    imported = {
+        "id": "hf-community",
+        "source": "huggingface",
+        "gguf_file": "hf-community-Q4_K_M.gguf",
+        "gguf_url": "https://huggingface.co/org/repo/resolve/" + ("a" * 40) + "/model.gguf",
+        "gguf_sha256": "b" * 64,
+        "size_bytes": 4096,
+    }
+    (install_dir / "data" / "model-imports.json").write_text(
+        json.dumps({"version": 1, "models": [imported]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    records = _mod._load_model_library_records()
+
+    assert [item["id"] for item in records] == ["curated", "hf-community"]
+    assert _mod._model_download_manifest(records[1])["artifacts"][0]["size_bytes"] == 4096
+
+
+def test_host_agent_model_library_rejects_import_collision(monkeypatch, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "config").mkdir(parents=True)
+    (install_dir / "data").mkdir()
+    (install_dir / "config" / "model-library.json").write_text(
+        json.dumps({"models": [{"id": "curated", "gguf_file": "curated.gguf"}]}),
+        encoding="utf-8",
+    )
+    (install_dir / "data" / "model-imports.json").write_text(
+        json.dumps({"models": [{
+            "id": "curated",
+            "source": "huggingface",
+            "gguf_file": "other.gguf",
+            "gguf_url": "https://huggingface.co/org/repo/resolve/" + ("a" * 40) + "/model.gguf",
+            "gguf_sha256": "b" * 64,
+            "size_bytes": 4096,
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    with pytest.raises(RuntimeError, match="collides"):
+        _mod._load_model_library_records()
+
+
 @pytest.fixture
 def host_agent_wire_client(monkeypatch):
     """Point the shared sync transport at a test server with isolated state."""
@@ -794,6 +847,12 @@ class TestValidateCoreRecreateIds:
         assert ok is True
         assert error == ""
 
+    def test_accepts_model_router_core_recreate_service(self, monkeypatch):
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"model-router"})
+        ok, error = validate_core_recreate_ids(["model-router"])
+        assert ok is True
+        assert error == ""
+
     def test_rejects_non_core_service(self, monkeypatch):
         monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"dashboard-api"})
         ok, error = validate_core_recreate_ids(["llama-server"])
@@ -1332,7 +1391,7 @@ class TestSyncExtensionConfigWire:
             thread.join(timeout=2)
 
     @staticmethod
-    def _post(port, sid, *, key="wire-test-secret"):
+    def _post(port, sid, *, key="wire-test-secret", preserve_existing=False):
         """Direct HTTP POST to /v1/extension/sync_config so callers can
         assert on the raw status code (the dashboard-api helper masks
         4xx as a generic False, which is too coarse for these tests)."""
@@ -1342,7 +1401,10 @@ class TestSyncExtensionConfigWire:
         url = f"http://127.0.0.1:{port}/v1/extension/sync_config"
         req = urllib.request.Request(
             url,
-            data=_json.dumps({"service_id": sid}).encode(),
+            data=_json.dumps({
+                "service_id": sid,
+                "preserve_existing": preserve_existing,
+            }).encode(),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {key}",
@@ -1358,6 +1420,80 @@ class TestSyncExtensionConfigWire:
             except ValueError:
                 body = {}
             return exc.code, body
+
+    def test_preserve_existing_only_adds_missing_config(
+        self, tmp_path, monkeypatch,
+    ):
+        import threading
+        from http.server import HTTPServer
+
+        install_dir = tmp_path / "install"
+        user_root = install_dir / "data" / "user-extensions"
+        install_dir.mkdir()
+        user_root.mkdir(parents=True)
+        self._make_extension(user_root, "fakesvc")
+        source = user_root / "fakesvc" / "config" / "fakesvc"
+        (source / "new.yaml").write_text("new: default\n", encoding="utf-8")
+        target = install_dir / "config" / "fakesvc"
+        target.mkdir(parents=True)
+        (target / "settings.yaml").write_text("server: customized\n", encoding="utf-8")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", user_root)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", tmp_path / "builtin-empty")
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, _body = self._post(port, "fakesvc", preserve_existing=True)
+            assert status == 200
+            assert _body.get("preserve_existing") is True
+            assert (target / "settings.yaml").read_text(encoding="utf-8") == "server: customized\n"
+            assert (target / "new.yaml").read_text(encoding="utf-8") == "new: default\n"
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_rejects_existing_symlink_in_config_target(
+        self, tmp_path, monkeypatch,
+    ):
+        if os.name == "nt" and not can_create_symlinks(tmp_path):
+            pytest.skip("Windows symlink creation requires Developer Mode or administrator privileges")
+        import threading
+        from http.server import HTTPServer
+
+        install_dir = tmp_path / "install"
+        user_root = install_dir / "data" / "user-extensions"
+        install_dir.mkdir()
+        user_root.mkdir(parents=True)
+        self._make_extension(user_root, "fakesvc")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = install_dir / "config" / "fakesvc"
+        target.mkdir(parents=True)
+        (target / "linked").symlink_to(outside, target_is_directory=True)
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", user_root)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", tmp_path / "builtin-empty")
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = self._post(port, "fakesvc", preserve_existing=True)
+            assert status == 400
+            assert "target symlink" in body.get("error", "")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_rejects_symlink_in_config_tree(self, tmp_path, monkeypatch):
         """Symlinks (file or directory, top-level or nested) must be rejected
@@ -1676,6 +1812,10 @@ class TestInstallHookEnvAllowlist:
         import inspect
         return inspect.getsource(_mod.AgentHandler._handle_install)
 
+    def _generic_hook_source(self):
+        import inspect
+        return inspect.getsource(_mod.AgentHandler._execute_hook)
+
     def test_setup_hook_subprocess_run_passes_env_kwarg(self):
         src = self._hook_helper_source()
         assert "env=hook_env" in src, (
@@ -1701,6 +1841,14 @@ class TestInstallHookEnvAllowlist:
             assert f'"{key}"' in src, (
                 f"setup_hook env allowlist missing required key {key}"
             )
+
+    def test_setup_hook_preserves_rootless_docker_routing(self):
+        for src in (self._hook_helper_source(), self._generic_hook_source()):
+            for key in ("DOCKER_HOST", "XDG_RUNTIME_DIR"):
+                assert f'"{key}"' in src, (
+                    f"extension hooks must preserve {key} so rootless Docker "
+                    "operations address the same daemon as the host agent"
+                )
 
     def test_setup_hook_uses_resolve_hook_with_post_install(self):
         src = self._hook_helper_source()
@@ -1857,6 +2005,581 @@ class _FakeHandler:
     def parse_response(self):
         # json_response writes the JSON body via wfile.write()
         return json.loads(self.wfile.getvalue().decode("utf-8"))
+
+
+class TestRemoteProviderLifecycle:
+    """Direct host-agent tests for remote-provider lifecycle planning/apply."""
+
+    @pytest.fixture(autouse=True)
+    def _auth(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+    def _configure_payload(self):
+        return {
+            "action": "configure",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://gpu.example.test",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+
+    def _ssh_configure_payload(self):
+        return {
+            "action": "configure",
+            "provider": {
+                "transport": "ssh",
+                "baseUrl": "http://127.0.0.1:8000/v1",
+                "model": "qwen/remote:latest",
+            },
+            "ssh": {
+                "host": "gpu.example.test",
+                "user": "ods",
+                "port": "22",
+                "inferenceHost": "127.0.0.1",
+                "inferencePort": "8000",
+            },
+            "secrets": {
+                "apiKey": "unit-test-provider-token",
+                "sshPrivateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nunit-test-key\n-----END OPENSSH PRIVATE KEY-----",
+                "sshKnownHosts": "gpu.example.test ssh-ed25519 AAAATEST",
+            },
+        }
+
+    def _patch_successful_probe(self, monkeypatch):
+        probes = []
+
+        def fake_probe(route, *, provider_secret):
+            probes.append((route, provider_secret))
+            return {
+                "ok": True,
+                "status": 200,
+                "endpoint": "/v1/models",
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {"ok": True, "addressCount": 1},
+            }
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", fake_probe)
+        monkeypatch.setattr(
+            _mod,
+            "_iso_now",
+            lambda: "2026-07-26T00:00:00+00:00",
+        )
+        return probes
+
+    def _egress_probe_response(self):
+        return {
+            "schema": "ods.remote-provider-egress-probe.v1",
+            "ok": True,
+            "transport": "ssh",
+            "probe": {
+                "schema": "ods.remote-provider-probe-receipt.v1",
+                "ok": True,
+                "verifiedAt": "2026-07-26T00:00:00+00:00",
+                "endpoint": "/v1/models",
+                "httpStatus": 200,
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {
+                    "ok": True,
+                    "addressCount": 0,
+                    "raw": "127.0.0.1",
+                },
+                "value": "unit-test-provider-token",
+            },
+            "tunnel": {
+                "ok": True,
+                "ready": True,
+                "status": "running",
+                "reason": "ready",
+                "secretValue": "unit-test-ssh-key",
+            },
+        }
+
+    def test_plans_redacted_lifecycle_operation(self):
+        payload = {
+            "action": "test",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://gpu.example.test",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 200
+        assert body["action"] == "test"
+        assert body["route"]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert body["writes"]["routingState"] is False
+        assert "REMOTE_LLM_API_KEY" in body["secretRefs"]
+        assert "unit-test-provider-token" not in dumped
+
+    def test_rejects_invalid_lifecycle_payload(self):
+        payload = {
+            "action": "configure",
+            "provider": {
+                "transport": "direct",
+                "baseUrl": "https://127.0.0.1:8000/v1",
+                "model": "qwen/remote:latest",
+            },
+            "secrets": {"apiKey": "unit-test-provider-token"},
+        }
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        body = handler.parse_response()
+        assert handler.response_code == 400
+        assert "loopback" in body["error"]
+
+    def test_requires_auth(self):
+        handler = _FakeHandler(
+            json.dumps({"action": "disable"}).encode("utf-8"),
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+
+        _mod.AgentHandler._handle_remote_provider_plan(handler)
+
+        assert handler.response_code == 403
+
+    def test_apply_configure_writes_route_state_and_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        probes = self._patch_successful_probe(monkeypatch)
+        payload = self._configure_payload()
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        state_path = tmp_path / "remote-provider" / "routing-state.json"
+        secret_path = tmp_path / "remote-provider" / "secrets" / "provider-api-key"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert handler.response_code == 200
+        assert body["applied"] is True
+        assert body["mutated"] is True
+        assert body["rollback"] == {"attempted": False, "ok": None}
+        assert body["probe"]["schema"] == "ods.remote-provider-probe-receipt.v1"
+        assert body["probe"]["verifiedAt"] == "2026-07-26T00:00:00+00:00"
+        assert state["schema"] == "ods.remote-routing-state.v1"
+        assert state["enabled"] is True
+        assert state["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert state["projection"]["egressBaseUrl"] == "http://remote-provider-egress:8091/v1"
+        assert state["status"] == {
+            "proven": True,
+            "reason": "provider-handshake-ok",
+            "lastProbe": body["probe"],
+        }
+        assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert probes[0][1] == "unit-test-provider-token"
+        assert secret_path.read_text(encoding="utf-8") == "unit-test-provider-token\n"
+        assert "unit-test-provider-token" not in dumped
+
+    def test_route_state_preserves_ssh_metadata_without_secret_values(self):
+        payload = self._ssh_configure_payload()
+
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+
+        dumped = json.dumps(state, sort_keys=True)
+        assert state["enabled"] is True
+        assert state["provider"]["transport"] == "ssh"
+        assert state["ssh"]["host"] == "gpu.example.test"
+        assert state["ssh"]["inferencePort"] == 8000
+        assert state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
+        assert "unit-test-provider-token" not in dumped
+        assert "unit-test-key" not in dumped
+        assert "AAAATEST" not in dumped
+
+    def test_apply_ssh_configure_stages_route_and_secret_custody_without_host_probe(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        def fail_if_called(_route, *, provider_secret):
+            raise AssertionError("SSH configure must not use the host-side direct probe")
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", fail_if_called)
+        handler = _FakeHandler(json.dumps(self._ssh_configure_payload()).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        root = tmp_path / "remote-provider"
+        state_path = root / "routing-state.json"
+        secret_dir = root / "secrets"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert handler.response_code == 200
+        assert body["applied"] is True
+        assert body["mutated"] is True
+        assert body["proof"] == {
+            "required": True,
+            "status": "pending",
+            "reason": "pending-ssh-tunnel-proof",
+            "boundary": "remote-provider-egress",
+        }
+        assert "probe" not in body
+        assert state["enabled"] is True
+        assert state["provider"]["transport"] == "ssh"
+        assert state["ssh"]["host"] == "gpu.example.test"
+        assert state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
+        assert (secret_dir / "provider-api-key").read_text(encoding="utf-8") == (
+            "unit-test-provider-token\n"
+        )
+        assert (secret_dir / "ssh-identity").read_text(encoding="utf-8") == (
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nunit-test-key\n-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        assert (secret_dir / "known_hosts").read_text(encoding="utf-8") == (
+            "gpu.example.test ssh-ed25519 AAAATEST\n"
+        )
+        assert "unit-test-provider-token" not in dumped
+        assert "unit-test-key" not in dumped
+        assert "AAAATEST" not in dumped
+
+    def test_ssh_supervisor_status_uses_route_state_and_secret_custody(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_dir = root / "secrets"
+        secret_dir.mkdir(parents=True)
+        (secret_dir / "ssh-identity").write_text("unit-test-key\n", encoding="utf-8")
+        (secret_dir / "known_hosts").write_text(
+            "gpu.example.test ssh-ed25519 AAAATEST\n",
+            encoding="utf-8",
+        )
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._handle_remote_provider_ssh_supervisor_status(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 200
+        assert body["schema"] == "ods.remote-provider-ssh-supervisor-plan.v1"
+        assert body["status"] == "planned"
+        assert body["ready"] is False
+        assert body["readyToStart"] is True
+        assert body["tunnelBaseUrl"] == "http://remote-provider-ssh-tunnel:18091/v1"
+        assert body["secrets"]["sshIdentity"]["configured"] is True
+        assert body["secrets"]["sshKnownHosts"]["configured"] is True
+        assert body["tunnels"][0]["argv"][0] == "ssh"
+        assert "unit-test-provider-token" not in dumped
+        assert "unit-test-key" not in dumped
+        assert "AAAATEST" not in dumped
+
+    def test_records_egress_probe_as_route_proof(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        handler = _FakeHandler(
+            json.dumps(self._egress_probe_response()).encode("utf-8")
+        )
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        dumped = json.dumps({"body": body, "state": recorded_state}, sort_keys=True)
+        expected_status = {
+            "proven": True,
+            "reason": "provider-handshake-ok",
+            "lastProbe": {
+                "schema": "ods.remote-provider-probe-receipt.v1",
+                "ok": True,
+                "verifiedAt": "2026-07-26T00:00:00+00:00",
+                "endpoint": "/v1/models",
+                "httpStatus": 200,
+                "contentType": "application/json",
+                "modelCount": 1,
+                "resolution": {"ok": True, "addressCount": 0},
+            },
+        }
+        assert handler.response_code == 200
+        assert body == {
+            "schema": "ods.remote-provider-proof-record.v1",
+            "recorded": True,
+            "status": expected_status,
+        }
+        assert recorded_state["provider"]["transport"] == "ssh"
+        assert recorded_state["ssh"]["host"] == "gpu.example.test"
+        assert recorded_state["status"] == expected_status
+        assert "unit-test-provider-token" not in dumped
+        assert "unit-test-ssh-key" not in dumped
+        assert '"raw"' not in dumped
+
+    def test_rejects_failed_egress_probe_without_overwriting_route_proof(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        proof_payload = self._egress_probe_response()
+        proof_payload["probe"]["ok"] = False
+        proof_payload["probe"]["value"] = "unit-test-provider-token"
+        handler = _FakeHandler(json.dumps(proof_payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        dumped = json.dumps({"body": body, "state": recorded_state}, sort_keys=True)
+        assert handler.response_code == 400
+        assert body["error"] == "probe receipt must be successful"
+        assert recorded_state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
+        assert "unit-test-provider-token" not in dumped
+
+    def test_rejects_mismatched_egress_probe_transport(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        payload = self._ssh_configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(payload)
+        state = _mod._remote_provider_route_state_from_plan(plan)
+        (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        proof_payload = self._egress_probe_response()
+        proof_payload["transport"] = "direct"
+        handler = _FakeHandler(json.dumps(proof_payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_proof(handler)
+
+        body = handler.parse_response()
+        recorded_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        assert handler.response_code == 409
+        assert body["error"] == "remote-provider proof transport does not match active route"
+        assert recorded_state["status"] == {
+            "proven": False,
+            "reason": "pending-ssh-tunnel-proof",
+        }
+
+    def test_apply_test_does_not_write_state(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        probes = self._patch_successful_probe(monkeypatch)
+        payload = self._configure_payload()
+        payload["action"] = "test"
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 200
+        assert body["applied"] is True
+        assert body["mutated"] is False
+        assert body["probe"]["ok"] is True
+        assert body["probe"]["verifiedAt"] == "2026-07-26T00:00:00+00:00"
+        assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
+        assert probes[0][1] == "unit-test-provider-token"
+        assert "unit-test-provider-token" not in dumped
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_configure_probe_failure_does_not_write_state_or_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        def failing_probe(_route, *, provider_secret):
+            assert provider_secret == "unit-test-provider-token"
+            raise _mod._RemoteProviderProbeError(
+                502,
+                "provider_unreachable",
+                "remote provider probe failed: no route",
+            )
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", failing_probe)
+        handler = _FakeHandler(json.dumps(self._configure_payload()).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 502
+        assert body == {
+            "error": "remote provider probe failed: no route",
+            "code": "provider_unreachable",
+        }
+        assert "unit-test-provider-token" not in dumped
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_test_probe_failure_does_not_write_state_or_leak_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        def failing_probe(_route, *, provider_secret):
+            assert provider_secret == "unit-test-provider-token"
+            raise _mod._RemoteProviderProbeError(
+                502,
+                "provider_unreachable",
+                "remote provider probe failed: no route",
+            )
+
+        monkeypatch.setattr(_mod, "_probe_remote_provider_direct", failing_probe)
+        payload = self._configure_payload()
+        payload["action"] = "test"
+        handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        assert handler.response_code == 502
+        assert body == {
+            "error": "remote provider probe failed: no route",
+            "code": "provider_unreachable",
+        }
+        assert "unit-test-provider-token" not in dumped
+        assert not (tmp_path / "remote-provider").exists()
+
+    def test_apply_disable_keeps_existing_secret(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_path = root / "secrets" / "provider-api-key"
+        secret_path.parent.mkdir(parents=True)
+        secret_path.write_text("old-provider-token\n", encoding="utf-8")
+        (root / "routing-state.json").write_text(
+            json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
+            encoding="utf-8",
+        )
+        handler = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert handler.response_code == 200
+        assert state["enabled"] is False
+        assert state["provider"] is None
+        assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+
+    def test_apply_remove_deletes_route_state_and_secrets(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        root = tmp_path / "remote-provider"
+        secret_dir = root / "secrets"
+        secret_dir.mkdir(parents=True)
+        (root / "routing-state.json").write_text(
+            json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
+            encoding="utf-8",
+        )
+        for filename in ("provider-api-key", "peer-token", "ssh-identity", "known_hosts"):
+            (secret_dir / filename).write_text(f"{filename}\n", encoding="utf-8")
+        handler = _FakeHandler(json.dumps({"action": "remove"}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        assert handler.response_code == 200
+        assert not (root / "routing-state.json").exists()
+        assert not (secret_dir / "provider-api-key").exists()
+        assert not (secret_dir / "peer-token").exists()
+        assert not (secret_dir / "ssh-identity").exists()
+        assert not (secret_dir / "known_hosts").exists()
+
+    def test_apply_rolls_back_partial_write_failure(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        self._patch_successful_probe(monkeypatch)
+        root = tmp_path / "remote-provider"
+        secret_path = root / "secrets" / "provider-api-key"
+        secret_path.parent.mkdir(parents=True)
+        old_state = {
+            "schema": "ods.remote-routing-state.v1",
+            "enabled": True,
+            "provider": {"baseUrl": "https://old.example.test/v1"},
+        }
+        (root / "routing-state.json").write_text(json.dumps(old_state), encoding="utf-8")
+        secret_path.write_text("old-provider-token\n", encoding="utf-8")
+        real_atomic_write = _mod._atomic_write_text
+        failed_once = {"value": False}
+
+        def flaky_atomic_write(path, text, *args, **kwargs):
+            if path.name == "routing-state.json" and not failed_once["value"]:
+                failed_once["value"] = True
+                raise RuntimeError("simulated route-state write failure")
+            return real_atomic_write(path, text, *args, **kwargs)
+
+        monkeypatch.setattr(_mod, "_atomic_write_text", flaky_atomic_write)
+        handler = _FakeHandler(json.dumps(self._configure_payload()).encode("utf-8"))
+
+        _mod.AgentHandler._handle_remote_provider_apply(handler)
+
+        body = handler.parse_response()
+        dumped = json.dumps(body, sort_keys=True)
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert handler.response_code == 500
+        assert body["rollback"] == {"attempted": True, "ok": True}
+        assert state == old_state
+        assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+        assert "unit-test-provider-token" not in dumped
 
 
 class TestTailscaleStatus:
@@ -2121,6 +2844,8 @@ def env_update_env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
     monkeypatch.setattr(_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(_mod, "EXTENSIONS_DIR", install_dir / "extensions" / "services")
+    monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", data_dir / "user-extensions")
     monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
     return install_dir, data_dir
 
@@ -2148,6 +2873,26 @@ class TestHandleEnvUpdate:
         # backup file actually exists where the response says it does
         backup_files = list((data_dir / "config-backups").glob(".env.backup.*"))
         assert len(backup_files) == 1
+
+    def test_proxy_enabled_forces_auth_and_reports_saved_value(self, env_update_env):
+        install_dir, _ = env_update_env
+        proxy_dir = _mod.EXTENSIONS_DIR / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        body = _make_body(
+            "ODS_AGENT_KEY=newvalue\n WEBUI_AUTH = false\nWEBUI_AUTH=false\n"
+        )
+        handler = _FakeHandler(body)
+
+        _mod.AgentHandler._handle_env_update(handler)
+
+        assert handler.response_code == 200
+        env_text = (install_dir / ".env").read_text(encoding="utf-8")
+        assert env_text.count("WEBUI_AUTH=true") == 1
+        assert "WEBUI_AUTH=false" not in env_text
+        response = handler.parse_response()
+        assert response["enforced_values"] == {"WEBUI_AUTH": "true"}
+        assert "raw_text" not in response
 
     def test_413_oversize_body(self, env_update_env):
         # Construct headers claiming body is too large; rfile content is irrelevant.
@@ -2334,6 +3079,24 @@ class TestModelActivationOwnership:
         assert _mod._model_activation_target is None
         assert _mod._model_activate_lock.acquire(blocking=False)
         _mod._model_activate_lock.release()
+
+    def test_model_status_reports_activation_lifecycle(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        acquired, _active = _mod._begin_model_lifecycle("model_activation", "target-a")
+        assert acquired
+        try:
+            handler = _FakeHandler(b"")
+            _mod.AgentHandler._handle_model_status(handler)
+        finally:
+            _mod._end_model_lifecycle("model_activation")
+
+        assert handler.response_code == 200
+        response = handler.parse_response()
+        assert response["status"] == "idle"
+        assert response["lifecycleActive"] is True
+        assert response["activeOperation"] == "model_activation"
+        assert response["activeTarget"] == "target-a"
+        assert response["activeModelId"] == "target-a"
 
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
@@ -2874,6 +3637,17 @@ class TestModelActivationLemonadePersistence:
         monkeypatch.setattr(
             _mod, "_capture_perplexica_config", lambda *_args, **_kwargs: None
         )
+        monkeypatch.setattr(
+            _mod,
+            "_capture_container_state",
+            lambda _name: {"exists": False, "running": False},
+        )
+        monkeypatch.setattr(_mod, "_opencode_installed", lambda: False)
+        monkeypatch.setattr(
+            _mod,
+            "_capture_managed_opencode_state",
+            lambda: {"system": "Linux", "active": False},
+        )
         handler = _FakeHandler(b"")
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -3326,6 +4100,216 @@ class TestPrecreateDataDirs:
         # Named volume must not materialize as a directory anywhere we own.
         assert not (ext_dir / "named_vol").exists()
         assert not (install_dir / "named_vol").exists()
+
+
+class TestRootlessDataOwnershipRepair:
+    def test_runs_targeted_helper_for_builtin_linux_service(
+        self, tmp_path, monkeypatch,
+    ):
+        helper = tmp_path / "lib" / "rootless-ownership.sh"
+        helper.parent.mkdir()
+        helper.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(_mod, "_find_usable_bash", lambda: "/bin/bash")
+        monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return _mod.subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        _mod._repair_rootless_data_ownership("hermes")
+
+        assert calls[0][0] == [
+            "/bin/bash", str(helper), str(tmp_path), "hermes",
+        ]
+        assert calls[0][1]["env"]["DOCKER_HOST"].endswith("docker.sock")
+        assert calls[0][1]["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+
+    @pytest.mark.parametrize("system", ["Windows", "Darwin"])
+    def test_non_linux_is_side_effect_free(self, system, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: system)
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("helper ran outside Linux"),
+        )
+
+        _mod._repair_rootless_data_ownership("hermes")
+
+    def test_unsupported_service_is_side_effect_free(self, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("helper ran for unsupported service"),
+        )
+
+        _mod._repair_rootless_data_ownership("custom-extension")
+
+    def test_failure_prevents_compose_start(self, monkeypatch):
+        compose_calls = []
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: ["-f", "base.yml"])
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod,
+            "_repair_rootless_data_ownership",
+            lambda _sid: (_ for _ in ()).throw(RuntimeError("ownership mismatch")),
+        )
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *args, **kwargs: compose_calls.append(args),
+        )
+
+        ok, error = _mod.docker_compose_action("hermes", "start")
+
+        assert ok is False
+        assert error == "ownership mismatch"
+        assert compose_calls == []
+
+
+class TestProxyAuthStart:
+    def test_auth_is_persisted_and_applied_before_proxy_start(
+        self, tmp_path, monkeypatch,
+    ):
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "BIND_ADDRESS=127.0.0.1\nWEBUI_AUTH=false\nWEBUI_AUTH=false\n",
+            encoding="utf-8",
+        )
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod, "_repair_rootless_data_ownership", lambda _sid: None,
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("ods-proxy", "start")
+
+        assert ok is True
+        assert error == ""
+        assert env_path.read_text(encoding="utf-8").count("WEBUI_AUTH=true") == 1
+        assert "WEBUI_AUTH=false" not in env_path.read_text(encoding="utf-8")
+        assert calls[0][0][-5:] == [
+            "up", "-d", "--no-deps", "--force-recreate", "open-webui",
+        ]
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
+        assert calls[1][0][-3:] == ["up", "-d", "ods-proxy"]
+
+    def test_proxy_does_not_start_when_auth_recreate_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        (tmp_path / ".env").write_text(
+            "WEBUI_AUTH=false\n",
+            encoding="utf-8",
+        )
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, "", "recreate failed")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("ods-proxy", "start")
+
+        assert ok is False
+        assert "ods-proxy was not started" in error
+        assert len(calls) == 1
+        assert calls[0][-1] == "open-webui"
+        assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+            "WEBUI_AUTH=true\n"
+        )
+
+    def test_open_webui_start_keeps_auth_on_when_proxy_is_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        env_path = tmp_path / ".env"
+        env_path.write_text("WEBUI_AUTH=false\n", encoding="utf-8")
+        extensions_dir = tmp_path / "extensions" / "services"
+        proxy_dir = extensions_dir / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", extensions_dir)
+        monkeypatch.setattr(
+            _mod, "USER_EXTENSIONS_DIR", tmp_path / "data" / "user-extensions",
+        )
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+        monkeypatch.setattr(_mod, "_precreate_data_dirs", lambda _sid: None)
+        monkeypatch.setattr(
+            _mod, "_repair_rootless_data_ownership", lambda _sid: None,
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_action("open-webui", "start")
+
+        assert ok is True
+        assert error == ""
+        assert env_path.read_text(encoding="utf-8") == "WEBUI_AUTH=true\n"
+        assert calls[0][0][-3:] == ["up", "-d", "open-webui"]
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
+
+    def test_core_recreate_keeps_auth_on_when_proxy_is_enabled(
+        self, tmp_path, monkeypatch,
+    ):
+        extensions_dir = tmp_path / "extensions" / "services"
+        proxy_dir = extensions_dir / "ods-proxy"
+        proxy_dir.mkdir(parents=True)
+        (proxy_dir / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+        calls = []
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "EXTENSIONS_DIR", extensions_dir)
+        monkeypatch.setattr(
+            _mod, "USER_EXTENSIONS_DIR", tmp_path / "data" / "user-extensions",
+        )
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"open-webui"})
+        monkeypatch.setattr(
+            _mod, "resolve_compose_flags", lambda: ["-f", "base.yml"],
+        )
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        ok, error = _mod.docker_compose_recreate(["open-webui"])
+
+        assert ok is True
+        assert error == ""
+        assert calls[0][1]["env"]["WEBUI_AUTH"] == "true"
 
 
 class TestInstallRunningStateVerification:
@@ -4454,6 +5438,7 @@ class TestModelDownloadFileIntegrity:
         monkeypatch.setattr(_mod, "_model_download_proc", None)
         monkeypatch.setattr(_mod, "_model_download_cancelable", False)
         monkeypatch.setattr(_mod, "_model_download_cancel", self._NoCancel())
+        monkeypatch.setenv("ODS_MODEL_DOWNLOAD_ALLOWED_HOSTS", "huggingface.co,example.com")
         monkeypatch.setattr(
             _mod.subprocess,
             "run",
@@ -4497,6 +5482,85 @@ class TestModelDownloadFileIntegrity:
 
         monkeypatch.setattr(_mod.subprocess, "Popen", FakeProc)
         return outputs
+
+    @pytest.mark.parametrize(
+        ("url", "expected_error"),
+        [
+            (
+                "http://huggingface.co/org/repo/resolve/main/test-model.gguf",
+                "must use HTTPS",
+            ),
+            (
+                "https://models.example.com/test-model.gguf",
+                "host 'models.example.com' is not allowed",
+            ),
+        ],
+    )
+    def test_unsafe_artifact_url_is_rejected_before_download(
+        self,
+        tmp_path,
+        monkeypatch,
+        url,
+        expected_error,
+    ):
+        model = {
+            "gguf_file": "unsafe-model.gguf",
+            "gguf_url": url,
+            "gguf_sha256": "a" * 64,
+        }
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            library_models=[model],
+        )
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda *_args, **_kwargs: pytest.fail("HEAD request must not start"),
+        )
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: pytest.fail("curl download must not start"),
+        )
+
+        handler = _FakeHandler(json.dumps(model).encode("utf-8"))
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["status"] == "started"
+        _mod._model_download_thread.join(timeout=2)
+        assert not _mod._model_download_thread.is_alive()
+        status = json.loads(
+            (install_dir / "data" / "model-download-status.json").read_text(encoding="utf-8")
+        )
+        assert status["status"] == "failed"
+        assert expected_error in status["error"]
+
+    def test_artifact_url_policy_defaults_to_hugging_face_and_allows_env_override(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_MODEL_DOWNLOAD_ALLOWED_HOSTS", raising=False)
+
+        assert _mod._model_download_url_error(
+            "https://huggingface.co/org/repo/resolve/main/model.gguf"
+        ) == ""
+        assert "not allowed" in _mod._model_download_url_error(
+            "https://models.example.com/model.gguf"
+        )
+
+        (install_dir / ".env").write_text(
+            "ODS_MODEL_DOWNLOAD_ALLOWED_HOSTS=models.example.com\n",
+            encoding="utf-8",
+        )
+        assert _mod._model_download_url_error(
+            "https://models.example.com/model.gguf"
+        ) == ""
 
     def test_empty_existing_model_is_redownloaded(self, tmp_path, monkeypatch):
         install_dir = self._setup_env(tmp_path, monkeypatch)
@@ -4565,6 +5629,125 @@ class TestModelDownloadFileIntegrity:
         assert "not running" in body["error"]
         persisted = json.loads(status_path.read_text(encoding="utf-8"))
         assert persisted["status"] == "failed"
+
+    def test_model_status_schedules_stale_bootstrap_route_proof_without_inline_warmup(
+        self, tmp_path, monkeypatch,
+    ):
+        bootstrap_model = {
+            "id": "qwen3.5-2b-q4",
+            "gguf_file": "Qwen3.5-2B-Q4_K_M.gguf",
+            "llm_model_name": "qwen3.5-2b-q4",
+            "ctx_size": 65536,
+        }
+        full_model = {
+            "id": "qwen3-coder-next",
+            "gguf_file": "qwen3-coder-next-Q4_K_M.gguf",
+            "llm_model_name": "qwen3-coder-next",
+            "ctx_size": 131072,
+        }
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            library_models=[bootstrap_model, full_model],
+        )
+        env_path = install_dir / ".env"
+        env_path.write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=nvidia\n"
+            "GGUF_FILE=qwen3-coder-next-Q4_K_M.gguf\n"
+            "LLM_MODEL=qwen3-coder-next\n"
+            "CTX_SIZE=131072\n",
+            encoding="utf-8",
+        )
+        state_path = install_dir / "data" / "model-state.json"
+        _mod._switchboard_state.record_verified_route(
+            state_path,
+            catalog_id="qwen3.5-2b-q4",
+            runtime_model_id="Qwen3.5-2B-Q4_K_M.gguf",
+            backend_kind="llama-server",
+            endpoint_id="llama-server-default",
+            context_length=65536,
+            capabilities={
+                "chat": True,
+                "tools": False,
+                "vision": False,
+                "agentViable": True,
+            },
+            proof_identity="Qwen3.5-2B-Q4_K_M.gguf",
+        )
+        (install_dir / "data" / "bootstrap-status.json").write_text(
+            json.dumps({
+                "status": "complete",
+                "model": "qwen3-coder-next-Q4_K_M.gguf",
+            }),
+            encoding="utf-8",
+        )
+
+        readiness_calls = []
+
+        def readiness(*_args, **kwargs):
+            readiness_calls.append(kwargs)
+            return {
+                "identity": "qwen3-coder-next-Q4_K_M.gguf",
+                "contextLength": 131072,
+                "contextVerified": True,
+                "verifiedAt": "2026-07-21T00:00:00Z",
+            }
+
+        scheduled = []
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
+        monkeypatch.setattr(
+            _mod,
+            "_schedule_initial_switchboard_verification",
+            lambda reason: scheduled.append(reason),
+        )
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response() == {"status": "idle"}
+        assert readiness_calls == []
+        assert scheduled == ["model-status"]
+        doc = json.loads(state_path.read_text(encoding="utf-8"))
+        assert doc["active"]["catalogId"] == "qwen3.5-2b-q4"
+        assert doc["active"]["runtimeModelId"] == "Qwen3.5-2B-Q4_K_M.gguf"
+        assert doc["active"]["contextLength"] == 65536
+        assert doc["active"]["proof"] == {
+            "identity": "Qwen3.5-2B-Q4_K_M.gguf",
+            "completion": True,
+        }
+        assert doc["history"] == []
+
+    def test_model_status_schedules_route_proof_while_bootstrap_swap_is_verifying(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir = self._setup_env(tmp_path, monkeypatch)
+        (install_dir / "data" / "bootstrap-status.json").write_text(
+            json.dumps({
+                "status": "swapping",
+                "model": "test-model.gguf",
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_switchboard_state_needs_current_env_verification",
+            lambda _path: True,
+        )
+        scheduled = []
+        monkeypatch.setattr(
+            _mod,
+            "_schedule_initial_switchboard_verification",
+            lambda reason: scheduled.append(reason),
+        )
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response() == {"status": "idle"}
+        assert scheduled == ["model-status"]
 
     def test_empty_finished_download_is_failed_not_complete(self, tmp_path, monkeypatch):
         install_dir = self._setup_env(tmp_path, monkeypatch)
@@ -4666,6 +5849,119 @@ class TestModelDownloadFileIntegrity:
         assert any(cmd and cmd[0] == sys.executable for cmd in calls)
         status = json.loads((install_dir / "data" / "model-download-status.json").read_text(encoding="utf-8"))
         assert status["status"] == "complete"
+
+    def test_huggingface_fallback_reports_active_status(self, tmp_path, monkeypatch):
+        payload = b"downloaded through hf hub"
+        model = {
+            "gguf_file": "hf-model.gguf",
+            "gguf_url": "https://huggingface.co/org/model-GGUF/resolve/main/subdir/hf-model.gguf",
+            "gguf_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            library_models=[model],
+            expected_payload=payload,
+        )
+        (install_dir / ".env").write_text(
+            "HF_TOKEN=hf_persisted_read_token\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HF_HUB_ETAG_TIMEOUT", raising=False)
+        monkeypatch.delenv("HF_HUB_DOWNLOAD_TIMEOUT", raising=False)
+        child_envs = []
+        status_path = install_dir / "data" / "model-download-status.json"
+        part_tmp = install_dir / "data" / "models" / "hf-model.gguf.part"
+
+        class HubProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.cmd = cmd
+                self.returncode = None
+                child_envs.append(kwargs.get("env", {}))
+
+            def communicate(self, timeout=None):
+                deadline = time.time() + 2
+                while time.time() < deadline and not status_path.exists():
+                    time.sleep(0.01)
+                dest = Path(self.cmd[6])
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(payload)
+                self.returncode = 0
+                return "", ""
+
+            def wait(self, timeout=None):
+                return self.returncode if self.returncode is not None else 0
+
+            def kill(self):
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", HubProc)
+
+        ok, error = _mod._download_huggingface_artifact(
+            model["gguf_url"],
+            part_tmp,
+            self._NoCancel(),
+            status_path=status_path,
+            status_label=model["gguf_file"],
+            part_total=len(payload),
+            status_error="Retry 1/3: curl exited with code 35",
+        )
+
+        assert ok is True
+        assert error == ""
+        assert child_envs[0]["HF_HUB_ETAG_TIMEOUT"] == "30"
+        assert child_envs[0]["HF_HUB_DOWNLOAD_TIMEOUT"] == "30"
+        assert child_envs[0]["HF_TOKEN"] == "hf_persisted_read_token"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert status["status"] == "downloading"
+        assert status["model"] == "hf-model.gguf"
+        assert status["bytesTotal"] == len(payload)
+        assert "curl exited with code 35" in status["error"]
+        assert "Hugging Face Hub fallback active" in status["error"]
+
+    def test_huggingface_fallback_timeout_is_bounded(self, tmp_path, monkeypatch):
+        model = {
+            "gguf_file": "hf-model.gguf",
+            "gguf_url": "https://huggingface.co/org/model-GGUF/resolve/main/subdir/hf-model.gguf",
+            "gguf_sha256": hashlib.sha256(b"payload").hexdigest(),
+        }
+        install_dir = self._setup_env(tmp_path, monkeypatch, library_models=[model])
+        monkeypatch.setenv("ODS_HF_HUB_FALLBACK_TIMEOUT_SECONDS", "1")
+        part_tmp = install_dir / "data" / "models" / "hf-model.gguf.part"
+        timeouts = []
+
+        class HangingHubProc:
+            def __init__(self, cmd, *args, **kwargs):
+                self.cmd = cmd
+                self.returncode = None
+                self.killed = False
+
+            def communicate(self, timeout=None):
+                timeouts.append(timeout)
+                if self.killed:
+                    self.returncode = -9
+                    return "", ""
+                raise subprocess.TimeoutExpired(self.cmd, timeout)
+
+            def wait(self, timeout=None):
+                return self.returncode if self.returncode is not None else -9
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", HangingHubProc)
+
+        ok, error = _mod._download_huggingface_artifact(
+            model["gguf_url"],
+            part_tmp,
+            self._NoCancel(),
+        )
+
+        assert ok is False
+        assert timeouts[0] == 30
+        assert "Hugging Face Hub fallback timed out after 30s" in error
 
     def test_split_download_skips_existing_non_empty_parts(self, tmp_path, monkeypatch):
         parts = [
@@ -4983,3 +6279,368 @@ def test_read_json_body_rejects_non_object():
 def test_read_json_body_accepts_object():
     handler = _FakeHandler(b'{"a": 1}')
     assert _mod.read_json_body(handler) == {"a": 1}
+
+
+class TestWindowsObservability:
+
+    def test_adapter_selection_prefers_configured_discrete_amd(self, monkeypatch):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        adapters = [
+            {"name": "AMD Radeon Graphics", "vendor_id": 0x1002, "memory_total_mb": 512, "software": False},
+            {"name": "Microsoft Basic Render Driver", "vendor_id": 0x1414, "memory_total_mb": 0, "software": True},
+            {"name": "AMD Radeon RX 9070 XT", "vendor_id": 0x1002, "memory_total_mb": 16368, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters, "Radeon RX 9070 XT")
+
+        assert [item["name"] for item in selected] == ["AMD Radeon RX 9070 XT"]
+
+    def test_adapter_selection_supports_identical_multi_gpu(self, monkeypatch):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "nvidia")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "2")
+        adapters = [
+            {"name": "NVIDIA RTX PRO 6000", "vendor_id": 0x10DE, "memory_total_mb": 97887, "software": False},
+            {"name": "NVIDIA RTX PRO 6000", "vendor_id": 0x10DE, "memory_total_mb": 97887, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters, "RTX PRO 6000 \u00d7 2")
+
+        assert len(selected) == 2
+
+    def test_adapter_selection_infers_all_discrete_amd_without_persisted_count(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        adapters = [
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+        ]
+
+        assert len(_mod._select_windows_gpu_adapters(adapters)) == 2
+
+    def test_adapter_selection_does_not_collapse_configured_dual_amd_without_count(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        adapters = [
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+            {"name": "AMD Radeon RX 7800 XT", "vendor_id": 0x1002, "memory_total_mb": 16368, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters, "AMD Radeon RX 7900 XTX")
+
+        assert [item["name"] for item in selected] == [
+            "AMD Radeon RX 7900 XTX", "AMD Radeon RX 7800 XT",
+        ]
+
+    def test_adapter_selection_excludes_integrated_amd_when_discrete_exists(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        adapters = [
+            {"name": "AMD Radeon Graphics", "vendor_id": 0x1002, "memory_total_mb": 512, "software": False},
+            {"name": "AMD Radeon RX 9070 XT", "vendor_id": 0x1002, "memory_total_mb": 16368, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters)
+
+        assert [item["name"] for item in selected] == ["AMD Radeon RX 9070 XT"]
+
+    def test_windows_gpu_metrics_are_bounded_and_cached(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("HOST_GPU_NAME=AMD Radeon RX 9070 XT\n")
+        monkeypatch.setattr(_mod, "_windows_gpu_metrics_cache", (0.0, None))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters_cache", (0.0, []))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters", lambda: [{
+            "name": "AMD Radeon RX 9070 XT", "vendor_id": 0x1002,
+            "memory_total_mb": 16368, "luid_high": 1, "luid_low": 2,
+            "shared_memory_total_mb": 16384,
+            "software": False,
+        }])
+        calls = []
+
+        def run(*args, **kwargs):
+            calls.append(args[0])
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"adapters": [{
+                    "prefix": "luid_0x00000001_0x00000002",
+                    "utilization_percent": 140,
+                    "utilization_available": True,
+                    "dedicated_used_bytes": 99 * 1024**3,
+                    "shared_used_bytes": 0,
+                    "memory_usage_available": True,
+                }]}),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", run)
+
+        first = _mod._windows_gpu_metrics()
+        second = _mod._windows_gpu_metrics()
+
+        assert first == second
+        assert first["utilization_percent"] == 100
+        assert first["memory_used_mb"] == first["memory_total_mb"]
+        assert first["temperature_available"] is False
+        assert first["gpus"][0]["uuid"] == "luid-00000001-00000002"
+        assert len(calls) == 1
+
+    def test_windows_unified_gpu_uses_shared_memory_and_system_ram(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("SYSTEM_RAM_GB=128\n")
+        monkeypatch.setattr(_mod, "_windows_gpu_metrics_cache", (0.0, None))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters_cache", (0.0, []))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters", lambda: [{
+            "name": "AMD Radeon 8060S Graphics", "vendor_id": 0x1002,
+            "memory_total_mb": 2048, "shared_memory_total_mb": 65536,
+            "luid_high": 3, "luid_low": 4, "software": False,
+        }])
+        monkeypatch.setattr(_mod.subprocess, "run", lambda *args, **kwargs: types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"adapters": [{
+                "prefix": "luid_0x00000003_0x00000004",
+                "utilization_percent": 61,
+                "utilization_available": True,
+                "dedicated_used_bytes": 1024 * 1024**2,
+                "shared_used_bytes": 8 * 1024**3,
+                "memory_usage_available": True,
+            }]}),
+            stderr="",
+        ))
+
+        payload = _mod._windows_gpu_metrics()
+
+        assert payload["memory_type"] == "unified"
+        assert payload["memory_total_mb"] == 96 * 1024
+        assert payload["memory_used_mb"] == 9 * 1024
+        assert payload["gpus"][0]["memory_type"] == "unified"
+
+    def test_windows_llm_health_survives_optional_stats_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("AMD_INFERENCE_PORT=99999\n")
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+        requested = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                return b'{"status":"ok","model_loaded":"test"}'
+
+        def urlopen(url, timeout):
+            requested_url = url.full_url if hasattr(url, "full_url") else str(url)
+            requested.append(requested_url)
+            if requested_url.endswith("/stats"):
+                raise _mod.urllib_error.URLError("not supported")
+            return Response()
+
+        monkeypatch.setattr(_mod.urllib_request, "urlopen", urlopen)
+
+        payload = _mod._windows_llm_status()
+
+        assert payload["health"]["status"] == "ok"
+        assert payload["stats"] is None
+        assert requested[0] == "http://127.0.0.1:8080/api/v1/health"
+
+    def test_windows_llm_status_redacts_runtime_paths(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text(
+            "AMD_INFERENCE_PORT=8080\nLEMONADE_API_KEY=secret-key\n"
+        )
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+        auth_headers = []
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                return json.dumps(self.payload).encode("utf-8")
+
+        def urlopen(url, timeout):
+            requested_url = url.full_url if hasattr(url, "full_url") else str(url)
+            auth_headers.append(url.get_header("Authorization"))
+            if requested_url.endswith("/health"):
+                return Response({
+                    "status": "ok", "version": "10.0.0",
+                    "model_loaded": r"C:\Users\private\model.gguf",
+                    "all_models_loaded": [{"checkpoint": r"C:\Users\private\model.gguf", "last_use": 123}],
+                })
+            return Response({"output_tokens": 7, "tokens_per_second": 188.49})
+
+        monkeypatch.setattr(_mod.urllib_request, "urlopen", urlopen)
+
+        payload = _mod._windows_llm_status()
+
+        assert payload["health"] == {
+            "status": "ok", "version": "10.0.0", "model_loaded": "model.gguf",
+        }
+        assert set(payload["stats"]) == {
+            "time_to_first_token", "tokens_per_second", "input_tokens",
+            "output_tokens", "prompt_tokens",
+        }
+        assert "private" not in json.dumps(payload)
+        assert auth_headers == ["Bearer secret-key", "Bearer secret-key"]
+
+    def test_windows_llm_stats_exclude_unrelated_health_fields(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("AMD_INFERENCE_PORT=8080\n")
+        health_counter = iter((1, 2))
+
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                return json.dumps(self.payload).encode("utf-8")
+
+        def urlopen(url, timeout):
+            if url.full_url.endswith("/health"):
+                return Response({
+                    "status": "ok", "model_loaded": "model",
+                    "unrelated_health_counter": next(health_counter),
+                })
+            return Response({
+                "output_tokens": 7, "tokens_per_second": 42.0,
+                "last_use": "2026-07-20T22:00:00Z",
+            })
+
+        monkeypatch.setattr(_mod.urllib_request, "urlopen", urlopen)
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+        first = _mod._windows_llm_status()
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+        second = _mod._windows_llm_status()
+
+        assert first["stats"] == second["stats"]
+
+    def test_windows_llm_rejects_oversized_runtime_response(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("AMD_INFERENCE_PORT=8080\n")
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size=-1):
+                return b"x" * size
+
+        monkeypatch.setattr(_mod.urllib_request, "urlopen", lambda *args, **kwargs: Response())
+
+        assert _mod._windows_llm_status() is None
+
+
+class TestDockerServiceHealthSnapshot:
+
+    def test_uses_compose_service_labels_and_caches_snapshot(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_service_health_cache", (0.0, None))
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[1] == "ps":
+                return types.SimpleNamespace(returncode=0, stdout="ods-dashboard\n", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps([{
+                "Name": "/ods-dashboard",
+                "State": {"Status": "running", "Health": {"Status": "healthy"}},
+                "Config": {"Labels": {"com.docker.compose.service": "dashboard"}},
+            }]), stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", run)
+
+        first = _mod._docker_service_health_snapshot()
+        second = _mod._docker_service_health_snapshot()
+
+        assert first == second
+        assert first["containers"] == [{
+            "service_id": "dashboard",
+            "container_name": "ods-dashboard",
+            "state": "running",
+            "health": "healthy",
+        }]
+        assert len(calls) == 2
+
+
+class TestObservabilityWire:
+
+    def test_read_only_endpoints_require_auth_and_return_versioned_contracts(
+        self, monkeypatch,
+    ):
+        import urllib.error
+        import urllib.request
+        from http.server import HTTPServer
+
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+        monkeypatch.setattr(_mod, "_windows_gpu_metrics", lambda: {
+            "schema_version": "ods.host-gpu-metrics.v1", "name": "GPU",
+        })
+        monkeypatch.setattr(_mod, "_windows_llm_status", lambda: {
+            "schema_version": "ods.host-llm-status.v1", "health": {"status": "ok"},
+        })
+        monkeypatch.setattr(_mod, "_docker_service_health_snapshot", lambda: {
+            "schema_version": "ods.host-service-health.v1", "containers": [],
+        })
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/gpu/metrics", timeout=2)
+            assert denied.value.code == 401
+
+            expected = {
+                "/v1/gpu/metrics": "ods.host-gpu-metrics.v1",
+                "/v1/llm/status": "ods.host-llm-status.v1",
+                "/v1/service/health": "ods.host-service-health.v1",
+            }
+            for path, schema_version in expected.items():
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}",
+                    headers={"Authorization": "Bearer wire-test-secret"},
+                )
+                with urllib.request.urlopen(request, timeout=2) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                assert response.status == 200
+                assert payload["schema_version"] == schema_version
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)

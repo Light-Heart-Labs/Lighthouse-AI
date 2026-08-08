@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Optional
 
@@ -49,6 +51,138 @@ router = APIRouter(tags=["extensions"])
 
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _MAX_EXTENSION_BYTES = 50 * 1024 * 1024  # 50 MB
+_LIBRARY_RECEIPT = ".ods-library-receipt.json"
+_LIBRARY_RECEIPT_SCHEMA = 1
+_extension_digest_cache: dict[str, tuple[tuple, str]] = {}
+_extension_digest_cache_lock = threading.Lock()
+
+
+def _invalidate_extension_digest_cache(*roots: Path) -> None:
+    with _extension_digest_cache_lock:
+        for root in roots:
+            _extension_digest_cache.pop(str(root.resolve(strict=False)), None)
+
+
+def _extension_tree_digest(root: Path) -> str:
+    """Return a deterministic digest for extension definitions under root."""
+    entries: list[tuple] = []
+    paths = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if relative == _LIBRARY_RECEIPT:
+            continue
+        canonical = "compose.yaml" if relative == "compose.yaml.disabled" else relative
+        if path.is_symlink():
+            entries.append(("L", canonical, os.readlink(path)))
+        elif path.is_dir():
+            stat_result = path.stat()
+            entries.append((
+                "D", canonical, stat_result.st_mtime_ns, stat_result.st_ctime_ns,
+            ))
+        elif path.is_file():
+            stat_result = path.stat()
+            entries.append((
+                "F", canonical, stat_result.st_size, stat_result.st_mtime_ns,
+                stat_result.st_ctime_ns,
+                bool(stat_result.st_mode & 0o111),
+            ))
+    signature = tuple(entries)
+    cache_key = str(root.resolve())
+    with _extension_digest_cache_lock:
+        cached = _extension_digest_cache.get(cache_key)
+        if cached and cached[0] == signature:
+            return cached[1]
+
+    digest = hashlib.sha256()
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        if relative == _LIBRARY_RECEIPT:
+            continue
+        canonical = "compose.yaml" if relative == "compose.yaml.disabled" else relative
+        if path.is_symlink():
+            digest.update(f"L\0{canonical}\0{os.readlink(path)}\0".encode())
+            continue
+        if path.is_dir():
+            digest.update(f"D\0{canonical}\0".encode())
+            continue
+        if not path.is_file():
+            continue
+        executable = bool(path.stat().st_mode & 0o111)
+        digest.update(f"F\0{canonical}\0{int(executable)}\0".encode())
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    result = digest.hexdigest()
+    with _extension_digest_cache_lock:
+        _extension_digest_cache[cache_key] = (signature, result)
+    return result
+
+
+def _read_library_receipt(extension_dir: Path) -> dict | None:
+    receipt_path = extension_dir / _LIBRARY_RECEIPT
+    try:
+        data = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("schema_version") != _LIBRARY_RECEIPT_SCHEMA:
+        return None
+    required = ("source_digest", "installed_digest")
+    if any(not isinstance(data.get(key), str) or not data[key] for key in required):
+        return None
+    return data
+
+
+def _write_library_receipt(
+    extension_dir: Path,
+    *,
+    source_digest: str,
+    installed_digest: str,
+) -> None:
+    receipt = {
+        "schema_version": _LIBRARY_RECEIPT_SCHEMA,
+        "source_digest": source_digest,
+        "installed_digest": installed_digest,
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    receipt_path = extension_dir / _LIBRARY_RECEIPT
+    temporary = receipt_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(receipt, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, receipt_path)
+
+
+def _library_update_state(service_id: str) -> dict:
+    """Describe update/rollback state for one user-installed library extension."""
+    installed = USER_EXTENSIONS_DIR / service_id
+    source = EXTENSIONS_LIBRARY_DIR / service_id
+    backup = USER_EXTENSIONS_DIR / ".backups" / service_id
+    state = {
+        "update_status": "unavailable",
+        "update_available": False,
+        "locally_modified": False,
+        "rollback_available": backup.is_dir() and not backup.is_symlink(),
+    }
+    if not installed.is_dir() or not source.is_dir() or not (source / "compose.yaml").is_file():
+        return state
+    receipt = _read_library_receipt(installed)
+    if receipt is None:
+        state["update_status"] = "untracked"
+        return state
+    try:
+        source_digest = _extension_tree_digest(source)
+        installed_digest = _extension_tree_digest(installed)
+    except OSError:
+        state["update_status"] = "unknown"
+        return state
+    state["update_available"] = source_digest != receipt["source_digest"]
+    state["locally_modified"] = installed_digest != receipt["installed_digest"]
+    if state["locally_modified"]:
+        state["update_status"] = "modified"
+    elif state["update_available"]:
+        state["update_status"] = "available"
+    else:
+        state["update_status"] = "current"
+    return state
 
 
 def _is_stale(iso_timestamp: str, max_age_seconds: int) -> bool:
@@ -59,6 +193,26 @@ def _is_stale(iso_timestamp: str, max_age_seconds: int) -> bool:
         return age > max_age_seconds
     except (ValueError, TypeError, AttributeError):
         return True
+
+
+def _progress_blocks_mutation(progress: dict | None) -> bool:
+    """True while an in-flight operation should block update/rollback.
+
+    A routine synchronous start writes an initial 'pulling' record that the
+    agent's sync path never advances or clears; mirroring
+    _compute_extension_status, a never-advanced record (started_at ==
+    updated_at) older than 2 minutes is treated as abandoned instead of
+    blocking mutations for the full progress TTL.
+    """
+    if not progress:
+        return False
+    if progress.get("status") not in {"pulling", "setup_hook", "starting"}:
+        return False
+    started = progress.get("started_at", "")
+    updated = progress.get("updated_at", "")
+    if started and started == updated and _is_stale(updated, max_age_seconds=120):
+        return False
+    return True
 
 
 def _read_progress(service_id: str) -> dict | None:
@@ -141,7 +295,7 @@ def _clear_progress(service_id: str) -> None:
         logger.warning("Failed to clear progress file for %s: %s", service_id, exc)
 
 
-def _sync_extension_config(service_id: str) -> bool:
+def _sync_extension_config(service_id: str, *, preserve_existing: bool = False) -> bool:
     """Ask host agent to copy config/<id>/ from an installed extension
     into INSTALL_DIR/config/.
 
@@ -157,7 +311,7 @@ def _sync_extension_config(service_id: str) -> bool:
     extension has no config/ subdir), False if the agent rejected the
     request or was unreachable.
     """
-    return _call_agent_sync_config(service_id)
+    return _call_agent_sync_config(service_id, preserve_existing=preserve_existing)
 
 
 def _is_one_shot_extension(ext: dict) -> bool:
@@ -644,7 +798,7 @@ def _get_service_data_info(service_id: str) -> dict | None:
 
 # --- Host Agent Helpers ---
 
-_AGENT_TIMEOUT = 300  # seconds — image pulls can take several minutes on first install
+_AGENT_TIMEOUT = 660  # seconds — exceed the host agent's 600s start allowance
 _AGENT_LOG_TIMEOUT = 30  # seconds — log fetches should be fast
 
 
@@ -753,7 +907,7 @@ def _call_agent_install(service_id: str) -> bool:
         return False
 
 
-def _call_agent_sync_config(service_id: str) -> bool:
+def _call_agent_sync_config(service_id: str, *, preserve_existing: bool = False) -> bool:
     """Ask host agent to copy <ext>/config/* into INSTALL_DIR/config/.
 
     The dashboard-api container has /ods/config bind-mounted
@@ -765,12 +919,29 @@ def _call_agent_sync_config(service_id: str) -> bool:
     was unreachable.
     """
     try:
-        request_agent_json(
+        response = request_agent_json(
             "POST",
             "/v1/extension/sync_config",
-            payload={"service_id": service_id},
+            payload={
+                "service_id": service_id,
+                "preserve_existing": preserve_existing,
+            },
             timeout=_AGENT_TIMEOUT,
         )
+        if preserve_existing and (
+            not isinstance(response, dict)
+            or response.get("preserve_existing") is not True
+        ):
+            # An agent that predates preserve_existing ignores the flag and
+            # full-copies definition defaults over user config (ODS
+            # self-upgrade window). Treat the missing echo as failure so the
+            # caller's recovery path runs instead of reporting a clean sync.
+            logger.warning(
+                "sync_config for %s did not confirm preserve_existing; "
+                "host agent is likely outdated — restart it and retry",
+                service_id,
+            )
+            return False
         return True
     except AgentHTTPError as exc:
         logger.warning(
@@ -825,9 +996,8 @@ def _check_agent_health() -> bool:
 
 
 @contextlib.contextmanager
-def _extensions_lock():
-    """Acquire an exclusive file lock for extension mutations."""
-    lock_path = _extensions_lock_path()
+def _exclusive_file_lock(lock_path: Path):
+    """Acquire a cross-process exclusive lock for one lock file."""
     lockfile = open(lock_path, "a+b")
     try:
         if fcntl is not None:
@@ -851,6 +1021,40 @@ def _extensions_lock():
             lockfile.close()
 
 
+@contextlib.contextmanager
+def _extensions_lock():
+    """Acquire the global lock for short extension filesystem mutations."""
+    with _exclusive_file_lock(_extensions_lock_path()):
+        yield
+
+
+@contextlib.contextmanager
+def _extension_operation_lock(service_id: str):
+    """Serialize the complete lifecycle transaction for one extension."""
+    lock_parent = _extensions_lock_path().parent.resolve()
+    lock_dir = lock_parent / ".extension-operation-locks"
+    if lock_dir.is_symlink():
+        raise OSError("Extension operation lock directory is a symlink")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    if not lock_dir.resolve().is_relative_to(lock_parent):
+        raise OSError("Invalid extension operation lock directory")
+    lock_name = hashlib.sha256(service_id.encode("utf-8")).hexdigest() + ".lock"
+    with _exclusive_file_lock(lock_dir / lock_name):
+        yield
+
+
+def _serialize_extension_operation(func):
+    """Keep same-service portal mutations serialized through runtime proof."""
+    @wraps(func)
+    def wrapped(service_id: str, *args, **kwargs):
+        if not _SERVICE_ID_RE.match(service_id):
+            return func(service_id, *args, **kwargs)
+        with _extension_operation_lock(service_id):
+            return func(service_id, *args, **kwargs)
+
+    return wrapped
+
+
 def _extensions_lock_candidates() -> list[Path]:
     data_path = Path(DATA_DIR)
     return [
@@ -864,6 +1068,15 @@ def _extensions_lock_path() -> Path:
     for lock_path in _extensions_lock_candidates():
         try:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
+            operation_lock_dir = lock_path.parent / ".extension-operation-locks"
+            if operation_lock_dir.is_symlink():
+                raise OSError("Extension operation lock directory is a symlink")
+            operation_lock_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=operation_lock_dir,
+                prefix=".write-probe-",
+            ):
+                pass
             lock_path.touch(exist_ok=True)
             if lock_path != Path(DATA_DIR) / ".extensions-lock":
                 logger.warning("extensions lock falling back to %s", lock_path)
@@ -931,6 +1144,16 @@ async def extensions_catalog(
                 status="healthy", response_time_ms=None,
             )
 
+    user_extension_ids = [
+        entry["id"] for entry in EXTENSION_CATALOG
+        if (USER_EXTENSIONS_DIR / entry["id"]).is_dir()
+    ]
+    update_results = await asyncio.gather(*[
+        asyncio.to_thread(_library_update_state, service_id)
+        for service_id in user_extension_ids
+    ])
+    update_states = dict(zip(user_extension_ids, update_results))
+
     extensions = []
     for ext in EXTENSION_CATALOG:
         status = _compute_extension_status(ext, services_by_id)
@@ -939,6 +1162,12 @@ async def extensions_catalog(
         user_dir = USER_EXTENSIONS_DIR / ext_id
         source = "user" if user_dir.is_dir() else ("core" if ext_id in SERVICES else "library")
         has_data = (Path(DATA_DIR) / ext_id).is_dir()
+        update_state = update_states.get(ext_id, {
+            "update_status": "unavailable",
+            "update_available": False,
+            "locally_modified": False,
+            "rollback_available": False,
+        })
         enriched = {
             **ext,
             "status": status,
@@ -948,10 +1177,14 @@ async def extensions_catalog(
             "depends_on": ext.get("depends_on", []),
             "dependents": [],
             "dependency_status": {},
+            **update_state,
         }
         llm_contract = _llm_contract_for_extension(ext)
         if llm_contract is not None:
             enriched["llm"] = llm_contract
+        service_config = SERVICES.get(ext_id, {})
+        if service_config.get("public_url"):
+            enriched["public_url"] = service_config["public_url"]
         # Surface install-failure reason inline. The progress file already
         # records `error` (set by _write_error_progress) but it lives behind
         # a separate /progress endpoint, so a caller seeing `status: "error"`
@@ -1003,6 +1236,7 @@ async def extensions_catalog(
         "error": sum(1 for e in extensions if e["status"] == "error"),
         "not_installed": sum(1 for e in extensions if e["status"] == "not_installed"),
         "incompatible": sum(1 for e in extensions if e["status"] == "incompatible"),
+        "updates_available": sum(1 for e in extensions if e["update_available"]),
     }
 
     try:
@@ -1087,10 +1321,18 @@ async def extension_detail(
     status = _compute_extension_status(ext, services_by_id)
     installable = _is_installable(service_id)
     llm_contract = _llm_contract_for_extension(ext)
+    service_config = SERVICES.get(service_id, {})
+    public_url = service_config.get("public_url") or None
     manifest = {**ext, **({"llm": llm_contract} if llm_contract is not None else {})}
 
     user_dir = USER_EXTENSIONS_DIR / service_id
     source = "user" if user_dir.is_dir() else ("core" if service_id in SERVICES else "library")
+    update_state = await asyncio.to_thread(_library_update_state, service_id) if source == "user" else {
+        "update_status": "unavailable",
+        "update_available": False,
+        "locally_modified": False,
+        "rollback_available": False,
+    }
 
     # See extensions_catalog: same rationale for inlining the install error.
     error_message: Optional[str] = None
@@ -1108,9 +1350,11 @@ async def extension_detail(
         "source": source,
         "installable": installable,
         "llm": llm_contract,
+        "public_url": public_url,
         "manifest": manifest,
         "env_vars": ext.get("env_vars", []),
         "features": ext.get("features", []),
+        **update_state,
         "setup_instructions": {
             "steps": [
                 f"Run 'ods enable {service_id}' to install and start the service",
@@ -1150,16 +1394,9 @@ async def extension_logs(
         raise HTTPException(status_code=502, detail=f"Invalid host agent response: {exc}") from exc
 
 
-def _install_from_library(service_id: str) -> None:
-    """Copy an extension from the library to USER_EXTENSIONS_DIR atomically.
-
-    Must be called inside _extensions_lock() by the caller. Performs the
-    library path check, size check, and atomic stage+rename. Does NOT call
-    hooks or start the container — that's the caller's responsibility.
-
-    Raises HTTPException on failure.
-    """
-    # Verify library is accessible
+@contextlib.contextmanager
+def _staged_library_extension(service_id: str, dest: Path):
+    """Yield a validated, rewritten library copy on the destination filesystem."""
     try:
         lib_available = EXTENSIONS_LIBRARY_DIR.is_dir()
     except OSError:
@@ -1197,23 +1434,6 @@ def _install_from_library(service_id: str) -> None:
             ),
         )
 
-    dest = USER_EXTENSIONS_DIR / service_id
-
-    # Re-check under lock to prevent double-install race
-    if dest.exists():
-        has_compose = (dest / "compose.yaml").exists()
-        has_disabled = (dest / "compose.yaml.disabled").exists()
-        if (has_compose or has_disabled) and not _has_error_progress(service_id):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Extension already installed: {service_id}",
-            )
-        # Broken or failed directory — clean up before reinstall.
-        logger.warning("Cleaning up extension directory under lock before retry: %s", dest)
-        shutil.rmtree(dest)
-        _clear_progress(service_id)
-
-    # Size check
     total_size = 0
     for root, _dirs, files in os.walk(source):
         for f in files:
@@ -1226,10 +1446,15 @@ def _install_from_library(service_id: str) -> None:
 
     USER_EXTENSIONS_DIR.mkdir(parents=True, exist_ok=True)
     tmp_parent = USER_EXTENSIONS_DIR / ".tmp"
+    if tmp_parent.is_symlink():
+        raise HTTPException(status_code=409, detail="Extension temporary path is a symlink")
     tmp_parent.mkdir(parents=True, exist_ok=True)
     tmpdir = tempfile.mkdtemp(prefix=f".{service_id}-", dir=str(tmp_parent))
+    staged: Path | None = None
     try:
         staged = Path(tmpdir) / service_id
+        _invalidate_extension_digest_cache(source)
+        source_digest_before = _extension_tree_digest(source)
         _copytree_safe(source, staged)
         # Security scan the staged copy (prevents TOCTOU)
         staged_compose = staged / "compose.yaml"
@@ -1241,10 +1466,54 @@ def _install_from_library(service_id: str) -> None:
             # (INSTALL_DIR), not the extension dir, so "context: ." would
             # look for the Dockerfile in INSTALL_DIR/Dockerfile and fail.
             _rewrite_build_context(staged_compose, dest.resolve())
-        os.rename(str(staged), str(dest))
+        _invalidate_extension_digest_cache(source)
+        source_digest_after = _extension_tree_digest(source)
+        if source_digest_before != source_digest_after:
+            raise HTTPException(
+                status_code=409,
+                detail="Extension library changed while the update was being staged; retry",
+            )
+        yield staged, source_digest_after
     finally:
+        if staged is not None:
+            _invalidate_extension_digest_cache(staged)
         if Path(tmpdir).exists():
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _install_from_library(service_id: str) -> None:
+    """Copy an extension from the library to USER_EXTENSIONS_DIR atomically.
+
+    Must be called inside _extensions_lock() by the caller. Performs the
+    library path check, size check, and atomic stage+rename. Does NOT call
+    hooks or start the container — that's the caller's responsibility.
+
+    Raises HTTPException on failure.
+    """
+    dest = USER_EXTENSIONS_DIR / service_id
+
+    # Re-check under lock to prevent double-install race.
+    if dest.exists():
+        has_compose = (dest / "compose.yaml").exists()
+        has_disabled = (dest / "compose.yaml.disabled").exists()
+        if (has_compose or has_disabled) and not _has_error_progress(service_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Extension already installed: {service_id}",
+            )
+        logger.warning("Cleaning up extension directory under lock before retry: %s", dest)
+        shutil.rmtree(dest)
+        _clear_progress(service_id)
+
+    with _staged_library_extension(service_id, dest) as (staged, source_digest):
+        installed_digest = _extension_tree_digest(staged)
+        _write_library_receipt(
+            staged,
+            source_digest=source_digest,
+            installed_digest=installed_digest,
+        )
+        os.rename(str(staged), str(dest))
+        _invalidate_extension_digest_cache(dest)
 
 
 def _rewrite_build_context(compose_path: Path, final_dir: Path) -> None:
@@ -1334,6 +1603,7 @@ def _rewrite_build_context(compose_path: Path, final_dir: Path) -> None:
 
 
 @router.post("/api/extensions/{service_id}/install")
+@_serialize_extension_operation
 def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
     """Install an extension from the library."""
     _validate_service_id(service_id)
@@ -1396,6 +1666,382 @@ def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
             "Extension installed and starting." if agent_ok
             else "Extension installed. Run 'ods restart' to start."
         ),
+    }
+
+
+def _extension_backup_dir(service_id: str) -> Path:
+    return USER_EXTENSIONS_DIR / ".backups" / service_id
+
+
+def _set_extension_compose_state(extension_dir: Path, *, enabled: bool) -> bool:
+    """Normalize an extension definition to the requested operational state."""
+    active = extension_dir / "compose.yaml"
+    inactive = extension_dir / "compose.yaml.disabled"
+    if active.is_symlink() or inactive.is_symlink():
+        return False
+
+    has_active = active.is_file()
+    has_inactive = inactive.is_file()
+    if has_active == has_inactive:
+        return False
+    if has_active == enabled:
+        return True
+
+    os.replace(inactive if enabled else active, active if enabled else inactive)
+    return True
+
+
+def _restore_extension_backup(service_id: str) -> bool:
+    """Restore the previous definition while retaining the failed update as backup."""
+    dest = USER_EXTENSIONS_DIR / service_id
+    backup = _extension_backup_dir(service_id)
+    if backup.parent.is_symlink():
+        return False
+    if (not dest.is_dir() or dest.is_symlink()
+            or not backup.is_dir() or backup.is_symlink()):
+        return False
+    swap_parent = USER_EXTENSIONS_DIR / ".tmp"
+    if swap_parent.is_symlink():
+        return False
+    swap_parent.mkdir(parents=True, exist_ok=True)
+    swap_root = Path(tempfile.mkdtemp(prefix=f".{service_id}-rollback-", dir=swap_parent))
+    current = swap_root / service_id
+    parked = False
+    try:
+        os.replace(dest, current)
+        try:
+            os.replace(backup, dest)
+        except OSError:
+            try:
+                os.replace(current, dest)
+            except OSError:
+                # Double failure: never delete the only remaining copy of
+                # the live definition — leave it parked for manual recovery.
+                parked = True
+                logger.error(
+                    "Rollback failed for %s and the live definition could "
+                    "not be re-seated; parked at %s",
+                    service_id, current,
+                )
+            raise
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(current, backup)
+        except OSError:
+            # dest is already restored; only retaining the failed update as
+            # the new backup failed. Keep the tree for inspection and treat
+            # the restore itself as successful.
+            parked = True
+            logger.warning(
+                "Rollback restored %s but could not retain the replaced "
+                "definition; parked at %s",
+                service_id, current,
+            )
+        _invalidate_extension_digest_cache(dest, backup, current)
+        return True
+    finally:
+        if not parked:
+            shutil.rmtree(swap_root, ignore_errors=True)
+
+
+def _start_extension_lifecycle(service_id: str) -> tuple[bool, list[str]]:
+    """Start an extension through its lifecycle hooks and return warnings."""
+    if not _call_agent_hook(service_id, "pre_start"):
+        return False, []
+    if not _call_agent("start", service_id):
+        return False, []
+    warnings: list[str] = []
+    if not _call_agent_hook(service_id, "post_start"):
+        warnings.append("post_start hook failed; review extension logs")
+    return True, warnings
+
+
+def _recover_extension_swap(
+    service_id: str,
+    *,
+    enabled: bool,
+    one_shot: bool,
+) -> list[str]:
+    """Swap back to the prior definition and prove its config/runtime state."""
+    failures: list[str] = []
+    try:
+        with _extensions_lock():
+            restored = _restore_extension_backup(service_id)
+            if restored:
+                _call_agent_invalidate_compose_cache()
+    except (OSError, HTTPException) as exc:
+        logger.error("Extension definition recovery failed for %s: %s", service_id, exc)
+        restored = False
+    if not restored:
+        return ["definition restore failed"]
+
+    try:
+        config_ok = _sync_extension_config(service_id, preserve_existing=True)
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        logger.error("Extension config recovery failed for %s: %s", service_id, exc)
+        config_ok = False
+    if not config_ok:
+        failures.append("config sync failed")
+        return failures
+
+    if enabled and not one_shot:
+        try:
+            start_ok, hook_warnings = _start_extension_lifecycle(service_id)
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            logger.error("Extension runtime recovery failed for %s: %s", service_id, exc)
+            start_ok, hook_warnings = False, []
+        for warning in hook_warnings:
+            logger.warning("Recovered %s with warning: %s", service_id, warning)
+        if not start_ok:
+            failures.append("restored runtime restart failed")
+    return failures
+
+
+def _transaction_failure(
+    message: str,
+    recovery_failures: list[str],
+    *,
+    recovered_label: str,
+) -> HTTPException:
+    """Build an error that does not overstate an unproven recovery."""
+    if recovery_failures:
+        return HTTPException(
+            status_code=500,
+            detail=(
+                f"{message}; recovery incomplete: "
+                + ", ".join(recovery_failures)
+            ),
+        )
+    return HTTPException(status_code=502, detail=f"{message}; {recovered_label}")
+
+
+@router.post("/api/extensions/{service_id}/update")
+@_serialize_extension_operation
+def update_extension(
+    service_id: str,
+    force: bool = Query(False),
+    api_key: str = Depends(verify_api_key),
+):
+    """Atomically refresh a user extension from the bundled library."""
+    _validate_service_id(service_id)
+    _assert_not_core(service_id)
+    dest = USER_EXTENSIONS_DIR / service_id
+    if (dest.is_symlink() or not dest.resolve().is_relative_to(USER_EXTENSIONS_DIR.resolve())
+            or not dest.is_dir()):
+        raise HTTPException(status_code=404, detail=f"Extension not installed: {service_id}")
+    if not _is_installable(service_id):
+        raise HTTPException(status_code=409, detail="No deployable library update is available")
+
+    backup = _extension_backup_dir(service_id)
+    with _extensions_lock():
+        progress = _read_progress(service_id)
+        if _progress_blocks_mutation(progress):
+            raise HTTPException(status_code=409, detail="Extension operation is still in progress")
+        state = _library_update_state(service_id)
+        if state["update_status"] == "current" and not force:
+            raise HTTPException(status_code=409, detail="Extension is already current")
+        if state["update_status"] == "unknown" and not force:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Installed files could not be inspected; confirm update to replace them with the library version",
+                    "code": "update_state_unknown",
+                    "force_available": True,
+                },
+            )
+        if state["update_status"] == "untracked" and not force:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "This legacy install has no library receipt; confirm refresh to create one",
+                    "code": "untracked_install",
+                    "force_available": True,
+                },
+            )
+        if state["locally_modified"] and not force:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Local extension files changed after install; confirm update to preserve them as rollback backup",
+                    "code": "locally_modified",
+                    "force_available": True,
+                },
+            )
+
+        enabled = (dest / "compose.yaml").is_file()
+        if not _set_extension_compose_state(dest, enabled=enabled):
+            raise HTTPException(
+                status_code=409,
+                detail="Installed extension has an invalid compose state",
+            )
+        disabled = not enabled
+
+        with _staged_library_extension(service_id, dest) as (staged, source_digest):
+            if not _set_extension_compose_state(staged, enabled=enabled):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Library extension has an invalid compose state",
+                )
+            installed_digest = _extension_tree_digest(staged)
+            _write_library_receipt(
+                staged,
+                source_digest=source_digest,
+                installed_digest=installed_digest,
+            )
+            if backup.parent.is_symlink() or backup.is_symlink():
+                raise HTTPException(status_code=409, detail="Extension backup path is a symlink")
+            if backup.exists() and not backup.is_dir():
+                raise HTTPException(status_code=409, detail="Extension backup path is not a directory")
+            # Retire the prior rollback point aside instead of deleting it
+            # before the new update has committed: a failure between here
+            # and the staged->dest swap must leave the old backup intact.
+            retired: Path | None = None
+            if backup.exists():
+                retire_parent = USER_EXTENSIONS_DIR / ".tmp"
+                if retire_parent.is_symlink():
+                    raise HTTPException(status_code=409, detail="Extension tmp path is a symlink")
+                retire_parent.mkdir(parents=True, exist_ok=True)
+                retired = Path(tempfile.mkdtemp(
+                    prefix=f".{service_id}-retired-backup-", dir=retire_parent,
+                )) / service_id
+                os.replace(backup, retired)
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(dest, backup)
+            try:
+                os.replace(staged, dest)
+            except OSError:
+                os.replace(backup, dest)
+                if retired is not None:
+                    try:
+                        os.replace(retired, backup)
+                        shutil.rmtree(retired.parent, ignore_errors=True)
+                    except OSError:
+                        logger.error(
+                            "Update failed for %s and the prior backup could "
+                            "not be re-seated; parked at %s",
+                            service_id, retired,
+                        )
+                raise
+            _invalidate_extension_digest_cache(dest, backup, staged)
+            _call_agent_invalidate_compose_cache()
+            if retired is not None:
+                shutil.rmtree(retired.parent, ignore_errors=True)
+
+    ext = next((entry for entry in EXTENSION_CATALOG if entry.get("id") == service_id), {})
+    one_shot = _is_one_shot_extension(ext)
+    if not _sync_extension_config(service_id, preserve_existing=True):
+        recovery_failures = _recover_extension_swap(
+            service_id, enabled=enabled, one_shot=one_shot,
+        )
+        raise _transaction_failure(
+            "Extension update config sync failed",
+            recovery_failures,
+            recovered_label="previous definition restored",
+        )
+
+    warnings: list[str] = []
+    if enabled and not one_shot:
+        start_ok, start_warnings = _start_extension_lifecycle(service_id)
+        if not start_ok:
+            recovery_failures = _recover_extension_swap(
+                service_id, enabled=enabled, one_shot=one_shot,
+            )
+            raise _transaction_failure(
+                "Extension update failed to start",
+                recovery_failures,
+                recovered_label="previous definition restored",
+            )
+        warnings.extend(start_warnings)
+
+    _clear_progress(service_id)
+    logger.info("Updated extension from library: %s", service_id)
+    return {
+        "id": service_id,
+        "action": "updated",
+        "rollback_available": True,
+        "restart_required": False,
+        "warnings": warnings,
+        "message": (
+            "Extension definition updated; disabled state preserved."
+            if disabled else
+            "Extension updated and started."
+            if not one_shot else
+            "CLI extension updated."
+        ),
+    }
+
+
+@router.post("/api/extensions/{service_id}/rollback")
+@_serialize_extension_operation
+def rollback_extension_update(
+    service_id: str,
+    api_key: str = Depends(verify_api_key),
+):
+    """Restore the immediately previous library definition."""
+    _validate_service_id(service_id)
+    _assert_not_core(service_id)
+    dest = USER_EXTENSIONS_DIR / service_id
+    backup = _extension_backup_dir(service_id)
+    with _extensions_lock():
+        progress = _read_progress(service_id)
+        if _progress_blocks_mutation(progress):
+            raise HTTPException(status_code=409, detail="Extension operation is still in progress")
+        if (not dest.is_dir() or dest.is_symlink()
+                or not backup.is_dir() or backup.is_symlink()):
+            raise HTTPException(status_code=404, detail="No extension update backup is available")
+        enabled = (dest / "compose.yaml").is_file()
+        if not _set_extension_compose_state(dest, enabled=enabled):
+            raise HTTPException(
+                status_code=409,
+                detail="Installed extension has an invalid compose state",
+            )
+        # Rollback changes the definition, not the user's current enablement.
+        # Normalize the backup before swapping so the restored directory and
+        # runtime start decision cannot disagree.
+        if not _set_extension_compose_state(backup, enabled=enabled):
+            raise HTTPException(
+                status_code=409,
+                detail="Extension update backup has an invalid compose state",
+            )
+        if not _restore_extension_backup(service_id):
+            raise HTTPException(status_code=500, detail="Could not restore extension backup")
+        _call_agent_invalidate_compose_cache()
+
+    ext = next((entry for entry in EXTENSION_CATALOG if entry.get("id") == service_id), {})
+    one_shot = _is_one_shot_extension(ext)
+    if not _sync_extension_config(service_id, preserve_existing=True):
+        recovery_failures = _recover_extension_swap(
+            service_id, enabled=enabled, one_shot=one_shot,
+        )
+        raise _transaction_failure(
+            "Rollback config sync failed",
+            recovery_failures,
+            recovered_label="updated definition restored",
+        )
+
+    warnings: list[str] = []
+    if enabled and not one_shot:
+        start_ok, start_warnings = _start_extension_lifecycle(service_id)
+        if not start_ok:
+            recovery_failures = _recover_extension_swap(
+                service_id, enabled=enabled, one_shot=one_shot,
+            )
+            raise _transaction_failure(
+                "Rollback failed to start",
+                recovery_failures,
+                recovered_label="updated definition restored",
+            )
+        warnings.extend(start_warnings)
+
+    _clear_progress(service_id)
+    logger.info("Rolled back extension update: %s", service_id)
+    return {
+        "id": service_id,
+        "action": "rolled_back",
+        "rollback_available": True,
+        "restart_required": False,
+        "warnings": warnings,
+        "message": "Previous extension definition restored.",
     }
 
 
@@ -1536,6 +2182,7 @@ def _activate_service(service_id: str) -> dict:
 
 
 @router.post("/api/extensions/{service_id}/enable")
+@_serialize_extension_operation
 def enable_extension(
     service_id: str,
     auto_enable_deps: bool = Query(False),
@@ -1664,6 +2311,7 @@ def enable_extension(
 
 
 @router.post("/api/extensions/{service_id}/disable")
+@_serialize_extension_operation
 def disable_extension(service_id: str, include_data_info: bool = Query(True), api_key: str = Depends(verify_api_key)):
     """Disable an enabled extension."""
     _validate_service_id(service_id)
@@ -1753,12 +2401,16 @@ def disable_extension(service_id: str, include_data_info: bool = Query(True), ap
 
 
 @router.delete("/api/extensions/{service_id}")
+@_serialize_extension_operation
 def uninstall_extension(service_id: str, include_data_info: bool = Query(True), api_key: str = Depends(verify_api_key)):
     """Uninstall a disabled extension."""
     _validate_service_id(service_id)
     _assert_not_core(service_id)
 
-    ext_dir = (USER_EXTENSIONS_DIR / service_id).resolve()
+    ext_candidate = USER_EXTENSIONS_DIR / service_id
+    if ext_candidate.is_symlink():
+        raise HTTPException(status_code=400, detail="Extension directory is a symlink")
+    ext_dir = ext_candidate.resolve()
     if not ext_dir.is_relative_to(USER_EXTENSIONS_DIR.resolve()):
         raise HTTPException(
             status_code=404, detail=f"Extension not found: {service_id}",
@@ -1790,6 +2442,15 @@ def uninstall_extension(service_id: str, include_data_info: bool = Query(True), 
             raise HTTPException(status_code=500, detail=f"Failed to remove extension files: {e}")
         _call_agent_invalidate_compose_cache()
 
+        backup = _extension_backup_dir(service_id)
+        if backup.parent.is_symlink():
+            logger.warning("Refusing to clean extension backup through symlink: %s", backup.parent)
+        elif backup.is_symlink():
+            backup.unlink(missing_ok=True)
+        elif backup.is_dir():
+            shutil.rmtree(backup)
+        _invalidate_extension_digest_cache(ext_dir, backup)
+
         progress_file = Path(DATA_DIR) / "extension-progress" / f"{service_id}.json"
         progress_file.unlink(missing_ok=True)
 
@@ -1808,6 +2469,7 @@ class PurgeRequest(BaseModel):
 
 
 @router.delete("/api/extensions/{service_id}/data")
+@_serialize_extension_operation
 def purge_extension_data(
     service_id: str,
     body: PurgeRequest,
