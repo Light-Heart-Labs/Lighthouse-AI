@@ -215,22 +215,55 @@ class TestResolveAgentBindAddr:
         assert _resolve_agent_bind_addr({}, "Darwin") == "127.0.0.1"
 
     def test_linux_prefers_ods_network_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: False)
+        monkeypatch.setattr(_mod, "_is_locally_bindable", lambda addr: True)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "172.18.0.1")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "172.17.0.1")
 
         assert _resolve_agent_bind_addr({}, "Linux") == "172.18.0.1"
 
     def test_linux_falls_back_to_bridge_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: False)
+        monkeypatch.setattr(_mod, "_is_locally_bindable", lambda addr: True)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "172.17.0.1")
 
         assert _resolve_agent_bind_addr({}, "Linux") == "172.17.0.1"
 
     def test_linux_falls_back_to_loopback(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: False)
+        monkeypatch.setattr(_mod, "_is_locally_bindable", lambda addr: True)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "")
 
         assert _resolve_agent_bind_addr({}, "Linux") == "127.0.0.1"
+
+    def test_linux_rootless_lan_binds_all_interfaces(self, monkeypatch):
+        # Rootless follows the install's LAN posture: --lan (BIND_ADDRESS=0.0.0.0)
+        # binds 0.0.0.0 so the agent is reachable via the host LAN IP instead of
+        # crash-looping on the unbindable compose gateway.
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: True)
+        monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "172.18.0.1")
+
+        assert _resolve_agent_bind_addr({"BIND_ADDRESS": "0.0.0.0"}, "Linux") == "0.0.0.0"
+
+    def test_linux_rootless_regular_binds_loopback(self, monkeypatch):
+        # Without --lan the rootless agent stays on localhost (not LAN-exposed).
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: True)
+        monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "172.18.0.1")
+
+        assert _resolve_agent_bind_addr({"BIND_ADDRESS": "127.0.0.1"}, "Linux") == "127.0.0.1"
+        assert _resolve_agent_bind_addr({}, "Linux") == "127.0.0.1"
+
+    def test_linux_skips_unbindable_gateway(self, monkeypatch):
+        # A detected gateway that isn't assignable on the host is skipped rather
+        # than binding it and crashing with OSError.
+        monkeypatch.setattr(_mod, "_is_docker_rootless", lambda: False)
+        monkeypatch.setattr(_mod, "_is_locally_bindable", lambda addr: addr == "172.17.0.1")
+        monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "172.18.0.1")
+        monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "172.17.0.1")
+
+        assert _resolve_agent_bind_addr({}, "Linux") == "172.17.0.1"
 
 
 class TestMacosDirectBindBridgeCollision:

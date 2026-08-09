@@ -661,6 +661,16 @@ raise SystemExit(1)' 2>/dev/null && return 0
     # used for every other persistent value in this phase).
     HOST_LAN_IP=$(_env_get HOST_LAN_IP "$HOST_LAN_IP")
 
+    # Record whether Docker runs rootless. dashboard-api uses this to pick the
+    # reachable ods-host-agent address: rootless containers can only reach the
+    # host via HOST_LAN_IP (the compose/bridge gateways are not routable), so the
+    # agent binds per the LAN posture and dashboard-api targets HOST_LAN_IP.
+    if $_phase06_rootless; then
+        ODS_DOCKER_ROOTLESS_VALUE="true"
+    else
+        ODS_DOCKER_ROOTLESS_VALUE="false"
+    fi
+
     # Device name — used by ods-mdns (publishes <name>.local + per-service
     # subdomains: auth.<name>.local, chat.<name>.local, etc.) and by magic-
     # link URL generation in dashboard-api. The previous default literal
@@ -761,6 +771,11 @@ BIND_ADDRESS=${BIND_ADDRESS}
 # Host LAN IP (populated when BIND_ADDRESS=0.0.0.0; empty otherwise).
 # Containers like openclaw read this to advertise the host's LAN address.
 HOST_LAN_IP=${HOST_LAN_IP}
+
+#=== Docker runtime ===
+# true when Docker runs rootless; dashboard-api then reaches ods-host-agent via
+# HOST_LAN_IP (the only host address a rootless container can reach).
+ODS_DOCKER_ROOTLESS=${ODS_DOCKER_ROOTLESS_VALUE}
 
 #=== LLM Backend Mode ===
 ODS_MODE=${ODS_MODE_VALUE}
