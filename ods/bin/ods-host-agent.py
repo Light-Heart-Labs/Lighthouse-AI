@@ -10913,7 +10913,7 @@ $action = $env:ODS_OPENCODE_ACTION
 $exe = $env:ODS_OPENCODE_EXE
 $port = [int]$env:ODS_OPENCODE_PORT
 
-function Get-ODSOpenCodeProcesses {
+function Get-ODSOpenCodeProcessesOnPort {
     @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
         $_.ExecutablePath -and
         $_.ExecutablePath.Equals($exe, [StringComparison]::OrdinalIgnoreCase) -and
@@ -10922,9 +10922,21 @@ function Get-ODSOpenCodeProcesses {
     })
 }
 
+# Match any ODS-owned OpenCode web process regardless of the port it was
+# started on. OPENCODE_PORT can be changed after launch, and a process bound to
+# an older port would otherwise be invisible to the port-scoped match above,
+# leaving it running as an orphan that still owns the superseded port.
+function Get-ODSOpenCodeProcesses {
+    @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+        $_.ExecutablePath -and
+        $_.ExecutablePath.Equals($exe, [StringComparison]::OrdinalIgnoreCase) -and
+        $_.CommandLine -match '(?i)\b(web|serve)\b'
+    })
+}
+
 $owned = @(Get-ODSOpenCodeProcesses)
 if ($action -eq 'inspect') {
-    if ($owned.Count -gt 0) { 'true' } else { 'false' }
+    if ((@(Get-ODSOpenCodeProcessesOnPort)).Count -gt 0) { 'true' } else { 'false' }
     exit 0
 }
 if ($action -ne 'restart') { throw "Unsupported OpenCode action: $action" }
