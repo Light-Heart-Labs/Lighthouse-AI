@@ -8268,7 +8268,6 @@ class AgentHandler(BaseHTTPRequestHandler):
                         if windows_host_lemonade
                         else gguf_file if windows_native_llama else llm_model_name
                     )
-                    opencode_config_mutated = True
                     _update_opencode_config(
                         env,
                         opencode_snapshot,
@@ -8276,6 +8275,11 @@ class AgentHandler(BaseHTTPRequestHandler):
                         int(context_length),
                         display_name=llm_model_name,
                     )
+                    # Set the mutated flag only after a successful, verified
+                    # write. If the update raises, the snapshot restore already
+                    # returned OpenCode to its prior state, and forcing a restart
+                    # during rollback is wasteful and risks masking the error.
+                    opencode_config_mutated = True
 
                 # Restart dependent services so they pick up the new model
                 litellm_restart_attempted = container_states["ods-litellm"]["running"]
