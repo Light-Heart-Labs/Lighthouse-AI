@@ -10786,7 +10786,6 @@ def _opencode_config_matches(
     model_ref = f"{provider_id}/{model_id}"
     return bool(
         config.get("model") == model_ref
-        and config.get("small_model") == model_ref
         and isinstance(options, dict)
         and options.get("baseURL") == base_url
         and options.get("apiKey") == api_key
@@ -10815,7 +10814,11 @@ def _update_opencode_config(
         config = json.loads(json.dumps(source))
         previous_model_ref = config.get("model")
         config["model"] = model_ref
-        config["small_model"] = model_ref
+        # Only refresh small_model when ODS previously owned it (it pointed at
+        # the old main model). A user-configured distinct small_model is a
+        # deliberate choice and must survive model swaps.
+        if not config.get("small_model") or config.get("small_model") == previous_model_ref:
+            config["small_model"] = model_ref
         config.setdefault("$schema", "https://opencode.ai/config.json")
 
         providers = config.setdefault("provider", {})
