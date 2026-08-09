@@ -115,11 +115,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_document(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        if path.suffix == ".json":
-            return json.load(handle)
-        return yaml.safe_load(handle)
+def load_struct_file(path: Path) -> Any:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            if path.suffix == ".json":
+                return json.load(handle)
+            return yaml.safe_load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError, ValueError):
+        return {}
 
 
 def find_manifest(service_dir: Path) -> Path | None:
