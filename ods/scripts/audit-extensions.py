@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_struct_file(path: Path) -> Any:
+def load_document(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             if path.suffix == ".json":
