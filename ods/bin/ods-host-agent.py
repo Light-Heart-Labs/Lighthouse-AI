@@ -10670,6 +10670,12 @@ def _opencode_config_precedence(path: Path) -> tuple[int, int]:
 
 def _opencode_installed() -> bool:
     executable = "opencode.exe" if platform.system() == "Windows" else "opencode"
+    if platform.system() == "Windows":
+        # Only the ODS-managed binary can be inspected and restarted by
+        # _run_windows_opencode_control. An npm-installed opencode on PATH is a
+        # different binary ODS does not own; claiming it is installed would make
+        # the agent snapshot config for a process it can never restart.
+        return (Path.home() / ".opencode" / "bin" / executable).is_file()
     return bool(
         shutil.which("opencode")
         or (Path.home() / ".opencode" / "bin" / executable).is_file()
