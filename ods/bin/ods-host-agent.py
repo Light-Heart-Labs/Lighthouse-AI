@@ -10937,9 +10937,23 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
     Start-Sleep -Milliseconds 500
 }
 if (@(Get-ODSOpenCodeProcesses).Count -ne 0) { throw 'Could not stop ODS OpenCode' }
-Start-Process -FilePath $exe `
-    -ArgumentList @('web', '--port', [string]$port, '--hostname', '127.0.0.1') `
-    -WindowStyle Hidden | Out-Null
+# Restart through the Task Scheduler task the installer registered so the
+# ODS launcher clears OPENCODE_SERVER_PASSWORD and the process is not orphaned
+# when the logon trigger fires again. Fall back to a direct launch only when
+# the task is missing (e.g. an install that skipped task registration).
+$restarted = $false
+try {
+    $task = Get-ScheduledTask -TaskName 'ODSOpenCodeWeb' -ErrorAction Stop
+    Start-ScheduledTask -TaskName $task.TaskName -ErrorAction Stop
+    $restarted = $true
+} catch {
+    $restarted = $false
+}
+if (-not $restarted) {
+    Start-Process -FilePath $exe `
+        -ArgumentList @('web', '--port', [string]$port, '--hostname', '127.0.0.1') `
+        -WindowStyle Hidden | Out-Null
+}
 'true'
 '''
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
