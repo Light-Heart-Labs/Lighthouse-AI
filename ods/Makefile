@@ -86,6 +86,10 @@ test: ## Run unit and contract tests
 	@echo "=== ods-cli pipefail tolerance ==="
 	@bash tests/test-ods-cli-pipefail-tolerance.sh
 	@echo ""
+	@echo "=== status: internal-only service health (#2624) ==="
+	@bash tests/test-status-internal-only-health.sh
+	@bash tests/test-health-check.sh
+	@echo ""
 	@echo "=== offline model validation ==="
 	@python3 tests/test-offline-model-validation.py
 	@echo ""
