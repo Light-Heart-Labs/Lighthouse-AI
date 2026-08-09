@@ -10763,7 +10763,9 @@ def _opencode_route(env: dict) -> tuple[str, str]:
 def _opencode_model_route(env: dict, model_id: str) -> tuple[str, str, str]:
     provider_id = "llama-server"
     if _normal_switchboard_mode(env) == "enabled":
-        return provider_id, "ods/current", "ods/current"
+        # The switchboard serves every model under the ods/current alias, but
+        # the model picker should still show the real model name, not the alias.
+        return provider_id, "ods/current", model_id
     return provider_id, model_id, model_id
 
 
@@ -10805,7 +10807,7 @@ def _update_opencode_config(
     """Update both OpenCode compatibility files and verify persisted routing."""
     base_url, api_key = _opencode_route(env)
     provider_id, route_model_id, route_display_name = _opencode_model_route(env, model_id)
-    display_name = route_display_name if route_model_id != model_id else (display_name or model_id)
+    display_name = display_name or route_display_name or model_id
     model_ref = f"{provider_id}/{route_model_id}"
 
     for path, previous in snapshot["files"].items():
