@@ -2822,6 +2822,35 @@ def _detect_docker_bridge_gateway() -> str:
     return _detect_docker_network_gateway("bridge")
 
 
+def _is_locally_bindable(addr: str) -> bool:
+    """Return whether a TCP socket can bind ``addr`` in this host namespace.
+
+    A detected gateway may not be a host address (or may be stale), so probe
+    before committing rather than crash-looping on OSError.
+    """
+    if not addr:
+        return False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((addr, 0))
+        return True
+    except OSError:
+        return False
+
+
+def _is_docker_rootless() -> bool:
+    """Return whether the active Docker context runs in rootless mode."""
+    try:
+        result = subprocess.run(
+            ["docker", "info", "--format", "{{json .SecurityOptions}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return result.returncode == 0 and "rootless" in result.stdout
+
+
 def _resolve_agent_bind_addr(env: dict, system_name: str | None = None) -> str:
     """Resolve the host-agent bind address without exposing LAN by default."""
     system_name = system_name or platform.system()
@@ -2835,14 +2864,26 @@ def _resolve_agent_bind_addr(env: dict, system_name: str | None = None) -> str:
         return "127.0.0.1"
 
     if system_name == "Linux":
-        # Prefer ODS's actual compose network. The bridge fallback keeps
-        # older/partial installs reachable without binding the Docker
-        # management API to every LAN interface.
-        return (
-            _detect_docker_network_gateway("ods-network")
-            or _detect_docker_bridge_gateway()
-            or "127.0.0.1"
-        )
+        # Docker rootless: the compose-network gateway lives in the rootlesskit
+        # namespace (unbindable on the host) and bridge gateways are not
+        # routable from rootless containers — the only reachable host address is
+        # the LAN IP. Follow the install's LAN posture: bind 0.0.0.0 (reachable
+        # via HOST_LAN_IP, bearer-key protected) only when the operator chose
+        # --lan (BIND_ADDRESS=0.0.0.0); otherwise stay on localhost.
+        if _is_docker_rootless():
+            if env.get("BIND_ADDRESS", "").strip() == "0.0.0.0":
+                return "0.0.0.0"
+            return "127.0.0.1"
+        # Rootful: prefer ODS's compose network, then the bridge, each verified
+        # bindable so a stale/foreign gateway can't crash-loop the bind. Keep
+        # the loopback fallback so a partial install never exposes the LAN.
+        for candidate in (
+            _detect_docker_network_gateway("ods-network"),
+            _detect_docker_bridge_gateway(),
+        ):
+            if candidate and _is_locally_bindable(candidate):
+                return candidate
+        return "127.0.0.1"
 
     return "127.0.0.1"
 
