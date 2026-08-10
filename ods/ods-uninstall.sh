@@ -286,6 +286,15 @@ unset _ods_uninstall_orphan_pids _pid
 # Remove system-mode ods-host-agent unit (migrated from --user mode).
 # Idempotent — no-op if the unit was never installed (e.g. older user-mode installs).
 if systemctl is-enabled ods-host-agent.service >/dev/null 2>&1; then
+    # Prime the sudo credential cache with a clean, unwrapped prompt before
+    # any timeout-wrapped sudo call below. If `timeout` signals sudo while
+    # it's still mid-password-entry (slow typing, or a long-running
+    # systemctl call eating into the budget), sudo can be killed before it
+    # restores the terminal's echo setting — leaving the next keystroke's
+    # input, including a retried password, visible in plaintext.
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -v || log_warn "sudo authentication failed; systemd cleanup below may be skipped"
+    fi
     if ! timeout 20s sudo systemctl disable --now ods-host-agent.service 2>/dev/null; then
         log_warn "ods-host-agent did not stop cleanly; forcing service shutdown"
         sudo systemctl kill -s SIGKILL ods-host-agent.service 2>/dev/null || true
