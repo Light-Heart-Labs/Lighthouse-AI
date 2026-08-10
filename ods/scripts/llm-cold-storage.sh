@@ -119,15 +119,28 @@ do_archive() {
         if (( idle_days >= MAX_IDLE_DAYS )); then
             if [[ "$dry_run" == "true" ]]; then
                 log "WOULD ARCHIVE: $name ($size, idle ${idle_days}d)"
+                ((archived++))
             else
                 log "ARCHIVING: $name ($size, idle ${idle_days}d)"
-                # Move to cold storage
-                mv "$model_dir" "$COLD_DIR/$name"
+                # Move to cold storage. This script runs under `set -uo
+                # pipefail` (no `-e`), so a failed mv here would otherwise
+                # fall straight through to the unconditional "ARCHIVED" log
+                # line and count() below — reporting success on a model
+                # that was never moved.
+                if ! mv "$model_dir" "$COLD_DIR/$name"; then
+                    log "ERROR: Failed to move $name to $COLD_DIR/$name — left in place, not counted as archived"
+                    ((skipped++))
+                    continue
+                fi
                 # Create symlink so HF cache still resolves
-                ln -s "$COLD_DIR/$name" "${model_dir%/}"
+                if ! ln -s "$COLD_DIR/$name" "${model_dir%/}"; then
+                    log "ERROR: Moved $name to $COLD_DIR/$name but failed to symlink it back at $model_dir — HF cache will show it as missing until you run: ln -s '$COLD_DIR/$name' '${model_dir%/}'"
+                    ((archived++))
+                    continue
+                fi
                 log "ARCHIVED: $name -> $COLD_DIR/$name"
+                ((archived++))
             fi
-            ((archived++))
         else
             log "SKIP (recent, ${idle_days}d): $name ($size)"
             ((skipped++))
