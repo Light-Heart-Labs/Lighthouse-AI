@@ -27,7 +27,7 @@ while [[ -L "$_source" ]]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 INSTALL_DIR="${ODS_HOME:-$HOME/ods}"
-VERSION="2.6.0"
+VERSION="2.6.1-exp"
 if [[ -f "$INSTALL_DIR/.env" ]]; then
     _v=$(awk -F= '/^ODS_VERSION=/{gsub(/^["'"'"']|["'"'"']$/,"",$2); print $2; exit}' "$INSTALL_DIR/.env" 2>/dev/null) || true
     [[ -n "${_v:-}" ]] && VERSION="$_v"
