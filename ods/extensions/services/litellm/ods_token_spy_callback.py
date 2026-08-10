@@ -236,6 +236,35 @@ class ODSTokenSpyCallback(CustomLogger):
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+        timeout = max(
+            0.1, float(os.environ.get("ODS_LITELLM_TELEMETRY_TIMEOUT", "3"))
+        )
+        client = httpx.AsyncClient(follow_redirects=False, timeout=timeout)
+        try:
+            while True:
+                event = await self.queue.get()
+                try:
+                    response = await client.post(
+                        f"{self.url}/api/ingest/routed",
+                        json=event,
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                    )
+                    if response.status_code != 202:
+                        self._warn(
+                            "Token Spy rejected LiteLLM telemetry "
+                            f"with HTTP {response.status_code}"
+                        )
+                except (httpx.HTTPError, RuntimeError) as exc:
+                    self._warn(f"Token Spy telemetry unavailable: {exc}")
+                finally:
+                    self.queue.task_done()
+        finally:
+            # Release connections and file descriptors even when the worker is
+            # cancelled (LiteLLM model swap / gunicorn recycle / asyncio
+            # shutdown). Relying only on async-with __aexit__ can leave the
+            # client unclosed when a task is cancelled mid-cycle, compounding
+            # a leak across restarts.
+            await client.aclose()
 
     def _warn(self, message: str) -> None:
         now = time.monotonic()
