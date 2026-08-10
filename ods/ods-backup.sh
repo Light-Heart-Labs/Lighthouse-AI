@@ -139,7 +139,9 @@ ensure_backup_space() {
 # the global COLLECTED_BACKUPS array, newest first.
 #
 # Backup IDs are YYYYMMDD-HHMMSS (this script) or <prefix>-YYYYMMDD-HHMMSS
-# (dashboard/host-agent). Match that shape explicitly: retention deletes
+# (update/dashboard/host-agent). The host-agent permits a 64-character label;
+# ods-update prepends "backup-", so allow that bounded multi-segment prefix.
+# Match the timestamp shape explicitly: retention deletes
 # whatever this collects, so an operator's unrelated files in the backup
 # directory must never qualify.
 COLLECTED_BACKUPS=()
@@ -148,13 +150,7 @@ collect_backups() {
     local entry base
     while IFS= read -r -d '' entry; do
         base=$(basename "$entry")
-        # Prefix may span multiple hyphen-separated segments (e.g.
-        # `dashboard-my-name-`): the host agent's BACKUP_ID_RE
-        # (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) accepts hyphenated labels, so a
-        # `<prefix>-` group with `*` (not `?`) is required to see and retain
-        # them. The trailing YYYYMMDD-HHMMSS timestamp anchor still keeps
-        # unrelated operator files out of the retention set.
-        [[ "$base" =~ ^([A-Za-z0-9_]+-)*[0-9]{8}-[0-9]{6}(\.tar\.gz)?$ ]] || continue
+        [[ "$base" =~ ^([A-Za-z0-9_][A-Za-z0-9_-]{0,70}-)?[0-9]{8}-[0-9]{6}(\.tar\.gz)?$ ]] || continue
         COLLECTED_BACKUPS+=("$entry")
     done < <(find "$BACKUP_ROOT" -maxdepth 1 \( -type d -o -name "*.tar.gz" \) -print0 2>/dev/null | sort -z -r)
 }
