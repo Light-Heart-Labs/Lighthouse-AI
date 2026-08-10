@@ -145,6 +145,13 @@ class TestIPDetection:
     def test_clock_time_is_not_an_ip(self, detector):
         result = detector.scrub("Started at 12:34:56 UTC")
         assert "<PII_ip_address_" not in result
+        "candidate",
+        ["999.999.999.999", "256.1.1.1", "192.168.1.999"],
+    )
+    def test_invalid_ipv4_candidate_is_not_scrubbed(self, detector, candidate):
+        text = f"Version-like value: {candidate}"
+
+        assert detector.scrub(text) == text
 
 
 # ── API key detection ────────────────────────────────────────────────────────
