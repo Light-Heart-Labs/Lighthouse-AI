@@ -138,7 +138,7 @@ bootline
 echo -e "${BGRN}ALL SERVICES${NC}"
 bootline
 # Resolve OpenCode's configured port once (OPENCODE_PORT is documented in .env)
-OPENCODE_WEB_PORT="$(grep -m1 '^OPENCODE_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+OPENCODE_WEB_PORT="$(sed -n 's/^OPENCODE_PORT=//p' "$INSTALL_DIR/.env" | head -n1 | tr -d '"')"
 [[ "$OPENCODE_WEB_PORT" =~ ^[0-9]+$ ]] || OPENCODE_WEB_PORT=3003
 # Core services always shown
 echo "  • Chat UI:       http://localhost:${SERVICE_PORTS[open-webui]:-3000}"

@@ -514,7 +514,10 @@ fi
 # hermes-proxy is the LAN-facing entry and has an anonymous /health endpoint.
 [[ "$ENABLE_HERMES" == "true" ]] && _check_health "Hermes Proxy" "http://127.0.0.1:${SERVICE_PORTS[hermes-proxy]:-9120}${SERVICE_HEALTH[hermes-proxy]:-/health}" 60 5 "$(sr_container hermes-proxy)"
 [[ "$ENABLE_OPENCLAW" == "true" ]] && _check_health "OpenClaw" "http://127.0.0.1:${SERVICE_PORTS[openclaw]:-7860}${SERVICE_HEALTH[openclaw]:-/}" 150 10 "$(sr_container openclaw)"
-_opencode_health_port="$(grep -m1 '^OPENCODE_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' )"
+# OPENCODE_PORT is an optional override that phase 06 never writes, so a grep
+# would exit 1 and abort the phase under `set -euo pipefail` before the
+# numeric fallback below applies. sed -n p yields an empty string instead.
+_opencode_health_port="$(sed -n 's/^OPENCODE_PORT=//p' "$INSTALL_DIR/.env" | head -n1 | tr -d '"')"
 [[ "$_opencode_health_port" =~ ^[0-9]+$ ]] || _opencode_health_port=3003
 systemctl --user is-active opencode-web &>/dev/null && _check_health "OpenCode Web" "http://127.0.0.1:${_opencode_health_port}/" 10 5
 # Whisper: 150 attempts * adaptive backoff = up to ~20 minutes (model download on first start)
