@@ -145,6 +145,8 @@ class TestIPDetection:
     def test_clock_time_is_not_an_ip(self, detector):
         result = detector.scrub("Started at 12:34:56 UTC")
         assert "<PII_ip_address_" not in result
+
+    @pytest.mark.parametrize(
         "candidate",
         ["999.999.999.999", "256.1.1.1", "192.168.1.999"],
     )
