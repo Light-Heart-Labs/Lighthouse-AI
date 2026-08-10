@@ -543,6 +543,14 @@ def main():
         validate_inputs(topology, model_size_mb)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
+    gpu_count        = topology.get("gpu_count", 0)
+
+    if model_size_mb <= 0:
+        print("ERROR: --model-size must be a positive number", file=sys.stderr)
+        sys.exit(1)
+
+    if gpu_count == 0:
+        print("ERROR: no GPUs found in topology", file=sys.stderr)
         sys.exit(1)
     gpu_count = topology["gpu_count"]
 
