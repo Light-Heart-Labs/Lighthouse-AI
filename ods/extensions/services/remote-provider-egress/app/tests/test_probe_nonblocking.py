@@ -7,13 +7,10 @@ asyncio.to_thread() so concurrent inference requests are never frozen.
 from __future__ import annotations
 
 import asyncio
-import sys
 import threading
 import time
-import types
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock
+
 
 
 # ---------------------------------------------------------------------------
