@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- The bundled embeddings service can now target an ARM-compatible image and
+  platform via `EMBEDDINGS_IMAGE`/`EMBEDDINGS_PLATFORM`, instead of being
+  locked to the amd64-only default TEI build.
+
+### Fixed
+- Installer reliability improved broadly across platforms: Windows Python
+  interpreter and sync-lib resolution, macOS LaunchAgent/port/UID handling,
+  Linux bootstrap and preflight background-task tracking, uninstall path
+  safety, rollback wiring, and dozens of env-file/quote-parsing edge cases in
+  the config readers shared across installer, dashboard-api, mDNS, and
+  Lemonade code paths.
+- OpenCode's cross-platform config generation is more consistent: Windows and
+  macOS renderers now carry the same model/`small_model`/output-limit fields
+  as Linux, stale entries are pruned instead of accumulating, the loopback
+  coding surface is correctly treated as unauthenticated, and Windows launcher
+  quoting, encoding, and bootstrap-ordering bugs are fixed.
+- Dashboard and dashboard-api harden a long tail of malformed-input paths:
+  null/None GPU, cluster-status, and Token Spy payloads no longer crash a
+  request; magic-link, session, and auth state validate their shapes before
+  use; and several routers gained safe float/int parsing for ports and
+  resource values instead of raising on unexpected env content.
+- Backup, restore, and migration are safer: multi-segment and user-named
+  backup IDs are recognized consistently, restores reject archives whose root
+  doesn't match the requested backup, an empty backup config dir no longer
+  wipes live config, migration no longer copies the data directory into
+  itself, and `rsync --delete` semantics during backup/restore no longer risk
+  live data.
+- GPU assignment and host-agent status paths now validate topology, metrics,
+  and persisted-state payloads before trusting them, and fail closed instead
+  of assigning a GPU when NVIDIA UUIDs are missing.
+- Token Spy, LiteLLM telemetry, and the healthcheck script got several
+  correctness fixes: SSE token streams no longer resend events, tool-call
+  chains survive history/size trimming intact, Claude 3.x and cached OpenAI
+  tokens are billed correctly, healthcheck targets accept bracketed IPv6
+  literals and bounded HTTP status ranges, and an `httpx.AsyncClient`
+  connection leak in the Token Spy callback is closed.
+- Numerous smaller fixes round out reliability across the extension,
+  security, GPU-topology, session, and CI-workflow surfaces — see
+  `MERGED_UPSTREAM_PRS.md` for the complete list of upstream fixes ported in
+  this batch.
+
+### Security
+- A dedicated hardening pass eliminated TOCTOU races across roughly two dozen
+  state and config files (installer JSON reports, model/upgrade state,
+  compose caches, credential and API key files, backup/support-bundle
+  manifests, and more): writes now go through `mkstemp`-based temp files with
+  restricted permissions applied before rename, instead of writing in place or
+  chmod'ing after the fact.
+
 ## [2.6.0] - 2026-07-28
 
 ### Added
