@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+SEMVER = re.compile(r"^\d+\.\d+\.\d+(-[A-Za-z0-9]+)?$")
 
 
 def read_text(path: Path) -> str:
@@ -84,10 +84,27 @@ def add_regex_check(
 def main() -> int:
     errors: list[str] = []
     manifest_path = ROOT / "manifest.json"
+    version_path = ROOT / "VERSION"
+
+    try:
+        expected = read_text(version_path).strip()
+    except OSError as exc:
+        print(f"[FAIL] version consistency: cannot read VERSION: {exc}")
+        return 1
+
+    if not expected:
+        errors.append("VERSION file is empty")
+    elif not SEMVER.match(expected):
+        errors.append(f"VERSION must be x.y.z or x.y.z-suffix, got {expected!r}")
+
+    # A version with a pre-release/experimental suffix (e.g. 2.6.1-exp) is a
+    # local fork build, not a tagged release: it isn't required to carry a
+    # matching CHANGELOG.md entry.
+    is_prerelease = "-" in expected
 
     try:
         manifest = json.loads(read_text(manifest_path))
-        expected = str(manifest.get("ods_version", "")).strip()
+        manifest_version = str(manifest.get("ods_version", "")).strip()
         release = manifest.get("release") if isinstance(manifest.get("release"), dict) else {}
         release_version = str(release.get("version", "")).strip()
         release_date = str(release.get("date", "")).strip()
@@ -95,12 +112,10 @@ def main() -> int:
         print(f"[FAIL] version consistency: cannot read manifest.json: {exc}")
         return 1
 
-    if not expected:
-        errors.append("manifest.json ods_version is empty")
-    elif not SEMVER.match(expected):
-        errors.append(f"manifest.json ods_version must be x.y.z, got {expected!r}")
-
-    checks = [("manifest.json release.version", release_version)]
+    checks = [
+        ("manifest.json ods_version", manifest_version),
+        ("manifest.json release.version", release_version),
+    ]
     add_regex_check(
         checks,
         errors,
@@ -148,7 +163,7 @@ def main() -> int:
         errors,
         "ARCHITECTURE.md version",
         ROOT.parent / "ARCHITECTURE.md",
-        r"^> Version ([0-9]+\.[0-9]+\.[0-9]+)\s+\|",
+        r"^> Version ([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+)?)\s+\|",
     )
 
     version_file = optional_version_file()
@@ -157,17 +172,19 @@ def main() -> int:
 
     try:
         changelog_version, changelog_date = latest_changelog_release()
-        checks.append(("CHANGELOG.md latest release", changelog_version))
-        if release_date and changelog_date and release_date != changelog_date:
-            errors.append(
-                f"manifest.json release.date {release_date!r} != CHANGELOG.md latest release date {changelog_date!r}"
-            )
+        if not is_prerelease:
+            checks.append(("CHANGELOG.md latest release", changelog_version))
+            if release_date and changelog_date and release_date != changelog_date:
+                errors.append(
+                    f"manifest.json release.date {release_date!r} != CHANGELOG.md latest release date {changelog_date!r}"
+                )
     except ValueError as exc:
-        errors.append(str(exc))
+        if not is_prerelease:
+            errors.append(str(exc))
 
     for label, value in checks:
         if value != expected:
-            errors.append(f"{label} {value!r} != manifest.json ods_version {expected!r}")
+            errors.append(f"{label} {value!r} != VERSION {expected!r}")
 
     if errors:
         print("[FAIL] version consistency")
