@@ -68,6 +68,17 @@ if ! $DRY_RUN; then
         fi
     else
         ai_warn "Could not write ${_setup_complete_file} (non-fatal)"
+        _tmp_setup_complete=$(mktemp "${_setup_config_dir}/setup-complete.XXXXXX.tmp" 2>/dev/null || echo "")
+        if [[ -n "${_tmp_setup_complete}" ]]; then
+            if printf '{"completed_at": "%s", "version": "1.0.0"}\n' "${_completed_at}" > "${_tmp_setup_complete}" \
+                && chmod 644 "${_tmp_setup_complete}" \
+                && mv -f "${_tmp_setup_complete}" "${_setup_complete_file}" 2>/dev/null; then
+                log "Setup wizard pre-marked complete at ${_setup_complete_file}"
+            else
+                rm -f "${_tmp_setup_complete}"
+                ai_warn "Could not write ${_setup_complete_file} (non-fatal)"
+            fi
+        fi
     fi
 fi
 
