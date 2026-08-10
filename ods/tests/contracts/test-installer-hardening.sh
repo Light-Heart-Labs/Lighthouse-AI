@@ -261,6 +261,29 @@ remove_install_dir \"$guard_ok_dir\"" 2>/dev/null || [[ -d "$guard_ok_dir" ]]; t
     echo "[FAIL] remove_install_dir refused a legitimate dedicated install dir"
     exit 1
 fi
+assert_contains "$bootstrap" 'is_unsafe_install_dir' "bootstrap should validate ODS_INSTALL_DIR before any rm -rf"
+
+echo "[contract] public bootstrap refuses to rm -rf a dangerous ODS_INSTALL_DIR"
+danger_home="$tmpdir/danger-home"
+mkdir -p "$danger_home"
+echo "must-survive" > "$danger_home/important-user-file.txt"
+
+# ODS_INSTALL_DIR resolving to $HOME itself (e.g. a mistyped "~") is exactly
+# the "incomplete install, no .env" shape remove_install_dir() used to
+# rm -rf without question. It must refuse instead of wiping $HOME.
+if HOME="$danger_home" \
+    ODS_BOOTSTRAP_ROOT="$danger_home" \
+    ODS_INSTALL_DIR="$danger_home" \
+    OSTYPE=linux-gnu \
+    bash get-ods.sh --force --non-interactive >"$tmpdir/bootstrap-danger.out" 2>&1; then
+  echo "[FAIL] bootstrap should refuse an ODS_INSTALL_DIR that resolves to \$HOME"
+  cat "$tmpdir/bootstrap-danger.out"
+  exit 1
+fi
+assert_contains "$tmpdir/bootstrap-danger.out" "system or home directory" "bootstrap did not explain why it refused the dangerous install dir"
+[[ -f "$danger_home/important-user-file.txt" ]] \
+  || { echo "[FAIL] bootstrap deleted files outside the ODS install dir"; cat "$tmpdir/bootstrap-danger.out"; exit 1; }
+echo "[PASS] bootstrap refuses a dangerous ODS_INSTALL_DIR without deleting anything"
 
 echo "[contract] public bootstrap can install from an exact commit SHA"
 sha_repo="$tmpdir/sha-ref-repo"
