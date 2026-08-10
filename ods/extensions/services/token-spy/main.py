@@ -794,7 +794,7 @@ async def _handle_non_streaming(client, raw_body, headers, model, sys_analysis,
             content=raw_body,
             headers=headers,
         )
-    except Exception as e:
+    except httpx.RequestError as e:
         log.error(f"Upstream request error: {e}")
         return JSONResponse(
             status_code=502,
@@ -803,7 +803,7 @@ async def _handle_non_streaming(client, raw_body, headers, model, sys_analysis,
 
     try:
         data = resp.json()
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         log.warning("Failed to parse Anthropic response JSON — token usage will be recorded as zero")
         data = {}
 
@@ -1017,7 +1017,7 @@ async def _handle_openai_non_streaming(client, raw_body, headers, model, sys_ana
             content=raw_body,
             headers=headers,
         )
-    except Exception as e:
+    except httpx.RequestError as e:
         log.error(f"Upstream request error: {e}")
         return JSONResponse(
             status_code=502,
@@ -1026,7 +1026,7 @@ async def _handle_openai_non_streaming(client, raw_body, headers, model, sys_ana
 
     try:
         data = resp.json()
-    except Exception:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         log.warning("Failed to parse OpenAI response JSON — token usage will be recorded as zero")
         data = {}
 
