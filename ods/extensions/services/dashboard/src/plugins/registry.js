@@ -1,11 +1,10 @@
 import { coreRoutes, coreExternalLinks } from './core'
-import { appendPath } from '../lib/serviceUrls'
 import {
-  MessageSquare, Network, Bot, Terminal, Search, Image, Code, ExternalLink
+  MessageSquare, Network, Bot, Terminal, Search, Image, ExternalLink
 } from 'lucide-react'
 
 const ICON_MAP = {
-  MessageSquare, Network, Bot, Terminal, Search, Image, Code, ExternalLink,
+  MessageSquare, Network, Bot, Terminal, Search, Image, ExternalLink,
 }
 
 const routeExtensions = []
@@ -51,24 +50,29 @@ export function getSidebarExternalLinks(context = {}) {
   const { status, getExternalUrl, apiLinks = [] } = context
   // Merge static plugin links with API-fetched links
   const allLinks = [...coreExternalLinks, ...externalLinkExtensions, ...apiLinks]
-  // Merge by id so API values take priority without discarding static launcher
-  // behavior such as OpenCode's always-visible application entry.
-  const linksById = new Map()
-  for (const link of allLinks) {
-    linksById.set(link.id, { ...(linksById.get(link.id) || {}), ...link })
+  // Deduplicate by id (API links take priority)
+  const seen = new Set()
+  const deduped = []
+  for (const link of allLinks.reverse()) {
+    if (!seen.has(link.id)) {
+      seen.add(link.id)
+      deduped.unshift(link)
+    }
   }
-  return [...linksById.values()].map(link => {
+  return deduped.map(link => {
     const healthy = link.alwaysHealthy ? true : isServiceHealthy(status, link.healthNeedles || [])
+    const uiPath = link.ui_path && link.ui_path !== '/' ? link.ui_path : ''
+    const url = link.url || (
+      typeof getExternalUrl === 'function'
+        ? getExternalUrl(link.port, uiPath, link.id)
+        : `http://localhost:${link.port}${uiPath}`
+    )
     return {
       key: link.id,
       label: link.label,
       icon: typeof link.icon === 'string' ? (ICON_MAP[link.icon] || ExternalLink) : (link.icon || ExternalLink),
       healthy,
-      alwaysVisible: Boolean(link.alwaysVisible),
-      url: link.public_url || appendPath(
-        typeof getExternalUrl === 'function' ? getExternalUrl(link.port) : `http://localhost:${link.port}`,
-        link.ui_path,
-      ),
+      url,
     }
   })
 }

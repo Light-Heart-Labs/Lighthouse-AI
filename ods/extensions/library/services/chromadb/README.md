@@ -18,7 +18,8 @@ Your data is preserved when disabling. To re-enable later: `ods enable chromadb`
 
 ## Access
 
-- **URL:** `http://localhost:8000`
+- **API docs:** `http://localhost:8000/docs/`
+- **REST API:** `http://localhost:8000`
 
 ## First-Time Setup
 

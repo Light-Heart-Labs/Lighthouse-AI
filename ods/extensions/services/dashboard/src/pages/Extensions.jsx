@@ -1,13 +1,12 @@
 import {
   Database, Cpu, Workflow, Plug, Image, MessageSquare, Code,
   FileText, Shield, Globe, Music, Video, Search, Puzzle,
-  Box, Loader2, RefreshCw, RotateCcw, ChevronDown, ChevronUp, Package, Info, X, Download, Trash2, ExternalLink, Terminal, Copy, Check,
+  Box, Loader2, RefreshCw, ChevronDown, ChevronUp, Package, Info, X, Download, Trash2, ExternalLink, Terminal, Copy, Check,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { DependencyBadges, DependencyConfirmDialog, DisableDependentWarning } from '../components/DependencyBadges'
 import { TemplatePicker } from '../components/TemplatePicker'
 import { getTemplateStatus } from '../lib/templates'
-import { serviceUrl } from '../lib/serviceUrls'
 import { createRecoveryTracker } from '../utils/recoveryTracker'
 
 // Re-export so existing importers of getTemplateStatus from this module keep working.
@@ -15,6 +14,17 @@ export { getTemplateStatus }
 
 // API/backend services with no user-facing web UI — show badge instead of port link.
 const HEADLESS_EXTENSIONS = new Set(['embeddings', 'tts', 'whisper', 'privacy-shield'])
+
+const extensionPort = (ext) => ext.external_port_default || ext.port || 0
+
+const extensionUiPath = (ext) => {
+  const path = ext.ui_path || '/'
+  return path && path !== '/' ? path : ''
+}
+
+const extensionUrl = (ext) => `http://${window.location.hostname}:${extensionPort(ext)}${extensionUiPath(ext)}`
+
+const hasExternalUi = (ext) => ext.external_link !== false && !HEADLESS_EXTENSIONS.has(ext.id)
 
 // Auth: nginx injects "Authorization: Bearer ${DASHBOARD_API_KEY}" via
 // proxy_set_header for all /api/ requests (see nginx.conf).  All fetches
@@ -230,7 +240,7 @@ export default function Extensions() {
     }
   }
 
-  const handleMutation = async (serviceId, action, { autoEnableDeps = false, force = false } = {}) => {
+  const handleMutation = async (serviceId, action, { autoEnableDeps = false } = {}) => {
     setMutating(serviceId)
     setConfirm(null)
     setDepConfirm(null)
@@ -243,12 +253,9 @@ export default function Extensions() {
       if (action === 'enable' && autoEnableDeps) {
         url += '?auto_enable_deps=true'
       }
-      if (action === 'update' && force) {
-        url += '?force=true'
-      }
       const opts = {
         method: action === 'uninstall' || action === 'purge' ? 'DELETE' : 'POST',
-        signal: AbortSignal.timeout(action === 'update' || action === 'rollback' ? 30 * 60 * 1000 : 300000),
+        signal: AbortSignal.timeout(300000),
       }
       if (action === 'purge') {
         opts.headers = { 'Content-Type': 'application/json' }
@@ -305,12 +312,6 @@ export default function Extensions() {
       disable: `Disable ${ext.name}? The service will be stopped.`,
       uninstall: `Remove ${ext.name}? You can reinstall it from the library.`,
       purge: `Permanently delete all data for ${ext.name}? This cannot be undone.`,
-      update: ext.locally_modified
-        ? `Update ${ext.name} from the ODS library? Local definition changes will be replaced, but retained as a rollback backup.`
-        : ext.update_status === 'untracked'
-        ? `Refresh this legacy ${ext.name} install from the ODS library and begin tracking future updates? The current definition will be retained as a rollback backup.`
-        : `Update ${ext.name} from the ODS library? The current definition will be retained for rollback.`,
-      rollback: `Restore the previous ${ext.name} extension definition? Current service data and configuration will be preserved.`,
     }
     setConfirm({ action, ext, message: messages[action] })
   }
@@ -383,13 +384,12 @@ export default function Extensions() {
 
       {/* Summary bar */}
       <div className="bg-theme-card border border-theme-border rounded-xl p-4 mb-6 liquid-metal-frame liquid-metal-frame--soft">
-        <div className="flex flex-wrap items-center gap-6 text-sm">
+        <div className="flex items-center gap-6 text-sm">
           <SummaryItem label="Total" value={summary.total || extensions.length} color="bg-theme-text-muted" />
           <SummaryItem label="Installed" value={summary.installed ?? 0} color="bg-green-500" />
           <SummaryItem label="Stopped" value={summary.stopped ?? 0} color="bg-red-500" />
           <SummaryItem label="Unhealthy" value={summary.unhealthy ?? 0} color="bg-amber-500" />
           <SummaryItem label="Available" value={summary.not_installed ?? 0} color="bg-theme-accent" />
-          <SummaryItem label="Updates" value={summary.updates_available ?? 0} color="bg-cyan-400" />
           <SummaryItem label="Installing" value={summary.installing ?? 0} color="bg-blue-500" />
           <SummaryItem label="Error" value={summary.error ?? 0} color="bg-red-500" />
           <SummaryItem label="Incompatible" value={summary.incompatible ?? 0} color="bg-orange-500" />
@@ -542,11 +542,7 @@ export default function Extensions() {
             <div className="flex justify-end gap-3">
               <button onClick={() => setConfirm(null)} autoFocus className="px-4 py-2 text-[10px] font-mono uppercase tracking-[0.16em] text-theme-text-muted/65 hover:text-theme-text transition-colors">Cancel</button>
               <button
-                onClick={() => handleMutation(confirm.ext.id, confirm.action, {
-                  force: confirm.action === 'update' && (
-                    confirm.ext.locally_modified || confirm.ext.update_status === 'untracked'
-                  ),
-                })}
+                onClick={() => handleMutation(confirm.ext.id, confirm.action)}
                 className={`px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg transition-colors ${
                   confirm.action === 'uninstall' || confirm.action === 'purge' ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' :
                   'bg-theme-accent/15 text-theme-accent-light hover:bg-theme-accent/25'
@@ -632,28 +628,6 @@ function StatusBadge({ status, statusStyle, ext, gpuBackend, onConsole }) {
   )
 }
 
-function LlmSwapBadge({ llm }) {
-  if (!llm?.consumes) return null
-
-  const safe = llm.swap_safe === true
-  const Icon = safe ? Check : X
-  const label = safe ? 'Swap-safe' : 'Not swap-safe'
-  const tone = safe
-    ? 'border-green-500/20 bg-green-500/10 text-green-300'
-    : 'border-red-500/20 bg-red-500/10 text-red-300'
-
-  return (
-    <span
-      data-testid="llm-swap-badge"
-      title={llm.swap_safe_reason || label}
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}
-    >
-      <Icon size={10} />
-      {label}
-    </span>
-  )
-}
-
 function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, onAction, mutating, progressData }) {
   const iconName = ext.features?.[0]?.icon
   const Icon = (iconName && ICON_MAP[iconName]) || Package
@@ -674,10 +648,6 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
   const isToggleable = isUserExt && (status === 'enabled' || status === 'cli_installed' || status === 'disabled' || status === 'error' || status === 'stopped' || status === 'unhealthy')
   const showRemove = isUserExt && (status === 'disabled' || isError)
   const showInstall = status === 'not_installed' && ext.installable
-  const showUpdate = isUserExt && ext.installable && (
-    ext.update_available || ext.update_status === 'untracked'
-  )
-  const showRollback = isUserExt && ext.rollback_available
 
   return (
     <div className={`bg-theme-card border rounded-xl transition-all liquid-metal-frame liquid-metal-sequence-card flex flex-col ${
@@ -713,12 +683,11 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
               )}
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <LlmSwapBadge llm={ext.llm} />
+          <div className="flex items-center gap-2">
             {isCore ? (
               <span
                 className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/15 uppercase tracking-wider cursor-help"
-                title="Built-in service — managed by ODS"
+                title="Built-in service — managed by DreamServer"
               >
                 core
               </span>
@@ -788,8 +757,8 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
       })()}
 
       {/* Card footer */}
-      <div className="border-t border-theme-border/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 bg-theme-bg/30">
-        <div className="flex flex-wrap gap-1.5">
+      <div className="border-t border-theme-border/40 px-4 py-2.5 flex items-center justify-between bg-theme-bg/30">
+        <div className="flex gap-1.5">
           {showInstall && (
             <button
               disabled={actionDisabled}
@@ -798,26 +767,6 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
               className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg bg-theme-accent text-white hover:bg-theme-accent-hover transition-colors disabled:opacity-50 shadow-sm shadow-theme-accent/20"
             >
               {isMutating ? <Loader2 size={12} className="animate-spin" /> : <><Download size={12} /> Install</>}
-            </button>
-          )}
-          {showUpdate && (
-            <button
-              disabled={actionDisabled}
-              title={disabledTitle || (ext.locally_modified ? 'Local definition changes will be backed up' : 'Update from ODS library')}
-              onClick={() => onAction(ext, 'update')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 transition-colors disabled:opacity-50"
-            >
-              {isMutating ? <Loader2 size={12} className="animate-spin" /> : <><RefreshCw size={12} /> {ext.update_status === 'untracked' ? 'Refresh' : 'Update'}</>}
-            </button>
-          )}
-          {showRollback && (
-            <button
-              disabled={actionDisabled}
-              title={disabledTitle || 'Restore previous extension definition'}
-              onClick={() => onAction(ext, 'rollback')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg bg-theme-surface-hover/50 text-theme-text-secondary hover:text-theme-text transition-colors disabled:opacity-50"
-            >
-              {isMutating ? <Loader2 size={12} className="animate-spin" /> : <><RotateCcw size={12} /> Rollback</>}
             </button>
           )}
           {isUserExt && isStopped && (
@@ -884,22 +833,22 @@ function ExtensionCard({ ext, gpuBackend, agentAvailable, onDetails, onConsole, 
         </div>
         <div className="flex items-center gap-2">
           <DependencyBadges dependsOn={ext.depends_on} dependencyStatus={ext.dependency_status} />
-          {status === 'enabled' && (ext.external_port_default || ext.port) && (ext.external_port_default || ext.port) !== 0 ? (
-            HEADLESS_EXTENSIONS.has(ext.id) ? (
+          {status === 'enabled' && extensionPort(ext) !== 0 ? (
+            !hasExternalUi(ext) ? (
               <span className="px-2 py-1 text-[9px] font-mono uppercase tracking-[0.12em] text-theme-text-muted/45">
                 API service
               </span>
             ) : (
               <a
-                href={serviceUrl({ ...ext, port: ext.external_port_default || ext.port })}
+                href={extensionUrl(ext)}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={e => e.stopPropagation()}
                 className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-mono text-theme-text-secondary hover:text-theme-text hover:bg-theme-surface-hover/40 rounded-lg transition-colors"
-                title={`Open on port ${ext.external_port_default || ext.port}`}
+                title={`Open ${ext.name} on port ${extensionPort(ext)}${extensionUiPath(ext)}`}
               >
                 <ExternalLink size={11} />
-                :{ext.external_port_default || ext.port}
+                :{extensionPort(ext)}
               </a>
             )
           ) : null}
@@ -964,13 +913,10 @@ function DetailModal({ ext, gpuBackend, onClose }) {
               <h3 className="text-lg font-semibold text-theme-text">{ext.name}</h3>
               <span
                 className={`text-xs px-2 py-0.5 rounded-full ${statusStyle}`}
-                title={isIncompatible ? `Requires ${ext.gpu_backends?.join(' or ') || 'specific GPU'} — your system: ${gpuBackend || 'unknown'}` : ext.source === 'core' ? 'Built-in service — managed by ODS' : undefined}
+                title={isIncompatible ? `Requires ${ext.gpu_backends?.join(' or ') || 'specific GPU'} — your system: ${gpuBackend || 'unknown'}` : ext.source === 'core' ? 'Built-in service — managed by DreamServer' : undefined}
               >
                 {(ext.status || 'not_installed').replace('_', ' ')}
               </span>
-              <div className="mt-1">
-                <LlmSwapBadge llm={ext.llm} />
-              </div>
             </div>
           </div>
           <button onClick={onClose} autoFocus className="text-theme-text-muted hover:text-theme-text-secondary transition-colors p-1">
@@ -988,15 +934,6 @@ function DetailModal({ ext, gpuBackend, onClose }) {
               <span className="text-theme-text-muted text-xs block mb-1">Port</span>
               <span className="text-theme-text font-mono">{ext.external_port_default || ext.port || '—'}</span>
             </div>
-            {ext.source === 'user' && (
-              <div className="bg-theme-card/50 rounded-lg p-3">
-                <span className="text-theme-text-muted text-xs block mb-1">Library</span>
-                <span className="text-theme-text capitalize">{(ext.update_status || 'unavailable').replace('_', ' ')}</span>
-                {ext.locally_modified && (
-                  <span className="text-amber-400 text-[10px] block mt-1">Local definition changed</span>
-                )}
-              </div>
-            )}
             <div className="bg-theme-card/50 rounded-lg p-3">
               <span className="text-theme-text-muted text-xs block mb-1">GPU</span>
               <span className="text-theme-text">{ext.gpu_backends?.join(', ') || 'none'}</span>
@@ -1073,7 +1010,7 @@ function DetailModal({ ext, gpuBackend, onClose }) {
               <h4 className="text-xs font-medium text-theme-text-muted uppercase tracking-wider mb-2">Login Credentials</h4>
               <p className="text-xs text-theme-text-muted mb-2">Run this in your terminal to see login info:</p>
               <CopyableCommand command={
-                `docker exec ods-${ext.id} env | grep -iE "${envVars.filter(v => /username|password|secret|token|key|user|email/i.test(v.key || '')).map(v => v.key).join('|')}"`
+                `docker exec dream-${ext.id} env | grep -iE "${envVars.filter(v => /username|password|secret|token|key|user|email/i.test(v.key || '')).map(v => v.key).join('|')}"`
               } />
               <p className="text-xs text-theme-text-muted mt-1.5">Or check your .env file directly:</p>
               <CopyableCommand command={
@@ -1086,8 +1023,8 @@ function DetailModal({ ext, gpuBackend, onClose }) {
           <div>
             <h4 className="text-xs font-medium text-theme-text-muted uppercase tracking-wider mb-2">CLI Commands</h4>
             <div className="space-y-1">
-              <CopyableCommand command={`ods enable ${ext.id}`} />
-              <CopyableCommand command={`ods disable ${ext.id}`} />
+              <CopyableCommand command={`dream enable ${ext.id}`} />
+              <CopyableCommand command={`dream disable ${ext.id}`} />
             </div>
           </div>
         </div>
