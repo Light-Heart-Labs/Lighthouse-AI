@@ -556,7 +556,7 @@ def dir_size_gb(path: Path) -> float:
     try:
         for f in path.rglob("*"):
             try:
-                if not f.is_symlink() and f.is_file():
+                if f.is_file() and not f.is_symlink():
                     total += f.stat().st_size
             except (PermissionError, OSError):
                 pass
