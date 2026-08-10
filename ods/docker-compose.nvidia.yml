@@ -8,14 +8,16 @@ services:
     image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda-b9014}
     deploy:
       resources:
+        limits:
+          cpus: '${LLAMA_CPU_LIMIT:-16.0}'
+          memory: ${LLAMA_SERVER_MEMORY_LIMIT:-64G}
         reservations:
+          cpus: '${LLAMA_CPU_RESERVATION:-2.0}'
+          memory: 4G
           devices:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-        limits:
-          cpus: '${LLAMA_CPU_LIMIT:-16.0}'
-          memory: ${LLAMA_SERVER_MEMORY_LIMIT:-64G}
 
   dashboard-api:
     deploy:
