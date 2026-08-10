@@ -69,6 +69,8 @@ jobs:
 
       - name: Test policy gate
         run: python -m pytest tests/ -v
+      - name: Test provider pricing lookups
+        run: python -m pytest tests/test_provider_pricing.py -v
 
   integration-smoke:
     runs-on: ubuntu-latest
