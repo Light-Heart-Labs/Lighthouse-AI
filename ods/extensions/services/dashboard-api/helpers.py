@@ -610,42 +610,6 @@ async def get_loaded_model() -> Optional[str]:
         # llama.cpp: /v1/models returns the loaded model with status info.
         resp = await client.get(f"http://{host}:{port}{_LLM_API_PREFIX}/models")
         return _llama_loaded_model(resp.json())
-            payload = resp.json()
-            if not isinstance(payload, dict):
-                raise ValueError("Lemonade health response is not an object")
-            loaded = payload.get("model_loaded")
-            return loaded if isinstance(loaded, str) and loaded else None
-
-        # llama.cpp: /v1/models returns the loaded model with status info.
-        resp = await client.get(f"http://{host}:{port}{_LLM_API_PREFIX}/models")
-        payload = resp.json()
-        if not isinstance(payload, dict):
-            raise ValueError("llama-server models response is not an object")
-        models = payload.get("data", [])
-        if not isinstance(models, list):
-            raise ValueError("llama-server models data is not a list")
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            status = m.get("status", {})
-            model_id = m.get("id")
-            if (
-                isinstance(model_id, str)
-                and model_id
-                and isinstance(status, dict)
-                and status.get("value") == "loaded"
-            ):
-                return model_id
-        return next(
-            (
-                model_id
-                for model in models
-                if isinstance(model, dict)
-                and isinstance((model_id := model.get("id")), str)
-                and model_id
-            ),
-            None,
-        )
     except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
         logger.debug("get_loaded_model failed: %s", e)
     return None

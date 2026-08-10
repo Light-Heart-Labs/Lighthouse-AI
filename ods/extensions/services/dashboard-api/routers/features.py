@@ -26,7 +26,6 @@ def _svc_external_port(service_id: str, config: dict) -> int:
     return int(candidate or 0)
 
 
-def calculate_feature_status(feature: dict, services: list, gpu_info: Optional[GPUInfo]) -> dict:
 def calculate_feature_status(
     feature: dict, services: list, gpu_info: Optional[GPUInfo]
 ) -> dict:
