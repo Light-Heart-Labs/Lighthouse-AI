@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
-  "ods_version": "2.6.0",
+  "ods_version": "2.6.1-exp",
   "min_compatible_ods_version": "1.0.0",
   "manifestVersion": "1.0.0",
   "release": {
-    "version": "2.6.0",
+    "version": "2.6.1-exp",
     "channel": "stable",
     "date": "2026-07-28"
   },
