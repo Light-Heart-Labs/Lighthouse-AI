@@ -69,6 +69,13 @@ set_last_migrated_version() {
     tmp_state="$(mktemp "${MIGRATION_STATE}.XXXXXX.tmp")"
     echo "$version" > "$tmp_state"
     mv -f "$tmp_state" "$MIGRATION_STATE"
+    local target_dir
+    target_dir="$(dirname "$MIGRATION_STATE")"
+    mkdir -p "$target_dir"
+    local tmp_file
+    tmp_file="$(mktemp "$target_dir/.migration-state.XXXXXX.tmp")"
+    echo "$version" > "$tmp_file"
+    mv -f "$tmp_file" "$MIGRATION_STATE"
 }
 
 # Compare semantic versions
