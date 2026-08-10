@@ -102,6 +102,32 @@ def test_extension_catalog_skips_non_object_entries(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CATALOG_PATH", catalog)
 
     assert config.load_extension_catalog() == [valid]
+def test_core_service_ids_load_valid_registry(monkeypatch, tmp_path):
+    registry = tmp_path / "config" / "core-service-ids.json"
+    registry.parent.mkdir()
+    registry.write_text(
+        json.dumps(["custom-core", "dashboard"]), encoding="utf-8"
+    )
+    monkeypatch.setattr(config, "INSTALL_DIR", str(tmp_path))
+
+    assert config._load_core_service_ids() == frozenset({
+        "custom-core", "dashboard",
+    })
+
+
+@pytest.mark.parametrize("payload", [{"dashboard": True}, [], [None], "dashboard"])
+def test_core_service_ids_fall_back_for_invalid_registry(
+    monkeypatch, tmp_path, payload
+):
+    registry = tmp_path / "config" / "core-service-ids.json"
+    registry.parent.mkdir()
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(config, "INSTALL_DIR", str(tmp_path))
+
+    loaded = config._load_core_service_ids()
+
+    assert "dashboard-api" in loaded
+    assert "llama-server" in loaded
 
 
 class TestReadManifestFile:
