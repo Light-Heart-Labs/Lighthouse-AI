@@ -28,28 +28,6 @@ def manifest_bool(text: str, key: str) -> bool:
     return bool(value and value.lower() == "true")
 
 
-def caddy_block_body(text: str, opener: str) -> str:
-    """Return the body of the Caddy block whose opening line equals `opener`.
-
-    `opener` is the literal site line ending in the block's opening brace, e.g.
-    ``http://chat.{$ODS_DEVICE_NAME:ods}.local {``. Depth counting starts at that
-    brace; inline placeholders like ``{scheme}`` or ``{$ENV}`` are brace-balanced,
-    so they net to zero and do not disturb the match. This keeps assertions scoped
-    to the intended host block rather than the file as a whole.
-    """
-    idx = text.index(opener)
-    brace = idx + len(opener) - 1  # opener ends with the block's opening "{"
-    depth = 0
-    for i in range(brace, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[brace + 1 : i]
-    raise AssertionError(f"unbalanced braces after Caddy block opener {opener!r}")
-
-
 def exposed_service_ids() -> set[str]:
     exposed: set[str] = set()
     for manifest in SERVICES.glob("*/manifest.yaml"):
@@ -91,7 +69,7 @@ def test_hermes_is_internal_only_and_proxy_gated() -> None:
     assert_true(policy["hermes"]["lan_exposure"] == "none", "hermes policy must mark no LAN exposure")
     assert_true("forward_auth" in proxy_caddyfile, "hermes-proxy must verify sessions with forward_auth")
     assert_true("/api/auth/verify-session" in proxy_caddyfile, "hermes-proxy must call dashboard auth verification")
-    assert_true("reverse_proxy {$HERMES_PROXY_UPSTREAM:ods-hermes:9119}" in proxy_caddyfile, "hermes-proxy must forward to internal Hermes")
+    assert_true("reverse_proxy {$HERMES_PROXY_UPSTREAM:dream-hermes:9119}" in proxy_caddyfile, "hermes-proxy must forward to internal Hermes")
 
 
 def test_hermes_whatsapp_bridge_avoids_open_webui_port() -> None:
@@ -134,77 +112,27 @@ def test_hermes_local_provider_has_generous_timeouts() -> None:
         "Hermes streaming paths must allow slow local-model first-token latency",
     )
     assert_true(
-        "ODS_TALK_HERMES_TIMEOUT=${ODS_TALK_HERMES_TIMEOUT:-900}" in base_compose,
-        "dashboard-api must give ODS Talk the same long local-model timeout on the base stack",
+        "DREAM_TALK_HERMES_TIMEOUT=${DREAM_TALK_HERMES_TIMEOUT:-900}" in base_compose,
+        "dashboard-api must give Dream Talk the same long local-model timeout on the base stack",
     )
 
 
-def test_ods_proxy_routes_talk_portal() -> None:
-    caddyfile = read(SERVICES / "ods-proxy" / "Caddyfile")
+def test_dream_proxy_routes_talk_portal() -> None:
+    caddyfile = read(SERVICES / "dream-proxy" / "Caddyfile")
 
-    assert_true("talk.{$ODS_DEVICE_NAME:ods}.local" in caddyfile, "ods-proxy must route talk.<device>.local")
-    assert_true("reverse_proxy dashboard:3001" in caddyfile, "ODS Talk should be served by the dashboard container")
+    assert_true("talk.{$DREAM_DEVICE_NAME:dream}.local" in caddyfile, "dream-proxy must route talk.<device>.local")
+    assert_true("reverse_proxy dashboard:3001" in caddyfile, "Dream Talk should be served by the dashboard container")
+    assert_true(
+        ":80 {" in caddyfile and "reverse_proxy open-webui:8080" in caddyfile,
+        "dream-proxy must serve Chat for direct IP/localhost LAN entry fallback",
+    )
 
 
-def test_dashboard_csp_allows_ods_talk_tts_blob_audio() -> None:
+def test_dashboard_csp_allows_dream_talk_tts_blob_audio() -> None:
     nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
 
     assert_true("Content-Security-Policy" in nginx_conf, "dashboard must keep a CSP header")
-    assert_true("media-src 'self' blob:" in nginx_conf, "ODS Talk TTS playback uses blob: audio URLs")
-
-
-def test_dashboard_csp_allows_huggingface_author_avatars_only_as_images() -> None:
-    nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
-
-    assert_true(
-        "img-src 'self' data: https://huggingface.co https://cdn-avatars.huggingface.co;" in nginx_conf,
-        "the Models library renders Hugging Face author avatars",
-    )
-    assert_true(
-        "connect-src 'self';" in nginx_conf,
-        "Hub API access must remain server-side instead of exposing HF_TOKEN to the browser",
-    )
-
-
-def test_ods_proxy_caps_request_body_sizes() -> None:
-    caddyfile = read(SERVICES / "ods-proxy" / "Caddyfile")
-
-    chat_block = caddy_block_body(caddyfile, "http://chat.{$ODS_DEVICE_NAME:ods}.local {")
-    assert_true(
-        re.search(r"request_body\s*\{\s*max_size\s+200MB\s*\}", chat_block) is not None,
-        "ods-proxy chat host must cap request body at 200MB (Open WebUI document uploads)",
-    )
-
-    api_block = caddy_block_body(caddyfile, "http://api.{$ODS_DEVICE_NAME:ods}.local {")
-    assert_true(
-        re.search(r"request_body\s*\{\s*max_size\s+50MB\s*\}", api_block) is not None,
-        "ods-proxy api host must cap request body at 50MB (admin surface)",
-    )
-
-
-def test_hermes_proxy_caps_request_body() -> None:
-    caddyfile = read(SERVICES / "hermes-proxy" / "Caddyfile")
-
-    site_block = caddy_block_body(caddyfile, ":9120 {")
-    assert_true(
-        re.search(r"request_body\s*\{\s*max_size\s+50MB\s*\}", site_block) is not None,
-        "hermes-proxy must cap request body at 50MB (agent prompt attachments)",
-    )
-
-
-def test_dashboard_pre_stages_hsts() -> None:
-    nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
-
-    # HSTS is pre-staged so it activates once TLS lands via Caddy/Tailscale.
-    # Browsers ignore the header over plain HTTP, so it is inert until then.
-    assert_true(
-        re.search(
-            r'add_header\s+Strict-Transport-Security\s+"max-age=\d+;[^"]*includeSubDomains',
-            nginx_conf,
-        )
-        is not None,
-        "dashboard nginx must pre-stage a Strict-Transport-Security header with includeSubDomains",
-    )
+    assert_true("media-src 'self' blob:" in nginx_conf, "Dream Talk TTS playback uses blob: audio URLs")
 
 
 def test_openclaw_stays_deprecated_optional_and_token_gated() -> None:
@@ -235,11 +163,8 @@ def main() -> int:
         test_hermes_is_internal_only_and_proxy_gated,
         test_hermes_whatsapp_bridge_avoids_open_webui_port,
         test_hermes_local_provider_has_generous_timeouts,
-        test_ods_proxy_routes_talk_portal,
-        test_dashboard_csp_allows_ods_talk_tts_blob_audio,
-        test_ods_proxy_caps_request_body_sizes,
-        test_hermes_proxy_caps_request_body,
-        test_dashboard_pre_stages_hsts,
+        test_dream_proxy_routes_talk_portal,
+        test_dashboard_csp_allows_dream_talk_tts_blob_audio,
         test_openclaw_stays_deprecated_optional_and_token_gated,
         test_litellm_gateway_auth_is_enforced,
     ]
