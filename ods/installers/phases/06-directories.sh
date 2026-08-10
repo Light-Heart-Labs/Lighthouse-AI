@@ -45,7 +45,7 @@ if $DRY_RUN; then
     log "[DRY RUN] Would validate .env against schema"
 else
     # shellcheck source=../lib/llama-memory-budget.sh
-    source "$SCRIPT_DIR/lib/llama-memory-budget.sh"
+    source "$SCRIPT_DIR/installers/lib/llama-memory-budget.sh"
 
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
