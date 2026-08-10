@@ -3,6 +3,8 @@ services:
     image: tailscale/tailscale:v1.96.5
     container_name: ods-tailscale
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     # network_mode: host puts the Tailscale daemon in the host's network
     # namespace so the device's tailnet IP (100.x.y.z) is the host
     # itself. **It does NOT make loopback-bound services reachable
