@@ -23,6 +23,18 @@ It should feel that way for everyone.
 
 </div>
 
+> [!NOTE]
+> **This is an unaffiliated, experimental fork** of [Osmantic/ODS](https://github.com/Osmantic/ODS),
+> not the official project. It's used to try out AI-assisted maintenance:
+> Claude reviews and merges eligible upstream pull requests into this fork's
+> `main` on an ad hoc basis (tracked in
+> [`MERGED_UPSTREAM_PRS.md`](MERGED_UPSTREAM_PRS.md)). Branch tracking here is
+> **loose and may diverge** from upstream at any point — commits can be ahead,
+> behind, or reordered relative to `Osmantic/ODS`, and this fork carries no
+> support or release guarantees of its own. For the official project, install
+> instructions, and releases, go to
+> [github.com/Osmantic/ODS](https://github.com/Osmantic/ODS).
+
 ODS installs and wires together everything you need to run AI locally, so you do not have to assemble Ollama, Open WebUI, n8n, ComfyUI, and privacy tools by hand:
 
 - **Local model inference** — run open models on your own hardware
