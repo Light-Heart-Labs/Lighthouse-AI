@@ -478,11 +478,22 @@ def query_session_status(agent: str, char_limit: int = 200_000) -> dict:
 
 
 def query_recent_events(limit: int = 100, after_id: str = None):
-    """Query recent token usage events for SSE streaming."""
+    """Query recent token usage events for SSE streaming.
+
+    The caller (main.py's SSE stream) advances its cursor to the `id` of the
+    last event in the returned list after each poll. That only produces a
+    forward-moving cursor if results come back oldest-first; with a cursor
+    query ordered newest-first (DESC), the cursor would land on the OLDEST
+    id in the batch instead of the newest, so the next poll re-fetches
+    everything newer than that — re-emitting events already sent.
+    """
     conn = _get_conn()
     conn.row_factory = sqlite3.Row
 
     if after_id:
+        # id is INTEGER PRIMARY KEY AUTOINCREMENT, so it is already a stable,
+        # strictly-increasing insertion-order cursor — ascending order keeps
+        # the client's "last id seen" cursor moving forward.
         rows = conn.execute(
             """
             SELECT
@@ -492,12 +503,14 @@ def query_recent_events(limit: int = 100, after_id: str = None):
                 estimated_cost_usd as cost_usd, timestamp
             FROM usage
             WHERE id > ?
-            ORDER BY timestamp DESC
+            ORDER BY id ASC
             LIMIT ?
             """,
             (after_id, limit)
         ).fetchall()
     else:
+        # Initial poll: fetch the newest window efficiently (DESC + LIMIT),
+        # then emit it oldest-first so the cursor ends on the newest event.
         rows = conn.execute(
             """
             SELECT
@@ -506,10 +519,11 @@ def query_recent_events(limit: int = 100, after_id: str = None):
                 (input_tokens + output_tokens) as total_tokens,
                 estimated_cost_usd as cost_usd, timestamp
             FROM usage
-            ORDER BY timestamp DESC
+            ORDER BY id DESC
             LIMIT ?
             """,
             (limit,)
         ).fetchall()
+        rows = list(reversed(rows))
 
     return [dict(r) for r in rows]
