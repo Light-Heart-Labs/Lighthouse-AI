@@ -99,6 +99,12 @@ The installer checks RAM and disk in phase 04 and can warn or block depending on
 
 The installer can install Docker on Linux (phase 05) or prompt you to install it. On macOS and Windows, install Docker Desktop first.
 
+**Bundled embeddings image (ARM hosts):** the default embeddings service image
+is amd64-only (`ghcr.io/huggingface/text-embeddings-inference:cpu-*`). On an
+ARM64 Linux host, set both `EMBEDDINGS_IMAGE` and `EMBEDDINGS_PLATFORM` in
+`.env` to a compatible image/platform pair — see `.env.example` for the exact
+keys and defaults.
+
 ---
 
 ## Extensions and version compatibility

@@ -161,3 +161,14 @@ Priority order when principles conflict: **Let It Crash > KISS > Pure Functions 
 - Compose stack resolver: `ods/scripts/resolve-compose-stack.sh`
 - Environment schema: `ods/.env.schema.json`
 - Environment example: `ods/.env.example`
+
+## Fork Maintenance
+
+This is a fork of `Osmantic/ODS` (`azilber/ODS`). `MERGED_UPSTREAM_PRS.md`
+(repo root) tracks which upstream pull requests have been evaluated and
+ported into this fork's `main` — merged, deliberately superseded, skipped
+pending manual review, or not yet processed. When porting more upstream PRs,
+consult and append to that file rather than re-scanning the upstream PR list
+from scratch; it documents the filtering/merge process to follow for
+consistency (version-ancestry gate, lint/structural/legacy-token checks,
+conflict resolution).
