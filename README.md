@@ -31,9 +31,11 @@ It should feel that way for everyone.
 > [`MERGED_UPSTREAM_PRS.md`](MERGED_UPSTREAM_PRS.md)). Branch tracking here is
 > **loose and may diverge** from upstream at any point — commits can be ahead,
 > behind, or reordered relative to `Osmantic/ODS`, and this fork carries no
-> support or release guarantees of its own. For the official project, install
-> instructions, and releases, go to
-> [github.com/Osmantic/ODS](https://github.com/Osmantic/ODS).
+> support or release guarantees of its own. CI here is also reduced: the
+> upstream AI-assisted workflows (which need an API key) and several
+> persistently failing jobs have been removed, so checks on this fork cover
+> less than upstream's. For the official project, install instructions, and
+> releases, go to [github.com/Osmantic/ODS](https://github.com/Osmantic/ODS).
 
 ODS installs and wires together everything you need to run AI locally, so you do not have to assemble Ollama, Open WebUI, n8n, ComfyUI, and privacy tools by hand:
 

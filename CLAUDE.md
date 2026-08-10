@@ -172,3 +172,25 @@ consult and append to that file rather than re-scanning the upstream PR list
 from scratch; it documents the filtering/merge process to follow for
 consistency (version-ancestry gate, lint/structural/legacy-token checks,
 conflict resolution).
+
+### Removed CI workflows
+
+This fork runs a reduced subset of upstream's GitHub Actions. Eleven
+workflows were deleted and **should not be reintroduced** when syncing
+upstream changes that touch `.github/workflows/`:
+
+- Require an `ANTHROPIC_API_KEY` this fork does not set (would no-op or
+  fail, and would incur API usage): `ai-issue-triage.yml`,
+  `autonomous-code-scanner.yml`, `claude-review.yml`, `issue-to-pr.yml`,
+  `nightly-code-review.yml`, `nightly-docs-update.yml`, `release-notes.yml`.
+- Failed persistently here: `dashboard.yml`, `test-linux.yml`,
+  `lint-powershell.yml`, `lint-python.yml`.
+
+Kept (green, first-party actions only, no secrets beyond the automatic
+`GITHUB_TOKEN`): `lint-shell.yml`, `secret-scan.yml`, `validate-env.yml`,
+`validate-compose.yml`, `validate-catalog.yml`, `type-check-python.yml`,
+`matrix-smoke.yml`, `openclaw-image-diff.yml`.
+
+Note that `make lint` only `py_compile`s `main.py` and `agent_monitor.py`,
+so it is **not** a substitute for the removed Python lint job — it will not
+catch syntax errors in other Python files.
