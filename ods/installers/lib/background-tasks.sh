@@ -23,11 +23,30 @@ bg_task_start() {
     local description="$3"
     local log_file="$4"
     
-    # Create registry if it doesn't exist
-    if [[ ! -f "$BG_TASK_REGISTRY" ]]; then
-        echo "[]" > "$BG_TASK_REGISTRY"
+    # Create registry if it doesn't exist. BG_TASK_REGISTRY defaults to a
+    # predictable path under the shared, world-writable /tmp — a local
+    # attacker could pre-plant a symlink there pointing at an arbitrary
+    # file. A plain `echo "[]" > "$BG_TASK_REGISTRY"` would silently follow
+    # that symlink and clobber whatever it points to (this installer often
+    # runs as root). Create it with O_CREAT|O_EXCL instead, which refuses
+    # to touch a path that already exists — symlink or not — rather than
+    # dereferencing it.
+    if [[ ! -e "$BG_TASK_REGISTRY" ]]; then
+        python3 - "$BG_TASK_REGISTRY" <<'PY'
+import os
+import sys
+
+registry_path = sys.argv[1]
+try:
+    fd = os.open(registry_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    pass
+else:
+    with os.fdopen(fd, "w") as f:
+        f.write("[]")
+PY
     fi
-    
+
     # Add task to registry
     python3 - "$BG_TASK_REGISTRY" "$task_id" "$pid" "$description" "$log_file" <<'PY'
 import json
