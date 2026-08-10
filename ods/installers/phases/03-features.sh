@@ -1,13 +1,13 @@
 #!/bin/bash
 # ============================================================================
-# Dream Server Installer — Phase 03: Feature Selection
+# ODS Installer — Phase 03: Feature Selection
 # ============================================================================
 # Part of: installers/phases/
 # Purpose: Interactive feature selection menu
 #
 # Expects: INTERACTIVE, DRY_RUN, TIER, ENABLE_VOICE, ENABLE_WORKFLOWS,
 #           ENABLE_RAG, ENABLE_HERMES, ENABLE_OPENCLAW, GPU_COUNT, GPU_BACKEND,
-#           HOST_ARCH,
+#           HOST_ARCH, HOST_PAGE_SIZE,
 #           GPU_TOPOLOGY_JSON, LLM_MODEL_SIZE_MB, SCRIPT_DIR, VERBOSE, DEBUG,
 #           GPU_INDICES, GPU_UUIDS (arrays from topology),
 #           show_phase(), show_install_menu(), chapter(), bootline(),
@@ -29,7 +29,7 @@ if (( BASH_VERSINFO[0] < 4 )); then
     return 1 2>/dev/null || exit 1
 fi
 
-dream_progress 18 "features" "Selecting features"
+ods_progress 18 "features" "Selecting features"
 if $INTERACTIVE && ! $DRY_RUN; then
     show_phase 2 6 "Feature Selection" "~1 minute"
     show_install_menu
@@ -89,7 +89,7 @@ if ! $INTERACTIVE && [[ "$ENABLE_COMFYUI" == "true" ]]; then
     esac
 fi
 
-if [[ "${ENABLE_HERMES:-false}" == "true" && "${DREAM_MODE:-local}" != "cloud" ]]; then
+if [[ "${ENABLE_HERMES:-false}" == "true" && "${ODS_MODE:-local}" != "cloud" ]]; then
     HERMES_CONTEXT_SIZE="${HERMES_CONTEXT_SIZE:-65536}"
     if [[ "${MAX_CONTEXT:-0}" =~ ^[0-9]+$ ]] && (( MAX_CONTEXT < HERMES_CONTEXT_SIZE )); then
         ai_warn "Hermes enabled: increasing llama context from ${MAX_CONTEXT} to ${HERMES_CONTEXT_SIZE} (64K floor)."
@@ -135,18 +135,16 @@ if ! $DRY_RUN; then
 
     # Linux arm64/aarch64 compatibility guard.
     #
-    # Qdrant's official arm64 image is linked against jemalloc builds that
-    # abort on kernels with larger-than-4K memory pages (observed on NVIDIA
-    # DGX/Brev GB300 Ubuntu with PAGE_SIZE=65536):
+    # The official qdrant/qdrant arm64 image is currently linked against a
+    # jemalloc build that aborts on larger-than-4K kernel pages. This is
+    # observed on NVIDIA DGX/Brev GB300 Ubuntu 64K kernels:
     #
     #   <jemalloc>: Unsupported system page size
     #
-    # There is no official runtime env knob or image tag that fixes this as
-    # of the pinned qdrant/qdrant:v1.16.3 or current upstream tags. Keep the
-    # rest of the local AI stack installable and mark Qdrant unavailable on
-    # this host class until upstream publishes a compatible image.
+    # Keep the rest of ODS installable on that host class by excluding only
+    # Qdrant until upstream publishes a compatible image.
     _host_arch="${HOST_ARCH:-$(uname -m 2>/dev/null || echo unknown)}"
-    _host_page_size="$(getconf PAGE_SIZE 2>/dev/null || echo 4096)"
+    _host_page_size="${HOST_PAGE_SIZE:-$(getconf PAGE_SIZE 2>/dev/null || echo 4096)}"
     if [[ "$_host_arch" == "arm64" || "$_host_arch" == "aarch64" ]]; then
         if [[ "$_host_page_size" =~ ^[0-9]+$ ]] && (( _host_page_size > 4096 )); then
             if [[ "${ENABLE_QDRANT:-${ENABLE_RAG:-false}}" == "true" ]]; then
@@ -171,9 +169,9 @@ if ! $DRY_RUN; then
     _sync_extension_compose "${ENABLE_VOICE:-}"      whisper    "Whisper (STT)" "voice not enabled"
     _sync_extension_compose "${ENABLE_VOICE:-}"      tts        "Kokoro (TTS)"  "voice not enabled"
     _sync_extension_compose "${ENABLE_WORKFLOWS:-}"  n8n        "n8n"           "workflows not enabled"
-    # RAG = qdrant (vector store) + embeddings (TEI). Both must follow
-    # ENABLE_RAG by default. Host-specific guards above may set the concrete
-    # service flags false when an upstream image cannot run on this machine.
+    # RAG = qdrant (vector store) + embeddings (TEI). Both default from
+    # ENABLE_RAG, then host-specific guards above may disable the concrete
+    # service when an upstream image cannot run on this machine.
     _sync_extension_compose "${ENABLE_QDRANT:-${ENABLE_RAG:-false}}" qdrant "Qdrant" "RAG not enabled or unsupported on this host"
     _sync_extension_compose "${ENABLE_EMBEDDINGS:-${ENABLE_RAG:-false}}" embeddings "Embeddings (TEI)" "RAG not enabled or unsupported on this host"
     # Hermes is the default agent as of 2026-05-12. hermes-proxy is the
@@ -187,7 +185,7 @@ if ! $DRY_RUN; then
     _sync_extension_compose "${ENABLE_COMFYUI:-}"    comfyui    "ComfyUI"       "image generation not enabled"
     _sync_extension_compose "${ENABLE_PERPLEXICA:-}" perplexica "Perplexica"    "deep research not enabled"
     _sync_extension_compose "${ENABLE_PRIVACY_SHIELD:-}" privacy-shield "Privacy Shield" "privacy shield not enabled"
-    _sync_extension_compose "${ENABLE_DREAM_PROXY:-false}" dream-proxy "Dream proxy" "LAN web proxy not enabled"
+    _sync_extension_compose "${ENABLE_ODS_PROXY:-false}" ods-proxy "ODS proxy" "LAN web proxy not enabled"
     _sync_extension_compose "${ENABLE_TAILSCALE:-false}" tailscale "Tailscale"  "remote access not enabled"
     _sync_extension_compose "${ENABLE_LANGFUSE:-}"   langfuse   "Langfuse"      "LLM observability not enabled"
     _sync_extension_compose "${ENABLE_BRAVE_SEARCH:-false}" brave-search "Brave Search" "Brave Search API not enabled"
@@ -203,7 +201,7 @@ if [[ -x "$SCRIPT_DIR/scripts/resolve-compose-stack.sh" ]]; then
     # plumbing on installs that already detected GPU_COUNT >= 2 in Phase 02.
     _refreshed_flags=$("$SCRIPT_DIR/scripts/resolve-compose-stack.sh" \
         --script-dir "$SCRIPT_DIR" --tier "${TIER:-1}" --gpu-backend "${GPU_BACKEND:-nvidia}" \
-        --gpu-count "${GPU_COUNT:-1}" --dream-mode "${DREAM_MODE:-local}" 2>/dev/null) || true
+        --gpu-count "${GPU_COUNT:-1}" --ods-mode "${ODS_MODE:-local}" 2>/dev/null) || true
     if [[ -n "$_refreshed_flags" ]]; then
         COMPOSE_FLAGS="$_refreshed_flags"
         log "Compose flags refreshed after feature selection"
@@ -271,8 +269,8 @@ fi
 # Multi-GPU Configuration
 
 # write $GPU_TOPOLOGY_JSON into a tmpfile to use by the commands
-TOPOLOGY_FILE=$(mktemp /tmp/ds_gpu_topology.XXXXXX.json)
-trap "rm -f $TOPOLOGY_FILE" EXIT
+TOPOLOGY_FILE=$(mktemp "${TMPDIR:-/tmp}/ods_gpu_topology.XXXXXX.json")
+trap 'rm -f "$TOPOLOGY_FILE"' EXIT
 echo "$GPU_TOPOLOGY_JSON" > "$TOPOLOGY_FILE"
 
 ASSIGN_GPUS_SCRIPT="$SCRIPT_DIR/scripts/assign_gpus.py"
@@ -362,7 +360,7 @@ run_custom() {
   for svc in whisper comfyui embeddings; do
     local valid=false
     while ! $valid; do
-      read -rp "  GPU for ${WHT}${svc}${NC} (0-$((GPU_COUNT-1))): " chosen
+      read -rp "  GPU for ${WHT}${svc}${NC} (0-$((GPU_COUNT-1))): " chosen < /dev/tty
       if [[ "$chosen" =~ ^[0-9]+$ ]] && [[ $chosen -ge 0 ]] && [[ $chosen -lt $GPU_COUNT ]]; then
         CUSTOM_ASSIGNMENT[$svc]=$chosen; valid=true
       else
@@ -380,8 +378,11 @@ run_custom() {
     $found || default_llama+="${idx},"
   done
   default_llama="${default_llama%,}"
+  if [[ -z "$default_llama" ]]; then
+    default_llama=$(IFS=,; echo "${GPU_INDICES[*]}")
+  fi
 
-  read -rp "  GPUs for ${WHT}llama_server${NC} [${default_llama}]: " llama_input
+  read -rp "  GPUs for ${WHT}llama_server${NC} [${default_llama}]: " llama_input < /dev/tty
   llama_input="${llama_input:-$default_llama}"
   IFS=',' read -ra LLAMA_GPUS_CUSTOM <<< "$llama_input"
   for g in "${LLAMA_GPUS_CUSTOM[@]}"; do
@@ -431,9 +432,13 @@ run_custom() {
   echo -e "  ${WHT}Llama parallelism:${NC}  mode=${BGRN}${mode}${NC}  TP=${tp}  PP=${pp}  mem_util=${mem_util}  ${DIM}(min_rank=${min_rank})${NC}"
   echo ""
 
-  read -rp "  Apply this configuration? [Y/n]: " confirm
+  read -rp "  Apply this configuration? [Y/n]: " confirm < /dev/tty
   confirm="${confirm:-Y}"
-  [[ ! $confirm =~ ^[Yy]$ ]] && warn "Cancelled." && return
+  if [[ ! $confirm =~ ^[Yy]$ ]]; then
+    warn "Custom assignment cancelled; using automatic assignment."
+    run_automatic
+    return
+  fi
 
   local llama_uuids_json
   llama_uuids_json=$(for g in "${LLAMA_GPUS_CUSTOM[@]}"; do echo "\"${GPU_UUIDS[$g]}\""; done | jq -sc '.')
@@ -479,13 +484,56 @@ _show_json() {
   echo ""; bootline; echo ""
 }
 
+_decode_base64_portable() {
+  if base64 --help 2>&1 | grep -q -- '--decode'; then
+    base64 --decode
+  elif base64 -d </dev/null >/dev/null 2>&1; then
+    base64 -d
+  else
+    base64 -D
+  fi
+}
+
+_load_existing_gpu_assignment_json() {
+  [[ "${DRY_RUN:-false}" == "true" ]] && return 1
+  [[ "${INTERACTIVE:-false}" == "true" ]] && return 1
+  [[ -f "$INSTALL_DIR/.env" ]] || return 1
+
+  local encoded decoded
+  encoded=$(awk -F= '$1=="GPU_ASSIGNMENT_JSON_B64"{print substr($0, index($0, "=") + 1); exit}' "$INSTALL_DIR/.env" 2>/dev/null | tr -d '\r' || true)
+  encoded="${encoded%\"}"
+  encoded="${encoded#\"}"
+  encoded="${encoded%\'}"
+  encoded="${encoded#\'}"
+  [[ -n "$encoded" ]] || return 1
+
+  decoded=$(printf '%s' "$encoded" | _decode_base64_portable 2>/dev/null) || return 1
+  echo "$decoded" | jq -e '.gpu_assignment.services.llama_server.gpus | length > 0' >/dev/null || return 1
+
+  # Reuse only when every saved service UUID still exists in the freshly
+  # detected topology. If the user changed hardware, fall back to automatic
+  # assignment against current free VRAM.
+  jq -e --argjson assignment "$decoded" '
+    ([.gpus[].uuid] | unique) as $known |
+    ([$assignment.gpu_assignment.services[]?.gpus[]?] | all(. as $u | $known | index($u)))
+  ' "$TOPOLOGY_FILE" >/dev/null || return 1
+
+  echo "$decoded" | jq -c '.'
+}
+
 # --- Multi-GPU Config TUI ---
 GPU_ASSIGNMENT_JSON=""
 
 # If it is not an interactive session, run automatic assignment with default values
 if ! $INTERACTIVE || $DRY_RUN; then
-    log "Non-interactive mode: running automatic GPU assignment with default values."
-    run_automatic
+    if _existing_assignment=$(_load_existing_gpu_assignment_json); then
+        GPU_ASSIGNMENT_JSON="$_existing_assignment"
+        success "Reusing existing GPU assignment from .env"
+        log "Use 'ods gpu reassign --auto' after install to recompute assignment against current free VRAM."
+    else
+        log "Non-interactive mode: running automatic GPU assignment with default values."
+        run_automatic
+    fi
 else
     bootline
     echo -e "${BGRN}MULTI-GPU CONFIGURATION${NC}"
@@ -494,13 +542,13 @@ else
     echo -e "  You have ${BGRN}${GPU_COUNT}${NC} GPUs available. How would you like to use them?"
     echo ""
     echo -e "  ${BGRN}[1]${NC} Automatic ${AMB}(Recommended)${NC}"
-    echo -e "      ${DIM}Let DreamServer pick the best topology-aware assignment${NC}"
+    echo -e "      ${DIM}Let ODS pick the best topology-aware assignment${NC}"
     echo ""
     echo -e "  ${WHT}[2]${NC} Custom Configuration"
     echo -e "      ${DIM}Assign GPUs to services manually${NC}"
     echo ""
 
-    read -rp "  Selection [1]: " choice
+    read -rp "  Selection [1]: " choice < /dev/tty
     choice="${choice:-1}"
     case "$choice" in
     1) run_automatic ;;
@@ -544,7 +592,7 @@ LLAMA_ARG_TENSOR_SPLIT=$(echo "$GPU_ASSIGNMENT_JSON" | jq -r '
     end
   end')
 
-# Persist topology for the dashboard API (mounted read-only at /dream-server/config)
+# Persist topology for the dashboard API (mounted read-only at /ods/config)
 mkdir -p "$INSTALL_DIR/config"
 cp "$TOPOLOGY_FILE" "$INSTALL_DIR/config/gpu-topology.json"
 chmod 644 "$INSTALL_DIR/config/gpu-topology.json"
