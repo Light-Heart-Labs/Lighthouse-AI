@@ -26,6 +26,13 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
 INSTALL_DIR="${ODS_HOME:-$HOME/ods}"
 VERSION="2.6.0"
+
+# Docker Compose interpolates ${VAR} from the process environment, not
+# bash's builtin $UID/$GID (readonly, never exported). Compose files that
+# need the real host user (Hermes, n8n) reference ${ODS_UID}/${ODS_GID}
+# instead of the always-empty ${UID}/${GID}.
+export ODS_UID="${ODS_UID:-$(id -u)}"
+export ODS_GID="${ODS_GID:-$(id -g)}"
 if [[ -f "$INSTALL_DIR/.env" ]]; then
     _v=$(awk -F= '/^ODS_VERSION=/{gsub(/^["'"'"']|["'"'"']$/,"",$2); print $2; exit}' "$INSTALL_DIR/.env" 2>/dev/null) || true
     [[ -n "${_v:-}" ]] && VERSION="$_v"
