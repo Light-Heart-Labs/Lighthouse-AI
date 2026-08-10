@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-25T20:50:12Z",
+  "generated_at": "2026-05-24T03:20:28Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -17,8 +17,6 @@
       "port": 0,
       "external_port_default": 0,
       "health_endpoint": "",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "OPENAI_API_KEY",
@@ -72,8 +70,6 @@
       "port": 3001,
       "external_port_default": 7800,
       "health_endpoint": "/api/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "ANYTHINGLLM_JWT_SECRET",
@@ -154,8 +150,6 @@
       "port": 7860,
       "external_port_default": 7863,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "audio-generation",
@@ -224,8 +218,6 @@
       "port": 9200,
       "external_port_default": 9200,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "BARK_USE_SMALL_MODELS",
@@ -331,8 +323,6 @@
       "port": 80,
       "external_port_default": 3007,
       "health_endpoint": "/api/_health/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "database",
@@ -432,8 +422,6 @@
       "port": 8000,
       "external_port_default": 8000,
       "health_endpoint": "/api/v2/heartbeat",
-      "ui_path": "/docs/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": [
@@ -474,8 +462,6 @@
       "port": 8080,
       "external_port_default": 8890,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": [
@@ -519,8 +505,6 @@
       "port": 8501,
       "external_port_default": 8501,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "multi-agent",
@@ -637,8 +621,6 @@
       "port": 5001,
       "external_port_default": 8002,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "DIFY_SECRET_KEY",
@@ -711,8 +693,6 @@
       "port": 3000,
       "external_port_default": 7801,
       "health_endpoint": "/api/v1/ping",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "FLOWISE_USERNAME",
@@ -796,8 +776,6 @@
       "port": 7865,
       "external_port_default": 7865,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": [
@@ -837,8 +815,6 @@
       "port": 7861,
       "external_port_default": 7861,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "image",
@@ -947,8 +923,6 @@
       "port": 5000,
       "external_port_default": 8971,
       "health_endpoint": "/api/version",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "FRIGATE_RTSP_PASSWORD",
@@ -1064,8 +1038,6 @@
       "port": 4200,
       "external_port_default": 7822,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "GAIA_AGENT_UI_VERSION",
@@ -1150,8 +1122,6 @@
       "port": 3000,
       "external_port_default": 7830,
       "health_endpoint": "/api/healthz",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "GITEA_HOST",
@@ -1191,8 +1161,6 @@
       "port": 2283,
       "external_port_default": 2283,
       "health_endpoint": "/api/server/ping",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "IMMICH_DB_PASSWORD",
@@ -1240,8 +1208,6 @@
       "port": 9090,
       "external_port_default": 9090,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "image-generation",
@@ -1336,8 +1302,6 @@
       "port": 1337,
       "external_port_default": 1337,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "llm",
@@ -1385,8 +1349,6 @@
       "port": 8888,
       "external_port_default": 8889,
       "health_endpoint": "/tree",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "JUPYTER_TOKEN",
@@ -1433,8 +1395,6 @@
       "port": 8080,
       "external_port_default": 8086,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "labeling",
@@ -1479,8 +1439,6 @@
       "port": 7860,
       "external_port_default": 7802,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "visual",
@@ -1554,8 +1512,6 @@
       "port": 3080,
       "external_port_default": 3080,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "JWT_SECRET",
@@ -1686,8 +1642,6 @@
       "port": 8080,
       "external_port_default": 7803,
       "health_endpoint": "/healthz",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": [
@@ -1791,8 +1745,6 @@
       "port": 19530,
       "external_port_default": 19530,
       "health_endpoint": "/healthz",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": []
@@ -1811,8 +1763,6 @@
       "port": 11434,
       "external_port_default": 7804,
       "health_endpoint": "/api/tags",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "OLLAMA_MODEL",
@@ -1860,8 +1810,6 @@
       "port": 8080,
       "external_port_default": 7805,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "OPEN_INTERPRETER_API_KEY",
@@ -1929,8 +1877,6 @@
       "port": 8000,
       "external_port_default": 7807,
       "health_endpoint": "/accounts/login/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "PAPERLESS_SECRET_KEY",
@@ -2036,8 +1982,6 @@
       "port": 10200,
       "external_port_default": 10200,
       "health_endpoint": "",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "PIPER_VOICE",
@@ -2082,8 +2026,6 @@
       "port": 7865,
       "external_port_default": 7809,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "RVC_API_KEY",
@@ -2132,8 +2074,6 @@
       "port": 8000,
       "external_port_default": 8001,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": [
@@ -2171,8 +2111,6 @@
       "port": 7860,
       "external_port_default": 7862,
       "health_endpoint": "/",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [
         "llm",
@@ -2265,8 +2203,6 @@
       "port": 8080,
       "external_port_default": 7811,
       "health_endpoint": "/v1/.well-known/ready",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [
         {
           "key": "WEAVIATE_API_KEY",
@@ -2353,8 +2289,6 @@
       "port": 80,
       "external_port_default": 8100,
       "health_endpoint": "/health",
-      "ui_path": "/",
-      "external_link": true,
       "env_vars": [],
       "tags": [],
       "features": []

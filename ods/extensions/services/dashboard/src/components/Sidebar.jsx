@@ -7,10 +7,23 @@ import {
 } from 'lucide-react'
 import { getSidebarExternalLinks, getSidebarNavItems } from '../plugins/registry'
 import { useTheme } from '../contexts/ThemeContext'
-import { buildExternalServiceUrl } from '../utils/externalUrls'
+import { fallbackServiceUrl } from '../lib/serviceUrls'
 
-// Derive external service URLs from current host.
-const getExternalUrl = (port, path = '', serviceId) => buildExternalServiceUrl({ port, path, serviceId })
+// Derive external service URLs from current host
+const getExternalUrl = (port) => fallbackServiceUrl(port)
+
+function OsmanticLogo({ compact = false }) {
+  return (
+    <img
+      className={`osmantic-logo ${compact ? 'osmantic-logo--compact' : ''}`}
+      src={compact ? '/osmantic-os-icon-192.png' : '/ods-logo.png'}
+      alt="Osmantic"
+      draggable="false"
+      width={compact ? 192 : 760}
+      height={compact ? 192 : 240}
+    />
+  )
+}
 
 export default function Sidebar({ status, collapsed, onToggle }) {
   const { theme, cycleTheme, labels } = useTheme() // eslint-disable-line no-unused-vars -- theme switcher temporarily hidden
@@ -47,7 +60,9 @@ export default function Sidebar({ status, collapsed, onToggle }) {
   }, [status, serviceTokens, apiLinks])
 
   const visibleExternalLinks = useMemo(() => {
-    return showAllQuickLinks ? externalLinks : externalLinks.filter(link => link.healthy)
+    return showAllQuickLinks
+      ? externalLinks
+      : externalLinks.filter(link => link.healthy || link.alwaysVisible)
   }, [externalLinks, showAllQuickLinks])
 
   // Service counts with degraded nuance
@@ -84,7 +99,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen ${collapsed ? 'w-20' : 'w-64'} flex flex-col transition-all duration-200`}
+      className={`fixed left-0 top-0 flex h-screen flex-col transition-all duration-200 ${collapsed ? 'w-20' : 'w-20 sm:w-64'}`}
       style={{
         background: `var(--sidebar-bg-glow), var(--sidebar-bg)`,
         borderRight: '1px solid var(--sidebar-border)',
@@ -95,14 +110,8 @@ export default function Sidebar({ status, collapsed, onToggle }) {
       <div className="px-4 pt-6 pb-5 border-b overflow-hidden" style={{ borderColor: 'var(--sidebar-border)' }}>
         {collapsed ? (
           <div className="flex flex-col items-center">
-            <div
-              className="flex h-11 w-11 items-center justify-center rounded-xl border"
-              style={{
-                background: `linear-gradient(180deg, color-mix(in srgb, var(--sidebar-accent) 18%, transparent), color-mix(in srgb, var(--sidebar-accent) 6%, transparent))`,
-                borderColor: `color-mix(in srgb, var(--sidebar-accent-soft) 24%, transparent)`,
-              }}
-            >
-              <span className="text-lg font-black tracking-tight" style={{ color: 'var(--sidebar-accent-soft)' }}>DS</span>
+            <div className="osmantic-logo-tile">
+              <OsmanticLogo compact />
             </div>
             <p className="text-[8px] font-mono mt-2 tracking-[0.18em] uppercase" style={{ color: 'var(--sidebar-text-muted)' }}>
               v{status?.version || '...'}
@@ -110,25 +119,23 @@ export default function Sidebar({ status, collapsed, onToggle }) {
           </div>
         ) : (
           <>
-            <pre
-              aria-hidden="true"
-              className="dream-logo-liquid text-[7.5px] leading-[8px] font-mono whitespace-pre select-none"
-            >{`    ____
-   / __ \\ _____ ___   ____ _ ____ ___
-  / / / // ___// _ \\ / __ \`// __ \`__ \\
- / /_/ // /   /  __// /_/ // / / / / /
-/_____//_/    \\___/ \\__,_//_/ /_/ /_/
-    _____
-   / ___/ ___   _____ _   __ ___   _____
-   \\__ \\ / _ \\ / ___/| | / // _ \\ / ___/
-  ___/ //  __// /    | |/ //  __// /
- /____/ \\___//_/     |___/ \\___//_/`}</pre>
-            <p className="text-[8px] font-mono tracking-[0.28em] mt-2.5 uppercase" style={{ color: 'var(--sidebar-accent-soft)' }}>
-              LOCAL AI // SOVEREIGN INTELLIGENCE
-            </p>
-            <p className="text-[10px] mt-1" style={{ color: 'var(--sidebar-text-secondary)' }}>
-              {status?.tier || 'Minimal'} • v{status?.version || '...'}
-            </p>
+            <div className="flex flex-col items-center sm:hidden">
+              <div className="osmantic-logo-tile">
+                <OsmanticLogo compact />
+              </div>
+              <p className="mt-2 font-mono text-[8px] uppercase tracking-[0.18em]" style={{ color: 'var(--sidebar-text-muted)' }}>
+                v{status?.version || '...'}
+              </p>
+            </div>
+            <div className="hidden sm:block">
+              <OsmanticLogo />
+              <p className="mt-2.5 font-mono text-[8px] uppercase tracking-[0.16em]" style={{ color: 'var(--sidebar-accent-soft)' }}>
+                OSMANTIC DEPLOYMENT SYSTEM
+              </p>
+              <p className="mt-1 text-[10px]" style={{ color: 'var(--sidebar-text-secondary)' }}>
+                {status?.tier || 'Minimal'} • v{status?.version || '...'}
+              </p>
+            </div>
           </>
         )}
       </div>
@@ -141,9 +148,10 @@ export default function Sidebar({ status, collapsed, onToggle }) {
               <NavLink
                 to={path}
                 end
-                title={collapsed ? label : undefined}
+                aria-label={label}
+                title={label}
                 className={({ isActive }) =>
-                  `flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+                  `flex items-center ${collapsed ? 'justify-center' : 'justify-center sm:justify-start'} gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                     isActive
                       ? 'liquid-metal-nav text-white shadow-lg'
                       : 'text-theme-text-muted hover:text-theme-text'
@@ -160,7 +168,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
                 }
               >
                 <Icon size={20} />
-                {!collapsed && <span>{label}</span>}
+                {!collapsed && <span className="hidden sm:inline">{label}</span>}
               </NavLink>
             </li>
           ))}
@@ -168,7 +176,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
 
         {/* External Links — hidden when collapsed */}
         {!collapsed && (
-          <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--sidebar-border)' }}>
+          <div className="mt-4 hidden border-t pt-4 sm:block" style={{ borderColor: 'var(--sidebar-border)' }}>
             <div className="mb-2 flex items-center justify-between px-3">
               <p className="text-[10px] font-semibold uppercase tracking-[0.24em]" style={{ color: 'var(--sidebar-accent-soft)' }}>
                 Quick Links
@@ -207,7 +215,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
                       className="ml-auto text-[9px] font-mono uppercase tracking-[0.18em]"
                       style={{ color: healthy ? 'var(--sidebar-accent-soft)' : 'var(--sidebar-inactive)' }}
                     >
-                      {healthy ? 'OPEN' : '—'}
+                      {healthy ? 'OPEN' : 'OFFLINE'}
                     </span>
                   </a>
                 </li>
@@ -234,7 +242,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
         )} */}
         <button
           onClick={onToggle}
-          className={`${collapsed ? '' : 'ml-auto'} flex items-center justify-center p-2 rounded-lg text-theme-text-muted hover:text-theme-text transition-colors`}
+          className={`${collapsed ? '' : 'ml-auto'} hidden items-center justify-center rounded-lg p-2 text-theme-text-muted transition-colors hover:text-theme-text sm:flex`}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{ background: 'var(--sidebar-hover-bg)' }}
         >
@@ -245,7 +253,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
       {/* Status Footer */}
       <div className="p-4 border-t" style={{ borderColor: 'var(--sidebar-border)' }}>
         {!collapsed && (
-          <div className="flex items-center justify-between text-sm mb-2">
+          <div className="mb-2 hidden items-center justify-between text-sm sm:flex">
             <span className="text-theme-text-muted">Services</span>
             <span className={footerColor}>
               {degradedCount > 0
@@ -258,7 +266,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
         {(status?.gpu || (isUnified && status?.ram)) && (
           <div>
             {!collapsed && (
-              <div className="flex items-center justify-between text-xs text-theme-text-muted mb-1">
+              <div className="mb-1 hidden items-center justify-between text-xs text-theme-text-muted sm:flex">
                 <span>{memLabel}</span>
                 <span className="font-mono">{memUsed.toFixed ? memUsed.toFixed(1) : memUsed}/{memTotal.toFixed ? memTotal.toFixed(0) : memTotal} GB</span>
               </div>

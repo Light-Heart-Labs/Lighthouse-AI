@@ -341,69 +341,68 @@ class TestFeatureEnableInstructions:
 
         resp = test_client.get(
             "/api/features/documents/enable",
-            headers={**test_client.auth_headers, "host": "dashboard.dream.local:3001"},
+            headers={**test_client.auth_headers, "host": "dashboard.ods.local:3001"},
         )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["instructions"]["links"][0] == {
             "label": "Open Chat",
-            "url": "http://dashboard.dream.local:3000",
+            "url": "http://dashboard.ods.local:3000",
         }
 
-    def test_lan_web_instructions_are_explicit_about_dream_proxy(self, test_client, monkeypatch):
+    def test_instruction_links_prefer_public_service_url(self, test_client, monkeypatch):
+        test_features = [
+            {"id": "documents", "name": "Documents", "description": "Document Q&A",
+             "icon": "FileText", "category": "productivity",
+             "setup_time": "2 min", "priority": 3,
+             "requirements": {"vram_gb": 0, "services": [], "services_any": []},
+             "enabled_services_all": [], "enabled_services_any": []}
+        ]
+        monkeypatch.setattr("routers.features.FEATURES", test_features)
+        monkeypatch.setattr(
+            "routers.features.SERVICES",
+            {"open-webui": {"external_port": 3000, "public_url": "https://chat.example.test"}},
+        )
+
+        resp = test_client.get(
+            "/api/features/documents/enable",
+            headers={**test_client.auth_headers, "host": "dashboard.ods.local:3001"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["instructions"]["links"][0] == {
+            "label": "Open Chat",
+            "url": "https://chat.example.test",
+        }
+
+    def test_lan_web_instructions_are_explicit_about_ods_proxy(self, test_client, monkeypatch):
         test_features = [
             {"id": "lan-web", "name": "LAN web entry", "description": "LAN entry",
              "icon": "Globe", "category": "networking",
              "setup_time": "Ready", "priority": 1,
              "requirements": {"vram_gb": 0, "services": [], "services_any": []},
-             "enabled_services_all": ["dream-proxy"], "enabled_services_any": []}
+             "enabled_services_all": ["ods-proxy"], "enabled_services_any": []}
         ]
         monkeypatch.setattr("routers.features.FEATURES", test_features)
         monkeypatch.setattr(
             "routers.features.SERVICES",
-            {"dream-proxy": {"external_port": 80}},
+            {"ods-proxy": {"external_port": 80}},
         )
 
         resp = test_client.get(
             "/api/features/lan-web/enable",
-            headers={**test_client.auth_headers, "host": "dashboard.dream.local:3001"},
+            headers={**test_client.auth_headers, "host": "dashboard.ods.local:3001"},
         )
 
         assert resp.status_code == 200
         data = resp.json()
         steps = " ".join(data["instructions"]["steps"])
-        assert "dream-proxy" in steps
+        assert "ods-proxy" in steps
         assert "port 80" in steps
         assert data["instructions"]["links"][0] == {
             "label": "Open LAN entry",
-            "url": "http://dream.local",
-        }
-
-    def test_lan_web_instructions_keep_loopback_entry_usable(self, test_client, monkeypatch):
-        test_features = [
-            {"id": "lan-web", "name": "LAN web entry", "description": "LAN entry",
-             "icon": "Globe", "category": "networking",
-             "setup_time": "Ready", "priority": 1,
-             "requirements": {"vram_gb": 0, "services": [], "services_any": []},
-             "enabled_services_all": ["dream-proxy"], "enabled_services_any": []}
-        ]
-        monkeypatch.setattr("routers.features.FEATURES", test_features)
-        monkeypatch.setattr(
-            "routers.features.SERVICES",
-            {"dream-proxy": {"external_port": 80}},
-        )
-
-        resp = test_client.get(
-            "/api/features/lan-web/enable",
-            headers={**test_client.auth_headers, "host": "127.0.0.1:3001"},
-        )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["instructions"]["links"][0] == {
-            "label": "Open LAN entry",
-            "url": "http://127.0.0.1",
+            "url": "http://dashboard.ods.local:80",
         }
 
     def test_hermes_sso_instructions_open_access_management(self, test_client, monkeypatch):
