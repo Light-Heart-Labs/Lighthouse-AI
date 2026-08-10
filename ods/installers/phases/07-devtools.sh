@@ -147,7 +147,12 @@ else
             [[ -z "${ODS_MODEL_SWITCHBOARD:-}" ]] && ODS_MODEL_SWITCHBOARD=$(grep -m1 '^ODS_MODEL_SWITCHBOARD=' "$INSTALL_DIR/.env" | cut -d= -f2-)
             [[ -z "${LITELLM_KEY:-}" ]] && LITELLM_KEY=$(grep -m1 '^LITELLM_KEY=' "$INSTALL_DIR/.env" | cut -d= -f2-)
             [[ -z "${LITELLM_PORT:-}" ]] && LITELLM_PORT=$(grep -m1 '^LITELLM_PORT=' "$INSTALL_DIR/.env" | cut -d= -f2-)
-            [[ -z "${OPENCODE_PORT:-}" ]] && OPENCODE_PORT=$(grep -m1 '^OPENCODE_PORT=' "$INSTALL_DIR/.env" | cut -d= -f2-)
+            # OPENCODE_PORT is an optional override: .env.example ships it
+            # commented out and phase 06 never writes it. A grep that matches
+            # nothing exits 1, and under `set -euo pipefail` that aborts the
+            # install before the numeric fallback below can apply. sed -n p
+            # yields an empty string instead, so the default still wins.
+            [[ -z "${OPENCODE_PORT:-}" ]] && OPENCODE_PORT="$(sed -n 's/^OPENCODE_PORT=//p' "$INSTALL_DIR/.env" | head -n1)"
             [[ "$OPENCODE_PORT" =~ ^[0-9]+$ ]] || OPENCODE_PORT=3003
         fi
         # Route through LiteLLM on AMD/Lemonade, direct to llama-server otherwise.
