@@ -136,6 +136,11 @@ export ENABLE_OPENCLAW=true
     export RAG_OPENAI_API_BASE_URL=https://embeddings.example.test/v1
     export RAG_OPENAI_API_KEY=external-test-key
     export EMBEDDINGS_MEMORY_LIMIT=6GB
+    # Regression: a catalog-selector reason containing parens/spaces (as the
+    # real selector produces, e.g. an arch-aware policy label) used to be
+    # written into .env unquoted, so \`source .env\` failed with a syntax
+    # error on the '('.
+    export MODEL_RECOMMENDATION_REASON='Arch-aware catalog policy (spark-aarch64-nv-ultra-a3b-v1); benchmark locally after first launch.'
 
     # Source libs
     source installers/lib/constants.sh
@@ -165,6 +170,12 @@ export ENABLE_OPENCLAW=true
 
     # Run phase 06 (generates .env, configs)
     source installers/phases/06-directories.sh
+
+    # Snapshot the fresh-install .env before the second pass below (which
+    # exercises rerun-preserves-existing-values behavior and can reload/
+    # re-serialize values, masking bugs that only show up on a true first
+    # generation — e.g. a value quoted incorrectly the first time around).
+    cp \"\$INSTALL_DIR/.env\" \"\$INSTALL_DIR/.env.first-pass\"
 
     # A second installer run must retain the values written by the first run,
     # even when the invoking process now carries different defaults.
@@ -242,6 +253,40 @@ if [[ "$ENV_GENERATED" == true && -f "$INSTALL_DIR/.env" ]]; then
     else
         fail "Duplicate keys in .env: $DUPES"
     fi
+fi
+
+# Regression: a free-text MODEL_RECOMMENDATION_REASON containing parens/
+# spaces must be quoted in .env — the exact bug report reproduction
+# (`bash: line 56: syntax error near unexpected token '('`).
+# Checked against the FIRST-pass snapshot (a true fresh install): the second
+# generation pass above reloads/re-serializes existing values and can mask
+# a quoting bug that only shows up on the very first write.
+FIRST_PASS_ENV="$INSTALL_DIR/.env.first-pass"
+if [[ "$ENV_GENERATED" == true && -f "$FIRST_PASS_ENV" ]]; then
+    if grep -qE '^MODEL_RECOMMENDATION_REASON="Arch-aware catalog policy \(spark-aarch64-nv-ultra-a3b-v1\); benchmark locally after first launch\."$' "$FIRST_PASS_ENV"; then
+        pass "MODEL_RECOMMENDATION_REASON is written quoted on first generation"
+    else
+        fail "MODEL_RECOMMENDATION_REASON was not written quoted on first generation"
+        grep 'MODEL_RECOMMENDATION_REASON' "$FIRST_PASS_ENV" || true
+    fi
+
+    # Source just this one line in isolation — the exact repro from the bug
+    # report (`set -a; source .env; set +a`), narrowed to the single line so
+    # the result isn't confounded by unrelated content elsewhere in a
+    # 130+ key generated file. Must NOT run a trailing `set +a` as the last
+    # command in the same subshell: it always succeeds, so the subshell's
+    # own exit status would mask a syntax error from `source` itself.
+    REASON_LINE="$(grep '^MODEL_RECOMMENDATION_REASON=' "$FIRST_PASS_ENV" | head -1)"
+    if [[ -n "$REASON_LINE" ]] && printf '%s\n' "$REASON_LINE" > /tmp/reason-line.env \
+        && bash -c "set -a; source /tmp/reason-line.env; rc=\$?; set +a; exit \$rc" 2>/tmp/env-source-err.txt; then
+        pass "MODEL_RECOMMENDATION_REASON line sources cleanly on its own"
+    else
+        fail "MODEL_RECOMMENDATION_REASON line failed to source (parens/spaces in an unquoted value?)"
+        cat /tmp/env-source-err.txt >&2 2>/dev/null || true
+    fi
+    rm -f /tmp/reason-line.env /tmp/env-source-err.txt
+else
+    fail "first-pass .env snapshot was not created"
 fi
 
 # ── Test 4: Validate service dependency graph ──
