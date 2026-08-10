@@ -1,7 +1,12 @@
 services:
   llama-server:
     environment:
-      NVIDIA_VISIBLE_DEVICES: "${LLAMA_SERVER_GPU_UUIDS:-all}"
+      # This overlay is only merged in when gpu_count > 1 (see
+      # scripts/resolve-compose-stack.sh), so LLAMA_SERVER_GPU_UUIDS must
+      # already be set by the installer/gpu-reassign flow. Falling back to
+      # "all" here would silently hand llama-server every GPU on the host
+      # instead of the assigned subset — fail closed instead.
+      NVIDIA_VISIBLE_DEVICES: "${LLAMA_SERVER_GPU_UUIDS:?LLAMA_SERVER_GPU_UUIDS must be set when the multigpu-nvidia overlay is active}"
       LLAMA_ARG_SPLIT_MODE: "${LLAMA_ARG_SPLIT_MODE:-none}"
       LLAMA_ARG_TENSOR_SPLIT: "${LLAMA_ARG_TENSOR_SPLIT:-}"
     deploy:
