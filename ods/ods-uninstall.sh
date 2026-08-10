@@ -401,6 +401,23 @@ if [[ -f "$OPENCODE_CONFIG" ]] || [[ -f "$OPENCODE_COMPAT_CONFIG" ]]; then
     fi
 fi
 unset OPENCODE_CONFIG_DIR OPENCODE_CONFIG OPENCODE_COMPAT_CONFIG
+# 7. Remove OpenCode config (if we created it)
+# installers/phases/07-devtools.sh writes opencode.json from a template and
+# then syncs a config.json copy (OpenCode reads config.json, not opencode.json).
+# Uninstall must remove both documents so no stale route survives, but only the
+# ones ODS wrote — the llama-server marker scopes this to our own config.
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+_ods_opencode_config_removed=false
+for _ods_opencode_config in "$OPENCODE_CONFIG_DIR/opencode.json" "$OPENCODE_CONFIG_DIR/config.json"; do
+    if [[ -f "$_ods_opencode_config" ]] && grep -q "llama-server" "$_ods_opencode_config" 2>/dev/null; then
+        rm -f "$_ods_opencode_config"
+        _ods_opencode_config_removed=true
+    fi
+done
+if $_ods_opencode_config_removed; then
+    log_ok "OpenCode config removed"
+fi
+unset _ods_opencode_config _ods_opencode_config_removed
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
