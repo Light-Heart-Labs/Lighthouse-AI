@@ -309,6 +309,27 @@ if [ "$DASHBOARD_FOUND" = false ]; then
 fi
 log ""
 
+# ── Required service secrets ────────────────────────────────────────────────
+# Service manifests declare which env vars a service cannot run correctly
+# without. An empty value is not a missing one to the services that consume
+# them — Qdrant serves unauthenticated with an empty API key, and an empty
+# LITELLM_MASTER_KEY disables gateway auth — while
+# config/network-exposure-policy.json marks both auth_required: true.
+log "[8/8] Checking required service secrets..."
+if [ -x "$ODS_DIR/scripts/check-required-secrets.sh" ]; then
+    if _secret_output="$(bash "$ODS_DIR/scripts/check-required-secrets.sh" "$ODS_DIR" 2>&1)"; then
+        pass "Required service secrets present"
+    else
+        while IFS= read -r _line; do
+            [ -n "$_line" ] && log "  $_line"
+        done <<< "$_secret_output"
+        fail "One or more enabled services is missing a required secret"
+    fi
+else
+    warn "scripts/check-required-secrets.sh not found — skipping secret check"
+fi
+log ""
+
 # Summary
 log "========================================"
 log "Pre-flight Summary"
