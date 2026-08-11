@@ -101,6 +101,22 @@ if [[ -z "$INSTALL_DIR" || "$INSTALL_DIR" == "/" || "$INSTALL_DIR" == "$HOME" ]]
     exit 1
 fi
 
+# Guard against deleting an ODS source checkout. The auto-detect above keys off
+# ods-cli, which the git repo ships too, so running this (especially with
+# --force, which skips the confirmation prompt) from a development clone would
+# rm -rf the working tree. A deployed install always carries an
+# installer-generated .env at its root; the installer strips .git when copying
+# to ~/ods. So a git working tree with no installer .env is a source checkout,
+# not an install — refuse it. `git rev-parse` walks up to the repo root, so this
+# also fires when INSTALL_DIR is a subdirectory (e.g. the repo's ods/ dir).
+if [[ ! -f "$INSTALL_DIR/.env" ]] && \
+   git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    log_error "Refusing to uninstall '$INSTALL_DIR': it is a git working tree with no installer-generated .env."
+    log_error "This looks like an ODS source checkout, not a deployed install."
+    log_error "To remove a real install here, set INSTALL_DIR=<path> explicitly, or delete it manually."
+    exit 1
+fi
+
 if [[ ! -d "$INSTALL_DIR" ]]; then
     log_error "Install directory not found: $INSTALL_DIR"
     exit 1

@@ -155,6 +155,9 @@ test: ## Run unit and contract tests
 	@echo "=== macOS uninstall LaunchAgent cleanup ==="
 	@bash tests/test-macos-uninstall-launchagents.sh
 	@echo ""
+	@echo "=== uninstall source-checkout guard ==="
+	@bash tests/test-uninstall-source-checkout-guard.sh
+	@echo ""
 	@echo "=== token-spy session manager active-id extraction ==="
 	@bash tests/test-token-spy-session-manager.sh
 	@echo ""
