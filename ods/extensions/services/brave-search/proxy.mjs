@@ -26,6 +26,7 @@
 // ods services and scripts. See README.md for design notes and the fidelity
 // limits of the searxng compatibility mode.
 
+import crypto from "node:crypto";
 import http from "node:http";
 
 // Empty env values (e.g. from compose ${VAR:-} interpolation) fall back to
@@ -61,6 +62,14 @@ function booleanFromEnv(name, fallback = false) {
 
 const PORT = Number(process.env.BRAVE_SEARCH_PORT_INTERNAL ?? 8585);
 const API_KEY = process.env.BRAVE_SEARCH_API_KEY;
+// Caller credential for the native /v1/search route. This service holds a paid
+// subscription token and attaches it to every upstream call, so reachability on
+// ods-network must not be the only thing between a container and the victim's
+// search quota — network-exposure-policy.json marks this a paid-api-proxy with
+// auth_required: true. Resolution order matches the other internal services so
+// an existing install needs no new generated secret.
+const INTERNAL_KEY =
+  process.env.BRAVE_SEARCH_INTERNAL_KEY || process.env.DASHBOARD_API_KEY || "";
 const BRAVE_URL =
   process.env.BRAVE_SEARCH_UPSTREAM_URL || "https://api.search.brave.com/res/v1/web/search";
 const REQUEST_TIMEOUT_MS = timeoutMsFromEnv();
@@ -333,6 +342,22 @@ async function handleSearxngSearch(res, params) {
   send(res, 200, searxngEnvelope(query, toSearxngResults(outcome.data), []));
 }
 
+// ── caller authentication ───────────────────────────────────────────────────
+
+/** Constant-time compare of the presented bearer against INTERNAL_KEY. */
+function callerAuthorized(req) {
+  if (!INTERNAL_KEY) return false;
+  const header = req.headers.authorization ?? "";
+  if (!header.startsWith("Bearer ")) return false;
+  const presented = Buffer.from(header.slice("Bearer ".length), "utf8");
+  const expected = Buffer.from(INTERNAL_KEY, "utf8");
+  // timingSafeEqual throws on a length mismatch, which would itself leak the
+  // length, so compare a fixed-size digest of each side instead.
+  const a = crypto.createHash("sha256").update(presented).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 // ── router ──────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -351,6 +376,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method !== "GET" || parsed.pathname !== "/v1/search") {
       send(res, 404, { error: "not_found" });
+      return;
+    }
+
+    if (!callerAuthorized(req)) {
+      send(res, 401, { error: "unauthorized" });
       return;
     }
 
