@@ -20,3 +20,11 @@ service:
   compose_file: compose.yaml
   category: optional
   depends_on: []
+  env_vars:
+    # Qdrant reads QDRANT__SERVICE__API_KEY and serves every request
+    # unauthenticated when it is empty, while network-exposure-policy.json
+    # marks this service auth_required: true.
+    - key: QDRANT_API_KEY
+      required: true
+      secret: true
+      description: Qdrant vector DB API key

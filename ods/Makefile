@@ -67,6 +67,9 @@ test: ## Run unit and contract tests
 	@echo "=== safe .env loading (quote/CRLF handling) ==="
 	@bash tests/test-safe-env.sh
 	@echo ""
+	@echo "=== required service secrets ==="
+	@bash tests/test-required-secrets-check.sh
+	@echo ""
 	@echo "=== QR code helper LAN detection ==="
 	@bash tests/test-qrcode-helper.sh
 	@echo ""
