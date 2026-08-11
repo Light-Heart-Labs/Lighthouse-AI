@@ -396,6 +396,30 @@ stop_containers() {
     fi
 }
 
+# Refuse to treat a symlinked backup entry as a restore source.
+#
+# A backup archive is untrusted input: it can arrive from anywhere, and
+# extract_backup() only proves that member *names* are contained. A symlink
+# member's name can be perfectly ordinary while its target names any path on
+# the host. `[[ -f ]]` and `[[ -d ]]` both follow symlinks, so such a member
+# passes the guards below, and `cp`'s source operand is dereferenced too — so
+# the copy pulls whatever the link addresses into $ODS_DIR.
+#
+# Only the source *operand* is rejected. Symlinks nested inside a restored
+# tree are left alone, because `cp -r` and `rsync -a` recreate those as links
+# rather than following them — which is what a legitimate backup of a tree
+# containing symlinks (a models/ directory on another disk, say) relies on.
+assert_not_symlink() {
+    local path="$1"
+    local label="$2"
+    if [[ -L "$path" ]]; then
+        log_error "Backup entry '$label' is a symlink to: $(readlink "$path")"
+        log_error "Refusing to restore — backup archives are untrusted input."
+        return 1
+    fi
+    return 0
+}
+
 # Restore user data
 restore_user_data() {
     local backup_dir="$1"
@@ -405,6 +429,7 @@ restore_user_data() {
 
     local restored_any=false
     for dir in "${data_dirs[@]}"; do
+        assert_not_symlink "$backup_dir/$dir" "$dir" || return 1
         if [[ -d "$backup_dir/$dir" ]]; then
             restored_any=true
             mkdir -p "$ODS_DIR/$(dirname "$dir")"
@@ -431,6 +456,7 @@ restore_config() {
 
     # Dynamically discover config files (dotfiles + compose overlays + scripts)
     for file in "$backup_dir"/.env "$backup_dir"/.version "$backup_dir"/docker-compose*.y*ml "$backup_dir"/ods-*.sh; do
+        assert_not_symlink "$file" "$(basename "$file")" || return 1
         if [[ -f "$file" ]]; then
             restored_any=true
             cp "$file" "$ODS_DIR/"
@@ -438,6 +464,7 @@ restore_config() {
         fi
     done
 
+    assert_not_symlink "$backup_dir/config" "config/" || return 1
     if [[ -d "$backup_dir/config" ]]; then
         restored_any=true
         if [[ -d "$ODS_DIR/config" ]]; then

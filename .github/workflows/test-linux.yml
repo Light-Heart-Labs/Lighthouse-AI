@@ -136,6 +136,9 @@ jobs:
       - name: Compose Failure Report Tests
         run: bash tests/test-compose-failure-report.sh
 
+      - name: Restore Archive Member Safety Tests
+        run: bash tests/test-restore-symlink-rejection.sh
+
       - name: Uninstall Compose Flags Tests
         run: bash tests/test-uninstall-compose-flags.sh
 
