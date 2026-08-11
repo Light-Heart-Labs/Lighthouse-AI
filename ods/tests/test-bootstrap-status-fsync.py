@@ -6,7 +6,6 @@ atomically with fsync so the file is never left truncated or corrupted on crash.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -40,8 +39,6 @@ def test_no_heredoc_mv_in_write_status() -> None:
     start = source.find("\nwrite_status() {")
     assert start != -1, "write_status function not found in bootstrap-upgrade.sh"
 
-    # Find the closing brace of write_status — search for next top-level '}'
-    body_start = start + len("\nwrite_status() {")
     # Extract roughly 150 lines worth of the function body
     body = source[start : start + 4000]
 
