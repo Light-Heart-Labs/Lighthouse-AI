@@ -461,58 +461,51 @@ fi
 # announces hostname.local automatically via Bonjour, the script is a no-op
 # there. Windows support TBD.
 if [[ -f "$INSTALL_DIR/bin/ods-mdns.py" ]] && [[ "$(uname -s)" == "Linux" ]]; then
-    # Install python3-zeroconf via the system package manager. Non-fatal —
-    # mDNS is a quality-of-life feature; if zeroconf isn't available the
-    # device is still reachable by IP.
+    # Install python3-zeroconf for the SAME interpreter the announcer will run
+    # under. mDNS is a quality-of-life feature; non-fatal — if zeroconf can't be
+    # installed the device is still reachable by IP.
+    #
+    # Resolve the interpreter once, to an absolute path, and reuse it for every
+    # import check, the install, and the systemd unit's __PYTHON3__. This is the
+    # fix for the historical failure on Homebrew hosts: bare `python3` resolved
+    # to brew's PEP 668 externally-managed Python, so `apt install
+    # python3-zeroconf` landed in a different interpreter and `pip --user` was
+    # rejected. ods_detect_python_cmd honors ODS_PYTHON_PREFER_SYSTEM=1, so on a
+    # normal Linux box this is /usr/bin/python3 (distro package works); on a
+    # brew-only box it is brew's Python and the pip fallback below (which adds
+    # --break-system-packages) handles it.
     #
     # Two-tier strategy:
-    #   1. Try the distro package manager first (best: integrates with apt
-    #      upgrades, doesn't require pip / network in offline mode).
-    #   2. Fall back to `pip install --user zeroconf` if the package isn't
-    #      in the distro's repos (e.g. minimal images, stale apt cache,
-    #      Ubuntu universe disabled) — without this, the install logs a
-    #      warning and the mDNS announcer never starts even though the
-    #      Python module is one pip away.
-    _install_zeroconf_via_pkg() {
-        case "$PKG_MANAGER" in
-            apt)    sudo apt-get install -y python3-zeroconf 2>&1 | tee -a "$LOG_FILE" ;;
-            dnf)    sudo dnf install -y python3-zeroconf 2>&1 | tee -a "$LOG_FILE" ;;
-            pacman) sudo pacman -S --noconfirm --needed python-zeroconf 2>&1 | tee -a "$LOG_FILE" ;;
-            zypper) sudo zypper --non-interactive install python3-zeroconf 2>&1 | tee -a "$LOG_FILE" ;;
-            *)      return 99 ;;
-        esac
-    }
-    _install_zeroconf_via_pip() {
-        # `--user` writes into ~/.local/lib/python3.x/site-packages so we
-        # don't need sudo and don't fight PEP 668 (Debian/Ubuntu mark the
-        # system site-packages as externally-managed). The mDNS announcer
-        # runs as $USER, not root, so --user is the right install scope.
-        if command -v pip3 >/dev/null 2>&1; then
-            pip3 install --user --quiet --no-warn-script-location zeroconf 2>&1 | tee -a "$LOG_FILE"
-        else
-            return 99
-        fi
-    }
-    if ! python3 -c "import zeroconf" 2>/dev/null; then
+    #   1. Distro package first (integrates with system upgrades, works offline).
+    #   2. pip fallback via ods_python_pip_install_user (--user, then
+    #      --user --break-system-packages) when the repo lacks the package or
+    #      targets a different interpreter.
+    MDNS_PYTHON="$(ods_python_cmd_path "$(ods_detect_python_cmd 2>/dev/null || true)" 2>/dev/null || true)"
+    if [[ -z "$MDNS_PYTHON" ]]; then
+        ai_warn "No runnable python3 found — skipping mDNS announcer (non-fatal; device still reachable by IP)"
+    elif ! "$MDNS_PYTHON" -c "import zeroconf" 2>/dev/null; then
         ai "Installing python3-zeroconf (for mDNS announcer)..."
-        if _install_zeroconf_via_pkg && python3 -c "import zeroconf" 2>/dev/null; then
+        # shellcheck disable=SC2046  # pkg_resolve output is intentionally word-split
+        if pkg_install $(pkg_resolve python3-zeroconf) 2>>"$LOG_FILE" && "$MDNS_PYTHON" -c "import zeroconf" 2>/dev/null; then
             ai_ok "Installed python3-zeroconf via $PKG_MANAGER"
-        elif python3 -c "import zeroconf" 2>/dev/null; then
+        elif "$MDNS_PYTHON" -c "import zeroconf" 2>/dev/null; then
             : # Package manager returned non-zero, but the module is importable.
-        elif _install_zeroconf_via_pip && python3 -c "import zeroconf" 2>/dev/null; then
-            ai_ok "Installed zeroconf via pip --user (system package manager unavailable / failed)"
+        elif ods_python_pip_install_user "$MDNS_PYTHON" "$LOG_FILE" zeroconf && "$MDNS_PYTHON" -c "import zeroconf" 2>/dev/null; then
+            ai_ok "Installed zeroconf via pip (system package manager unavailable / failed)"
         else
-            ai_warn "Failed to install zeroconf via $PKG_MANAGER AND pip --user — mDNS announcer will not start (non-fatal; device still reachable by IP)"
+            ai_warn "Failed to install zeroconf via $PKG_MANAGER AND pip — mDNS announcer will not start (non-fatal; device still reachable by IP)"
         fi
     fi
 
     # Install the systemd unit alongside ods-host-agent. Reuses the same
     # __PLACEHOLDER__ substitution pattern, the same user resolution
     # (INSTALL_USER → SUDO_USER → whoami), and the same sudo discipline.
-    if python3 -c "import zeroconf" 2>/dev/null && \
+    if [[ -n "${MDNS_PYTHON:-}" ]] && "$MDNS_PYTHON" -c "import zeroconf" 2>/dev/null && \
        (systemctl status >/dev/null 2>&1 || [[ -d /run/systemd/system ]]) && \
        [[ -f "$INSTALL_DIR/scripts/systemd/ods-mdns.service" ]]; then
-        MDNS_PYTHON="$(command -v python3)"
+        # $MDNS_PYTHON (absolute path, resolved above) becomes the unit's
+        # __PYTHON3__ so the service runs the interpreter zeroconf was installed
+        # into.
         # Reuse $_agent_user from the host-agent block above if set; otherwise
         # resolve fresh. Falls back to the same heuristic.
         if [[ -z "${_agent_user:-}" ]]; then
