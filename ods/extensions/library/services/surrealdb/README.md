@@ -59,3 +59,9 @@ docker exec -it ods-surrealdb /surreal sql \
 | `SURREALDB_PORT` | Host port | `8900` |
 | `SURREALDB_USER` | Root user | `root` |
 | `SURREALDB_PASS` | Root password (required) | auto-generated |
+
+## RAG (Open WebUI)
+
+Open WebUI has no native `VECTOR_DB=surrealdb`. Enable the companion
+[`surreal-vector`](../surreal-vector/) bridge (Qdrant-compatible API → Surreal
+HNSW) and point WebUI at it. See that service's README.

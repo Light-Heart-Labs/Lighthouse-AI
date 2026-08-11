@@ -1,0 +1,12 @@
+# Optional overlay — apply when using Surreal as Open WebUI's VECTOR_DB.
+# Included automatically when both open-webui and surreal-vector are enabled
+# if you merge this file into compose flags, or copy env into open-webui service.
+services:
+  open-webui:
+    environment:
+      VECTOR_DB: qdrant
+      QDRANT_URI: http://surreal-vector:6333
+      QDRANT_API_KEY: "${SURREAL_VECTOR_API_KEY:-${QDRANT_API_KEY:-}}"
+      ENABLE_QDRANT_MULTITENANCY_MODE: "false"
+      QDRANT_COLLECTION_PREFIX: open-webui
+      QDRANT_PREFER_GRPC: "false"

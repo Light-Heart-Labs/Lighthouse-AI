@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-06T13:58:56Z",
+  "generated_at": "2026-08-11T19:37:03Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -2094,6 +2094,78 @@
           ],
           "setup_time": "~1 minute",
           "priority": 6
+        }
+      ]
+    },
+    {
+      "id": "surreal-vector",
+      "name": "Surreal Vector (Qdrant-compat)",
+      "description": "Qdrant-compatible vector API backed by SurrealDB HNSW indexes.\nPoint Open WebUI at this service (VECTOR_DB=qdrant) to use Surreal\nas the RAG store; browse the same chunks in Surrealist.\n",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [
+        "surrealdb"
+      ],
+      "port": 6333,
+      "external_port_default": 6335,
+      "health_endpoint": "/readyz",
+      "env_vars": [
+        {
+          "key": "SURREALDB_URL",
+          "required": false,
+          "description": "SurrealDB HTTP URL from containers (default http://surrealdb:8000)"
+        },
+        {
+          "key": "SURREALDB_USER",
+          "required": false,
+          "description": "SurrealDB root user"
+        },
+        {
+          "key": "SURREALDB_PASS",
+          "required": true,
+          "description": "SurrealDB root password (shared with surrealdb service)"
+        },
+        {
+          "key": "SURREAL_VECTOR_NS",
+          "required": false,
+          "description": "Surreal namespace for RAG chunks (default ods)"
+        },
+        {
+          "key": "SURREAL_VECTOR_DB",
+          "required": false,
+          "description": "Surreal database for RAG chunks (default rag)"
+        }
+      ],
+      "tags": [
+        "knowledge-graph",
+        "vector-database",
+        "rag",
+        "surrealdb",
+        "qdrant-compat"
+      ],
+      "features": [
+        {
+          "id": "surreal-rag-backend",
+          "name": "SurrealDB RAG Backend",
+          "description": "Store Open WebUI document embeddings in SurrealDB via a Qdrant-compatible API",
+          "icon": "Database",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "surrealdb",
+              "surreal-vector"
+            ],
+            "vram_gb": 0
+          },
+          "enabled_services_all": [
+            "surrealdb",
+            "surreal-vector"
+          ],
+          "setup_time": "~2 minutes",
+          "priority": 13
         }
       ]
     },
