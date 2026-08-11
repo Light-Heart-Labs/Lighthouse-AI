@@ -134,7 +134,12 @@ def test_remote_cloud_projection_uses_internal_egress_and_state_receipt() -> Non
     assert 'model: "openai/qwen/remote:latest"' in cloud
     assert 'model_name: "qwen/remote:latest"' in cloud
     assert 'api_base: "http://remote-provider-egress:8091/v1"' in cloud
-    assert "api_key: not-needed" in cloud
+    # The egress service authenticates its callers, so the generated cloud
+    # route presents the internal key instead of the old "not-needed"
+    # placeholder. The provider credential still never appears here — it stays
+    # inside remote-provider-egress.
+    assert "api_key: os.environ/ODS_EGRESS_INTERNAL_KEY" in cloud
+    assert "api_key: not-needed" not in cloud
     assert "https://gpu.example.test" not in cloud
     assert "REMOTE_LLM_API_KEY" not in cloud
 
