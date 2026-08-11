@@ -175,6 +175,7 @@ _service_health_cache: tuple[float, dict | None] = (0.0, None)
 _windows_gpu_metrics_lock = threading.Lock()
 _windows_llm_status_lock = threading.Lock()
 _service_health_lock = threading.Lock()
+_remote_provider_state_lock = threading.Lock()
 WINDOWS_WHISPER_CUDA_MIN_DRIVER_MAJOR = 575
 # Always-on services defined in docker-compose.base.yml — never stoppable via API.
 # Distinct from CORE_SERVICE_IDS (which is the allowlist of known service IDs).
@@ -2366,21 +2367,22 @@ def _read_remote_provider_route_state_for_update() -> dict:
 
 def _record_remote_provider_egress_probe(payload: dict) -> dict:
     probe_receipt = _remote_provider_probe_receipt_from_egress(payload)
-    state = _read_remote_provider_route_state_for_update()
-    provider = state.get("provider") if isinstance(state.get("provider"), dict) else {}
-    payload_transport = _remote_provider_safe_text(payload.get("transport"), max_length=32)
-    active_transport = str(provider.get("transport") or "direct")
-    if payload_transport != active_transport:
-        raise RuntimeError("remote-provider proof transport does not match active route")
-    state["status"] = _remote_provider_route_status(
-        enabled=True,
-        probe_receipt=probe_receipt,
-    )
-    _atomic_write_text(
-        _remote_provider_route_state_path(),
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
-        0o644,
-    )
+    with _remote_provider_state_lock:
+        state = _read_remote_provider_route_state_for_update()
+        provider = state.get("provider") if isinstance(state.get("provider"), dict) else {}
+        payload_transport = _remote_provider_safe_text(payload.get("transport"), max_length=32)
+        active_transport = str(provider.get("transport") or "direct")
+        if payload_transport != active_transport:
+            raise RuntimeError("remote-provider proof transport does not match active route")
+        state["status"] = _remote_provider_route_status(
+            enabled=True,
+            probe_receipt=probe_receipt,
+        )
+        _atomic_write_text(
+            _remote_provider_route_state_path(),
+            json.dumps(state, indent=2, sort_keys=True) + "\n",
+            0o644,
+        )
     return {
         "schema": _REMOTE_PROVIDER_PROOF_RECORD_SCHEMA,
         "recorded": True,
@@ -2567,40 +2569,41 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
         secret_values = {}
         mutation_paths = _remote_provider_mutation_paths(action)
 
-    snapshots: dict[Path, dict] = {}
-    mutation_started = False
-    try:
-        snapshots = {path: _snapshot_text_file(path) for path in mutation_paths}
-        if action == "configure":
-            for ref, secret in secret_values.items():
-                _write_remote_provider_secret(ref, secret)
+    with _remote_provider_state_lock:
+        snapshots: dict[Path, dict] = {}
+        mutation_started = False
+        try:
+            snapshots = {path: _snapshot_text_file(path) for path in mutation_paths}
+            if action == "configure":
+                for ref, secret in secret_values.items():
+                    _write_remote_provider_secret(ref, secret)
+                    mutation_started = True
+                _write_remote_provider_route_state(plan, probe_receipt=probe_receipt)
                 mutation_started = True
-            _write_remote_provider_route_state(plan, probe_receipt=probe_receipt)
-            mutation_started = True
-        elif action == "disable":
-            _write_remote_provider_route_state(plan)
-            mutation_started = True
-        elif action == "remove":
-            for path in mutation_paths:
-                _remove_remote_provider_file(path)
+            elif action == "disable":
+                _write_remote_provider_route_state(plan)
                 mutation_started = True
-    except Exception as exc:
-        rollback = {"attempted": False, "ok": None}
-        if mutation_started and snapshots:
-            rollback["attempted"] = True
-            try:
-                _restore_remote_provider_snapshots(snapshots)
-            except Exception as rollback_exc:
-                rollback["ok"] = False
-                raise _RemoteProviderApplyError(
-                    f"Remote provider apply failed: {exc}; rollback failed: {rollback_exc}",
-                    rollback,
-                ) from exc
-            rollback["ok"] = True
-        raise _RemoteProviderApplyError(
-            f"Remote provider apply failed: {exc}",
-            rollback,
-        ) from exc
+            elif action == "remove":
+                for path in mutation_paths:
+                    _remove_remote_provider_file(path)
+                    mutation_started = True
+        except Exception as exc:
+            rollback = {"attempted": False, "ok": None}
+            if mutation_started and snapshots:
+                rollback["attempted"] = True
+                try:
+                    _restore_remote_provider_snapshots(snapshots)
+                except Exception as rollback_exc:
+                    rollback["ok"] = False
+                    raise _RemoteProviderApplyError(
+                        f"Remote provider apply failed: {exc}; rollback failed: {rollback_exc}",
+                        rollback,
+                    ) from exc
+                rollback["ok"] = True
+            raise _RemoteProviderApplyError(
+                f"Remote provider apply failed: {exc}",
+                rollback,
+            ) from exc
 
     return result
 

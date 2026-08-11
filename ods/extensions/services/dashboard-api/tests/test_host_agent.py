@@ -2581,6 +2581,91 @@ class TestRemoteProviderLifecycle:
         assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
         assert "unit-test-provider-token" not in dumped
 
+    def test_concurrent_apply_rollback_cannot_erase_later_success(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        first_payload = self._ssh_configure_payload()
+        first_payload["provider"]["model"] = "first/model"
+        first_payload["secrets"]["apiKey"] = "first-provider-token"
+        second_payload = self._ssh_configure_payload()
+        second_payload["provider"]["model"] = "second/model"
+        second_payload["secrets"]["apiKey"] = "second-provider-token"
+
+        first_secret_written = threading.Event()
+        second_apply_ready = threading.Event()
+        second_mutation_started = threading.Event()
+        release_first = threading.Event()
+        real_secret_values = _mod._remote_provider_secret_values
+        real_write_secret = _mod._write_remote_provider_secret
+        real_write_state = _mod._write_remote_provider_route_state
+
+        def controlled_secret_values(payload, plan):
+            values = real_secret_values(payload, plan)
+            if values.get("REMOTE_LLM_API_KEY") == "second-provider-token":
+                second_apply_ready.set()
+            return values
+
+        def controlled_secret_write(ref, value):
+            real_write_secret(ref, value)
+            if ref != "REMOTE_LLM_API_KEY":
+                return
+            if value == "first-provider-token":
+                first_secret_written.set()
+                if not release_first.wait(timeout=5):
+                    raise RuntimeError("timed out waiting to release first apply")
+            elif value == "second-provider-token":
+                second_mutation_started.set()
+
+        def fail_first_route_write(plan, *, probe_receipt=None):
+            model = plan["route"]["provider"]["model"]
+            if model == "first/model":
+                raise RuntimeError("simulated first route-state failure")
+            return real_write_state(plan, probe_receipt=probe_receipt)
+
+        monkeypatch.setattr(_mod, "_remote_provider_secret_values", controlled_secret_values)
+        monkeypatch.setattr(_mod, "_write_remote_provider_secret", controlled_secret_write)
+        monkeypatch.setattr(_mod, "_write_remote_provider_route_state", fail_first_route_write)
+        first_handler = _FakeHandler(json.dumps(first_payload).encode("utf-8"))
+        second_handler = _FakeHandler(json.dumps(second_payload).encode("utf-8"))
+        first_thread = threading.Thread(
+            target=_mod.AgentHandler._handle_remote_provider_apply,
+            args=(first_handler,),
+        )
+        second_thread = threading.Thread(
+            target=_mod.AgentHandler._handle_remote_provider_apply,
+            args=(second_handler,),
+        )
+
+        first_thread.start()
+        assert first_secret_written.wait(timeout=5)
+        second_thread.start()
+        try:
+            assert second_apply_ready.wait(timeout=5)
+            overlapped_mutation = second_mutation_started.wait(timeout=1)
+        finally:
+            release_first.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+
+        assert not first_thread.is_alive()
+        assert not second_thread.is_alive()
+        assert overlapped_mutation is False
+        assert first_handler.response_code == 500
+        assert first_handler.parse_response()["rollback"] == {
+            "attempted": True,
+            "ok": True,
+        }
+        assert second_handler.response_code == 200
+        root = tmp_path / "remote-provider"
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert state["provider"]["model"] == "second/model"
+        assert (root / "secrets" / "provider-api-key").read_text(
+            encoding="utf-8"
+        ) == "second-provider-token\n"
+
 
 class TestTailscaleStatus:
     """Direct host-agent tests for /v1/tailscale/status behavior."""
