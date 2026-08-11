@@ -168,6 +168,15 @@ ensure_source_checkout_for_update() {
         log_info "No files, services, or rollback snapshots were changed."
         return 1
     fi
+
+    local tracked_changes
+    tracked_changes=$(git -C "${INSTALL_DIR}" status --porcelain --untracked-files=no)
+    if [[ -n "$tracked_changes" ]]; then
+        log_error "ods-update.sh update requires a clean tracked working tree."
+        log_info "Commit or restore tracked changes before pulling source updates."
+        log_info "Untracked runtime data is left untouched."
+        return 1
+    fi
 }
 
 # Semver compare: returns 0 if equal, 1 if v1 > v2, 2 if v1 < v2
@@ -391,16 +400,43 @@ wait_for_healthy() {
     return 1
 }
 
-# _update_rollback <reason> <snap_dir> [compose_flags]
-#   Restores the given snapshot and restarts services.
+# _restore_source_revision <revision>
+#   Restores the tracked source tree to the revision captured before git pull.
+_restore_source_revision() {
+    local revision="$1"
+
+    if ! git -C "${INSTALL_DIR}" reset --hard "$revision"; then
+        log_error "CRITICAL: Could not restore source revision ${revision}."
+        return 1
+    fi
+
+    local restored_revision
+    restored_revision=$(git -C "${INSTALL_DIR}" rev-parse HEAD)
+    if [[ "$restored_revision" != "$revision" ]]; then
+        log_error "CRITICAL: Source rollback ended at ${restored_revision}, expected ${revision}."
+        return 1
+    fi
+
+    log_ok "Source restored to ${revision}."
+}
+
+# _update_rollback <reason> <snap_dir> [compose_flags] [source_revision]
+#   Restores the tracked source revision and runtime snapshot, then restarts services.
 #   Called when cmd_update encounters a non-zero exit at any step.
 _update_rollback() {
     local reason="$1"
     local snap_dir_arg="$2"
     local compose_flags_arg="${3:-}"
+    local source_revision_arg="${4:-}"
 
     log_error "${reason}"
-    log_warn "Auto-restoring rollback snapshot and restarting services..."
+    log_warn "Auto-restoring source and rollback snapshot before restarting services..."
+
+    local source_restore_failed=false
+    if [[ -n "$source_revision_arg" ]] \
+        && ! _restore_source_revision "$source_revision_arg"; then
+        source_restore_failed=true
+    fi
 
     if ! _restore_snapshot "$snap_dir_arg"; then
         log_error "CRITICAL: Snapshot restore failed. Manual recovery required."
@@ -408,6 +444,13 @@ _update_rollback() {
         log_error "  Steps    :"
         log_error "    1. cp \"${snap_dir_arg}/.env\" \"${INSTALL_DIR}/.env\""
         log_error "    2. cd \"${INSTALL_DIR}\" && docker compose up -d"
+        return 1
+    fi
+
+    if [[ "$source_restore_failed" == true ]]; then
+        log_error "CRITICAL: Runtime config was restored, but source rollback failed."
+        log_error "  Expected source revision: ${source_revision_arg}"
+        log_error "  Services were not restarted with an inconsistent source tree."
         return 1
     fi
 
@@ -639,6 +682,9 @@ cmd_update() {
         return 1
     fi
 
+    local source_revision
+    source_revision=$(git -C "${INSTALL_DIR}" rev-parse HEAD)
+
     # ── Step 1: rollback snapshot ─────────────────────────────────────────────
     local timestamp
     timestamp=$(date +%Y%m%d-%H%M%S)
@@ -654,7 +700,7 @@ cmd_update() {
     cd "$INSTALL_DIR"
     git fetch origin
     if ! git pull origin main && ! git pull origin master; then
-        _update_rollback "Git pull failed." "$snap_dir" "$compose_flags"
+        _update_rollback "Git pull failed." "$snap_dir" "$compose_flags" "$source_revision"
         return 1
     fi
 
@@ -667,7 +713,7 @@ cmd_update() {
                 log_info "Running: $(basename "$migration")"
                 if ! bash "$migration"; then
                     _update_rollback "Migration failed: $(basename "$migration")." \
-                        "$snap_dir" "$compose_flags"
+                        "$snap_dir" "$compose_flags" "$source_revision"
                     return 1
                 fi
             fi
@@ -703,7 +749,7 @@ cmd_update() {
     if ! wait_for_healthy; then
         _update_rollback \
             "Services failed to become healthy after update (timeout: ${HEALTH_TIMEOUT}s)." \
-            "$snap_dir" "$compose_flags"
+            "$snap_dir" "$compose_flags" "$source_revision"
         return 1
     fi
 
