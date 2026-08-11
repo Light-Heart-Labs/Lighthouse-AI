@@ -266,9 +266,13 @@ services:
       # with Hermes/LiteLLM long-model timeouts so Talk does not 502 while the
       # underlying agent is still working.
       - ODS_TALK_HERMES_TIMEOUT=${ODS_TALK_HERMES_TIMEOUT:-900}
-      # Model id of the vision-capable variant. Defaults to the user.*
-      # name we register on AMD install (Qwen3.6-35B-A3B + mmproj-F16).
-      - ODS_TALK_VISION_MODEL=${ODS_TALK_VISION_MODEL:-user.Qwen3.6-35B-A3B-Vision}
+      # Model id of the vision-capable variant. No universal default: the
+      # user.* Lemonade naming convention (docker-compose.amd.yml sets
+      # user.Qwen3.6-35B-A3B-Vision there) only resolves on AMD/Lemonade
+      # hosts — shipping it as the default here made ODS Talk image
+      # attachments fail with a "model not found" error on every other
+      # backend unless the operator manually overrode it.
+      - ODS_TALK_VISION_MODEL=${ODS_TALK_VISION_MODEL:-}
     volumes:
       - ./scripts:/ods/scripts:ro,z
       - ./config:/ods/config:ro,z
