@@ -9,6 +9,7 @@ import json
 import socket
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 
@@ -55,10 +56,66 @@ def assert_egress_error(func, code: str) -> EgressError:
 
 
 def load_egress_app():
+    class StubResponse:
+        def __init__(
+            self,
+            content=None,
+            *,
+            status_code: int = 200,
+            media_type: str | None = None,
+            headers: dict[str, str] | None = None,
+        ):
+            self.body = content if isinstance(content, bytes) else b""
+            self.status_code = status_code
+            self.media_type = media_type
+            self.headers = headers or {}
+
+    class StubJSONResponse(StubResponse):
+        def __init__(self, content, *, status_code: int = 200, **kwargs):
+            super().__init__(
+                json.dumps(content).encode("utf-8"),
+                status_code=status_code,
+                **kwargs,
+            )
+
+    class StubFastAPI:
+        def __init__(self, *args, **kwargs):
+            self.state = types.SimpleNamespace()
+
+        def _decorator(self, *args, **kwargs):
+            return lambda func: func
+
+        get = post = api_route = on_event = _decorator
+
+    httpx_stub = types.ModuleType("httpx")
+    httpx_stub.AsyncClient = object
+    httpx_stub.HTTPError = OSError
+    httpx_stub.TimeoutException = TimeoutError
+    fastapi_stub = types.ModuleType("fastapi")
+    fastapi_stub.FastAPI = StubFastAPI
+    fastapi_stub.Request = object
+    fastapi_stub.Response = StubResponse
+    responses_stub = types.ModuleType("fastapi.responses")
+    responses_stub.JSONResponse = StubJSONResponse
+    responses_stub.StreamingResponse = StubResponse
+    dependency_stubs = {
+        "httpx": httpx_stub,
+        "fastapi": fastapi_stub,
+        "fastapi.responses": responses_stub,
+    }
+    previous_modules = {name: sys.modules.get(name) for name in dependency_stubs}
+    sys.modules.update(dependency_stubs)
     spec = importlib.util.spec_from_file_location("ods_remote_provider_egress_app", APP_MAIN)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
     return module
 
 
