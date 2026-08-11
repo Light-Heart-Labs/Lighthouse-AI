@@ -49,15 +49,23 @@ archive, member, target = sys.argv[1:]
 with tarfile.open(archive, "w:gz") as tf:
     root = tarfile.TarInfo("20260101-000000")
     root.type = tarfile.DIRTYPE
+    # TarInfo defaults to 0o644. On a directory that leaves no traversal bit,
+    # so a non-root extractor cannot read manifest.json inside it and the
+    # restore fails during validation instead of at the symlink guard this
+    # test exists to exercise. Root ignores the bit, so the difference only
+    # shows up off a root shell.
+    root.mode = 0o755
     tf.addfile(root)
     manifest = (b'{"manifest_version":"1.0","backup_date":"2026-01-01T00:00:00Z",'
                 b'"backup_id":"20260101-000000","backup_type":"config",'
                 b'"ods_version":"test"}\n')
-    info = tarfile.TarInfo(f"20260101-000000/manifest.json")
+    info = tarfile.TarInfo("20260101-000000/manifest.json")
+    info.mode = 0o644
     info.size = len(manifest)
     tf.addfile(info, io.BytesIO(manifest))
     link = tarfile.TarInfo(f"20260101-000000/{member}")
     link.type = tarfile.SYMTYPE
+    link.mode = 0o777
     link.linkname = target
     tf.addfile(link)
 PY
