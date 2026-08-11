@@ -16,6 +16,10 @@ services:
       - ODS_MODEL_SWITCHBOARD=${ODS_MODEL_SWITCHBOARD:-observe}
       - TOKEN_SPY_URL=${TOKEN_SPY_URL:-http://token-spy:8080}
       - TOKEN_SPY_API_KEY=${TOKEN_SPY_API_KEY:-}
+      # Presented to remote-provider-egress on the cloud route. Mirrors
+      # the egress service's own resolution order so both sides land on
+      # the same value without a new generated secret.
+      - ODS_EGRESS_INTERNAL_KEY=${ODS_EGRESS_INTERNAL_KEY:-${DASHBOARD_API_KEY:-}}
     volumes:
       - ./config/litellm/${ODS_MODE:-local}.yaml:/app/config.yaml:ro,z
       - ./config/litellm/switchboard.yaml:/app/switchboard.yaml:ro,z

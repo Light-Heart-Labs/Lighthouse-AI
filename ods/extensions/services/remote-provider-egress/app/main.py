@@ -8,6 +8,7 @@ injects provider credentials from a private file at the final egress boundary.
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
@@ -52,6 +53,14 @@ MAX_BODY_BYTES = int(
 )
 UPSTREAM_TIMEOUT_SECONDS = float(
     os.environ.get("ODS_REMOTE_PROVIDER_UPSTREAM_TIMEOUT", "600")
+)
+# Caller credential. Reachability on ods-network is not authorisation: this
+# service holds the private provider key and injects it into every forwarded
+# request, so an unauthenticated peer would be able to spend the victim's
+# provider quota under their account. Resolution order mirrors model-router's
+# INTERNAL_KEY so an existing install needs no new generated secret.
+INTERNAL_KEY = os.environ.get("ODS_EGRESS_INTERNAL_KEY", "") or os.environ.get(
+    "DASHBOARD_API_KEY", ""
 )
 SSH_TUNNEL_HEALTH_URL = os.environ.get(
     "ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_URL",
@@ -219,6 +228,31 @@ async def _ssh_tunnel_status() -> dict[str, Any]:
     return _safe_tunnel_summary(payload)
 
 
+def _internal_key_authorized(request: Request) -> bool:
+    """Constant-time check of the caller's internal Bearer key.
+
+    Compared as UTF-8 bytes so a non-ASCII presented token is a clean mismatch
+    rather than a TypeError on the pre-auth path — the same shape as
+    dashboard-api's verify_api_key, token-spy and privacy-shield.
+
+    Returns False when no key is configured: this service must not forward a
+    request carrying the provider credential just because the deployment
+    forgot to set one.
+    """
+    if not INTERNAL_KEY:
+        return False
+    provided = request.headers.get("authorization", "")
+    if not provided.startswith("Bearer "):
+        return False
+    return secrets.compare_digest(
+        provided[len("Bearer "):].encode("utf-8"), INTERNAL_KEY.encode("utf-8")
+    )
+
+
+def _unauthorized() -> JSONResponse:
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     secret = provider_secret_status(SECRET_PATH)
@@ -286,7 +320,9 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/v1/models")
-async def list_models() -> Response:
+async def list_models(request: Request) -> Response:
+    if not _internal_key_authorized(request):
+        return _unauthorized()
     try:
         route = _load_route()
     except EgressError as exc:
@@ -305,7 +341,9 @@ async def list_models() -> Response:
 
 
 @app.post("/probe")
-async def probe() -> Response:
+async def probe(request: Request) -> Response:
+    if not _internal_key_authorized(request):
+        return _unauthorized()
     tunnel = None
     try:
         route = _load_route()
@@ -332,6 +370,9 @@ async def probe() -> Response:
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT"],
 )
 async def forward(full_path: str, request: Request) -> Response:
+    # Authenticate before touching route state or the provider secret.
+    if not _internal_key_authorized(request):
+        return _unauthorized()
     path = "/" + full_path
     try:
         route = _load_route()

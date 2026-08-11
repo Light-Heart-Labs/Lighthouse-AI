@@ -369,6 +369,10 @@ services:
       - ODS_REMOTE_PROVIDER_UPSTREAM_TIMEOUT=${ODS_REMOTE_PROVIDER_UPSTREAM_TIMEOUT:-600}
       - ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_URL=${ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_URL:-http://remote-provider-ssh-tunnel:18090/health}
       - ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_TIMEOUT=${ODS_REMOTE_PROVIDER_SSH_TUNNEL_HEALTH_TIMEOUT:-2}
+      # Caller credential. Falls back to DASHBOARD_API_KEY so an
+      # existing install needs no new generated secret.
+      - ODS_EGRESS_INTERNAL_KEY=${ODS_EGRESS_INTERNAL_KEY:-}
+      - DASHBOARD_API_KEY=${DASHBOARD_API_KEY:-}
     volumes:
       - ${ODS_DATA_DIR:-./data}:/state:ro
       - ${ODS_CONFIG_DIR:-./config}/remote-provider-egress-policy.json:/config/remote-provider-egress-policy.json:ro

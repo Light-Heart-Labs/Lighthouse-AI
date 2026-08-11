@@ -221,19 +221,19 @@ def render_litellm_cloud(inputs: RenderInputs) -> RenderedFile:
     litellm_params:
       model: {model_param}
       api_base: {egress_base}
-      api_key: not-needed
+      api_key: os.environ/ODS_EGRESS_INTERNAL_KEY
 
   - model_name: default
     litellm_params:
       model: {model_param}
       api_base: {egress_base}
-      api_key: not-needed
+      api_key: os.environ/ODS_EGRESS_INTERNAL_KEY
 
   - model_name: {yaml_scalar(model)}
     litellm_params:
       model: {model_param}
       api_base: {egress_base}
-      api_key: not-needed
+      api_key: os.environ/ODS_EGRESS_INTERNAL_KEY
 
 router_settings:
   routing_strategy: simple-shuffle
