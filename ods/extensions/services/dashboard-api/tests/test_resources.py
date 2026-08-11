@@ -314,6 +314,26 @@ class TestServiceResources:
 
         assert resp.status_code == 404
 
+    def test_restart_service_rejects_trailing_newline(self, test_client, monkeypatch):
+        """A known id with a trailing newline is not the known id.
+
+        Python's `$` also matches just before a final newline, so a
+        `$`-anchored `.match()` accepts "ape\\n". The id must be rejected by
+        the format check rather than falling through to the catalog lookup.
+        """
+        monkeypatch.setattr("routers.resources.SERVICES", {
+            "ape": {"name": "APE", "container_name": "ods-ape"},
+        })
+
+        with patch("routers.resources._post_agent_json") as post_agent:
+            resp = test_client.post(
+                "/api/services/ape%0A/restart",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 400
+        post_agent.assert_not_called()
+
     def test_restart_service_rejects_non_docker_service(self, test_client, monkeypatch):
         """Restart endpoint rejects known services that do not map to Docker."""
         monkeypatch.setattr("routers.resources.SERVICES", {

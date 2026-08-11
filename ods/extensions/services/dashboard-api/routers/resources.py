@@ -184,7 +184,7 @@ async def service_resources(api_key: str = Depends(verify_api_key)):
 @router.post("/api/services/{service_id}/restart")
 async def restart_service(service_id: str, api_key: str = Depends(verify_api_key)):
     """Restart a single known ODS service via the host agent."""
-    if not _SERVICE_ID_RE.match(service_id):
+    if not _SERVICE_ID_RE.fullmatch(service_id):
         raise HTTPException(status_code=400, detail="Invalid service_id")
     if service_id not in SERVICES:
         raise HTTPException(status_code=404, detail=f"Service not found: {service_id}")

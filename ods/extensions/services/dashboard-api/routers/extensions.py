@@ -425,8 +425,8 @@ def _is_installable(ext_id: str) -> bool:
 
 def _validate_service_id(service_id: str) -> None:
     """Validate service_id format, raising 404 if invalid."""
-    if not _SERVICE_ID_RE.match(service_id):
-        raise HTTPException(status_code=404, detail=f"Invalid service_id: {service_id}")
+    if not _SERVICE_ID_RE.fullmatch(service_id):
+        raise HTTPException(status_code=404, detail="Invalid service_id")
 
 
 def _assert_not_core(service_id: str) -> None:
@@ -1047,7 +1047,7 @@ def _serialize_extension_operation(func):
     """Keep same-service portal mutations serialized through runtime proof."""
     @wraps(func)
     def wrapped(service_id: str, *args, **kwargs):
-        if not _SERVICE_ID_RE.match(service_id):
+        if not _SERVICE_ID_RE.fullmatch(service_id):
             return func(service_id, *args, **kwargs)
         with _extension_operation_lock(service_id):
             return func(service_id, *args, **kwargs)
@@ -1281,8 +1281,8 @@ async def extension_detail(
     api_key: str = Depends(verify_api_key),
 ):
     """Get detailed information for a single extension."""
-    if not _SERVICE_ID_RE.match(service_id):
-        raise HTTPException(status_code=404, detail=f"Invalid service_id: {service_id}")
+    if not _SERVICE_ID_RE.fullmatch(service_id):
+        raise HTTPException(status_code=404, detail="Invalid service_id")
 
     ext = next((e for e in EXTENSION_CATALOG if e["id"] == service_id), None)
     if not ext:
@@ -1375,8 +1375,8 @@ async def extension_logs(
     api_key: str = Depends(verify_api_key),
 ):
     """Get container logs for any service via the host agent."""
-    if not _SERVICE_ID_RE.match(service_id):
-        raise HTTPException(status_code=404, detail=f"Invalid service_id: {service_id}")
+    if not _SERVICE_ID_RE.fullmatch(service_id):
+        raise HTTPException(status_code=404, detail="Invalid service_id")
 
     try:
         body = await asyncio.to_thread(
@@ -2057,7 +2057,7 @@ def _parse_manifest_deps(manifest_path: Path) -> list[str]:
     depends_on = svc.get("depends_on", []) if isinstance(svc, dict) else []
     if not isinstance(depends_on, list):
         return []
-    return [d for d in depends_on if isinstance(d, str) and _SERVICE_ID_RE.match(d)]
+    return [d for d in depends_on if isinstance(d, str) and _SERVICE_ID_RE.fullmatch(d)]
 
 
 def _read_direct_deps(service_id: str) -> list[str]:
@@ -2476,8 +2476,8 @@ def purge_extension_data(
     api_key: str = Depends(verify_api_key),
 ):
     """Permanently delete service data directory."""
-    if not _SERVICE_ID_RE.match(service_id):
-        raise HTTPException(status_code=404, detail=f"Invalid service_id: {service_id}")
+    if not _SERVICE_ID_RE.fullmatch(service_id):
+        raise HTTPException(status_code=404, detail="Invalid service_id")
 
     if service_id in ALWAYS_ON_SERVICES:
         raise HTTPException(status_code=403, detail="Cannot purge always-on service data")
