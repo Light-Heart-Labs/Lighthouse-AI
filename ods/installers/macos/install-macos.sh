@@ -1925,7 +1925,7 @@ if $DRY_RUN; then
     ai "[DRY RUN] Would run: docker compose up -d --remove-orphans --no-build --pull never"
 else
     # Change to install directory for docker compose
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
 
     # ── Bootstrap fast-start ──────────────────────────────────────────────
     _BOOTSTRAP_ACTIVE=false
