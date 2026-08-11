@@ -695,7 +695,7 @@ stop_native_llama() {
 
 cmd_status() {
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
     resolve_cli_llm_route
 
     local flags
@@ -768,7 +768,7 @@ cmd_status() {
 cmd_start() {
     local service="${1:-}"
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
     ensure_llama_cpu_budget
 
     # Start native llama-server first
@@ -809,7 +809,7 @@ cmd_start() {
 cmd_stop() {
     local service="${1:-}"
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
 
     local flags
     flags=$(get_compose_flags)
@@ -838,7 +838,7 @@ cmd_stop() {
 cmd_restart() {
     local service="${1:-}"
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
     ensure_llama_cpu_budget
 
     local flags
@@ -903,7 +903,7 @@ cmd_logs() {
     fi
 
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
 
     local flags
     flags=$(get_compose_flags)
@@ -990,7 +990,7 @@ cmd_chat() {
 
 cmd_update() {
     test_install
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || exit 1
     ensure_llama_cpu_budget
 
     # Upsert SHIELD_API_KEY when missing (pre-PR-#1069 upgrade path).
