@@ -1,19 +1,23 @@
-# Force LF line endings for all shell scripts and Docker-mounted files.
-# Windows Git's core.autocrlf converts LF→CRLF on checkout, which breaks
-# shell shebangs inside Linux Docker containers (kernel reads #!/bin/sh\r
-# and fails with "no such file or directory").
-*.sh text eol=lf
-*.bash text eol=lf
-ods/ods-cli text eol=lf
-Dockerfile* text eol=lf
-docker-entrypoint* text eol=lf
-*.yaml text eol=lf
-*.yml text eol=lf
-*.json text eol=lf
-*.env text eol=lf
-*.shellcheckrc text eol=lf
+# Every tracked text file is LF in the index and checks out LF, on every
+# platform. Windows Git's core.autocrlf otherwise converts on checkout, and a
+# trailing \r breaks whatever parses the file on the Linux side:
+#   * the kernel reads `#!/bin/sh\r` and fails with "no such file or directory"
+#   * modprobe keeps the \r as part of an option value
+#   * sysctl rejects the key outright
+#   * the `$`-anchored grep contracts in ods/tests/ stop matching
+#
+# text=auto leaves binary content alone — git detects that itself, so the
+# icons and images under installer/ and dashboard/public/ are unaffected.
+* text=auto eol=lf
 
-# PowerShell scripts can use CRLF (native Windows)
+# Redundant under the rule above, kept deliberately: ods/ods-cli is
+# extensionless, was the original CRLF casualty, and
+# tests/contracts/test-installer-contracts.sh pins this exact line so the
+# regression cannot come back by way of an edit to the default.
+ods/ods-cli text eol=lf
+
+# PowerShell is the deliberate exception: these run on native Windows, where
+# CRLF is expected. LF in the index, CRLF in every working tree.
 *.ps1 text eol=crlf
 *.psm1 text eol=crlf
 *.psd1 text eol=crlf
