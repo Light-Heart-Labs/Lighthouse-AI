@@ -244,6 +244,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
           onClick={onToggle}
           className={`${collapsed ? '' : 'ml-auto'} hidden items-center justify-center rounded-lg p-2 text-theme-text-muted transition-colors hover:text-theme-text sm:flex`}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{ background: 'var(--sidebar-hover-bg)' }}
         >
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
