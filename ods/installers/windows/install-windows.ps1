@@ -2087,7 +2087,8 @@ if ($enableVoice)     {
     $healthWhisperPort = if ($windowsEnvMap.ContainsKey("WHISPER_PORT") -and -not [string]::IsNullOrWhiteSpace($windowsEnvMap["WHISPER_PORT"])) { $windowsEnvMap["WHISPER_PORT"] } else { "9000" }
     $healthChecks += @{ Name = "Whisper (STT)"; Url = "http://localhost:$healthWhisperPort/health" }
 }
-if ($enableWorkflows) { $healthChecks += @{ Name = "n8n (Workflows)";   Url = "http://localhost:5678/healthz" } }
+$n8nHealthPort = if ($windowsEnvMap.ContainsKey("N8N_PORT") -and -not [string]::IsNullOrWhiteSpace($windowsEnvMap["N8N_PORT"])) { $windowsEnvMap["N8N_PORT"] } else { "5678" }
+if ($enableWorkflows) { $healthChecks += @{ Name = "n8n (Workflows)";   Url = "http://localhost:$n8nHealthPort/healthz" } }
 
 Write-AI "Running health checks..."
 $maxAttempts = 60; $allHealthy = $true
@@ -2438,7 +2439,7 @@ if ($installReadiness -and $installReadiness.AllReady -and $llmModelReady -and $
 
 # ── Desktop & Start Menu shortcuts ───────────────────────────────────────────
 try {
-    $dashboardUrl  = "http://localhost:3001"
+    $dashboardUrl  = "http://localhost:$dashboardPort"
     $shortcutName  = "ODS"
     $iconPath      = Join-Path $installDir "extensions\services\dashboard\public\osmantic-os.ico"
     $iconContent   = if (Test-Path -LiteralPath $iconPath) { "IconFile=$iconPath`nIconIndex=0" } else { "IconIndex=0" }

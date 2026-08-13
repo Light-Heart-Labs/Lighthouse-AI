@@ -286,8 +286,8 @@ Stop-WindowsODSLemonadePortConflicts `
 $_portsToCheck = [ordered]@{
     "Open WebUI (chat)"   = Resolve-WindowsODSPort `
         -Name "WEBUI_PORT" -DefaultPort 3000 -InstallDir $installDir
-    "Dashboard"           = 3001
-    "Dashboard API"       = 3002
+    "Dashboard"           = (Resolve-WindowsODSPort -Name "DASHBOARD_PORT" -DefaultPort 3001 -InstallDir $installDir)
+    "Dashboard API"       = (Resolve-WindowsODSPort -Name "DASHBOARD_API_PORT" -DefaultPort 3002 -InstallDir $installDir)
 }
 $_llmPortToCheck = Resolve-WindowsLlmPreflightPort `
     -GpuBackend ([string]$gpuInfo.Backend) `
@@ -304,7 +304,7 @@ if ($enableRecommended) {
     $_portsToCheck["Token Spy (usage monitor)"] = 3005
 }
 if ($enableVoice) {
-    $_whisperPortToCheck = $(if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) { 9100 } else { 9000 })
+    $_whisperPortToCheck = Resolve-WindowsODSPort -Name "WHISPER_PORT" -DefaultPort $(if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) { 9100 } else { 9000 }) -InstallDir $installDir
     $_portsToCheck["Whisper (STT)"] = $_whisperPortToCheck
     $_portsToCheck["Kokoro (TTS)"]  = 8880
 }
