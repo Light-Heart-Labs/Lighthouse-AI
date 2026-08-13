@@ -285,6 +285,7 @@ export default function Models() {
             onClick={refresh}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-theme-border bg-theme-bg/45 text-theme-text-muted transition-colors hover:border-theme-accent/35 hover:text-theme-text"
             title="Refresh models"
+            aria-label="Refresh models"
           >
             <RefreshCw size={16} />
           </button>
