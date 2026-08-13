@@ -286,11 +286,17 @@ REMOTESCRIPT
   log "  Sessions: $session_count total, ${#to_remove[@]} to remove"
 
   if [ "${#to_remove[@]}" -gt 0 ]; then
-    local rm_args=""
+    local -a rm_paths=()
     for sid in "${to_remove[@]}"; do
-      rm_args="${rm_args} ${remote_dir}/${sid}.jsonl"
+      rm_paths+=("${remote_dir}/${sid}.jsonl")
     done
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "${host}" "rm -f ${rm_args}" 2>/dev/null || true
+    # Pass paths NUL-delimited so the remote login shell never re-parses the
+    # filenames. Session ids are raw .jsonl basenames; an id containing a space
+    # previously split the rm into bogus args (file left behind), and an id
+    # containing shell metacharacters (e.g. `a; touch /tmp/PWNED`) executed
+    # arbitrary commands on the agent host.
+    printf '%s\0' "${rm_paths[@]}" \
+      | ssh -o ConnectTimeout=5 -o BatchMode=yes "${host}" "xargs -0 -I{} rm -f -- {}" 2>/dev/null || true
     log "  [DONE] Removed ${#to_remove[@]} sessions on $host"
   else
     log "  [OK] No cleanup needed"
