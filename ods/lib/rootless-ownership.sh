@@ -9,12 +9,27 @@ ods_docker_rootless_state() {
         0|false) return 1 ;;
     esac
 
+    # Docker reports rootless via .SecurityOptions (contains "name=rootless").
+    # This field is Docker-specific; the podman "docker" shim does not expose it
+    # and the Go template errors out instead of returning empty.
     local security_options
-    if ! security_options=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null); then
-        echo "[error] Could not determine whether Docker is running in rootless mode." >&2
-        return 2
+    if security_options=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null) \
+       && [[ -n "$security_options" && "$security_options" != "null" ]]; then
+        grep -q 'rootless' <<<"$security_options"
+        return
     fi
-    grep -q '"name=rootless"\|rootless' <<<"$security_options"
+
+    # Podman (invoked through the docker CLI shim) reports rootless via
+    # .Host.Security.Rootless — a plain "true"/"false" boolean.
+    local podman_rootless
+    if podman_rootless=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null) \
+       && [[ -n "$podman_rootless" ]]; then
+        [[ "$podman_rootless" == "true" ]]
+        return
+    fi
+
+    echo "[error] Could not determine whether Docker is running in rootless mode." >&2
+    return 2
 }
 
 ods_is_rootless_docker() {
