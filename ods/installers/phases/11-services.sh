@@ -257,7 +257,7 @@ else
             index($0, k "=") == 1 { print k "=" v; found = 1; next }
             { print }
             END { if (!found) print k "=" v }
-        ' "$env_file" > "$tmp_file" && cat "$tmp_file" > "$env_file" && rm -f "$tmp_file"
+        ' "$env_file" > "$tmp_file" && mv -f "$tmp_file" "$env_file"
     }
 
     _phase11_env_get() {
