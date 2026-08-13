@@ -140,6 +140,12 @@ WIPE_FILES=()
 REMOVED_INACTIVE=0
 REMOVED_BLOATED=0
 
+# Snapshot timestamp: sessions whose .jsonl is created after this point were
+# not present when we read the active set above, so the live gateway may have
+# just added them. Treating them as inactive would delete a live session and
+# leave a dangling index entry after the rewrite below — skip them.
+SNAP_TS=$(date +%s)
+
 for f in "$SESSIONS_DIR"/*.jsonl; do
     [ -f "$f" ] || continue
     BASENAME=$(basename "$f" .jsonl)
@@ -154,6 +160,11 @@ for f in "$SESSIONS_DIR"/*.jsonl; do
     done
 
     if [ "$IS_ACTIVE" = false ]; then
+        f_mtime=$(stat -c%Y "$f" 2>/dev/null || stat -f%Y "$f" 2>/dev/null || echo 0)
+        if [[ "$f_mtime" -gt "$SNAP_TS" ]]; then
+            echo "[$(date)] Skipping session created during cleanup: $BASENAME"
+            continue
+        fi
         SIZE=$(du -h "$f" | cut -f1)
         echo "[$(date)] Removing inactive session: $BASENAME ($SIZE)"
         rm -f "$f"
