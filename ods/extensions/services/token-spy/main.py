@@ -1414,8 +1414,14 @@ def _kill_session(agent: str, reason: str = "manual") -> dict:
         to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get("sessionId") == largest]
         for k in to_remove:
             del data[k]
-        with open(sessions_json, "w") as f:
+        # Atomic write: a crash mid-flush would otherwise truncate/corrupt the
+        # index and silently lose every session reference for this agent.
+        _tmp = f"{sessions_json}.{os.getpid()}.tmp"
+        with open(_tmp, "w") as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(_tmp, sessions_json)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         log.warning(f"[RESET] Failed to clean sessions.json for {agent}")
 
