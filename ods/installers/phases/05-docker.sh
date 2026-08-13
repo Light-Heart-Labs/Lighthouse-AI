@@ -382,6 +382,47 @@ _docker_compose_verify() {
     return 1
 }
 
+# When the `docker` CLI is actually the podman shim (common on AMD Ryzen AI /
+# Fedora / RHEL hosts), bare image names like `nousresearch/hermes-agent:TAG`
+# do not resolve: podman has no implicit docker.io like Docker does, and errors
+# with `short-name ... did not resolve` unless an unqualified-search registry is
+# configured. Every bare image the installer validates (phase 08) and every
+# compose pull (phase 11) would fail. Ensure docker.io is searched, using a
+# user-level registries.conf (no sudo, doesn't touch system config). System
+# registries.conf.d shortname aliases are still merged by podman.
+_runtime_is_podman() {
+    docker_run version 2>/dev/null | grep -qi 'podman' && return 0
+    return 1
+}
+
+_ensure_podman_dockerhub_search() {
+    _runtime_is_podman || return 0
+
+    local conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/containers"
+    local user_conf="$conf_dir/registries.conf"
+    local f
+    # Already configured anywhere in podman's config chain? Leave it alone.
+    for f in "${CONTAINERS_REGISTRIES_CONF:-}" \
+             "$user_conf" \
+             /etc/containers/registries.conf \
+             /etc/containers/registries.conf.d/*.conf \
+             "$conf_dir"/registries.conf.d/*.conf; do
+        [[ -f "$f" ]] || continue
+        if grep -qE '^[[:space:]]*unqualified-search-registries[[:space:]]*=' "$f" 2>/dev/null; then
+            log "podman unqualified-search-registries already configured ($f)"
+            return 0
+        fi
+    done
+
+    mkdir -p "$conf_dir"
+    if [[ -f "$user_conf" ]]; then
+        printf '\n# Added by ODS installer: resolve bare image names via Docker Hub.\nunqualified-search-registries = ["docker.io"]\n' >> "$user_conf"
+    else
+        printf '# Created by ODS installer: podman does not assume docker.io for\n# unqualified image names the way Docker does. ODS images are referenced by\n# bare name (e.g. nousresearch/hermes-agent), so add Docker Hub to the search.\nunqualified-search-registries = ["docker.io"]\n' > "$user_conf"
+    fi
+    ai_ok "Configured podman to resolve unqualified image names via Docker Hub ($user_conf)"
+}
+
 _docker_post_install_checks() {
     # Best-effort checks. Should not hard-fail in dry-run.
     if $DRY_RUN; then
@@ -421,6 +462,9 @@ _docker_post_install_checks() {
     else
         warn "Docker engine did not respond to 'docker version'"
     fi
+
+    # If the runtime is podman, make sure bare image names resolve to Docker Hub.
+    _ensure_podman_dockerhub_search
 
     # Optional: give the user a clear hint if they are likely missing group perms
     if [[ "$DOCKER_CMD" == "sudo docker" ]]; then
