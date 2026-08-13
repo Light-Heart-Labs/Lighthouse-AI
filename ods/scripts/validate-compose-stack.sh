@@ -12,6 +12,24 @@ COMPOSE_FLAGS=""
 ENV_FILE=""
 QUIET=false
 
+usage() {
+    cat <<'USAGE'
+Usage: validate-compose-stack.sh --compose-flags "-f file1.yml -f file2.yml" [OPTIONS]
+
+Validate the resolved Docker Compose stack for syntax errors.
+
+Options:
+  --compose-flags FLAGS   Compose -f flags to validate (required)
+  --env-file FILE         .env file to pass to docker compose config
+  --quiet                 Suppress non-error output
+  -h, --help              Show this help message and exit
+
+Exit codes:
+  0 - Valid compose stack
+  1 - Invalid compose stack (syntax errors, missing files, etc.)
+USAGE
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --compose-flags)
@@ -25,6 +43,10 @@ while [[ $# -gt 0 ]]; do
         --quiet)
             QUIET=true
             shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
             ;;
         *)
             echo "Unknown argument: $1" >&2
