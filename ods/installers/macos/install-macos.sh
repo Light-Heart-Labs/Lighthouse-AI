@@ -979,7 +979,7 @@ _install_opencode() {
 
     ai "Installing OpenCode with upstream installer..."
     local tmpfile
-    tmpfile=$(mktemp /tmp/opencode-install.XXXXXX.sh)
+    tmpfile=$(mktemp /tmp/opencode-install.sh.XXXXXX)
     if curl -fsSL --max-time 300 https://opencode.ai/install -o "$tmpfile" 2>/dev/null \
        && bash "$tmpfile" >> "$ODS_LOG_FILE" 2>&1; then
         OPENCODE_BIN="$(_find_opencode_bin 2>/dev/null || true)"
