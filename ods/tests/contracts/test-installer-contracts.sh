@@ -784,4 +784,7 @@ bash tests/test-installer-context-parity.sh
 echo "[contract] Linux installer/background model lifecycle serialization"
 bash tests/test-linux-installer-model-lifecycle-lock.sh
 
+echo "[contract] Podman and no-sudo rootless lifecycle"
+bash tests/test-podman-rootless-contracts.sh
+
 echo "[PASS] installer contracts"

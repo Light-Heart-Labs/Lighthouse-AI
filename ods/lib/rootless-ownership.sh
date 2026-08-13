@@ -133,6 +133,51 @@ _ods_rootless_ensure_helper_image() {
     fi
 }
 
+ods_rootless_make_host_writable() {
+    local install_dir="$1" relative="$2" install_root target
+
+    case "$relative" in
+        config/*) ;;
+        *)
+            echo "[error] Refusing rootless host-writable repair outside config/: $relative" >&2
+            return 1
+            ;;
+    esac
+    case "/$relative/" in
+        */../*)
+            echo "[error] Refusing rootless host-writable path traversal: $relative" >&2
+            return 1
+            ;;
+    esac
+    [[ ! -L "$install_dir/$relative" ]] || {
+        echo "[error] Refusing rootless host-writable repair for symlink: $relative" >&2
+        return 1
+    }
+
+    install_root=$(readlink -f "$install_dir") || return 1
+    target=$(readlink -f "$install_dir/$relative") || return 1
+    case "$target" in
+        "$install_root"/config/*) ;;
+        *)
+            echo "[error] Rootless host-writable target escapes config/: $relative -> $target" >&2
+            return 1
+            ;;
+    esac
+
+    _ods_rootless_ensure_helper_image || return 1
+    if ! docker run --rm --pull never --user 0:0 --network none \
+        -v "$target:/target" \
+        "$ODS_ROOTLESS_HELPER_IMAGE" \
+        chown -R 0:0 /target; then
+        echo "[error] Could not restore host-user ownership for $relative in the rootless namespace." >&2
+        return 1
+    fi
+    [[ -w "$target" ]] || {
+        echo "[error] Rootless host-writable verification failed for $relative." >&2
+        return 1
+    }
+}
+
 _ods_rootless_ensure_directory() {
     local install_dir="$1" relative="$2" data_root subpath
 

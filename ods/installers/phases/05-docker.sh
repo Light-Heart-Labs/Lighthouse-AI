@@ -16,6 +16,9 @@
 #   Multi-distro: uses packaging.sh for distro-agnostic package installs.
 # ============================================================================
 
+# shellcheck source=installers/lib/podman-registries.sh
+source "$SCRIPT_DIR/installers/lib/podman-registries.sh"
+
 ods_progress 30 "docker" "Setting up Docker"
 show_phase 3 6 "Docker Setup" "~2 minutes"
 ai "Preparing container runtime..."
@@ -136,16 +139,9 @@ else
     if $DRY_RUN; then
         log "[DRY RUN] Would install Docker via official script"
     else
-        # In non-interactive mode, fail fast if sudo requires a password
-        if [[ "${INTERACTIVE:-true}" != "true" ]] && ! sudo -n true 2>/dev/null; then
-            ai_bad "Docker is not installed and sudo requires a password."
-            ai_bad "In non-interactive mode, either:"
-            ai "  1. Run with passwordless sudo (NOPASSWD in sudoers)"
-            ai "  2. Install Docker manually first, then re-run with --skip-docker"
-            ai "  3. Run the installer interactively (without --non-interactive)"
-            error "Cannot install Docker without sudo in non-interactive mode."
+        if ! ods_sudo_available; then
+            error "No container runtime is installed and privileged package installation is unavailable. Install Docker or Podman first, then re-run ODS."
         fi
-
         case "$PKG_MANAGER" in
             apt|zypper)
                 # Docker CE via get.docker.com (supports Debian/Ubuntu/Fedora/SLES)
@@ -203,9 +199,11 @@ if command -v docker &>/dev/null && ! $DRY_RUN; then
     _docker_ver="$(_docker_server_version_for_amd_downgrade || echo "0.0.0")"
     if [[ "$_docker_ver" == 29.3.* ]] && [[ "${GPU_BACKEND:-}" == "amd" ]]; then
         ai_warn "Docker $_docker_ver has a known bug with AMD GPU device passthrough."
-        ai "Downgrading to Docker 29.2.1 for AMD GPU compatibility..."
-        # Detect package format
-        if command -v apt-get &>/dev/null; then
+        if ! ods_sudo_available; then
+            ai_warn "Cannot downgrade Docker without privileged package access."
+            ai_warn "AMD GPU containers may fail until Docker 29.2.1 is installed by an administrator."
+        elif command -v apt-get &>/dev/null; then
+            ai "Downgrading to Docker 29.2.1 for AMD GPU compatibility..."
             # Docker CE's apt version string embeds the distro id + codename,
             # e.g. 5:29.2.1-1~ubuntu.24.04~noble or 5:29.2.1-1~debian.13~trixie.
             # Resolve the exact installable 29.2.1 version from the configured
@@ -224,6 +222,7 @@ if command -v docker &>/dev/null && ! $DRY_RUN; then
                 ai "  Manual fix: ensure Docker's apt repo is configured (get.docker.com), then 'apt-cache madison docker-ce' to find the 29.2.1 version string."
             fi
         elif command -v dnf &>/dev/null; then
+            ai "Downgrading to Docker 29.2.1 for AMD GPU compatibility..."
             ods_sudo dnf downgrade -y docker-ce-29.2.1 docker-ce-cli-29.2.1 >> "$LOG_FILE" 2>&1 && \
                 ai_ok "Docker downgraded to 29.2.1 (AMD GPU fix)" || \
                 ai_warn "Could not downgrade Docker. GPU containers may fail."
@@ -238,7 +237,9 @@ if command -v docker &>/dev/null && ! $DRY_RUN; then
         else
             ai_warn "Could not downgrade Docker on this system. GPU containers may fail."
         fi
-        ods_sudo systemctl restart docker 2>/dev/null || true
+        if ods_sudo_available; then
+            ods_sudo systemctl restart docker 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -397,30 +398,7 @@ _runtime_is_podman() {
 
 _ensure_podman_dockerhub_search() {
     _runtime_is_podman || return 0
-
-    local conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/containers"
-    local user_conf="$conf_dir/registries.conf"
-    local f
-    # Already configured anywhere in podman's config chain? Leave it alone.
-    for f in "${CONTAINERS_REGISTRIES_CONF:-}" \
-             "$user_conf" \
-             /etc/containers/registries.conf \
-             /etc/containers/registries.conf.d/*.conf \
-             "$conf_dir"/registries.conf.d/*.conf; do
-        [[ -f "$f" ]] || continue
-        if grep -qE '^[[:space:]]*unqualified-search-registries[[:space:]]*=' "$f" 2>/dev/null; then
-            log "podman unqualified-search-registries already configured ($f)"
-            return 0
-        fi
-    done
-
-    mkdir -p "$conf_dir"
-    if [[ -f "$user_conf" ]]; then
-        printf '\n# Added by ODS installer: resolve bare image names via Docker Hub.\nunqualified-search-registries = ["docker.io"]\n' >> "$user_conf"
-    else
-        printf '# Created by ODS installer: podman does not assume docker.io for\n# unqualified image names the way Docker does. ODS images are referenced by\n# bare name (e.g. nousresearch/hermes-agent), so add Docker Hub to the search.\nunqualified-search-registries = ["docker.io"]\n' > "$user_conf"
-    fi
-    ai_ok "Configured podman to resolve unqualified image names via Docker Hub ($user_conf)"
+    ods_podman_ensure_dockerhub_search
 }
 
 _docker_post_install_checks() {
@@ -488,6 +466,9 @@ if [[ $GPU_COUNT -gt 0 && "$GPU_BACKEND" == "nvidia" ]]; then
     else
         ai "Installing NVIDIA Container Toolkit..."
         if ! $DRY_RUN; then
+            if ! ods_sudo_available; then
+                error "NVIDIA Container Toolkit is missing and privileged package installation is unavailable. Install the toolkit first, then re-run ODS."
+            fi
             # Distro-aware repo setup + install
             case "$PKG_MANAGER" in
                 apt)

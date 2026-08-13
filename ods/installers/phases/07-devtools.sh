@@ -315,6 +315,27 @@ if $DRY_RUN; then return 0; fi
 # System-mode systemd unit (was --user mode pre-#573). Installs to
 # /etc/systemd/system, runs as the installing user with SupplementaryGroups=docker
 # so the agent can manage Docker without socket-mounting into a container.
+_ods_start_session_host_agent() {
+    if ! "$AGENT_PYTHON" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        ai "Installing ODS host-agent model downloader dependencies..."
+        if ods_ensure_python_pip "$AGENT_PYTHON" "ODS host-agent" && \
+           ods_python_pip_install_user "$AGENT_PYTHON" "$LOG_FILE" "huggingface_hub[hf_xet]>=0.27"; then
+            ai_ok "ODS host-agent Hugging Face downloader ready"
+        else
+            ai_warn "Could not install huggingface_hub[hf_xet]; model manager downloads may fail on Xet-backed Hugging Face models."
+        fi
+    fi
+
+    if ODS_AGENT_FORCE_SESSION=true "$INSTALL_DIR/ods-cli" agent start >> "$LOG_FILE" 2>&1; then
+        ai_ok "ODS host agent started for this session (background mode)"
+        ai "  Run 'ods agent start' after reboot or login to start it again."
+        return 0
+    fi
+
+    ai_warn "Could not start the session host agent. Run: ods agent start"
+    return 1
+}
+
 if [[ -f "$INSTALL_DIR/bin/ods-host-agent.py" ]]; then
     AGENT_PYTHON="$(command -v python3)"
     if [[ -n "$AGENT_PYTHON" ]]; then
@@ -331,12 +352,12 @@ if [[ -f "$INSTALL_DIR/bin/ods-host-agent.py" ]]; then
             # System-mode install of the host-agent + mDNS units needs root.
             # When sudo isn't usable (rootless box, or non-interactive without
             # cached/passwordless sudo), skip these OPTIONAL extras instead of
-            # failing the whole install. Core ODS runs rootless; the agent can
-            # be started later with `ods agent start`. This return exits phase
-            # 07 (host-agent + mDNS are the only remaining steps, both root-only).
+            # failing the whole install. Core ODS runs rootless; start the agent
+            # as a session process so model management remains available. This
+            # return exits phase 07 (the remaining system units need root).
             if ! ods_sudo_available; then
                 ai_warn "sudo unavailable — skipping host-agent + mDNS systemd units (optional)."
-                ai "  Core ODS runs rootless. Start the agent later with: ods agent start"
+                _ods_start_session_host_agent || true
                 return 0
             fi
 
@@ -429,8 +450,8 @@ if [[ -f "$INSTALL_DIR/bin/ods-host-agent.py" ]]; then
             # loginctl enable-linger no longer needed for host agent (system-mode unit)
 
         else
-            ai_warn "No systemd detected — ods host agent not auto-installed."
-            ai_warn "  Start manually: ods agent start"
+            ai_warn "No systemd detected — starting the host agent without a system service."
+            _ods_start_session_host_agent || true
         fi
     else
         ai_warn "python3 not found — ods host agent not installed"

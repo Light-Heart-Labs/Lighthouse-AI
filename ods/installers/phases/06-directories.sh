@@ -72,6 +72,28 @@ else
     mkdir -p "$INSTALL_DIR"/data/langfuse/{postgres,clickhouse,redis,minio}
     mkdir -p "$INSTALL_DIR"/config/{n8n,litellm,openclaw,searxng}
 
+    _phase06_repair_host_path() {
+        local target="$1" description="$2"
+
+        if $_phase06_rootless; then
+            local relative="${target#"$INSTALL_DIR"/}"
+            if [[ "$relative" == "$target" ]] || \
+               ! ods_rootless_make_host_writable "$INSTALL_DIR" "$relative"; then
+                error "Failed to repair $description in the rootless namespace: $target"
+                return 1
+            fi
+            return 0
+        fi
+        if ! ods_sudo_available; then
+            error "Cannot repair $description without privileged access: $target. Fix its ownership manually, then re-run ODS."
+            return 1
+        fi
+        if ! ods_sudo chown -R "$(id -u):$(id -g)" "$target" 2>/dev/null; then
+            error "Failed to repair $description: $target"
+            return 1
+        fi
+    }
+
     # Hermes runs its gateway/dashboard as the in-container `hermes` user
     # (uid 10000) and keeps HERMES_HOME at data/hermes mounted as /opt/data.
     # Upstream intentionally makes that directory 0700. A reinstall running
@@ -79,9 +101,22 @@ else
     # status and ODS Talk JSON-RPC paths fail with PermissionError.
     if ! $_phase06_rootless \
         && [[ "${ENABLE_HERMES:-false}" == "true" && -d "$INSTALL_DIR/data/hermes" ]]; then
-        sudo chown -R 10000:10000 "$INSTALL_DIR/data/hermes" 2>/dev/null || \
-            warn "Failed to restore data/hermes ownership to Hermes uid 10000 (Hermes dashboard may be unhealthy)"
-        sudo chmod 700 "$INSTALL_DIR/data/hermes" 2>/dev/null || true
+        _hermes_metadata=$(stat -c '%u:%g:%a' "$INSTALL_DIR/data/hermes" 2>/dev/null || true)
+        if [[ "$_hermes_metadata" != "10000:10000:700" ]]; then
+            if ! ods_sudo_available; then
+                error "Hermes requires data/hermes ownership 10000:10000 and mode 700 with a rootful runtime. Grant privileged access or disable Hermes, then re-run ODS."
+                return 1
+            fi
+            ods_sudo chown -R 10000:10000 "$INSTALL_DIR/data/hermes" 2>/dev/null || {
+                error "Failed to restore data/hermes ownership to Hermes uid 10000"
+                return 1
+            }
+            ods_sudo chmod 700 "$INSTALL_DIR/data/hermes" 2>/dev/null || {
+                error "Failed to preserve private mode 700 on data/hermes"
+                return 1
+            }
+        fi
+        unset _hermes_metadata
     fi
 
     # Fix ownership of data/config dirs that may have been created by containers
@@ -90,13 +125,13 @@ else
         for _data_dir in "$INSTALL_DIR"/data/*/; do
             [[ "${ENABLE_HERMES:-false}" == "true" && "$_data_dir" == "$INSTALL_DIR/data/hermes/" ]] && continue
             if [[ -d "$_data_dir" ]] && ! [[ -w "$_data_dir" ]]; then
-                sudo chown -R "$(id -u):$(id -g)" "$_data_dir" 2>/dev/null || true
+                _phase06_repair_host_path "$_data_dir" "container-owned data directory" || return 1
             fi
         done
     fi
     for _cfg_dir in "$INSTALL_DIR"/config/*/; do
         if [[ -d "$_cfg_dir" ]] && ! [[ -w "$_cfg_dir" ]]; then
-            sudo chown -R "$(id -u):$(id -g)" "$_cfg_dir" 2>/dev/null || true
+            _phase06_repair_host_path "$_cfg_dir" "container-owned config directory" || return 1
         fi
     done
 
@@ -109,7 +144,7 @@ else
             [[ -d "$INSTALL_DIR/$_root" ]] || continue
             for _d in "$INSTALL_DIR/$_root"/*/; do
                 [[ "${ENABLE_HERMES:-false}" == "true" && "$_d" == "$INSTALL_DIR/data/hermes/" ]] && continue
-                [[ -d "$_d" ]] && ! [[ -w "$_d" ]] && _cant_write="$_cant_write ${_d#$INSTALL_DIR/}"
+                [[ -d "$_d" ]] && ! [[ -w "$_d" ]] && _cant_write="$_cant_write ${_d#"$INSTALL_DIR"/}"
             done
         done
         if [[ -n "$_cant_write" ]]; then
@@ -748,20 +783,6 @@ raise SystemExit(1)' 2>/dev/null && return 0
     OPENAI_API_KEY=$(_env_get OPENAI_API_KEY "${OPENAI_API_KEY:-}")
     TOGETHER_API_KEY=$(_env_get TOGETHER_API_KEY "${TOGETHER_API_KEY:-}")
     MINIMAX_API_KEY=$(_env_get MINIMAX_API_KEY "${MINIMAX_API_KEY:-}")
-
-    # Cloud API keys are optional (empty is valid). Dev/CI shells frequently
-    # export short placeholders (e.g. ANTHROPIC_API_KEY=dummy), which the
-    # installer would otherwise copy verbatim into .env — producing a file that
-    # fails its OWN schema validation (minLength 10) and aborts the install.
-    # Clear anything too short to be a real key and warn, rather than crash.
-    for _cloud_key in ANTHROPIC_API_KEY OPENAI_API_KEY TOGETHER_API_KEY MINIMAX_API_KEY; do
-        _cloud_val="${!_cloud_key}"
-        if [[ -n "$_cloud_val" && "${#_cloud_val}" -lt 10 ]]; then
-            ai_warn "Ignoring placeholder ${_cloud_key} from environment (too short for a real key) — leaving it empty in .env"
-            printf -v "$_cloud_key" '%s' ""
-        fi
-    done
-    unset _cloud_key _cloud_val
     # Base64-encode GPU assignment JSON for safe .env storage
     if [[ -n "${GPU_ASSIGNMENT_JSON:-}" && "${GPU_ASSIGNMENT_JSON:-}" != "{}" ]]; then
         GPU_ASSIGNMENT_JSON_B64=$(echo "$GPU_ASSIGNMENT_JSON" | jq -c '.' | base64 -w0)
@@ -1205,7 +1226,7 @@ ENV_EOF
     _phase06_step "generate-searxng-config"
     mkdir -p "$INSTALL_DIR/config/searxng"
     if [[ -f "$INSTALL_DIR/config/searxng/settings.yml" ]] && ! [[ -w "$INSTALL_DIR/config/searxng/settings.yml" ]]; then
-        sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR/config/searxng/settings.yml" 2>/dev/null || true
+        _phase06_repair_host_path "$INSTALL_DIR/config/searxng/settings.yml" "SearXNG configuration" || return 1
     fi
     cat > "$INSTALL_DIR/config/searxng/settings.yml" << SEARXNG_EOF
 use_default_settings: true
