@@ -748,6 +748,20 @@ raise SystemExit(1)' 2>/dev/null && return 0
     OPENAI_API_KEY=$(_env_get OPENAI_API_KEY "${OPENAI_API_KEY:-}")
     TOGETHER_API_KEY=$(_env_get TOGETHER_API_KEY "${TOGETHER_API_KEY:-}")
     MINIMAX_API_KEY=$(_env_get MINIMAX_API_KEY "${MINIMAX_API_KEY:-}")
+
+    # Cloud API keys are optional (empty is valid). Dev/CI shells frequently
+    # export short placeholders (e.g. ANTHROPIC_API_KEY=dummy), which the
+    # installer would otherwise copy verbatim into .env — producing a file that
+    # fails its OWN schema validation (minLength 10) and aborts the install.
+    # Clear anything too short to be a real key and warn, rather than crash.
+    for _cloud_key in ANTHROPIC_API_KEY OPENAI_API_KEY TOGETHER_API_KEY MINIMAX_API_KEY; do
+        _cloud_val="${!_cloud_key}"
+        if [[ -n "$_cloud_val" && "${#_cloud_val}" -lt 10 ]]; then
+            ai_warn "Ignoring placeholder ${_cloud_key} from environment (too short for a real key) — leaving it empty in .env"
+            printf -v "$_cloud_key" '%s' ""
+        fi
+    done
+    unset _cloud_key _cloud_val
     # Base64-encode GPU assignment JSON for safe .env storage
     if [[ -n "${GPU_ASSIGNMENT_JSON:-}" && "${GPU_ASSIGNMENT_JSON:-}" != "{}" ]]; then
         GPU_ASSIGNMENT_JSON_B64=$(echo "$GPU_ASSIGNMENT_JSON" | jq -c '.' | base64 -w0)
