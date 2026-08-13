@@ -10,6 +10,23 @@ NO_DELEGATE=false
 DELEGATE_LINUX_SIM=false
 PASSTHROUGH_ARGS=()
 
+usage() {
+    cat <<'USAGE'
+Usage: macos.sh [OPTIONS] [-- INSTALLER_ARGS...]
+
+ODS macOS installer entry point (doctor/preflight MVP).
+
+Options:
+  --report FILE           Preflight report output path (default: /tmp/ods-preflight-macos.json)
+  --doctor-report FILE    Doctor report output path (default: /tmp/ods-doctor-macos.json)
+  --no-delegate           Run the MVP path without delegating to the full installer
+  --delegate-linux-sim    Delegate to the Linux installer in simulation mode
+  -h, --help              Show this help message and exit
+
+Any other argument is forwarded to the underlying installer.
+USAGE
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --report)
@@ -27,6 +44,10 @@ while [[ $# -gt 0 ]]; do
         --delegate-linux-sim)
             DELEGATE_LINUX_SIM=true
             shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
             ;;
         *)
             PASSTHROUGH_ARGS+=("$1")
