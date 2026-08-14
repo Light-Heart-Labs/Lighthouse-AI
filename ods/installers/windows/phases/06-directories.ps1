@@ -545,7 +545,12 @@ function Invoke-HermesSoulRefresh {
 
     if (-not $_rendered) {
         if (Test-Path -LiteralPath $_output -PathType Container) {
-            Remove-Item -LiteralPath $_output -Recurse -Force
+            try {
+                Remove-Item -LiteralPath $_output -Force -ErrorAction Stop
+            } catch {
+                Write-AIWarn "Hermes SOUL.md output path is a non-empty directory; preserving its contents"
+                return
+            }
         }
         if (-not (Test-Path -LiteralPath $_output -PathType Leaf)) {
             $_content = Get-Content -LiteralPath $_template -Raw

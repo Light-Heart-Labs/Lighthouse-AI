@@ -11,6 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "build-installation-context.py"
+LINUX_PHASE = ROOT / "installers" / "phases" / "11-services.sh"
+WINDOWS_PHASE = ROOT / "installers" / "windows" / "phases" / "06-directories.ps1"
 
 
 def run_builder(template: Path, env_file: Path, output: Path) -> subprocess.CompletedProcess[str]:
@@ -53,6 +55,16 @@ def main() -> int:
         result = run_builder(template, env_file, nonempty_output)
         assert result.returncode != 0
         assert sentinel.read_text(encoding="utf-8") == "preserve me"
+
+    linux_source = LINUX_PHASE.read_text(encoding="utf-8")
+    assert 'rmdir "$_soul_output"' in linux_source
+    assert 'rm -rf "$_soul_output"' not in linux_source
+
+    windows_source = WINDOWS_PHASE.read_text(encoding="utf-8")
+    soul_refresh = windows_source.split("function Invoke-HermesSoulRefresh", 1)[1]
+    soul_refresh = soul_refresh.split("if ($enableHermes)", 1)[0]
+    assert "Remove-Item -LiteralPath $_output -Force -ErrorAction Stop" in soul_refresh
+    assert "Remove-Item -LiteralPath $_output -Recurse" not in soul_refresh
 
     print("[PASS] installation-context replaces only empty output directories")
     return 0
