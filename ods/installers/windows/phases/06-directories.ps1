@@ -109,8 +109,12 @@ $_expectedRegularFiles = @(
 foreach ($_expectedFileName in $_expectedRegularFiles) {
     $_expectedFilePath = Join-Path $installDir $_expectedFileName
     if (Test-Path -LiteralPath $_expectedFilePath -PathType Container) {
-        Remove-Item -LiteralPath $_expectedFilePath -Recurse -Force
-        Write-AIWarn "Removed malformed $_expectedFileName directory from a previous partial install."
+        try {
+            Remove-Item -LiteralPath $_expectedFilePath -Force -ErrorAction Stop
+            Write-AIWarn "Removed empty malformed $_expectedFileName directory from a previous partial install."
+        } catch {
+            throw "Expected regular file path is a non-empty directory; preserving it: $_expectedFilePath"
+        }
     }
 }
 

@@ -61,6 +61,8 @@ def main() -> int:
     assert 'rm -rf "$_soul_output"' not in linux_source
 
     windows_source = WINDOWS_PHASE.read_text(encoding="utf-8")
+    assert "Remove-Item -LiteralPath $_expectedFilePath -Force -ErrorAction Stop" in windows_source
+    assert "Remove-Item -LiteralPath $_expectedFilePath -Recurse" not in windows_source
     soul_refresh = windows_source.split("function Invoke-HermesSoulRefresh", 1)[1]
     soul_refresh = soul_refresh.split("if ($enableHermes)", 1)[0]
     assert "Remove-Item -LiteralPath $_output -Force -ErrorAction Stop" in soul_refresh
