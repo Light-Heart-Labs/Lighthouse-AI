@@ -63,11 +63,15 @@ logger = logging.getLogger(__name__)
 # This prevents an unconfigured ODS from silently issuing
 # unsignable cookies that look valid because they pass an empty-key
 # HMAC check.
-_SECRET: bytes = (os.environ.get("ODS_SESSION_SECRET", "")).encode("utf-8")
+_SECRET: bytes | None = (
+    os.environ["ODS_SESSION_SECRET"].encode("utf-8")
+    if "ODS_SESSION_SECRET" in os.environ
+    else None
+)
 
 
 def _get_secret() -> bytes:
-    if _SECRET:
+    if _SECRET is not None:
         return _SECRET
     try:
         from config import INSTALL_DIR
