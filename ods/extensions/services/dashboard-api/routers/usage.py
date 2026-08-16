@@ -335,7 +335,7 @@ def _token_spy_api_key() -> str:
         return raw_key
     try:
         if TOKEN_SPY_KEY_FILE.is_file():
-            return TOKEN_SPY_KEY_FILE.read_text(encoding="utf-8", errors="replace").strip()
+            return TOKEN_SPY_KEY_FILE.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError, ValueError):
         pass
     return ""
