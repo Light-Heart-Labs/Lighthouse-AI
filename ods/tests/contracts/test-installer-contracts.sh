@@ -371,6 +371,12 @@ grep -A16 -F 'location ~ ^/api/models/.+/load$ {' "$dashboard_nginx" | grep -qF 
 echo "[contract] bundled service CPU limits are env-driven"
 grep -qF "cpus: '\${TTS_CPU_LIMIT:-1.0}'" extensions/services/tts/compose.yaml \
   || { echo "[FAIL] Kokoro TTS CPU limit must be env-driven with safe fallback"; exit 1; }
+grep -qF 'ghcr.io/remsky/kokoro-fastapi-cpu:v0.8.0' extensions/services/tts/compose.yaml \
+  || { echo "[FAIL] Kokoro TTS must use the memory-leak-fixed v0.8.0 image"; exit 1; }
+grep -qF 'UVICORN_WORKERS=${TTS_WORKERS:-1}' extensions/services/tts/compose.yaml \
+  || { echo "[FAIL] Kokoro TTS must default to one memory-safe worker"; exit 1; }
+grep -qF '/tmp:exec,size=${TTS_TMPFS_SIZE:-512m},mode=1777' extensions/services/tts/compose.yaml \
+  || { echo "[FAIL] Kokoro TTS must bound transient /tmp growth with tmpfs"; exit 1; }
 grep -qF "cpus: '\${WHISPER_CPU_LIMIT:-1.0}'" extensions/services/whisper/compose.yaml \
   || { echo "[FAIL] Whisper CPU limit must be env-driven with safe fallback"; exit 1; }
 grep -qF "cpus: '\${WHISPER_CPU_LIMIT:-1.0}'" extensions/services/whisper/compose.nvidia.yaml \

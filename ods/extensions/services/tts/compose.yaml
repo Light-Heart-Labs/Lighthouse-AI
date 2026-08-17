@@ -1,6 +1,6 @@
 services:
   tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.8.0
     container_name: ods-tts
     restart: unless-stopped
     security_opt:
@@ -8,7 +8,15 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - DEFAULT_VOICE=af_heart
-      - UVICORN_WORKERS=2
+      # One worker avoids loading multiple CPU model copies inside the 4 GiB
+      # container limit. Kokoro's async API still accepts concurrent requests.
+      - UVICORN_WORKERS=${TTS_WORKERS:-1}
+    # Kokoro, PyTorch, and the espeak phonemizer use /tmp during model warmup
+    # and synthesis. Keep those files off Docker.raw and bound their growth.
+    tmpfs:
+      # exec is required because phonemizer loads a private libespeak-ng.so
+      # copy from /tmp for each isolated espeak wrapper.
+      - /tmp:exec,size=${TTS_TMPFS_SIZE:-512m},mode=1777
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${TTS_PORT:-8880}:8880"
     deploy:

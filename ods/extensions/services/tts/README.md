@@ -10,7 +10,7 @@ The TTS service provides high-quality neural text-to-speech synthesis using [Kok
 
 - **OpenAI-compatible API**: Drop-in replacement for `POST /v1/audio/speech`
 - **Multiple voices**: Multiple voice presets available; default is `af_heart`
-- **Concurrent requests**: 2 Uvicorn workers for parallel synthesis
+- **Concurrent requests**: Async request handling in one memory-safe Uvicorn worker by default
 - **Low latency**: CPU-based inference with fast Kokoro neural TTS model
 - **OpenAI format**: Compatible with any client that uses `openai.audio.speech.create()`
 
@@ -22,7 +22,8 @@ Environment variables (set in `.env`):
 |----------|---------|-------------|
 | `TTS_PORT` | `8880` | External port (maps to internal 8880) |
 | `DEFAULT_VOICE` | `af_heart` | Default voice preset |
-| `UVICORN_WORKERS` | `2` | Number of worker processes |
+| `TTS_WORKERS` | `1` | Uvicorn worker processes. Each worker loads its own CPU model; increase only with a larger memory limit. |
+| `TTS_TMPFS_SIZE` | `512m` | Maximum RAM-backed `/tmp` size. Prevents transient synthesis files from growing Docker.raw without bound. The mount permits execution because phonemizer loads its private eSpeak library copy from `/tmp`. |
 
 ## API Endpoints
 
@@ -31,7 +32,7 @@ Environment variables (set in `.env`):
 | `GET` | `/health` | Health check |
 | `POST` | `/v1/audio/speech` | Synthesize speech from text (OpenAI format) |
 | `GET` | `/v1/models` | List available TTS models |
-| `GET` | `/v1/voices` | List available voice presets |
+| `GET` | `/v1/audio/voices` | List available voice presets |
 
 ### Example
 
@@ -94,8 +95,14 @@ docker compose logs tts
 - The CPU image processes speech on CPU; synthesis takes 1–5 seconds depending on text length
 - Ensure the container has sufficient CPU allocation (`TTS_CPU_LIMIT` in `.env`; the installer auto-caps it to Docker's visible CPU count)
 
+**Growing Docker disk usage:**
+- `/tmp` is RAM-backed and capped by `TTS_TMPFS_SIZE`, so transient Kokoro,
+  PyTorch, and espeak files are discarded when the container is recreated.
+- Keep `TTS_WORKERS=1` under the default 4 GiB memory limit. Extra workers each
+  load another model and can enter a crash/restart loop under memory pressure.
+
 **Wrong voice:**
-- List available voices: `curl http://localhost:8880/v1/voices`
+- List available voices: `curl http://localhost:8880/v1/audio/voices`
 - Change `DEFAULT_VOICE` in `.env` or specify `voice` per-request
 
 ## License
