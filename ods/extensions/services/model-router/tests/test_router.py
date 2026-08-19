@@ -381,6 +381,29 @@ class TestForwarding:
 
 
 class TestStateTrust:
+    def test_mlx_backend_kind_is_routable(self, router):
+        """MLX is a first-class runtime family, not an "unknown" backend."""
+        mod, client, write_state, calls = router
+        write_state(
+            mutate=lambda doc: doc["active"]["backend"].update({"kind": "mlx"})
+        )
+        resp = client.post("/v1/chat/completions", json={
+            "model": "ods/current", "messages": [],
+        })
+        assert resp.status_code == 200
+        assert len(calls) == 1
+
+    def test_unknown_backend_kind_is_not_routable(self, router):
+        mod, client, write_state, calls = router
+        write_state(
+            mutate=lambda doc: doc["active"]["backend"].update({"kind": "torch"})
+        )
+        resp = client.post("/v1/chat/completions", json={
+            "model": "ods/current", "messages": [],
+        })
+        assert resp.status_code == 503
+        assert calls == []
+
     def test_schema_invalid_state_is_not_routable(self, router):
         mod, client, write_state, calls = router
         write_state(mutate=lambda doc: doc.update({"unexpected": True}))

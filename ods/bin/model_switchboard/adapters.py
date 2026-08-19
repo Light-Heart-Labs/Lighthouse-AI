@@ -13,7 +13,8 @@ failure; adapters must not raise for expected runtime failures.
 PR 2A ships the shared contract, the transaction fake used by the boundary
 test matrix, and the container llama.cpp adapter. Native Windows/macOS and
 Lemonade/HipFire adapters land in PR 2B/2C and must pass the same contract
-suite.
+suite. The native MLX runtime (Apple Silicon) is a fourth family and passes
+the same suite.
 """
 
 from __future__ import annotations
@@ -63,6 +64,22 @@ class ReadinessProbe(Protocol):
         gguf_file: str,
         context_length: int,
         lemonade_model_id: str = "",
+    ) -> dict[str, Any]: ...
+
+
+class ModelReadinessProbe(Protocol):
+    """Return runtime-carried identity, context, and proof time for a model ref.
+
+    Distinct from ``ReadinessProbe``: runtimes that serve a directory of
+    weights rather than a single GGUF file identify themselves by a model
+    reference, and have no Lemonade concrete-ID concept.
+    """
+
+    def __call__(
+        self,
+        env: dict[str, str],
+        model_ref: str,
+        context_length: int,
     ) -> dict[str, Any]: ...
 
 
@@ -317,6 +334,131 @@ class LemonadeAdapter:
 
     def publish_native_alias(self, env: dict[str, str]) -> dict[str, Any]:
         return result(True, "native Lemonade alias is deferred to the route adapter")
+
+    def unload(self, env: dict[str, str]) -> dict[str, Any]:
+        return ContainerLlamaAdapter._optional_operation("unload", self._unload, env)
+
+    def delete(self, env: dict[str, str]) -> dict[str, Any]:
+        return ContainerLlamaAdapter._optional_operation("delete", self._delete, env)
+
+    def rollback(self, env: dict[str, str]) -> dict[str, Any]:
+        return ContainerLlamaAdapter._optional_operation(
+            "rollback", self._rollback, env
+        )
+
+
+class NativeMLXAdapter:
+    """Native MLX runtime on Apple Silicon (mlx-vlm / mlx-lm server).
+
+    MLX always runs as a host process: Docker on macOS has no Metal
+    passthrough, so containers reach it over ``host.docker.internal``. The
+    runtime family therefore has no compose path and ``stage`` drives an
+    injected native process restart, mirroring ``NativeLlamaAdapter``.
+
+    Two contract differences from llama.cpp are structural, not incidental:
+    - The runtime serves a directory of weights, so identity is a model
+      reference (a local path or repo id), never a GGUF filename.
+    - There is no ``/props`` endpoint, so the served context length cannot
+      be read back from the runtime. The injected probe reports whether it
+      could confirm the context; an unconfirmed context is proof-carried as
+      ``contextVerified: False`` rather than silently asserted.
+    """
+
+    kind = "mlx"
+
+    def __init__(
+        self,
+        *,
+        restart: Callable[[dict[str, str]], None],
+        wait_ready: ModelReadinessProbe,
+        expected_model: str,
+        context_length: int,
+        capabilities: dict[str, bool] | None = None,
+        unload: Callable[[dict[str, str]], None] | None = None,
+        delete: Callable[[dict[str, str]], None] | None = None,
+        rollback: Callable[[dict[str, str]], None] | None = None,
+    ) -> None:
+        self._restart = restart
+        self._wait_ready = wait_ready
+        self._expected_model = expected_model
+        self._context_length = int(context_length)
+        supplied_capabilities = capabilities or {}
+        self._capabilities = {
+            "chat": bool(supplied_capabilities.get("chat", True)),
+            "tools": bool(supplied_capabilities.get("tools", False)),
+            "vision": bool(supplied_capabilities.get("vision", False)),
+            "agentViable": bool(supplied_capabilities.get("agentViable", False)),
+        }
+        self._unload = unload
+        self._delete = delete
+        self._rollback = rollback
+        self._verified_identity = ""
+        self._verified_context = 0
+        self._context_verified = False
+        self._verified_at = ""
+
+    def _verification_result(self, detail: str) -> dict[str, Any]:
+        return result(
+            True,
+            detail,
+            identity=self._verified_identity,
+            contextLength=self._verified_context,
+            contextVerified=self._context_verified,
+            capabilities=dict(self._capabilities),
+            verifiedAt=self._verified_at,
+        )
+
+    def stage(self, env: dict[str, str]) -> dict[str, Any]:
+        try:
+            self._restart(env)
+        except Exception as exc:  # expected runtime failures become results
+            return result(False, str(exc))
+        return result(True, "native MLX server restart issued")
+
+    def verify_identity(self, env: dict[str, str]) -> dict[str, Any]:
+        try:
+            runtime_proof = self._wait_ready(
+                env,
+                self._expected_model,
+                self._context_length,
+            )
+        except Exception as exc:
+            return result(False, f"MLX readiness wait failed: {exc}")
+        if not isinstance(runtime_proof, dict):
+            return result(False, "MLX runtime did not return a proof record")
+        runtime_identity = runtime_proof.get("identity")
+        runtime_context = runtime_proof.get("contextLength")
+        context_verified = runtime_proof.get("contextVerified")
+        verified_at = runtime_proof.get("verifiedAt")
+        if not isinstance(runtime_identity, str) or not runtime_identity.strip():
+            return result(False, "MLX runtime did not report the staged model")
+        if (
+            not isinstance(runtime_context, int)
+            or isinstance(runtime_context, bool)
+            or runtime_context <= 0
+        ):
+            return result(False, "MLX runtime did not report a valid context length")
+        if not isinstance(context_verified, bool):
+            return result(False, "MLX runtime proof has no context-verification status")
+        if not isinstance(verified_at, str) or not verified_at.strip():
+            return result(False, "MLX runtime proof has no timestamp")
+        self._verified_identity = runtime_identity.strip()
+        self._verified_context = runtime_context
+        self._context_verified = context_verified
+        self._verified_at = verified_at.strip()
+        return self._verification_result("MLX runtime reports staged model")
+
+    def verify_completion(self, env: dict[str, str]) -> dict[str, Any]:
+        # The probe returns an identity only after a meaningful completion
+        # reports the same concrete model; do not echo configuration.
+        if not self._verified_identity:
+            return result(False, "completion proof has no runtime identity")
+        return self._verification_result(
+            "completion proven during MLX readiness wait"
+        )
+
+    def publish_native_alias(self, env: dict[str, str]) -> dict[str, Any]:
+        return result(True, "native alias not required for MLX")
 
     def unload(self, env: dict[str, str]) -> dict[str, Any]:
         return ContainerLlamaAdapter._optional_operation("unload", self._unload, env)

@@ -437,7 +437,9 @@ def _validate_state_schema(doc: Any) -> bool:
             backend, {"kind", "endpointId"}, {"kind", "endpointId", "nativeRoute"}
         ):
             return False
-        if backend["kind"] not in {"llama-server", "lemonade", "hipfire", "unknown"}:
+        if backend["kind"] not in {
+            "llama-server", "lemonade", "hipfire", "mlx", "unknown"
+        }:
             return False
         if not isinstance(backend["endpointId"], str) or not backend["endpointId"]:
             return False
