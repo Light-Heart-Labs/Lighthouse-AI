@@ -7469,6 +7469,20 @@ class AgentHandler(BaseHTTPRequestHandler):
                 json_response(self, 404, {"error": f"Model '{model_id}' not found in library or local GGUF files"})
                 return
 
+        # MLX models are served by a native host process, not llama.cpp, and
+        # carry no GGUF artifact. Dispatch before the GGUF-shaped transaction
+        # rather than threading a second runtime family through it.
+        if str(model.get("runtime") or "").lower() == "mlx":
+            if _switchboard_adapters is None or _switchboard_reconciler is None:
+                json_response(self, 500, {
+                    "error": "MLX activation requires the model switchboard",
+                })
+                return
+            _do_mlx_model_activate(
+                self, model, model_id, env_path, requested_context_length
+            )
+            return
+
         gguf_file = model.get("gguf_file", "")
         llm_model_name = model.get("llm_model_name", model_id)
         if not _valid_gguf_filename(gguf_file):
@@ -11749,6 +11763,422 @@ def _stop_macos_native_llama_server(pid_file: Path) -> None:
         pass
     finally:
         pid_file.unlink(missing_ok=True)
+
+
+# --- Native MLX runtime (Apple Silicon) -------------------------------------
+#
+# MLX is always a host process: Docker on macOS has no Metal passthrough, so
+# containers reach it over host.docker.internal. The runtime is managed here
+# with the same PID-file discipline as the native llama-server path.
+
+_MLX_DEFAULT_PORT = "8081"
+# Large MLX repos are tens of GB; the llama GGUF path uses a comparable ceiling.
+_MLX_DOWNLOAD_TIMEOUT = 14400
+
+
+def _mlx_runtime_paths(env: dict) -> dict[str, Path]:
+    """Resolve the interpreter, weights root, PID file, and log for MLX."""
+    data_dir = Path(env.get("ODS_DATA_DIR") or (INSTALL_DIR / "data"))
+    configured = str(env.get("MLX_PYTHON") or "").strip()
+    python_bin = Path(configured) if configured else data_dir / "mlx" / "venv" / "bin" / "python"
+    return {
+        "python": python_bin,
+        "models_root": data_dir / "models" / "mlx",
+        "pid_file": data_dir / "mlx-server.pid",
+        "log": data_dir / "mlx-server.log",
+    }
+
+
+def _mlx_runtime_address(env: dict) -> tuple[str, str]:
+    port = str(env.get("ODS_MLX_PORT") or _MLX_DEFAULT_PORT)
+    return "127.0.0.1", port
+
+
+def _stop_native_mlx_server(pid_file: Path) -> None:
+    """Stop only the PID-file-owned native MLX server process."""
+    if not pid_file.exists():
+        return
+    try:
+        old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        if old_pid <= 1:
+            raise OSError("invalid MLX server PID")
+        try:
+            ps_result = subprocess.run(
+                ["ps", "-p", str(old_pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if ps_result.returncode != 0 or "mlx" not in ps_result.stdout.lower():
+                raise OSError("PID is not an MLX server")
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise OSError("stale MLX server PID") from exc
+
+        os.kill(old_pid, signal.SIGTERM)
+        for _ in range(20):
+            try:
+                os.kill(old_pid, 0)
+                time.sleep(0.5)
+            except OSError:
+                break
+        else:
+            os.kill(old_pid, signal.SIGKILL)
+    except (ValueError, OSError):
+        pass
+
+
+def _launch_native_mlx_server(env_path: Path, model_dir: Path) -> None:
+    """Launch mlx_vlm.server for the staged weights and write its PID file.
+
+    Reads the current .env so the caller only needs .env to be up to date.
+    Raises so the adapter's stage phase reports a real failure instead of
+    leaving the reconciler to time out in verification.
+    """
+    env = load_env(env_path)
+    paths = _mlx_runtime_paths(env)
+    python_bin = paths["python"]
+    if not python_bin.is_file():
+        raise RuntimeError(f"MLX runtime interpreter is missing: {python_bin}")
+    if not (model_dir / "config.json").is_file():
+        raise RuntimeError(f"MLX weights are missing config.json: {model_dir}")
+
+    bind_addr = str(env.get("BIND_ADDRESS") or "").strip() or "127.0.0.1"
+    _, port = _mlx_runtime_address(env)
+    ctx_size = str(env.get("CTX_SIZE") or "65536")
+    args = [
+        str(python_bin), "-m", "mlx_vlm.server",
+        "--model", str(model_dir),
+        "--host", bind_addr,
+        "--port", str(port),
+        "--max-tokens", str(env.get("MLX_MAX_TOKENS") or "8192"),
+    ]
+    # KV quantization keeps the long-context footprint affordable; it is only
+    # engaged past the configured start so short prompts stay full precision.
+    kv_bits = str(env.get("MLX_KV_BITS") or "8").strip()
+    if kv_bits:
+        args.extend(["--kv-bits", kv_bits,
+                     "--quantized-kv-start", str(env.get("MLX_KV_START") or "4096")])
+
+    log_path = paths["log"]
+    pid_file = paths["pid_file"]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as log_f:
+        proc = subprocess.Popen(
+            args, stdout=log_f, stderr=log_f, cwd=str(INSTALL_DIR),
+        )
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
+    logger.info(
+        "Native MLX server launched (pid %d, model %s, ctx %s)",
+        proc.pid, model_dir.name, ctx_size,
+    )
+
+
+def _restart_native_mlx_server(env_path: Path, model_dir: Path) -> None:
+    env = load_env(env_path)
+    _stop_native_mlx_server(_mlx_runtime_paths(env)["pid_file"])
+    _launch_native_mlx_server(env_path, model_dir)
+
+
+def _mlx_reported_identity(body: str, expected_model: str) -> str:
+    """Return the runtime-reported id matching the staged weights, else ''.
+
+    mlx_vlm.server lists every model it has resolved, so an exact match on
+    the staged path is required: a substring match would accept a different
+    model that merely shares a prefix.
+    """
+    try:
+        payload = json.loads(body or "{}")
+    except json.JSONDecodeError:
+        return ""
+    entries = payload.get("data")
+    if not isinstance(entries, list):
+        return ""
+    wanted = str(expected_model).rstrip("/")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        served = str(entry.get("id") or "").rstrip("/")
+        if served and served == wanted:
+            return served
+    return ""
+
+
+def _wait_for_mlx_readiness(
+    env: dict,
+    model_ref: str,
+    context_length: int,
+    *,
+    attempts: int = 60,
+    initial_delay: float = 3,
+    interval: float = 5,
+) -> dict[str, object]:
+    """Prove the MLX runtime serves the staged weights and completes a request.
+
+    MLX exposes no /props endpoint, so the served context cannot be read back
+    from the runtime. The configured length is reported with
+    ``contextVerified`` False rather than asserted as proven.
+    """
+    host, port = _mlx_runtime_address(env)
+    identity_url = f"http://{host}:{port}/v1/models"
+    logger.info("Waiting for MLX model identity %s at %s", model_ref, identity_url)
+    if initial_delay > 0:
+        time.sleep(initial_delay)
+    for attempt in range(max(1, attempts)):
+        try:
+            probe = subprocess.run(
+                ["curl", "-s", "--max-time", "5", identity_url],
+                capture_output=True, text=True, timeout=10,
+            )
+            runtime_identity = _mlx_reported_identity(probe.stdout.strip(), model_ref)
+            if runtime_identity and _chat_completion_ready(
+                host, port, runtime_identity, "/v1",
+                expected_model_id=runtime_identity,
+            ):
+                logger.info("MLX model %s ready after %d attempts", model_ref, attempt + 1)
+                return {
+                    "identity": runtime_identity,
+                    "contextLength": int(context_length),
+                    "contextVerified": False,
+                    "verifiedAt": _iso_now(),
+                }
+            if attempt % 6 == 0:
+                logger.info(
+                    "MLX model %s readiness incomplete (attempt %d, identity=%s)",
+                    model_ref, attempt + 1, bool(runtime_identity),
+                )
+        except subprocess.TimeoutExpired:
+            if attempt % 6 == 0:
+                logger.info("MLX readiness attempt %d timed out", attempt + 1)
+        if attempt + 1 < attempts and interval > 0:
+            time.sleep(interval)
+    return {}
+
+
+def _update_env_file(env_path: Path, updates: dict[str, str]) -> None:
+    """Rewrite .env in place, replacing known keys and appending new ones."""
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    new_lines: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
+        if key and key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            new_lines.append(line)
+    for key, value in updates.items():
+        if key not in seen:
+            new_lines.append(f"{key}={value}")
+    _atomic_write_text(env_path, "\n".join(new_lines) + "\n")
+
+
+def _mlx_catalog_files(model: dict) -> list[dict]:
+    entries = model.get("mlx_files")
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def _verify_mlx_weights(model: dict, model_dir: Path) -> list[str]:
+    """Return the catalogued files that are missing or fail their sha256."""
+    bad: list[str] = []
+    for entry in _mlx_catalog_files(model):
+        rel = str(entry.get("file") or "")
+        expected = str(entry.get("sha256") or "")
+        if not rel or not expected:
+            continue
+        # Catalog paths include the quant subdir; the weights live directly in
+        # model_dir, so compare against the basename.
+        target = model_dir / Path(rel).name
+        if not target.is_file():
+            bad.append(f"{target.name}: missing")
+            continue
+        digest = hashlib.sha256()
+        with open(target, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            bad.append(f"{target.name}: sha256 mismatch")
+    return bad
+
+
+def _ensure_mlx_weights(model: dict, model_dir: Path) -> None:
+    """Download the staged MLX weights when absent, then verify every shard.
+
+    Verification is not optional: the catalog pins a per-shard sha256 against
+    a repo revision, and a truncated or tampered shard would otherwise only
+    surface as an opaque runtime load failure.
+    """
+    repo = str(model.get("mlx_repo") or "")
+    if not repo:
+        raise RuntimeError("catalog entry has no mlx_repo")
+    if not _mlx_catalog_files(model):
+        raise RuntimeError("catalog entry has no mlx_files to verify")
+
+    if not (model_dir / "config.json").is_file():
+        _download_mlx_weights(model, model_dir)
+
+    failures = _verify_mlx_weights(model, model_dir)
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
+def _download_mlx_weights(model: dict, model_dir: Path) -> None:
+    """Fetch one quant subdirectory of an MLX repo into model_dir.
+
+    Runs inside the MLX runtime venv, which is where huggingface_hub lives;
+    the agent's own interpreter is not required to carry that dependency.
+    """
+    env = load_env(INSTALL_DIR / ".env")
+    python_bin = _mlx_runtime_paths(env)["python"]
+    if not python_bin.is_file():
+        raise RuntimeError(f"MLX runtime interpreter is missing: {python_bin}")
+
+    repo = str(model.get("mlx_repo"))
+    revision = str(model.get("mlx_revision") or "") or None
+    subdir = str(model.get("mlx_subdir") or "").strip("/")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    script = (
+        "import sys\n"
+        "from huggingface_hub import snapshot_download\n"
+        "repo, revision, subdir, dest = sys.argv[1:5]\n"
+        "snapshot_download(\n"
+        "    repo_id=repo,\n"
+        "    revision=revision or None,\n"
+        "    allow_patterns=[f'{subdir}/*'] if subdir else None,\n"
+        "    local_dir=dest,\n"
+        ")\n"
+    )
+    logger.info("Downloading MLX weights %s (%s) -> %s", repo, subdir or "root", model_dir)
+    # The staging parent receives <subdir>/, which is then the served dir.
+    staging = model_dir.parent
+    result = subprocess.run(
+        [str(python_bin), "-c", script, repo, revision or "", subdir, str(staging)],
+        capture_output=True, text=True, timeout=_MLX_DOWNLOAD_TIMEOUT,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"MLX weight download failed: {(result.stderr or '').strip()[:400]}"
+        )
+
+
+def _do_mlx_model_activate(
+    handler,
+    model: dict,
+    model_id: str,
+    env_path: Path,
+    requested_context_length: int | None,
+) -> None:
+    """Activate a native-MLX catalog model.
+
+    MLX needs a far smaller transaction than the llama.cpp path: there is
+    no models.ini, no LLAMA_ARG_* runtime profile, no Lemonade concrete ID
+    and no compose service. Keeping it a separate sequence avoids threading
+    a second runtime family through the GGUF transaction's ~50 GGUF-shaped
+    call sites, where a mistake would regress llama.cpp activation.
+    """
+    env_pre = load_env(env_path)
+    gpu_backend = str(env_pre.get("GPU_BACKEND") or "").lower()
+    if gpu_backend != "apple":
+        json_response(handler, 400, {
+            "error": "MLX models require the apple GPU backend, "
+                     f"not {gpu_backend or 'unset'}",
+        })
+        return
+
+    try:
+        context_length = int(model.get("context_length") or 65536)
+    except (TypeError, ValueError):
+        context_length = 65536
+    if requested_context_length is not None:
+        context_length = requested_context_length
+
+    paths = _mlx_runtime_paths(env_pre)
+    model_dir = (paths["models_root"] / str(model_id) / str(
+        model.get("mlx_subdir") or ""
+    )).resolve()
+    models_root = paths["models_root"].resolve()
+    if not model_dir.is_relative_to(models_root):
+        json_response(handler, 400, {"error": "Invalid MLX model path"})
+        return
+
+    try:
+        _ensure_mlx_weights(model, model_dir)
+    except (RuntimeError, OSError) as exc:
+        json_response(handler, 400, {"error": f"MLX weights unavailable: {exc}"})
+        return
+
+    env_snapshot = env_path.read_text(encoding="utf-8")
+    capabilities = {
+        "chat": True,
+        "tools": bool(model.get("tools")),
+        "vision": bool(model.get("vision")),
+        "agentViable": False,
+    }
+    llm_model_name = str(model.get("llm_model_name") or model_id)
+
+    _update_env_file(env_path, {
+        "LLM_MODEL": llm_model_name,
+        "MLX_MODEL_PATH": str(model_dir),
+        "MLX_MODEL_ID": str(model_id),
+        "CTX_SIZE": str(context_length),
+        "MAX_CONTEXT": str(context_length),
+        "ODS_MLX_PORT": _mlx_runtime_address(env_pre)[1],
+    })
+
+    adapter = _switchboard_adapters.NativeMLXAdapter(
+        restart=lambda _e: _restart_native_mlx_server(env_path, model_dir),
+        wait_ready=_wait_for_mlx_readiness,
+        expected_model=str(model_dir),
+        context_length=context_length,
+        capabilities=capabilities,
+    )
+    run = _switchboard_reconciler.run_runtime_activation(
+        adapter, load_env(env_path)
+    )
+
+    if not run["ok"]:
+        logger.error(
+            "MLX activation failed at %s: %s", run.get("phase"), run.get("detail")
+        )
+        _atomic_write_text(env_path, env_snapshot)
+        _stop_native_mlx_server(paths["pid_file"])
+        json_response(handler, 500, {
+            "error": f"MLX activation failed: {run.get('detail')}",
+            "failure_phase": run.get("phase"),
+            "failure_detail": run.get("detail"),
+        })
+        return
+
+    # Identity and completion are proven; only the served context could not
+    # be read back, because MLX exposes no /props equivalent. That is a
+    # property of the runtime family, not a failed probe, so the route is
+    # published with contextVerified already recorded as False by the
+    # adapter rather than withheld the way an unproven llama route is.
+    if _switchboard_state is not None:
+        try:
+            _switchboard_state.record_verified_route(
+                INSTALL_DIR / "data" / "model-state.json",
+                catalog_id=str(model_id),
+                runtime_model_id=str(run["identity"]),
+                backend_kind="mlx",
+                endpoint_id="mlx-host",
+                native_route=None,
+                context_length=int(run["contextLength"]),
+                capabilities=run["capabilities"],
+                proof_identity=str(run["identity"]),
+            )
+        except Exception as exc:
+            logger.warning("switchboard state record failed: %s", exc)
+
+    json_response(handler, 200, {
+        "status": "activated",
+        "model_id": model_id,
+        "llm_model": llm_model_name,
+        "runtime": "mlx",
+        "mlx_model_path": str(model_dir),
+        "context_length": int(context_length),
+        "context_verified": False,
+    })
 
 
 def _restart_macos_native_llama_server(
