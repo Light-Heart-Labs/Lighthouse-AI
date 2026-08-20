@@ -39,8 +39,14 @@ async def get_agent_metrics_html(api_key: str = Depends(verify_api_key)):
     failover_safe = esc(failover_text)
     sessions = esc(agent.get("session_count", 0))
     last_update_safe = esc(last_update_time)
-    tp_current = esc(f"{tp.get('current', 0):.1f}")
-    tp_average = esc(f"{tp.get('average', 0):.1f}")
+    def _safe_float_fmt(value, default=0.0) -> str:
+        try:
+            return f"{float(value):.1f}"
+        except (TypeError, ValueError):
+            return f"{default:.1f}"
+
+    tp_current = esc(_safe_float_fmt(tp.get('current', 0)))
+    tp_average = esc(_safe_float_fmt(tp.get('average', 0)))
 
     html = f"""
     <div class="grid">
