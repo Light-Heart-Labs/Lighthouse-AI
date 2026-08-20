@@ -68,6 +68,7 @@ const payloadByUrl = (url) => {
     }
   }
   if (url === '/api/setup/status') return { first_run: false, persona: null }
+  if (url === '/api/update/status') return { status: 'idle' }
   if (url === '/api/version') {
     return { current: '2.6.0', latest: '2.6.0', update_available: false, checked_at: '2026-07-23T12:00:00Z' }
   }
@@ -75,9 +76,9 @@ const payloadByUrl = (url) => {
 }
 
 const renderSettings = (override = null) => {
-  const fetchMock = vi.fn(async (url) => {
+  const fetchMock = vi.fn(async (url, options = {}) => {
     if (override) {
-      const overridden = override(url)
+      const overridden = override(url, options)
       if (overridden) return overridden
     }
     return response(payloadByUrl(url))
@@ -213,5 +214,65 @@ describe('Settings', () => {
     await screen.findByText('Environment editor reloaded from disk.')
     expect(screen.getByDisplayValue('192.168.1.10')).toBeInTheDocument()
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/settings/env')).toHaveLength(3)
+  })
+
+  test('offers an in-place update and follows the host-agent run to completion', async () => {
+    const { fetchMock } = renderSettings((url, options) => {
+      if (url === '/api/version') {
+        return response({ current: '2.6.0', latest: '2.6.1', update_available: true, checked_at: '2026-07-23T12:00:00Z' })
+      }
+      if (url === '/api/update' && options.method === 'POST') {
+        return response({ success: true, status: 'started', message: 'Update started in background.' })
+      }
+      if (url === '/api/update/status') {
+        return response({ status: 'succeeded', returncode: 0 })
+      }
+      return null
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install v2.6.1' }))
+    expect(screen.getByRole('dialog', { name: 'Confirm ODS update' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Install update' }))
+
+    expect(await screen.findByText('ODS updated successfully. Refresh the dashboard if it does not reload automatically.')).toBeInTheDocument()
+    const updateRequest = fetchMock.mock.calls.find(([url]) => url === '/api/update')
+    expect(updateRequest?.[1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(updateRequest?.[1]?.body)).toEqual({ action: 'update' })
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/update/status')).toBe(true)
+  })
+
+  test('keeps update start failures actionable without entering a polling state', async () => {
+    const { fetchMock } = renderSettings((url, options) => {
+      if (url === '/api/version') {
+        return response({ current: '2.6.0', latest: '2.6.1', update_available: true, checked_at: '2026-07-23T12:00:00Z' })
+      }
+      if (url === '/api/update' && options.method === 'POST') {
+        return response({ detail: 'Host agent unreachable' }, 503)
+      }
+      if (url === '/api/update/status') return response({ status: 'idle' })
+      return null
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install v2.6.1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Install update' }))
+
+    expect(await screen.findByText('Host agent unreachable')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/update/status')).toHaveLength(1)
+    expect(screen.getByRole('dialog', { name: 'Confirm ODS update' })).toBeInTheDocument()
+  })
+
+  test('resumes status tracking after the dashboard reloads during an update', async () => {
+    let statusCalls = 0
+    const { fetchMock } = renderSettings((url) => {
+      if (url === '/api/update/status') {
+        statusCalls += 1
+        return response(statusCalls === 1 ? { status: 'running' } : { status: 'succeeded', returncode: 0 })
+      }
+      return null
+    })
+
+    expect(await screen.findByText('ODS updated successfully. Refresh the dashboard if it does not reload automatically.')).toBeInTheDocument()
+    expect(statusCalls).toBe(2)
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/update')).toBe(false)
   })
 })

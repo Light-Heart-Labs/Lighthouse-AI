@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowUpCircle,
   ArrowUpRight,
   Calendar,
   ChevronDown,
@@ -25,6 +26,7 @@ import { Link } from 'react-router-dom'
 import EnvEditor from '../components/settings/EnvEditor'
 import { useTheme } from '../contexts/ThemeContext'
 import { dashboardHost, serviceUrl } from '../lib/serviceUrls'
+import { triggerUpdate } from '../hooks/useVersion'
 import {
   clearSettingsFollowUp,
   loadSettingsFollowUp,
@@ -182,12 +184,72 @@ export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false)
+  const [updateStarting, setUpdateStarting] = useState(false)
+  const [updateRun, setUpdateRun] = useState(null)
   const [routeFilter, setRouteFilter] = useState('all')
   const [routesExpanded, setRoutesExpanded] = useState(false)
   const [envOpen, setEnvOpen] = useState(true)
   const envEditorRef = useRef(null)
 
   useEffect(() => { fetchSettings() }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchPayload('/api/update/status', 4000)
+      .then(payload => {
+        if (!cancelled && ['started', 'queued', 'running'].includes(payload?.status)) {
+          setUpdateRun(payload)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const updateActive = ['started', 'queued', 'running'].includes(updateRun?.status)
+
+  useEffect(() => {
+    if (!updateActive) return undefined
+
+    let cancelled = false
+    let timer = null
+    let consecutiveFailures = 0
+
+    const pollUpdateStatus = async () => {
+      try {
+        const payload = await fetchPayload('/api/update/status', 8000)
+        if (cancelled) return
+        consecutiveFailures = 0
+        setUpdateRun(payload)
+
+        if (['started', 'queued', 'running'].includes(payload?.status)) {
+          timer = window.setTimeout(pollUpdateStatus, 2500)
+        } else if (payload?.status === 'succeeded') {
+          setNotice({ type: 'info', text: 'ODS updated successfully. Refresh the dashboard if it does not reload automatically.' })
+          void fetchVersionInfo()
+        } else if (payload?.status === 'failed') {
+          setNotice({ type: 'danger', text: payload?.error || 'ODS update failed. Review the update logs before retrying.' })
+        } else {
+          setNotice({ type: 'warn', text: 'The update status is unknown. The update may still be running; check ODS status before retrying.' })
+        }
+      } catch {
+        if (cancelled) return
+        consecutiveFailures += 1
+        if (consecutiveFailures < 12) {
+          timer = window.setTimeout(pollUpdateStatus, 2500)
+        } else {
+          setUpdateRun({ status: 'unknown' })
+          setNotice({ type: 'warn', text: 'The dashboard lost update status. ODS may be restarting; wait a moment, then refresh before retrying.' })
+        }
+      }
+    }
+
+    void pollUpdateStatus()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [updateActive])
 
   const applyEnvEditorPayload = (payload) => {
     setEnvEditor(payload)
@@ -288,6 +350,20 @@ export default function Settings() {
     window.requestAnimationFrame(() => {
       envEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
+  }
+
+  const handleStartUpdate = async () => {
+    setUpdateStarting(true)
+    try {
+      const payload = await triggerUpdate('update')
+      setUpdateConfirmOpen(false)
+      setUpdateRun({ ...payload, status: payload?.status || 'started' })
+      setNotice({ type: 'info', text: payload?.message || 'ODS update started. Services may restart while it is applied.' })
+    } catch (err) {
+      setNotice({ type: 'danger', text: getErrorText(err) })
+    } finally {
+      setUpdateStarting(false)
+    }
   }
 
   const handleSaveEnv = async () => {
@@ -419,7 +495,12 @@ export default function Settings() {
         <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(22rem,0.85fr)]">
           <StorageCard storage={storage} />
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-            <UpdatesCard version={version} onCheckUpdates={() => fetchVersionInfo({ announce: true })} />
+            <UpdatesCard
+              version={version}
+              onCheckUpdates={() => fetchVersionInfo({ announce: true })}
+              onInstallUpdate={() => setUpdateConfirmOpen(true)}
+              updating={updateStarting || updateActive}
+            />
             <CommandsCard onExportConfig={handleExportConfig} />
           </div>
         </div>
@@ -459,6 +540,15 @@ export default function Settings() {
           </div>
         ) : null}
       </div>
+
+      {updateConfirmOpen ? (
+        <UpdateConfirmDialog
+          version={version?.latest}
+          submitting={updateStarting}
+          onCancel={() => setUpdateConfirmOpen(false)}
+          onConfirm={handleStartUpdate}
+        />
+      ) : null}
     </div>
   )
 }
@@ -749,7 +839,7 @@ function StorageCard({ storage }) {
   )
 }
 
-function UpdatesCard({ version, onCheckUpdates }) {
+function UpdatesCard({ version, onCheckUpdates, onInstallUpdate, updating }) {
   const checkedAt = formatCheckedAt(version?.checked_at)
   const updateText = version?.update_check_ok
     ? (version?.update_available ? 'Update available' : 'Current release')
@@ -773,12 +863,57 @@ function UpdatesCard({ version, onCheckUpdates }) {
           </p>
           <p className="text-xs text-theme-text-muted">{updateText}</p>
         </div>
-        <button type="button" onClick={onCheckUpdates} className="inline-flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
-          <RefreshCw size={15} />
-          Check
-        </button>
+        {version?.update_available ? (
+          <button
+            type="button"
+            onClick={onInstallUpdate}
+            disabled={updating}
+            className="liquid-metal-button inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+          >
+            <ArrowUpCircle size={15} className={updating ? 'animate-pulse' : ''} />
+            {updating ? 'Updating...' : `Install v${version.latest}`}
+          </button>
+        ) : (
+          <button type="button" onClick={onCheckUpdates} className="inline-flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+            <RefreshCw size={15} />
+            Check
+          </button>
+        )}
       </div>
     </PremiumCard>
+  )
+}
+
+function UpdateConfirmDialog({ version, submitting, onCancel, onConfirm }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={submitting ? undefined : onCancel}>
+      <div
+        className="w-full max-w-md rounded-lg border border-theme-border bg-theme-card p-6 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Confirm ODS update"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <ArrowUpCircle size={22} className="mt-0.5 shrink-0 text-theme-accent-light" />
+          <div>
+            <h2 className="text-lg font-semibold text-theme-text">Install ODS v{version}</h2>
+            <p className="mt-2 text-sm leading-6 text-theme-text-muted">
+              ODS will update in place and restart affected services. Existing configuration and service data are preserved.
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button type="button" onClick={onCancel} disabled={submitting} className="rounded-lg px-4 py-2 text-sm text-theme-text-muted hover:text-theme-text disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="button" onClick={onConfirm} disabled={submitting} className="liquid-metal-button inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60">
+            <ArrowUpCircle size={15} className={submitting ? 'animate-pulse' : ''} />
+            {submitting ? 'Starting...' : 'Install update'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
