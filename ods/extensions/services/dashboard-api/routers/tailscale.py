@@ -51,7 +51,7 @@ def _proxy_agent(path: str, timeout: int = 15) -> dict:
     except AgentUnavailable as exc:
         logger.warning("host-agent GET %s unreachable: %s", path, exc)
         raise HTTPException(status_code=503, detail="ODS host agent is not reachable.") from exc
-    except AgentProtocolError as exc:
+    except (AgentProtocolError, AgentClientError, OSError, ValueError) as exc:
         logger.exception("host-agent GET %s failed", path)
         raise HTTPException(status_code=500, detail=f"Host agent call failed: {exc}") from exc
 
