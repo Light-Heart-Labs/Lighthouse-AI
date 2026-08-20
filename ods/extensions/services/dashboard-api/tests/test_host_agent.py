@@ -606,6 +606,11 @@ class TestResolveComposeFlags:
         )
         monkeypatch.setattr(_mod, "_update_usable_bash", None)
         monkeypatch.setattr(_mod, "_usable_bash", None)
+        monkeypatch.setattr(
+            _mod.Path,
+            "exists",
+            lambda path: str(path) == r"C:\Program Files\Git\bin\bash.exe",
+        )
         calls = []
 
         def fake_run(cmd, **kwargs):
