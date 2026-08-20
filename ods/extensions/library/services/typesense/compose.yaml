@@ -1,0 +1,49 @@
+services:
+  typesense:
+    image: typesense/typesense:30.2
+    container_name: ods-typesense
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      TYPESENSE_DATA_DIR: /data
+      TYPESENSE_API_KEY: "${TYPESENSE_API_KEY:?TYPESENSE_API_KEY must be set}"
+      TYPESENSE_ENABLE_CORS: "false"
+      TYPESENSE_DISK_USED_MAX_PERCENTAGE: "90"
+      TYPESENSE_MEMORY_USED_MAX_PERCENTAGE: "90"
+    volumes:
+      - ./data/typesense:/data:rw
+    tmpfs:
+      - /tmp:mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${TYPESENSE_PORT:-8108}:8108"
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8108 &&
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q true <&3
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  ods-network:
+    external: true

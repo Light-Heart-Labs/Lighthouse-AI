@@ -1,0 +1,48 @@
+schema_version: ods.services.v1
+
+service:
+  id: typesense
+  name: Typesense
+  aliases: [typesense-search, federated-search]
+  container_name: ods-typesense
+  host_env: TYPESENSE_HOST
+  default_host: typesense
+  port: 8108
+  external_port_env: TYPESENSE_PORT
+  external_port_default: 8108
+  health: /health
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 90
+  description: "Fast federated, vector, and typo-tolerant search for local applications."
+  env_vars:
+    - key: TYPESENSE_API_KEY
+      required: true
+      secret: true
+      description: Bootstrap administrator key for the Typesense API
+  setup_hook: setup.sh
+
+features:
+  - id: typesense-search-api
+    name: Federated and Vector Search
+    description: Query multiple collections with full-text, filters, and vector similarity
+    icon: Search
+    category: data
+    requirements:
+      services: [typesense]
+      vram_gb: 0
+      disk_gb: 10
+    enabled_services_all: [typesense]
+    setup_time: ~1 minute
+    priority: 35
+    gpu_backends: [all]
+
+tags:
+  - search
+  - federated-search
+  - vector-search
+  - typo-tolerance
+  - agents
