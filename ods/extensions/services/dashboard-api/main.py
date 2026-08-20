@@ -148,31 +148,31 @@ def _read_installed_version() -> str:
     env_file = install_root / ".env"
     if env_file.exists():
         try:
-            for line in env_file.read_text().splitlines():
+            for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("ODS_VERSION="):
                     env_version = strip_matching_quotes(line.split("=", 1)[1])
                     if env_version:
                         return env_version
-        except OSError:
+        except (OSError, UnicodeError):
             pass
 
     version_file = install_root / ".version"
     if version_file.exists():
         try:
-            raw = version_file.read_text().strip()
+            raw = version_file.read_text(encoding="utf-8", errors="replace").strip()
             if raw:
                 if raw.startswith("{"):
                     data = json.loads(raw)
                     if isinstance(data, dict) and data.get("version"):
                         return str(data["version"])
                 return raw
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError, UnicodeError):
             pass
 
     manifest_file = install_root / "manifest.json"
     if manifest_file.exists():
         try:
-            data = json.loads(manifest_file.read_text())
+            data = json.loads(manifest_file.read_text(encoding="utf-8", errors="replace"))
             version = (
                 data.get("release", {}).get("version")
                 or data.get("ods_version")
@@ -180,7 +180,7 @@ def _read_installed_version() -> str:
             )
             if version:
                 return str(version)
-        except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        except (OSError, json.JSONDecodeError, ValueError, UnicodeError):
             pass
 
     return app.version
