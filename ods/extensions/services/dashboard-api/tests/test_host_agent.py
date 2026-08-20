@@ -593,9 +593,17 @@ class TestResolveComposeFlags:
 
         assert [python_cmd, "-m", "pip", "install"] == calls[1][:4]
 
-    def test_windows_bash_discovery_skips_unusable_path_bash(self, monkeypatch):
+    def test_windows_bash_discovery_prefers_git_bash_before_path_wsl(self, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
-        monkeypatch.setattr(_mod.shutil, "which", lambda name: r"C:\Windows\System32\bash.exe")
+        monkeypatch.setattr(
+            _mod.shutil,
+            "which",
+            lambda name: (
+                r"C:\Program Files\Git\cmd\git.exe"
+                if name == "git"
+                else r"C:\Windows\System32\bash.exe"
+            ),
+        )
         monkeypatch.setattr(_mod, "_update_usable_bash", None)
         monkeypatch.setattr(_mod, "_usable_bash", None)
         calls = []
@@ -609,8 +617,7 @@ class TestResolveComposeFlags:
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
 
         assert _mod._find_update_bash() == r"C:\Program Files\Git\bin\bash.exe"
-        assert calls[0][0] == r"C:\Windows\System32\bash.exe"
-        assert calls[-1][0] == r"C:\Program Files\Git\bin\bash.exe"
+        assert [call[0] for call in calls] == [r"C:\Program Files\Git\bin\bash.exe"]
 
 
 # --- _split_nmcli_terse — parser for nmcli -t (terse) output ---
@@ -801,27 +808,60 @@ class TestToBashPath:
 
 class TestFindUsableBash:
 
-    def test_windows_skips_unusable_path_bash_and_uses_git_bash(self, monkeypatch):
-        bad_bash = r"C:\Windows\System32\bash.exe"
+    def test_windows_derives_bash_from_custom_git_install(self, monkeypatch):
+        git = r"D:\Tools\PortableGit\cmd\git.exe"
+        git_bash = r"D:\Tools\PortableGit\bin\bash.exe"
+
+        monkeypatch.setattr(_mod, "_usable_bash", None)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            _mod.shutil,
+            "which",
+            lambda name: git if name == "git" else None,
+        )
+        monkeypatch.setattr(
+            _mod.Path,
+            "exists",
+            lambda path: str(path) == git_bash,
+        )
+
+        def fake_run(cmd, *args, **kwargs):
+            assert cmd[0] == git_bash
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._find_usable_bash() == git_bash
+
+    def test_windows_prefers_git_bash_over_usable_wsl_launcher(self, monkeypatch):
+        wsl_bash = r"C:\Windows\System32\bash.exe"
         git_bash = r"C:\Program Files\Git\bin\bash.exe"
         seen = []
 
         monkeypatch.setattr(_mod, "_usable_bash", None)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
-        monkeypatch.setattr(_mod.shutil, "which", lambda name: bad_bash if name == "bash" else None)
+        monkeypatch.setattr(
+            _mod.shutil,
+            "which",
+            lambda name: wsl_bash if name == "bash" else None,
+        )
 
         real_exists = _mod.Path.exists
 
         def fake_exists(path):
-            if str(path) in {bad_bash, git_bash}:
+            if str(path) in {wsl_bash, git_bash}:
                 return True
             return real_exists(path)
 
         def fake_run(cmd, *args, **kwargs):
             seen.append(cmd[0])
-            if cmd[0] == bad_bash:
-                return subprocess.CompletedProcess(cmd, 127, "", "WSL execvpe(/bin/bash) failed")
             if cmd[0] == git_bash:
+                assert "MINGW*|MSYS*" in cmd[2]
+                assert cmd[-1].startswith("/")
+                return subprocess.CompletedProcess(cmd, 0, "ok", "")
+            if cmd[0] == wsl_bash:
+                # A WSL launcher can run Bash successfully, but it is not
+                # compatible with the /c/... paths used by this process.
                 return subprocess.CompletedProcess(cmd, 0, "ok", "")
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -829,7 +869,33 @@ class TestFindUsableBash:
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
 
         assert _mod._find_usable_bash() == git_bash
-        assert seen[:2] == [bad_bash, git_bash]
+        assert seen == [git_bash]
+
+    def test_windows_rejects_wsl_when_git_bash_is_absent(self, monkeypatch):
+        wsl_bash = r"C:\Windows\System32\bash.exe"
+
+        monkeypatch.setattr(_mod, "_usable_bash", None)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            _mod.shutil,
+            "which",
+            lambda name: wsl_bash if name == "bash" else None,
+        )
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+        def fake_exists(path):
+            return str(path) == wsl_bash
+
+        def fake_run(cmd, *args, **kwargs):
+            assert cmd[0] == wsl_bash
+            assert "MINGW*|MSYS*" in cmd[2]
+            return subprocess.CompletedProcess(cmd, 64, "", "")
+
+        monkeypatch.setattr(_mod.Path, "exists", fake_exists)
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._find_usable_bash() is None
+        assert _mod._usable_bash is False
 
 
 class TestValidateCoreRecreateIds:
