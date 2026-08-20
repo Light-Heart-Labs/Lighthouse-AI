@@ -60,9 +60,9 @@ async def voice_status(api_key: str = Depends(verify_api_key)):
         for name in REQUIRED_VOICE_SERVICES
     )
     installed_healthy = all(
-        entry["status"] == "healthy"
+        entry.get("status") == "healthy"
         for entry in services_status.values()
-        if entry["status"] != NOT_CONFIGURED
+        if isinstance(entry, dict) and entry.get("status") != NOT_CONFIGURED
     )
     all_healthy = required_healthy and installed_healthy
 
