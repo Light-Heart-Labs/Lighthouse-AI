@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:38:39Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -2189,6 +2189,65 @@
           ]
         }
       ]
+    },
+    {
+      "id": "valkey",
+      "name": "Valkey",
+      "description": "Authenticated Valkey state, cache, streams, and queues with Prometheus metrics.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 6379,
+      "external_port_default": 6379,
+      "health_endpoint": "/metrics",
+      "env_vars": [
+        {
+          "key": "VALKEY_PASSWORD",
+          "required": true,
+          "description": "Password required by Valkey clients and the metrics sidecar"
+        },
+        {
+          "key": "VALKEY_MAXMEMORY",
+          "required": false,
+          "default": "768mb",
+          "description": "Memory ceiling before Valkey rejects writes"
+        }
+      ],
+      "tags": [
+        "cache",
+        "queues",
+        "streams",
+        "pubsub",
+        "agent-state"
+      ],
+      "features": [
+        {
+          "id": "valkey-agent-state",
+          "name": "Durable Agent State and Queues",
+          "description": "Persist cache entries, streams, pub/sub state, and work queues with AOF",
+          "icon": "Database",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "valkey"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 5
+          },
+          "enabled_services_all": [
+            "valkey"
+          ],
+          "setup_time": "~1 minute",
+          "priority": 37,
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 90
     },
     {
       "id": "weaviate",

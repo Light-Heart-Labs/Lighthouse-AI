@@ -1,0 +1,55 @@
+schema_version: ods.services.v1
+
+service:
+  id: valkey
+  name: Valkey
+  aliases: [redis-compatible, durable-cache]
+  container_name: ods-valkey
+  container_uid: 999
+  host_env: VALKEY_HOST
+  default_host: valkey
+  port: 6379
+  external_port_env: VALKEY_PORT
+  external_port_default: 6379
+  health: /metrics
+  health_port: 9121
+  external_link: false
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 90
+  description: "Authenticated Valkey state, cache, streams, and queues with Prometheus metrics."
+  env_vars:
+    - key: VALKEY_PASSWORD
+      required: true
+      secret: true
+      description: Password required by Valkey clients and the metrics sidecar
+    - key: VALKEY_MAXMEMORY
+      required: false
+      default: 768mb
+      description: Memory ceiling before Valkey rejects writes
+  setup_hook: setup.sh
+
+features:
+  - id: valkey-agent-state
+    name: Durable Agent State and Queues
+    description: Persist cache entries, streams, pub/sub state, and work queues with AOF
+    icon: Database
+    category: data
+    requirements:
+      services: [valkey]
+      vram_gb: 0
+      disk_gb: 5
+    enabled_services_all: [valkey]
+    setup_time: ~1 minute
+    priority: 37
+    gpu_backends: [all]
+
+tags:
+  - cache
+  - queues
+  - streams
+  - pubsub
+  - agent-state

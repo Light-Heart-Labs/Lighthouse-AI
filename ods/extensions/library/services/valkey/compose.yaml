@@ -1,0 +1,89 @@
+services:
+  valkey:
+    image: valkey/valkey:9.1.1-alpine
+    container_name: ods-valkey
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: valkey
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      VALKEYCLI_AUTH: "${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set}"
+    command:
+      - valkey-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "60"
+      - "1000"
+      - --requirepass
+      - "${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set}"
+      - --maxmemory
+      - "${VALKEY_MAXMEMORY:-768mb}"
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - ./data/valkey:/data:rw
+    tmpfs:
+      - /tmp:uid=999,gid=1000,mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${VALKEY_PORT:-6379}:6379"
+      - "${BIND_ADDRESS:-127.0.0.1}:9121:9121"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  valkey-metrics:
+    image: oliver006/redis_exporter:v1.89.0-alpine
+    container_name: ods-valkey-metrics
+    restart: unless-stopped
+    network_mode: service:valkey
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      REDIS_ADDR: redis://127.0.0.1:6379
+      REDIS_PASSWORD: "${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set}"
+    depends_on:
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:9121/metrics | grep -q '^redis_up 1$'
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+networks:
+  ods-network:
+    external: true
