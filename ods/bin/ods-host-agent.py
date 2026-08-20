@@ -37,7 +37,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from socketserver import ThreadingMixIn
 from urllib import error as urllib_error, request as urllib_request
 from urllib.parse import parse_qs, unquote, urlparse
@@ -327,8 +327,8 @@ def _find_usable_bash() -> str | None:
         # Prefer Bash shipped with Git for Windows, which is also the runtime
         # required by the Windows installer.
         git = shutil.which("git")
-        if git and Path(git).name.lower() in {"git", "git.exe"}:
-            git_path = Path(git)
+        if git and PureWindowsPath(git).name.lower() in {"git", "git.exe"}:
+            git_path = PureWindowsPath(git)
             git_root = (
                 git_path.parent.parent
                 if git_path.parent.name.lower() in {"bin", "cmd"}
@@ -365,7 +365,12 @@ def _find_usable_bash() -> str | None:
             continue
         seen.add(identity)
         bash_path = Path(bash)
-        if bash_path.is_absolute():
+        is_absolute = (
+            PureWindowsPath(bash).is_absolute()
+            if platform.system() == "Windows"
+            else bash_path.is_absolute()
+        )
+        if is_absolute:
             if not bash_path.exists():
                 continue
         elif shutil.which(bash) is None:
