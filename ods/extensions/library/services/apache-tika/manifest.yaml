@@ -1,0 +1,48 @@
+schema_version: ods.services.v1
+
+service:
+  id: apache-tika
+  name: Apache Tika
+  aliases: [tika, document-extractor]
+  container_name: ods-apache-tika
+  host_env: APACHE_TIKA_HOST
+  default_host: apache-tika
+  port: 9998
+  external_port_env: APACHE_TIKA_PORT
+  external_port_default: 9998
+  health: /tika
+  ui_path: /
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 120
+  description: "Extract text and metadata from PDFs, office files, images, and 1,000+ formats."
+  env_vars: []
+
+features:
+  - id: tika-content-extraction
+    name: Universal Content Extraction
+    description: Extract text, metadata, and OCR output from more than a thousand document formats
+    icon: ScanText
+    category: productivity
+    requirements:
+      services: [apache-tika]
+      vram_gb: 0
+      disk_gb: 4
+    enabled_services_all: [apache-tika]
+    setup_time: ~2 minutes
+    priority: 31
+    launch:
+      type: service
+      service: apache-tika
+      path: /
+    gpu_backends: [all]
+
+tags:
+  - document
+  - extraction
+  - ocr
+  - metadata
+  - rag

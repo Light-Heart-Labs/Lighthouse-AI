@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:04:25Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -136,6 +136,58 @@
           ]
         }
       ]
+    },
+    {
+      "id": "apache-tika",
+      "name": "Apache Tika",
+      "description": "Extract text and metadata from PDFs, office files, images, and 1,000+ formats.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 9998,
+      "external_port_default": 9998,
+      "health_endpoint": "/tika",
+      "env_vars": [],
+      "tags": [
+        "document",
+        "extraction",
+        "ocr",
+        "metadata",
+        "rag"
+      ],
+      "features": [
+        {
+          "id": "tika-content-extraction",
+          "name": "Universal Content Extraction",
+          "description": "Extract text, metadata, and OCR output from more than a thousand document formats",
+          "icon": "ScanText",
+          "category": "productivity",
+          "requirements": {
+            "services": [
+              "apache-tika"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 4
+          },
+          "enabled_services_all": [
+            "apache-tika"
+          ],
+          "setup_time": "~2 minutes",
+          "priority": 31,
+          "launch": {
+            "type": "service",
+            "service": "apache-tika",
+            "path": "/"
+          },
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 120
     },
     {
       "id": "audiocraft",
