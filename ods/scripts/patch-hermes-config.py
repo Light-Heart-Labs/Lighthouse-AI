@@ -275,7 +275,10 @@ def patch_config(
     request_timeout_seconds: int = 180,
     max_tokens: int = 1024,
 ) -> bool:
-    original = path.read_text(encoding="utf-8")
+    try:
+        original = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return False
     trailing_newline = original.endswith("\n")
     lines = original.splitlines()
 
