@@ -1,0 +1,36 @@
+services:
+  gotenberg:
+    image: gotenberg/gotenberg:8.36.0
+    container_name: ods-gotenberg
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - gotenberg
+      - "--api-download-from-deny-private-ips=${GOTENBERG_DENY_PRIVATE_IPS:-true}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${GOTENBERG_PORT:-3000}:3000"
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  ods-network:
+    external: true

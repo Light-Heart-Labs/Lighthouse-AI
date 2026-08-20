@@ -1,0 +1,51 @@
+schema_version: ods.services.v1
+
+service:
+  id: gotenberg
+  name: Gotenberg
+  aliases: [document-to-pdf, pdf-api]
+  container_name: ods-gotenberg
+  host_env: GOTENBERG_HOST
+  default_host: gotenberg
+  port: 3000
+  external_port_env: GOTENBERG_PORT
+  external_port_default: 3000
+  health: /health
+  external_link: false
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 120
+  description: "Convert web pages and office documents to PDF with Chromium and LibreOffice."
+  env_vars:
+    - key: GOTENBERG_DENY_PRIVATE_IPS
+      required: false
+      secret: false
+      default: "true"
+      description: Reject remote input URLs that resolve to loopback or private networks
+
+features:
+  - id: gotenberg-pdf-conversion
+    name: Document-to-PDF API
+    description: Render URLs, HTML, Markdown, and office documents to PDF through a local API
+    icon: FileOutput
+    category: productivity
+    requirements:
+      services: [gotenberg]
+      vram_gb: 0
+      disk_gb: 2
+    enabled_services_all: [gotenberg]
+    setup_time: ~2 minutes
+    priority: 32
+    launch:
+      type: none
+    gpu_backends: [all]
+
+tags:
+  - pdf
+  - document
+  - chromium
+  - libreoffice
+  - conversion
