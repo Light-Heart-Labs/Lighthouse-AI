@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 
@@ -275,9 +276,12 @@ def patch_config(
     request_timeout_seconds: int = 180,
     max_tokens: int = 1024,
 ) -> bool:
+    if not path.is_file():
+        return False
     try:
         original = path.read_text(encoding="utf-8", errors="replace")
-    except (OSError, UnicodeError):
+    except (OSError, UnicodeError) as exc:
+        print(f"Warning: Failed to read Hermes config {path}: {exc}", file=sys.stderr)
         return False
     trailing_newline = original.endswith("\n")
     lines = original.splitlines()
@@ -293,8 +297,20 @@ def patch_config(
         updated += "\n"
     if updated == original:
         return False
-    path.write_text(updated, encoding="utf-8")
-    return True
+
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    try:
+        tmp_path.write_text(updated, encoding="utf-8")
+        tmp_path.replace(path)
+        return True
+    except OSError as exc:
+        print(f"Error: Failed to write updated Hermes config {path}: {exc}", file=sys.stderr)
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        return False
 
 
 def main() -> int:
