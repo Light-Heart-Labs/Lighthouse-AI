@@ -1,0 +1,81 @@
+services:
+  pgvector:
+    image: pgvector/pgvector:0.8.1-pg17-trixie
+    container_name: ods-pgvector
+    restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: "${PGVECTOR_USER:-ods}"
+      POSTGRES_PASSWORD: "${PGVECTOR_PASSWORD:?PGVECTOR_PASSWORD must be set}"
+      POSTGRES_DB: "${PGVECTOR_DATABASE:-ods}"
+      POSTGRES_INITDB_ARGS: "--data-checksums --auth-host=scram-sha-256"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/pgvector:/var/lib/postgresql/data:rw
+      - ./config/pgvector/init-vector.sql:/docker-entrypoint-initdb.d/10-vector.sql:ro
+    tmpfs:
+      - /tmp:mode=1777
+      - /var/run/postgresql:uid=999,gid=999,mode=3775
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PGVECTOR_PORT:-5432}:5432"
+      - "${BIND_ADDRESS:-127.0.0.1}:9187:9187"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  pgvector-metrics:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    container_name: ods-pgvector-metrics
+    restart: unless-stopped
+    network_mode: service:pgvector
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      DATA_SOURCE_URI: "127.0.0.1:5432/${PGVECTOR_DATABASE:-ods}?sslmode=disable"
+      DATA_SOURCE_USER: "${PGVECTOR_USER:-ods}"
+      DATA_SOURCE_PASS: "${PGVECTOR_PASSWORD:?PGVECTOR_PASSWORD must be set}"
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:9187/metrics | grep -q '^pg_up 1$'
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+networks:
+  ods-network:
+    external: true

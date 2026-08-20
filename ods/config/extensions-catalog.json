@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:33:05Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -1966,6 +1966,71 @@
           "priority": 19
         }
       ]
+    },
+    {
+      "id": "pgvector",
+      "name": "pgvector (PostgreSQL 17)",
+      "description": "PostgreSQL 17 with pgvector and readiness-aware Prometheus metrics.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 5432,
+      "external_port_default": 5432,
+      "health_endpoint": "/metrics",
+      "env_vars": [
+        {
+          "key": "PGVECTOR_PASSWORD",
+          "required": true,
+          "description": "Password for the bootstrap PostgreSQL role"
+        },
+        {
+          "key": "PGVECTOR_USER",
+          "required": false,
+          "default": "ods",
+          "description": "Bootstrap PostgreSQL role"
+        },
+        {
+          "key": "PGVECTOR_DATABASE",
+          "required": false,
+          "default": "ods",
+          "description": "Database initialized with the vector extension"
+        }
+      ],
+      "tags": [
+        "postgres",
+        "vector-database",
+        "sql",
+        "embeddings",
+        "rag"
+      ],
+      "features": [
+        {
+          "id": "pgvector-sql-search",
+          "name": "Vector SQL Database",
+          "description": "Combine relational queries, transactions, and vector similarity in PostgreSQL",
+          "icon": "Database",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "pgvector"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 20
+          },
+          "enabled_services_all": [
+            "pgvector"
+          ],
+          "setup_time": "~2 minutes",
+          "priority": 36,
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 120
     },
     {
       "id": "piper-audio",
