@@ -1,0 +1,40 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.53.1
+    container_name: ods-meilisearch
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: "${MEILI_MASTER_KEY:?MEILI_MASTER_KEY must be set}"
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - ./data/meilisearch:/meili_data:rw
+    tmpfs:
+      - /tmp:mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${MEILISEARCH_PORT:-7700}:7700"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:7700/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  ods-network:
+    external: true
