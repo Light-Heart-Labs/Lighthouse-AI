@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:46:42Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -677,6 +677,86 @@
           ]
         }
       ]
+    },
+    {
+      "id": "falkordb",
+      "name": "FalkorDB",
+      "description": "Persistent knowledge graphs and graph queries with a local authenticated explorer.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 3000,
+      "external_port_default": 3000,
+      "health_endpoint": "/",
+      "env_vars": [
+        {
+          "key": "FALKORDB_PASSWORD",
+          "required": true,
+          "description": "Password required for graph database connections"
+        },
+        {
+          "key": "FALKORDB_AUTH_SECRET",
+          "required": true,
+          "description": "Secret used to sign Browser sessions"
+        },
+        {
+          "key": "FALKORDB_ENCRYPTION_KEY",
+          "required": true,
+          "description": "Stable key used to encrypt Browser connection credentials"
+        },
+        {
+          "key": "FALKORDB_MAXMEMORY",
+          "required": false,
+          "default": "3gb",
+          "description": "Database memory ceiling before writes are rejected"
+        },
+        {
+          "key": "FALKORDB_BROWSER_URL",
+          "required": false,
+          "default": "http://localhost:3000",
+          "description": "Public Browser URL used for sessions and allowed origins"
+        }
+      ],
+      "tags": [
+        "graph-database",
+        "knowledge-graph",
+        "agent-memory",
+        "cypher",
+        "rag"
+      ],
+      "features": [
+        {
+          "id": "falkordb-knowledge-graph",
+          "name": "Knowledge Graph Memory and Explorer",
+          "description": "Store connected agent memory, traverse relationships, and inspect graphs visually",
+          "icon": "GitBranch",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "falkordb"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 10
+          },
+          "enabled_services_all": [
+            "falkordb"
+          ],
+          "setup_time": "~2 minutes",
+          "priority": 38,
+          "launch": {
+            "type": "service",
+            "service": "falkordb",
+            "path": "/"
+          },
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 180
     },
     {
       "id": "flowise",

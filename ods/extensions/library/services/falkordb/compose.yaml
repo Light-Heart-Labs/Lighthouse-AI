@@ -1,0 +1,61 @@
+services:
+  falkordb:
+    image: falkordb/falkordb:v4.20.3
+    container_name: ods-falkordb
+    restart: unless-stopped
+    stop_grace_period: 60s
+    user: redis
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      BROWSER: "1"
+      FALKORDB_PASSWORD: "${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}"
+      REDISCLI_AUTH: "${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}"
+      REDIS_ARGS: >-
+        --requirepass ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD must be set}
+        --appendonly yes --appendfsync everysec --save 60 1000
+        --maxmemory ${FALKORDB_MAXMEMORY:-3gb} --maxmemory-policy noeviction
+      AUTH_SECRET: "${FALKORDB_AUTH_SECRET:?FALKORDB_AUTH_SECRET must be set}"
+      ENCRYPTION_KEY: "${FALKORDB_ENCRYPTION_KEY:?FALKORDB_ENCRYPTION_KEY must be set}"
+      AUTH_URL: "${FALKORDB_BROWSER_URL:-http://localhost:3000}"
+      ALLOWED_ORIGINS: "${FALKORDB_BROWSER_URL:-http://localhost:3000}"
+      NEXT_PUBLIC_GOOGLE_ANALYTICS: ""
+      CSV_STORAGE: local
+      CSV_LOCAL_LOAD_URI_MODE: file
+      CSV_LOCAL_TEMP_DIR: /var/lib/falkordb/import
+    volumes:
+      - ./data/falkordb/database:/var/lib/falkordb/data:rw
+      - ./data/falkordb/import:/var/lib/falkordb/import:rw
+      - ./data/falkordb/browser:/app/.data:rw
+    tmpfs:
+      - /tmp:uid=999,gid=999,mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${FALKORDB_PORT:-6379}:6379"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FALKORDB_UI_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          redis-cli ping | grep -q PONG &&
+          node -e "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+networks:
+  ods-network:
+    external: true
