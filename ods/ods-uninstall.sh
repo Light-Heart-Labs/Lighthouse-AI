@@ -286,10 +286,18 @@ unset _ods_uninstall_orphan_pids _pid
 # Remove system-mode ods-host-agent unit (migrated from --user mode).
 # Idempotent — no-op if the unit was never installed (e.g. older user-mode installs).
 if systemctl is-enabled ods-host-agent.service >/dev/null 2>&1; then
-    if ! timeout 20s sudo systemctl disable --now ods-host-agent.service 2>/dev/null; then
-        log_warn "ods-host-agent did not stop cleanly; forcing service shutdown"
-        sudo systemctl kill -s SIGKILL ods-host-agent.service 2>/dev/null || true
-        timeout 10s sudo systemctl disable ods-host-agent.service 2>/dev/null || true
+    if command -v timeout >/dev/null 2>&1; then
+        if ! timeout 20s sudo systemctl disable --now ods-host-agent.service 2>/dev/null; then
+            log_warn "ods-host-agent did not stop cleanly; forcing service shutdown"
+            sudo systemctl kill -s SIGKILL ods-host-agent.service 2>/dev/null || true
+            timeout 10s sudo systemctl disable ods-host-agent.service 2>/dev/null || true
+        fi
+    else
+        if ! sudo systemctl disable --now ods-host-agent.service 2>/dev/null; then
+            log_warn "ods-host-agent did not stop cleanly; forcing service shutdown"
+            sudo systemctl kill -s SIGKILL ods-host-agent.service 2>/dev/null || true
+            sudo systemctl disable ods-host-agent.service 2>/dev/null || true
+        fi
     fi
 fi
 sudo rm -f /etc/systemd/system/ods-host-agent.service 2>/dev/null || true
