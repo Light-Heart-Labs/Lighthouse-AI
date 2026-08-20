@@ -42,6 +42,8 @@ def _runtime_dependency_order(
 
     _visiting.add(service_id)
     for dep in read_direct_deps(service_id):
+        if not isinstance(dep, str) or not dep.strip():
+            continue
         _runtime_dependency_order(
             dep,
             read_direct_deps,
