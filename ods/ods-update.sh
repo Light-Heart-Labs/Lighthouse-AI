@@ -12,8 +12,6 @@
 
 set -euo pipefail
 
-# Prerequisites
-command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed." >&2; echo "Install with: apt install jq (Debian/Ubuntu) or brew install jq (macOS)" >&2; exit 1; }
 
 #==============================================================================
 # CONFIGURATION
