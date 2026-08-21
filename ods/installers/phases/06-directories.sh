@@ -47,6 +47,9 @@ else
     # shellcheck source=../lib/llama-memory-budget.sh
     source "$SCRIPT_DIR/installers/lib/llama-memory-budget.sh"
 
+    # shellcheck source=../../lib/dotenv-quote.sh
+    source "$SCRIPT_DIR/lib/dotenv-quote.sh"
+
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
         # shellcheck source=../../lib/rootless-ownership.sh
@@ -825,13 +828,13 @@ CTX_SIZE=${MAX_CONTEXT}
 MODEL_RECOMMENDED_MODEL=${MODEL_RECOMMENDED_MODEL_VALUE}
 MODEL_RECOMMENDED_GGUF=${MODEL_RECOMMENDED_GGUF_VALUE}
 MODEL_RECOMMENDED_CONTEXT=${MODEL_RECOMMENDED_CONTEXT_VALUE}
-MODEL_RECOMMENDATION_SOURCE="${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}"
-MODEL_RECOMMENDATION_POLICY="${MODEL_RECOMMENDATION_POLICY:-tier-map}"
-MODEL_RECOMMENDATION_CONFIDENCE="${MODEL_RECOMMENDATION_CONFIDENCE:-medium}"
-MODEL_RECOMMENDATION_REASON="${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${TIER} (${TIER_NAME}) for ${GPU_BACKEND} backend; benchmark locally after first launch.}"
-MODEL_RECOMMENDED_ALTERNATIVES="${MODEL_RECOMMENDED_ALTERNATIVES:-}"
+MODEL_RECOMMENDATION_SOURCE=$(dotenv_quote "${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}")
+MODEL_RECOMMENDATION_POLICY=$(dotenv_quote "${MODEL_RECOMMENDATION_POLICY:-tier-map}")
+MODEL_RECOMMENDATION_CONFIDENCE=$(dotenv_quote "${MODEL_RECOMMENDATION_CONFIDENCE:-medium}")
+MODEL_RECOMMENDATION_REASON=$(dotenv_quote "${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${TIER} (${TIER_NAME}) for ${GPU_BACKEND} backend; benchmark locally after first launch.}")
+MODEL_RECOMMENDED_ALTERNATIVES=$(dotenv_quote "${MODEL_RECOMMENDED_ALTERNATIVES:-}")
 MODEL_PERFORMANCE_SOURCE=benchmark_required
-MODEL_PERFORMANCE_LABEL="Benchmark after first launch"
+MODEL_PERFORMANCE_LABEL=$(dotenv_quote "Benchmark after first launch")
 GPU_BACKEND=${GPU_BACKEND}
 SYSTEM_RAM_GB=${RAM_GB:-0}
 N_GPU_LAYERS=${N_GPU_LAYERS_VALUE}
