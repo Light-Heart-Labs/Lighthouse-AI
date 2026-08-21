@@ -305,7 +305,11 @@ _docker_try_with_optional_sudo() {
         return 0
     fi
 
-    if [[ "$DOCKER_CMD" != "sudo docker" ]] && command -v sudo &>/dev/null; then
+    # ods_prepare_sudo already established whether sudo can run without a
+    # password prompt. Merely finding the binary is not enough here: in a
+    # --non-interactive install, raw `sudo docker` would otherwise hang when
+    # Docker exists but this user cannot access its socket.
+    if [[ "$DOCKER_CMD" != "sudo docker" ]] && ods_sudo_available && command -v sudo &>/dev/null; then
         DOCKER_CMD="sudo docker"
         DOCKER_COMPOSE_CMD="sudo docker compose"
         if docker_run "$@" &>/dev/null; then
