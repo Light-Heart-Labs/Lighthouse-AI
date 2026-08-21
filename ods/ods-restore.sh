@@ -22,7 +22,7 @@ NC='\033[0m' # No Color
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
 
 # Source shared rsync utilities
