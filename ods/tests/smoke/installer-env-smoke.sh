@@ -143,6 +143,7 @@ export ENABLE_OPENCLAW=true
     source installers/lib/ui.sh
     source installers/lib/detection.sh
     source installers/lib/progress.sh
+    source installers/lib/sudo.sh
 
     # Stub UI functions
     ods_progress() { :; }
