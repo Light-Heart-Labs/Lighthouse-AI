@@ -2289,8 +2289,20 @@ cmd_config() {
                 warn "validate-manifests.sh not found at $INSTALL_DIR/scripts/validate-manifests.sh"
             fi
             ;;
+        explain)
+            shift
+            local _explain_script="$INSTALL_DIR/scripts/explain-config.py"
+            [[ -f "$_explain_script" ]] \
+                || error "explain-config.py not found at $_explain_script"
+            command -v python3 >/dev/null 2>&1 \
+                || error "python3 is required for configuration provenance"
+            python3 "$_explain_script" \
+                --env-file "$INSTALL_DIR/.env" \
+                --schema "$INSTALL_DIR/.env.schema.json" \
+                "$@"
+            ;;
         *)
-            log "Usage: ods config [show|edit|validate]"
+            log "Usage: ods config [show|edit|validate|explain]"
             ;;
     esac
 }
@@ -6377,8 +6389,8 @@ ${CYAN}Commands:${NC}
                       Pull latest images and restart (--force skips version-compat confirmation;
                       --rebuild-images rebuilds locally-built images so contributor edits deploy)
   shell <service>     Open shell in container
-  config [show|edit|validate]
-                      View, edit, or validate configuration
+  config [show|edit|validate|explain]
+                      View, edit, validate, or explain configuration provenance
   chat "<message>"    Quick chat with the LLM
   benchmark           Run a quick performance test
   doctor [report|--json]   Run diagnostics (--json writes JSON to stdout)
@@ -6482,6 +6494,8 @@ ${CYAN}Examples:${NC}
   ods restart stt               # Restart Whisper (via alias)
   ods chat "What is 2+2?"      # Quick LLM test
   ods config edit               # Edit .env file
+  ods config explain --key ODS_MODE
+                                  # Show effective value and source (secrets stay masked)
   ods template list              # List available templates
   ods template preview creative-studio
                                   # Preview what a template will change
