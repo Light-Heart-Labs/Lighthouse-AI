@@ -32,6 +32,9 @@ for value in "${values[@]}"; do
     quoted="$(dotenv_quote "$value")"
     expected="${value//$'\r'/ }"
     expected="${expected//$'\n'/ }"
+    if [[ "$expected" == *"'"* ]]; then
+        expected="${expected//\`/ˋ}"
+    fi
     printf 'TESTVAR=%s\n' "$quoted" > "$tmp_dir/.env"
 
     unset TESTVAR

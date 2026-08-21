@@ -20,7 +20,7 @@ $special = 'cost is $HOME and $(whoami) and `id` and "dq" and C:\path'
 Assert-Equal "literal special characters" "'$special'" (ConvertTo-ODSDotenvValue $special)
 
 $compound = 'it''s $HOME and $(whoami) and `id` and "dq" and C:\path'
-$compoundExpected = '"it''s \$HOME and \$(whoami) and \`id\` and \"dq\" and C:\\path"'
+$compoundExpected = '"it''s \$HOME and \$(whoami) and ˋidˋ and \"dq\" and C:\\path"'
 Assert-Equal "single quote fallback" $compoundExpected (ConvertTo-ODSDotenvValue $compound)
 
 Assert-Equal "empty value" "''" (ConvertTo-ODSDotenvValue "")

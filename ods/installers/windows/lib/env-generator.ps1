@@ -463,7 +463,11 @@ function ConvertTo-ODSDotenvValue {
 
     $text = ([string]$Value) -replace "`r", " " -replace "`n", " "
     if ($text.IndexOf("'") -ge 0) {
-        $escaped = $text.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$').Replace('`', '\`')
+        # Bash and Compose disagree about \` inside double-quoted dotenv
+        # values. Normalize it only in this apostrophe fallback so both readers
+        # receive the same safe text.
+        $text = $text.Replace('`', 'ˋ')
+        $escaped = $text.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$')
         return '"' + $escaped + '"'
     }
     return "'" + $text + "'"

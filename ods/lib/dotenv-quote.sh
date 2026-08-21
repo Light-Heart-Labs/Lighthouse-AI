@@ -9,12 +9,15 @@ dotenv_quote() {
     value="${value//$'\n'/ }"
 
     # Single quotes are literal in both Bash and Compose. When the value itself
-    # contains one, use the double-quoted escape set decoded by safe-env.sh.
+    # contains one, use their common double-quoted escape set. Bash requires a
+    # backslash before a literal backtick there, while Compose preserves that
+    # backslash, so normalize backticks to the visually equivalent modifier
+    # grave accent only in this rare fallback instead of corrupting one reader.
     if [[ "$value" == *"'"* ]]; then
+        value="${value//\`/ˋ}"
         value="${value//\\/\\\\}"
         value="${value//\"/\\\"}"
         value="${value//\$/\\\$}"
-        value="${value//\`/\\\`}"
         printf '"%s"\n' "$value"
     else
         printf "'%s'\n" "$value"
