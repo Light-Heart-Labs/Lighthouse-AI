@@ -44,6 +44,9 @@ if $DRY_RUN; then
     [[ "$ENABLE_OPENCLAW" == "true" ]] && log "[DRY RUN] Would configure OpenClaw (model: $LLM_MODEL, config: ${OPENCLAW_CONFIG:-default})"
     log "[DRY RUN] Would validate .env against schema"
 else
+    # shellcheck source=../lib/llama-memory-budget.sh
+    source "$SCRIPT_DIR/installers/lib/llama-memory-budget.sh"
+
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
         # shellcheck source=../../lib/rootless-ownership.sh
@@ -460,6 +463,10 @@ raise SystemExit(1)' 2>/dev/null && return 0
     # 32 random bytes hex-encoded. Rotating invalidates every issued cookie —
     # the only revocation mechanism we have today, so don't rotate casually.
     ODS_SESSION_SECRET=$(_env_get ODS_SESSION_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    # Upstream Hermes otherwise generates this token at process start. Keep it
+    # stable so an already-open dashboard can reconnect after a container
+    # restart instead of receiving a bare WebSocket 403.
+    HERMES_DASHBOARD_SESSION_TOKEN=$(_env_get HERMES_DASHBOARD_SESSION_TOKEN "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     SHIELD_API_KEY=$(_env_get SHIELD_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     DIFY_SECRET_KEY=$(_env_get DIFY_SECRET_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     QDRANT_API_KEY=$(_env_get QDRANT_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
@@ -508,6 +515,14 @@ raise SystemExit(1)' 2>/dev/null && return 0
         fi
         EXTERNAL_LLM_ACTIVE=true
         LLM_MODEL="$EXTERNAL_SELECTED_MODEL"
+    fi
+    LLAMA_SERVER_MEMORY_LIMIT_VALUE=""
+    if [[ "$GPU_BACKEND" == "nvidia" && "$EXTERNAL_LLM_ACTIVE" != "true" && "${ODS_MODE:-local}" != "cloud" ]]; then
+        _docker_memory_gb="$(ods_docker_memory_gb 2>/dev/null || true)"
+        _effective_memory_gb="$(ods_effective_container_memory_gb "${RAM_GB:-0}" "$_docker_memory_gb")"
+        _llama_memory_default="$(ods_default_nvidia_llama_memory_limit "$_effective_memory_gb")"
+        LLAMA_SERVER_MEMORY_LIMIT_VALUE="$(_env_get LLAMA_SERVER_MEMORY_LIMIT "$_llama_memory_default")"
+        unset _docker_memory_gb _effective_memory_gb _llama_memory_default
     fi
     ODS_MODE_VALUE="$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "local"; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
     ODS_MODEL_SWITCHBOARD_VALUE=$(_env_get ODS_MODEL_SWITCHBOARD "${ODS_MODEL_SWITCHBOARD:-observe}")
@@ -703,6 +718,9 @@ raise SystemExit(1)' 2>/dev/null && return 0
     RAG_OPENAI_API_BASE_URL_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_BASE_URL "${RAG_OPENAI_API_BASE_URL:-}")
     RAG_OPENAI_API_KEY_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_KEY "${RAG_OPENAI_API_KEY:-}")
     EMBEDDINGS_MEMORY_LIMIT_VALUE=$(_env_get EMBEDDINGS_MEMORY_LIMIT "${EMBEDDINGS_MEMORY_LIMIT:-4G}")
+    N_GPU_LAYERS_VALUE=$(_env_get N_GPU_LAYERS "${N_GPU_LAYERS:-auto}")
+    N_GPU_LAYERS_VALUE="$(printf '%s' "$N_GPU_LAYERS_VALUE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    N_GPU_LAYERS_VALUE="${N_GPU_LAYERS_VALUE:-auto}"
 
     _phase06_lemonade_uses_host_9000() {
         [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]] && return 0
@@ -816,9 +834,10 @@ MODEL_PERFORMANCE_SOURCE=benchmark_required
 MODEL_PERFORMANCE_LABEL=Benchmark after first launch
 GPU_BACKEND=${GPU_BACKEND}
 SYSTEM_RAM_GB=${RAM_GB:-0}
-N_GPU_LAYERS=${N_GPU_LAYERS:-99}
+N_GPU_LAYERS=${N_GPU_LAYERS_VALUE}
 $(if [[ -n "${LLAMA_SERVER_IMAGE:-}" ]]; then echo "LLAMA_SERVER_IMAGE=${LLAMA_SERVER_IMAGE}"; fi)
 $(if [[ -n "${LLAMA_SERVER_IMAGE_FALLBACK:-}" ]]; then echo "LLAMA_SERVER_IMAGE_FALLBACK=${LLAMA_SERVER_IMAGE_FALLBACK}"; fi)
+$(if [[ -n "$LLAMA_SERVER_MEMORY_LIMIT_VALUE" ]]; then echo "LLAMA_SERVER_MEMORY_LIMIT=${LLAMA_SERVER_MEMORY_LIMIT_VALUE}"; fi)
 #=== llama.cpp Runtime Tuning ===
 LLAMA_ARG_FLASH_ATTN=${LLAMA_ARG_FLASH_ATTN:-auto}
 LLAMA_ARG_CACHE_TYPE_K=${LLAMA_ARG_CACHE_TYPE_K:-f16}
@@ -941,6 +960,7 @@ WEBUI_SECRET=${WEBUI_SECRET}
 DASHBOARD_API_KEY=${DASHBOARD_API_KEY}
 ODS_AGENT_KEY=${ODS_AGENT_KEY}
 ODS_SESSION_SECRET=${ODS_SESSION_SECRET}
+HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
 SHIELD_API_KEY=${SHIELD_API_KEY}
 N8N_USER=admin@ods.local
 N8N_PASS=${N8N_PASS}
