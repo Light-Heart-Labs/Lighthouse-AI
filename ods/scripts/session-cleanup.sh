@@ -242,7 +242,7 @@ fi
 # ── Summary ────────────────────────────────────────────────────
 echo "[$(date)] Cleanup complete: removed $REMOVED_INACTIVE inactive, $REMOVED_BLOATED bloated"
 REMAINING_EXIT=0
-REMAINING=$(find "$SESSIONS_DIR" -maxdepth 1 -name '*.jsonl' 2>&1 | wc -l) || REMAINING_EXIT=$?
+REMAINING=$(find "$SESSIONS_DIR" -maxdepth 1 -name '*.jsonl' 2>&1 | wc -l | tr -d ' ') || REMAINING_EXIT=$?
 if [[ $REMAINING_EXIT -ne 0 ]]; then
     REMAINING=0
 fi
