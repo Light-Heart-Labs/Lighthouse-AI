@@ -547,6 +547,32 @@ def test_atomic_write_failure_preserves_known_good_config() -> None:
         assert not list(target.parent.glob(f".{target.name}.*.tmp"))
 
 
+def test_orcarouter_route_present_in_cloud_and_hybrid() -> None:
+    for mode in ("cloud", "hybrid"):
+        payload = run_renderer("--surface", f"litellm-{mode}", "--ods-mode", mode)
+        content = file_by_surface(payload, f"litellm-{mode}")["content"]
+        assert "model_name: orcarouter" in content
+        assert "model: openai/orcarouter/auto" in content
+        assert "api_base: https://api.orcarouter.ai/v1" in content
+        assert "api_key: os.environ/ORCAROUTER_API_KEY" in content
+
+
+def test_orcarouter_route_present_in_switchboard_hybrid() -> None:
+    payload = run_renderer(
+        "--surface",
+        "litellm-switchboard",
+        "--ods-mode",
+        "hybrid",
+        "--switchboard-mode",
+        "enabled",
+    )
+    content = file_by_surface(payload, "litellm-switchboard")["content"]
+    assert "model_name: orcarouter" in content
+    assert "model: openai/orcarouter/auto" in content
+    assert "api_base: https://api.orcarouter.ai/v1" in content
+    assert "api_key: os.environ/ORCAROUTER_API_KEY" in content
+
+
 def main() -> int:
     tests = [
         test_all_surfaces_render,
@@ -560,6 +586,8 @@ def main() -> int:
         test_explicit_cloud_switchboard_render_fails_closed,
         test_native_local_projection_uses_host_route_and_concrete_model,
         test_checked_in_mode_configs_match_renderer,
+        test_orcarouter_route_present_in_cloud_and_hybrid,
+        test_orcarouter_route_present_in_switchboard_hybrid,
         test_enabled_env_exports_switchboard_webui_gateway,
         test_enabled_perplexica_uses_stable_alias,
         test_enabled_hermes_uses_stable_switchboard_alias,

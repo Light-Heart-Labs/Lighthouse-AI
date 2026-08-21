@@ -524,6 +524,7 @@ ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 TOGETHER_API_KEY=
 MINIMAX_API_KEY=
+ORCAROUTER_API_KEY=
 
 #=== LLM Settings (llama-server -- native Metal) ===
 ODS_MACOS_LLM_BRIDGE_ENABLED=${macos_llm_bridge_enabled}

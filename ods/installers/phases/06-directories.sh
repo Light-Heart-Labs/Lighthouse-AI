@@ -786,6 +786,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
     OPENAI_API_KEY=$(_env_get OPENAI_API_KEY "${OPENAI_API_KEY:-}")
     TOGETHER_API_KEY=$(_env_get TOGETHER_API_KEY "${TOGETHER_API_KEY:-}")
     MINIMAX_API_KEY=$(_env_get MINIMAX_API_KEY "${MINIMAX_API_KEY:-}")
+    ORCAROUTER_API_KEY=$(_env_get ORCAROUTER_API_KEY "${ORCAROUTER_API_KEY:-}")
     # Base64-encode GPU assignment JSON for safe .env storage
     if [[ -n "${GPU_ASSIGNMENT_JSON:-}" && "${GPU_ASSIGNMENT_JSON:-}" != "{}" ]]; then
         GPU_ASSIGNMENT_JSON_B64=$(echo "$GPU_ASSIGNMENT_JSON" | jq -c '.' | base64 -w0)
@@ -849,6 +850,7 @@ ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
 TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
 MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+ORCAROUTER_API_KEY=${ORCAROUTER_API_KEY:-}
 
 #=== Service Auth (LiteLLM proxy) ===
 TARGET_API_KEY=not-needed

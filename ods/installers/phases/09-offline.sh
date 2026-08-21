@@ -29,6 +29,7 @@ elif [[ "$OFFLINE_MODE" == "true" ]] && ! $DRY_RUN; then
     _sed_i 's/^BRAVE_API_KEY=.*/BRAVE_API_KEY=/' "$INSTALL_DIR/.env" 2>/dev/null || true
     _sed_i 's/^ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=/' "$INSTALL_DIR/.env" 2>/dev/null || true
     _sed_i 's/^OPENAI_API_KEY=.*/OPENAI_API_KEY=/' "$INSTALL_DIR/.env" 2>/dev/null || true
+    _sed_i 's/^ORCAROUTER_API_KEY=.*/ORCAROUTER_API_KEY=/' "$INSTALL_DIR/.env" 2>/dev/null || true
 
     # Add offline mode config
     cat >> "$INSTALL_DIR/.env" << 'OFFLINE_EOF'

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- LiteLLM gateway now includes an `orcarouter` route for [OrcaRouter](https://www.orcarouter.ai)
+  models (`orcarouter/auto`) in `cloud` and `hybrid` modes, backed by a new
+  `ORCAROUTER_API_KEY` environment variable wired through the installers,
+  env schema, compose, and runtime config renderer.
+
 ## [2.6.0] - 2026-07-28
 
 ### Added
