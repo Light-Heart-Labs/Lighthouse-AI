@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -69,3 +70,11 @@ def test_output_path_is_parseable_and_matches_stdout(tmp_path):
 
     assert output.read_bytes() == expected_bytes
     assert json.loads(output.read_text(encoding="utf-8")) == expected
+
+
+if __name__ == "__main__":
+    test_cli_emits_deterministic_cyclonedx_inventory()
+    test_every_source_image_is_represented_once()
+    with tempfile.TemporaryDirectory() as temporary:
+        test_output_path_is_parseable_and_matches_stdout(Path(temporary))
+    print("PASS: 3 runtime SBOM tests")

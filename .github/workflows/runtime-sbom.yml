@@ -41,7 +41,7 @@ jobs:
           python3 scripts/generate-runtime-sbom.py --output artifacts/ods-runtime.cdx.json
           python3 scripts/generate-runtime-sbom.py > artifacts/ods-runtime.second.cdx.json
           cmp artifacts/ods-runtime.cdx.json artifacts/ods-runtime.second.cdx.json
-          python3 -m pytest -q tests/test_runtime_sbom.py
+          python3 tests/test_runtime_sbom.py
 
       - name: Upload runtime inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
