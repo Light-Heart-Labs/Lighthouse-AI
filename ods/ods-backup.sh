@@ -19,7 +19,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Prerequisites check
-command -v rsync >/dev/null 2>&1 || { echo -e "${RED}Error: rsync is required but not installed.${NC}" >&2; echo "Install with: apt install rsync (Debian/Ubuntu) or brew install rsync (macOS)" >&2; exit 1; }
+if ! command -v rsync >/dev/null 2>&1; then
+    echo -e "${YELLOW}[WARN]${NC} rsync is not installed; backup will use cp (no incremental/delta support)." >&2
+    echo "For faster incremental backups, install rsync: apt install rsync (Debian/Ubuntu) or brew install rsync (macOS)" >&2
+fi
 command -v jq >/dev/null 2>&1 || { echo -e "${RED}Error: jq is required but not installed.${NC}" >&2; echo "Install with: apt install jq (Debian/Ubuntu) or brew install jq (macOS)" >&2; exit 1; }
 
 # Logging functions
