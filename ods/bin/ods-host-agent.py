@@ -10774,6 +10774,7 @@ def _opencode_config_matches(
     base_url: str,
     api_key: str,
     context_length: int,
+    expected_defaults: dict,
 ) -> bool:
     if not isinstance(config, dict):
         return False
@@ -10783,16 +10784,38 @@ def _opencode_config_matches(
     models = llama_provider.get("models") if isinstance(llama_provider, dict) else None
     model = models.get(model_id) if isinstance(models, dict) else None
     limit = model.get("limit") if isinstance(model, dict) else None
-    model_ref = f"{provider_id}/{model_id}"
+    defaults_match = all(
+        (key in config) == (key in expected_defaults)
+        and config.get(key) == expected_defaults.get(key)
+        for key in ("model", "small_model")
+    )
     return bool(
-        config.get("model") == model_ref
-        and config.get("small_model") == model_ref
+        defaults_match
         and isinstance(options, dict)
         and options.get("baseURL") == base_url
         and options.get("apiKey") == api_key
         and isinstance(limit, dict)
         and limit.get("context") == context_length
     )
+
+
+def _opencode_defaults_are_managed(config: dict, provider_id: str) -> bool:
+    """Return whether ODS may update OpenCode's top-level model defaults.
+
+    Existing defaults that point at another provider identify a user-owned
+    native CLI config. In that case ODS may refresh its provider route, but it
+    must not take over the user's selected model. Missing defaults and defaults
+    already using the ODS provider remain ODS-managed for compatibility with
+    configs created by the installer.
+    """
+    prefix = f"{provider_id}/"
+    for key in ("model", "small_model"):
+        if key not in config:
+            continue
+        value = config[key]
+        if not isinstance(value, str) or not value.startswith(prefix):
+            return False
+    return True
 
 
 def _update_opencode_config(
@@ -10814,8 +10837,10 @@ def _update_opencode_config(
         source = previous.get("parsed") or snapshot["source"]
         config = json.loads(json.dumps(source))
         previous_model_ref = config.get("model")
-        config["model"] = model_ref
-        config["small_model"] = model_ref
+        manage_defaults = _opencode_defaults_are_managed(config, provider_id)
+        if manage_defaults:
+            config["model"] = model_ref
+            config["small_model"] = model_ref
         config.setdefault("$schema", "https://opencode.ai/config.json")
 
         providers = config.setdefault("provider", {})
@@ -10841,7 +10866,8 @@ def _update_opencode_config(
             models = {}
             provider["models"] = models
         if (
-            isinstance(previous_model_ref, str)
+            manage_defaults
+            and isinstance(previous_model_ref, str)
             and previous_model_ref.startswith(f"{provider_id}/")
         ):
             previous_model_id = previous_model_ref.split("/", 1)[1]
@@ -10865,7 +10891,13 @@ def _update_opencode_config(
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Could not verify OpenCode config {path}: {exc}") from exc
         if not _opencode_config_matches(
-            persisted, provider_id, route_model_id, base_url, api_key, context_length
+            persisted,
+            provider_id,
+            route_model_id,
+            base_url,
+            api_key,
+            context_length,
+            config,
         ):
             raise RuntimeError(f"OpenCode persisted model route is stale in {path}")
 
