@@ -43,7 +43,7 @@ clear_screen() {
 print_header() {
     echo ""
     echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${CYAN}║               ODS Interactive Showcase              ║${NC}"
+    echo -e "${BOLD}${CYAN}║                ODS Interactive Showcase                     ║${NC}"
     echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
