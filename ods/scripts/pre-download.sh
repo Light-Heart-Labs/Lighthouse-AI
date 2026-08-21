@@ -159,7 +159,8 @@ download_model() {
     
     log "Downloading $label: $model"
     
-    "${ODS_PYTHON_CMD:-python3}" << EOF
+    local dl_exit=0
+    "${ODS_PYTHON_CMD:-python3}" <<EOF || dl_exit=$?
 from huggingface_hub import snapshot_download
 import sys
 
@@ -174,8 +175,8 @@ except Exception as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
 EOF
-    
-    if [[ $? -eq 0 ]]; then
+
+    if [[ $dl_exit -eq 0 ]]; then
         success "Downloaded $label"
         return 0
     else
