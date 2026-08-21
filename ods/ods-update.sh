@@ -386,7 +386,7 @@ wait_for_healthy() {
     done
 
     log_error "Health-check timeout after ${HEALTH_TIMEOUT}s. Final status:"
-    cat "$health_log"
+    cat "$health_log" >&2
     rm -f "$health_log"
     return 1
 }
