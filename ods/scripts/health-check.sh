@@ -3,7 +3,7 @@
 # Tests each component with actual API calls, not just connectivity
 # Exit codes: 0=healthy, 1=degraded (some services down), 2=critical (core services down)
 #
-# Usage: ./health-check.sh [--json] [--quiet]
+# Usage: ./health-check.sh [--json] [--quiet] [--services=svc1,svc2,...]
 
 # ── Bash 4+ guard ─────────────────────────────────────────────────────────────
 # service-registry.sh requires associative arrays (declare -A) which need Bash 4+.
@@ -23,12 +23,27 @@ set -euo pipefail
 # Parse args
 JSON_OUTPUT=false
 QUIET=false
+FILTER_SERVICES=""
 for arg in "$@"; do
     case $arg in
         --json) JSON_OUTPUT=true ;;
         --quiet) QUIET=true ;;
+        --services=*) FILTER_SERVICES="${arg#--services=}" ;;
     esac
 done
+
+# Helper: check if a service ID passes the --services filter.
+# Returns 0 (pass) when no filter is set or when $sid is in the list.
+_passes_filter() {
+    local sid="$1"
+    [[ -z "$FILTER_SERVICES" ]] && return 0
+    local IFS=','
+    local f
+    for f in $FILTER_SERVICES; do
+        [[ "$sid" == "$f" ]] && return 0
+    done
+    return 1
+}
 
 # Config (defaults; .env overrides after load_env_file below)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" 
@@ -304,6 +319,7 @@ declare -a CORE_SIDS=()
 for sid in "${SERVICE_IDS[@]}"; do
     [[ "$sid" == "llama-server" ]] && continue
     [[ "${SERVICE_CATEGORIES[$sid]}" != "core" ]] && continue
+    _passes_filter "$sid" || continue
     result_file="$TEMP_DIR/core_$sid"
     check_service_async "$sid" "$result_file" &
     CORE_PIDS+=($!)
@@ -368,6 +384,7 @@ declare -a EXT_PIDS=()
 declare -a EXT_SIDS=()
 for sid in "${SERVICE_IDS[@]}"; do
     [[ "${SERVICE_CATEGORIES[$sid]}" == "core" ]] && continue
+    _passes_filter "$sid" || continue
     ext_compose="${SERVICE_COMPOSE[$sid]:-}"
     [[ -n "$ext_compose" && -f "$ext_compose" ]] || continue
     result_file="$TEMP_DIR/ext_$sid"
