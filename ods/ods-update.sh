@@ -501,8 +501,11 @@ cmd_check() {
     fi
     local tmp_version_file
     tmp_version_file=$(mktemp "${VERSION_FILE}.tmp.XXXXXX")
-    echo "$version_data" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.last_check = $ts' > "$tmp_version_file"
-    mv -f "$tmp_version_file" "$VERSION_FILE"
+    if echo "$version_data" | jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.last_check = $ts' > "$tmp_version_file"; then
+        mv -f "$tmp_version_file" "$VERSION_FILE"
+    else
+        rm -f "$tmp_version_file"
+    fi
 }
 
 #==============================================================================
