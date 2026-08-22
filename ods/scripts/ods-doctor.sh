@@ -41,22 +41,16 @@ if [[ -f "$ROOT_DIR/lib/safe-env.sh" ]]; then
     . "$ROOT_DIR/lib/safe-env.sh"
 fi
 
-# Safe .env loading (no direct source to avoid injection)
-load_env_safe() {
-    local env_file="${1:-$ROOT_DIR/.env}"
-    [[ -f "$env_file" ]] || return 0
-    while IFS='=' read -r key value; do
-        value="${value%$'\r'}"
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$key" ]] && continue
-        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-        value="${value%\"}"
-        value="${value#\"}"
-        value="${value%\'}"
-        value="${value#\'}"
-        export "$key=$value"
-    done < "$env_file"
-}
+# Safe .env loading: delegate to the shared matched-pair quote parser
+# in lib/safe-env.sh so doctor sees exactly the values ods-cli and
+# Compose see (the removed copy stripped each quote type independently
+# and rejected keys with leading whitespace, producing wrong ports and
+# secrets in doctor reports).
+if declare -F load_env_file >/dev/null 2>&1; then
+    load_env_safe() {
+        load_env_file "${1:-$ROOT_DIR/.env}"
+    }
+fi
 load_env_safe "$ROOT_DIR/.env"
 sr_resolve_ports
 _DASHBOARD_PORT="${SERVICE_PORTS[dashboard]:-3001}"
