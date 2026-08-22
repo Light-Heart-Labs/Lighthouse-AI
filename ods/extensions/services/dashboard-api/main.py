@@ -1482,7 +1482,7 @@ async def service_tokens():
                     if path.suffix == ".env":
                         for line in path.read_text().splitlines():
                             if line.startswith("OPENCLAW_TOKEN="):
-                                oc_token = line.split("=", 1)[1].strip()
+                                oc_token = strip_matching_quotes(line.split("=", 1)[1])
                                 break
                     else:
                         oc_token = path.read_text().strip()

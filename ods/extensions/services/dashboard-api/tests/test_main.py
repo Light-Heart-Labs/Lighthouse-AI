@@ -472,6 +472,12 @@ class TestServiceTokens:
         # Either empty dict or no openclaw key
         assert "openclaw" not in data
 
+    def test_env_fallback_token_value_is_unquoted(self):
+        from env_values import strip_matching_quotes
+
+        line = 'OPENCLAW_TOKEN="quoted-token"'
+        assert strip_matching_quotes(line.split("=", 1)[1]) == "quoted-token"
+
 
 # --- /api/external-links ---
 
