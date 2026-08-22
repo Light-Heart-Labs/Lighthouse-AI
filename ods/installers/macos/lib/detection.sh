@@ -94,11 +94,29 @@ get_macos_version() {
 # interacts with `docker info`, `docker compose`, image pulls, bind
 # mounts — all of which are daemon-agnostic).
 
+# Is the `docker` on PATH actually podman wearing a docker hat?
+# Mirrors docker_cli_looks_like_podman() in scripts/linux-install-preflight.sh.
+docker_cli_is_podman() {
+    command -v docker >/dev/null 2>&1 || return 1
+
+    docker --version 2>/dev/null | grep -qi 'podman' && return 0
+
+    local docker_path docker_real
+    docker_path="$(command -v docker)" || return 1
+    command -v readlink >/dev/null 2>&1 || return 1
+    docker_real="$(readlink -f "$docker_path")" || return 1
+    case "$(basename "$docker_real")" in
+        podman|podman-docker) return 0 ;;
+    esac
+
+    return 1
+}
+
 test_docker_desktop() {
     DOCKER_INSTALLED=false
     DOCKER_RUNNING=false
     DOCKER_VERSION=""
-    DOCKER_BACKEND="unknown"  # "desktop" | "colima" | "rancher" | "orbstack" | "other"
+    DOCKER_BACKEND="unknown"  # "desktop" | "colima" | "rancher" | "orbstack" | "podman" | "other"
 
     # Check if docker CLI is available
     if ! command -v docker >/dev/null 2>&1; then
@@ -121,8 +139,17 @@ test_docker_desktop() {
         *colima*)                                             DOCKER_BACKEND="colima" ;;
         *rancher-desktop*|*rd-sock*)                          DOCKER_BACKEND="rancher" ;;
         *orbstack*)                                           DOCKER_BACKEND="orbstack" ;;
+        *podman*)                                             DOCKER_BACKEND="podman" ;;
         *)                                                    DOCKER_BACKEND="other" ;;
     esac
+
+    # A podman shim answers to `docker` but is not Docker Engine, and the
+    # context hint above does not always name it. Ask the CLI directly, the way
+    # scripts/linux-install-preflight.sh already does, so macOS can give the
+    # same honest answer instead of "start Docker Desktop".
+    if [[ "$DOCKER_BACKEND" != "podman" ]] && docker_cli_is_podman; then
+        DOCKER_BACKEND="podman"
+    fi
 
     # Check if Docker daemon is responsive
     if docker version >/dev/null 2>&1; then

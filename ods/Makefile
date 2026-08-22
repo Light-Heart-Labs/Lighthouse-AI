@@ -106,6 +106,7 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== macOS ods config show secret-mask ==="
 	@bash tests/test-macos-config-show-secret-mask.sh
+	@bash tests/test-macos-podman-detection.sh
 	@echo ""
 	@echo "=== CLI preset restore user extensions ==="
 	@bash tests/test-cli-preset-restore-user-extensions.sh

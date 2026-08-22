@@ -1163,6 +1163,21 @@ if ! $DOCKER_INSTALLED; then
 fi
 ai_ok "Docker CLI found"
 
+# Podman answers to `docker` but is not Docker Engine. Say so here, the way the
+# Linux preflight already does — otherwise a podman host either gets told to
+# "start Docker Desktop" (when the machine is stopped) or sails past this gate
+# into an unsupported runtime and fails somewhere far less legible.
+if [[ "${DOCKER_BACKEND:-unknown}" == "podman" ]]; then
+    ai_err "\`docker\` on this machine resolves to Podman, not Docker Engine."
+    ai_err "Podman is not a supported ODS runtime yet."
+    ai_err "Install one of these and make sure it owns \`docker\` in your PATH:"
+    ai_err "  - Docker Desktop:  https://docs.docker.com/desktop/install/mac-install/"
+    ai_err "  - Colima (CLI):    brew install colima docker docker-compose && colima start"
+    ai_err "  - Rancher Desktop: https://rancherdesktop.io"
+    ai_err "  - OrbStack:        https://orbstack.dev"
+    exit 1
+fi
+
 if ! $DOCKER_RUNNING; then
     ai_err "Docker daemon is not responding."
     case "${DOCKER_BACKEND:-unknown}" in
