@@ -6017,7 +6017,10 @@ _gpu_reassign() {
     if [[ "$(uname)" == "Linux" ]]; then
         assignment_b64=$(echo "$assignment_json" | jq -c '.' | base64 -w0)
     else
-        assignment_b64=$(echo "$assignment_json" | jq -c '.' | base64)
+        # GNU base64 wraps at 76 columns outside Linux (Git Bash/Cygwin);
+        # wrapped lines would corrupt the single-line .env value.
+        assignment_b64=$(echo "$assignment_json" | jq -c '.' | base64 | tr -d '
+')
     fi
 
     # Write to .env
