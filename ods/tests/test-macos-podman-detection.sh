@@ -40,6 +40,41 @@ else
     fail "expected DOCKER_BACKEND=podman, got '${DOCKER_BACKEND:-}'"
 fi
 
+# ── the exact banner from #2933's log: podman relabelled as "docker" ───────
+# get-ods.sh prints `docker --version` verbatim, and the reporter's log reads
+# "docker found: docker version 6.1.0" — lowercase, no build field, version 6.x.
+cat > "$TMP/bin/docker" <<'STUB'
+#!/bin/sh
+case "$1" in
+  --version) echo "docker version 6.1.0" ;;
+  context)   echo "" ;;
+  *)         exit 1 ;;
+esac
+STUB
+chmod +x "$TMP/bin/docker"
+
+PATH="$TMP/bin:$PATH" test_docker_desktop
+if [ "${DOCKER_BACKEND:-}" = "podman" ]; then
+    pass "podman relabelled as 'docker version 6.1.0' (#2933's actual banner) is caught"
+else
+    fail "expected DOCKER_BACKEND=podman for the #2933 banner, got '${DOCKER_BACKEND:-}'"
+fi
+
+# ── a podman-docker wrapper script that execs podman ───────────────────────
+cat > "$TMP/bin/docker" <<'STUB'
+#!/bin/sh
+[ -e /etc/containers/nodocker ] || echo "Emulate Docker CLI using podman." >&2
+exec /usr/bin/podman "$@"
+STUB
+chmod +x "$TMP/bin/docker"
+
+PATH="$TMP/bin:$PATH" test_docker_desktop
+if [ "${DOCKER_BACKEND:-}" = "podman" ]; then
+    pass "a podman-docker wrapper script is caught"
+else
+    fail "expected DOCKER_BACKEND=podman for the wrapper script, got '${DOCKER_BACKEND:-}'"
+fi
+
 # ── a podman-docker shim that only gives itself away via the symlink ────────
 cat > "$TMP/bin/podman" <<'STUB'
 #!/bin/sh
@@ -83,6 +118,26 @@ if [ "${DOCKER_BACKEND:-}" = "desktop" ]; then
     pass "a genuine Docker Desktop CLI is still classified as desktop"
 else
     fail "expected DOCKER_BACKEND=desktop, got '${DOCKER_BACKEND:-}'"
+fi
+
+# Real Docker's banner ("Docker version X, build Y") must never trip the
+# relabelled-banner heuristic, on any context, including an unknown one.
+cat > "$TMP/bin/docker" <<'STUB'
+#!/bin/sh
+case "$1" in
+  --version) echo "Docker version 28.0.1, build 068a01e" ;;
+  context)   echo "some-custom-context" ;;
+  version)   exit 0 ;;
+  *)         exit 0 ;;
+esac
+STUB
+chmod +x "$TMP/bin/docker"
+
+PATH="$TMP/bin:$PATH" test_docker_desktop
+if [ "${DOCKER_BACKEND:-}" = "podman" ]; then
+    fail "a genuine Docker CLI on an unknown context was misread as podman"
+else
+    pass "a genuine Docker CLI on an unknown context is not misread as podman (=${DOCKER_BACKEND:-})"
 fi
 
 # ── the installer must act on it ────────────────────────────────────────────

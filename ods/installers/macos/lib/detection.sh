@@ -99,15 +99,37 @@ get_macos_version() {
 docker_cli_is_podman() {
     command -v docker >/dev/null 2>&1 || return 1
 
-    docker --version 2>/dev/null | grep -qi 'podman' && return 0
+    local _v
+    _v="$(docker --version 2>/dev/null || true)"
+
+    # 1. Podman naming itself, when it has not been relabelled.
+    printf '%s\n' "$_v" | grep -qi 'podman' && return 0
+
+    # 2. Podman's docker shim relabelling itself. The log in #2933 shows
+    #    `docker --version` printing "docker version 6.1.0" on a podman Mac.
+    #    Docker Engine's CLI has always printed "Docker version <v>, build <sha>"
+    #    — capital D, and a build field — so a lowercase, build-less banner is
+    #    not Docker Engine. (6.x is a podman version; Docker CLI is on 2x.)
+    if printf '%s\n' "$_v" | grep -Eq '^docker version [0-9]' \
+        && ! printf '%s\n' "$_v" | grep -q ', build '; then
+        return 0
+    fi
 
     local docker_path docker_real
     docker_path="$(command -v docker)" || return 1
-    command -v readlink >/dev/null 2>&1 || return 1
-    docker_real="$(readlink -f "$docker_path")" || return 1
-    case "$(basename "$docker_real")" in
-        podman|podman-docker) return 0 ;;
-    esac
+
+    # 3. podman-docker installs `docker` as a symlink onto podman.
+    if command -v readlink >/dev/null 2>&1; then
+        docker_real="$(readlink -f "$docker_path" 2>/dev/null || true)"
+        case "$(basename "${docker_real:-$docker_path}")" in
+            podman|podman-docker) return 0 ;;
+        esac
+    fi
+
+    # 4. ...or as a shell wrapper that execs podman.
+    if [[ -f "$docker_path" ]] && head -n1 "$docker_path" 2>/dev/null | grep -q '^#!'; then
+        grep -qi 'podman' "$docker_path" && return 0
+    fi
 
     return 1
 }
