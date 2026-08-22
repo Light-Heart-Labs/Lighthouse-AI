@@ -167,6 +167,21 @@ test_service() {
     local port="$default_port"
     [[ -n "$port_env" ]] && port="${!port_env:-$default_port}"
 
+    # Host-network services share the host network namespace: there is no
+    # Docker-mapped port to probe (see SERVICE_HOST_NETWORK contract in
+    # lib/service-registry.sh), so judge them by container state only.
+    if [[ "${SERVICE_HOST_NETWORK[$sid]:-}" == "1" ]]; then
+        local hn_state
+        hn_state=$(check_container_state "$sid")
+        if [[ "$hn_state" == "running" ]]; then
+            result_set "$sid" "ok"
+            return 0
+        fi
+        result_set "$sid" "fail"
+        ANY_FAIL=true
+        return 1
+    fi
+
     [[ -z "$health" || "$port" == "0" ]] && return 1
 
     # Check container state first (if docker available)
