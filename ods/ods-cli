@@ -4745,6 +4745,14 @@ cmd_rollback() {
     if "$INSTALL_DIR/ods-restore.sh" "$backup_id"; then
         success "Configuration restored from backup: $backup_id"
 
+        # The restore may have changed stack-shaping .env values (ODS_MODE,
+        # TIER, GPU_BACKEND, enabled extensions). Recompose flags from the
+        # restored configuration so the restarted stack matches the backup
+        # instead of the abandoned update.
+        flags_str=$(get_compose_flags)
+        flags=()
+        read -ra flags <<< "$flags_str"
+
         # Restart services with restored configuration
         log "Restarting services with restored configuration..."
         if docker compose "${flags[@]}" up -d; then
