@@ -887,7 +887,20 @@ async def forward(full_path: str, request: Request) -> Response:
             status_code=400,
         )
 
-    requested_alias = str(payload.get("model") or PUBLIC_ALIASES[0])
+    requested_model = payload.get("model")
+    if requested_model in (None, ""):
+        requested_alias = PUBLIC_ALIASES[0]
+    elif not isinstance(requested_model, str) or requested_model not in PUBLIC_ALIASES:
+        return JSONResponse(
+            {"error": {
+                "message": "model must be one of: " + ", ".join(PUBLIC_ALIASES),
+                "type": "invalid_request_error",
+                "code": "400",
+            }},
+            status_code=400,
+        )
+    else:
+        requested_alias = requested_model
 
     global _inflight
     async with _inflight_lock:
