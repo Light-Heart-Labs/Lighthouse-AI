@@ -63,8 +63,41 @@ got="$(KFD_TOPOLOGY_ROOT="$R" amd_kfd_gfx_target)"
 set -e
 check "an empty topology dir reports unknown" "unknown" "$got"
 
-# ── The refusal ─────────────────────────────────────────────────────────────
+# ── The resolution path, executed for real ──────────────────────────────────
+# Extract phase 06's resolution block between stable markers and run it with
+# stubbed helpers, so this checks behaviour rather than the shape of the source.
 PHASE="$ROOT/installers/phases/06-directories.sh"
+BLOCK="$TMP/resolve-block.sh"
+sed -n '/# Resolve the AMD gfx target before writing .env/,/^    fi$/p' "$PHASE" > "$BLOCK"
+if [ ! -s "$BLOCK" ]; then
+    echo "[FAIL] could not extract the gfx resolution block from phase 06"
+    FAIL=$((FAIL + 1))
+fi
+
+# run_resolution <topology-json> <operator-override> <kfd-stub-body>
+run_resolution() {
+    {
+        echo 'set -euo pipefail'
+        echo 'ai() { :; }; ai_bad() { :; }; error() { echo "ABORTED"; exit 1; }'
+        echo "amd_kfd_gfx_target() { $3; }"
+        echo "GPU_BACKEND=amd; GPU_TOPOLOGY_JSON='$1'; SCRIPT_DIR=/nonexistent"
+        [ -n "$2" ] && echo "AMDGPU_TARGET='$2'"
+        cat "$BLOCK"
+        echo 'echo "$_amd_gfx_detected"'
+    } > "$TMP/run.sh"
+    bash "$TMP/run.sh" 2>&1 | tail -1
+}
+
+check "single GPU + empty topology reads KFD (the #2844 host)" \
+    "gfx1200" "$(run_resolution "" "" 'echo gfx1200; return 0')"
+check "a populated topology JSON is still preferred" \
+    "gfx1100" "$(run_resolution '{"gpus":[{"gfx_version":"gfx1100"}]}' "" 'echo unknown; return 1')"
+check "an operator-supplied AMDGPU_TARGET wins" \
+    "gfx1201" "$(run_resolution "" "gfx1201" 'echo gfx1200; return 0')"
+check "nothing resolvable aborts instead of guessing gfx1151" \
+    "ABORTED" "$(run_resolution "" "" 'echo unknown; return 1')"
+
+# ── The refusal ─────────────────────────────────────────────────────────────
 
 if grep -q '_amd_gfx_detected="gfx1151"' "$PHASE"; then
     echo "[FAIL] phase 06 still falls back to a hardcoded gfx1151"
