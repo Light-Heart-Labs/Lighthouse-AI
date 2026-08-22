@@ -131,6 +131,37 @@ class TestStreamingNotBuffered:
         )
 
 
+class TestUpstreamAuthorization:
+    @pytest.mark.parametrize(
+        ("target_key", "expected_authorization"),
+        [
+            ("not-needed", None),
+            ("provider-secret", "Bearer provider-secret"),
+        ],
+    )
+    def test_shield_credential_is_not_forwarded_upstream(
+        self,
+        client,
+        install_upstream,
+        monkeypatch,
+        target_key,
+        expected_authorization,
+    ):
+        seen = {}
+
+        def handler(request):
+            seen["authorization"] = request.headers.get("authorization")
+            return _resp(200, {"content-type": "application/json"}, [b"{}"])
+
+        install_upstream(handler)
+        monkeypatch.setattr(proxy, "TARGET_API_KEY", target_key)
+
+        response = client.get("/models", headers=AUTH)
+
+        assert response.status_code == 200
+        assert seen["authorization"] == expected_authorization
+
+
 # ── 1b. Oversized-text cutover keeps ONE upstream iterator (#1268) ─────────
 #
 # When a textual body crosses SHIELD_RESTORE_MAX_BYTES mid-stream, body_iter()
