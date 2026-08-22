@@ -2655,3 +2655,28 @@ def test_load_model_rejects_local_gguf_path_separators(test_client, monkeypatch,
     )
 
     assert resp.status_code == 404
+
+
+def test_download_status_bootstrap_fallback_exposes_speed_bytes_per_sec(test_client, monkeypatch, tmp_path):
+    """The bootstrap fallback must speak the same speed contract as the
+    file-based and host-agent payloads so the UI progress bar can render MB/s."""
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_get_agent_model_status", lambda: None)
+    monkeypatch.setattr(
+        models_router,
+        "get_bootstrap_status",
+        lambda: BootstrapStatus(
+            active=True,
+            model_name="Qwen3.5-9B-Q4_K_M.gguf",
+            percent=12.5,
+            speed_mbps=3.5,
+        ),
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "downloading"
+    assert payload["speedMbps"] == 3.5
+    assert payload["speedBytesPerSec"] == int(3.5 * 1024 * 1024)
