@@ -15,8 +15,13 @@ services:
     environment:
       # User remapping: match the host user so files written into the volume
       # are owned by the user, not container-root. Same pattern as n8n.
-      - HERMES_UID=${UID:-10000}
-      - HERMES_GID=${GID:-10000}
+      # ODS_UID/ODS_GID (not $UID/$GID): those are bash's builtin readonly
+      # shell variables, never exported into the process environment, so
+      # Compose (which interpolates from the environment) always saw them
+      # as empty and silently fell through to the defaults below.
+      # ods-cli/install-core.sh export the real ODS_UID/ODS_GID.
+      - HERMES_UID=${ODS_UID:-10000}
+      - HERMES_GID=${ODS_GID:-10000}
       # Point Hermes at the local LLM. provider=custom is the documented
       # alias for any OpenAI-compatible local server (vLLM / llama.cpp / Ollama).
       # The actual provider/model wiring lives in cli-config.yaml (mounted below).

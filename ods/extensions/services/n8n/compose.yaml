@@ -3,7 +3,11 @@ services:
     image: n8nio/n8n:2.6.4
     container_name: ods-n8n
     restart: unless-stopped
-    user: "${UID:-1000}:${GID:-1000}"
+    # $UID/$GID are bash's builtin readonly shell variables, never exported
+    # into the process environment, so Compose (which interpolates from the
+    # environment) always saw them as empty and silently fell through to
+    # 1000:1000. ods-cli/install-core.sh export the real ODS_UID/ODS_GID.
+    user: "${ODS_UID:-1000}:${ODS_GID:-1000}"
     security_opt:
       - no-new-privileges:true
     entrypoint: ["tini", "--", "/bin/sh", "/opt/ods/n8n-entrypoint.sh"]

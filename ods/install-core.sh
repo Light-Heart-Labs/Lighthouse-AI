@@ -16,6 +16,14 @@
 
 set -euo pipefail
 
+# Docker Compose interpolates ${VAR} from the process environment, not
+# bash's builtin $UID/$GID (readonly, never exported). Compose files that
+# need the real host user (Hermes, n8n) reference ${ODS_UID}/${ODS_GID}
+# instead of the always-empty ${UID}/${GID}. Exported early so phase 11's
+# `docker compose up` (and any other compose invocation below) sees them.
+export ODS_UID="${ODS_UID:-$(id -u)}"
+export ODS_GID="${ODS_GID:-$(id -g)}"
+
 #=============================================================================
 # Cleanup on Failure
 #=============================================================================
