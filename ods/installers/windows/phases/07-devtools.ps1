@@ -470,6 +470,7 @@ if (Test-Path $_agentScript) {
         $_agentCommand = @"
 `$env:PATH = $_dockerPathLiteral + `$env:PATH
 `$agentArgs = $_pythonPrefixArgsLiteral + @($_agentScriptLiteral, '--port', '$($script:ODS_AGENT_PORT)', '--pid-file', $_pidFileLiteral, '--install-dir', $_installDirLiteral)
+`$agentArgs = `$agentArgs | ForEach-Object { if (`$_ -match '\s') { '"' + `$_ + '"' } else { `$_ } }
 Set-Location $_installDirLiteral
 Start-Process -FilePath $_pythonLiteral -ArgumentList `$agentArgs -WorkingDirectory $_installDirLiteral -WindowStyle Hidden -RedirectStandardError $_logFileLiteral -Wait
 "@
