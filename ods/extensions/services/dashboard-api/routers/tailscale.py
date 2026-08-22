@@ -25,6 +25,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from host_agent_client import (
+    AgentClientError,
     AgentHTTPError,
     AgentProtocolError,
     AgentTimeout,
