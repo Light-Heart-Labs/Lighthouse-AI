@@ -109,8 +109,12 @@ $_expectedRegularFiles = @(
 foreach ($_expectedFileName in $_expectedRegularFiles) {
     $_expectedFilePath = Join-Path $installDir $_expectedFileName
     if (Test-Path -LiteralPath $_expectedFilePath -PathType Container) {
-        Remove-Item -LiteralPath $_expectedFilePath -Recurse -Force
-        Write-AIWarn "Removed malformed $_expectedFileName directory from a previous partial install."
+        try {
+            Remove-Item -LiteralPath $_expectedFilePath -Force -ErrorAction Stop
+            Write-AIWarn "Removed empty malformed $_expectedFileName directory from a previous partial install."
+        } catch {
+            throw "Expected regular file path is a non-empty directory; preserving it: $_expectedFilePath"
+        }
     }
 }
 
@@ -545,7 +549,12 @@ function Invoke-HermesSoulRefresh {
 
     if (-not $_rendered) {
         if (Test-Path -LiteralPath $_output -PathType Container) {
-            Remove-Item -LiteralPath $_output -Recurse -Force
+            try {
+                Remove-Item -LiteralPath $_output -Force -ErrorAction Stop
+            } catch {
+                Write-AIWarn "Hermes SOUL.md output path is a non-empty directory; preserving its contents"
+                return
+            }
         }
         if (-not (Test-Path -LiteralPath $_output -PathType Leaf)) {
             $_content = Get-Content -LiteralPath $_template -Raw
