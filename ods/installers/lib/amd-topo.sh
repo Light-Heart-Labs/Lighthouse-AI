@@ -147,6 +147,44 @@ amd_gfx_version() {
     echo "unknown"
 }
 
+# Read the gfx target the kernel itself reports, from the KFD topology.
+#
+# This is the authority: amdkfd publishes gfx_target_version per node long
+# before rocm-smi/amd-smi/rocminfo are installed, and it was populated
+# correctly on the gfx1200 host that #2844 hard-froze while every probe above
+# returned empty.
+#
+# Node 0 is the CPU node and legitimately reports gfx_target_version 0, so
+# nodes are filtered on simd_count > 0. gfx_target_version packs the target as
+# MMmmss decimal: 120000 -> gfx1200, 110501 -> gfx1151, 90010 -> gfx90a (the
+# step is hex, which is where the trailing letter comes from).
+#
+# KFD_TOPOLOGY_ROOT is overridable so this can be exercised against fixtures.
+amd_kfd_gfx_target() {
+    local nodes_root="${KFD_TOPOLOGY_ROOT:-/sys/class/kfd/kfd/topology/nodes}"
+    local node props simd version major minor step
+
+    for node in "$nodes_root"/*/; do
+        props="${node}properties"
+        [[ -r "$props" ]] || continue
+
+        simd=$(awk '$1 == "simd_count" { print $2; exit }' "$props") || simd=""
+        [[ -n "$simd" && "$simd" -gt 0 ]] || continue
+
+        version=$(awk '$1 == "gfx_target_version" { print $2; exit }' "$props") || version=""
+        [[ -n "$version" && "$version" -gt 0 ]] || continue
+
+        major=$(( version / 10000 ))
+        minor=$(( (version / 100) % 100 ))
+        step=$(( version % 100 ))
+        printf 'gfx%d%d%x\n' "$major" "$minor" "$step"
+        return 0
+    done
+
+    echo "unknown"
+    return 1
+}
+
 # Get render node for an AMD GPU card by matching PCI device paths
 amd_render_node() {
     local card_dir="$1"

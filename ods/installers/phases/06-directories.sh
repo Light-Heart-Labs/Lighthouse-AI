@@ -793,6 +793,47 @@ raise SystemExit(1)' 2>/dev/null && return 0
         GPU_ASSIGNMENT_JSON_B64=""
     fi
 
+    # Resolve the AMD gfx target before writing .env. This is not a cosmetic
+    # value: HSA_OVERRIDE_GFX_VERSION and the gfx1151-only custom llama-server
+    # binary are both chosen from it, and docker-compose.amd.yml maps /dev/kfd
+    # into the container unconditionally. Naming the wrong architecture points
+    # ROCm at the wrong ISA, which has wedged the GPU's MES and hard-frozen
+    # whole hosts (#2844). So: never guess an architecture.
+    if [[ "$GPU_BACKEND" == "amd" ]]; then
+        # Phase 02 sources this only on some AMD paths; the KFD probe below
+        # needs it either way.
+        if ! type amd_kfd_gfx_target &>/dev/null \
+            && [[ -f "$SCRIPT_DIR/installers/lib/amd-topo.sh" ]]; then
+            . "$SCRIPT_DIR/installers/lib/amd-topo.sh"
+        fi
+
+        if [[ -n "${AMDGPU_TARGET:-}" ]]; then
+            _amd_gfx_detected="$AMDGPU_TARGET"
+            ai "Using operator-supplied gfx target: $_amd_gfx_detected"
+        else
+            _amd_gfx_detected=$(echo "${GPU_TOPOLOGY_JSON:-{\}}" | jq -r '[.gpus[]?.gfx_version] | unique | .[0] // empty') \
+                || _amd_gfx_detected=""
+            if [[ -z "$_amd_gfx_detected" || "$_amd_gfx_detected" == "null" || "$_amd_gfx_detected" == "unknown" ]]; then
+                # The topology probe came back empty. The kernel still knows —
+                # ask KFD directly before giving up.
+                _amd_gfx_detected="$(amd_kfd_gfx_target)" || _amd_gfx_detected="unknown"
+                [[ "$_amd_gfx_detected" != "unknown" ]] \
+                    && ai "gfx target read from KFD topology: $_amd_gfx_detected"
+            fi
+        fi
+
+        if [[ -z "$_amd_gfx_detected" || "$_amd_gfx_detected" == "unknown" ]]; then
+            ai_bad "Could not determine this GPU's gfx target."
+            ai_bad "ODS will not guess one: an incorrect AMDGPU_TARGET points ROCm at the"
+            ai_bad "wrong ISA, and with /dev/kfd mapped into the container that has hung"
+            ai_bad "entire hosts. Find your target with:"
+            ai_bad "  grep -H gfx_target_version /sys/class/kfd/kfd/topology/nodes/*/properties"
+            ai_bad "(ignore the node reporting 0 — that is the CPU node), then re-run with it:"
+            ai_bad "  AMDGPU_TARGET=gfx1200 ./install.sh"
+            error "AMD gfx target could not be detected; refusing to write a guessed AMDGPU_TARGET"
+        fi
+    fi
+
     # Generate .env file
     # Subshell-scope a tighter umask so the file is created 0600 from the start
     # (closes a brief window on systems where $HOME is world-readable, e.g.
@@ -903,10 +944,8 @@ COMFYUI_CPU_LIMIT=${COMFYUI_CPU_LIMIT}
 COMFYUI_CPU_RESERVATION=${COMFYUI_CPU_RESERVATION}
 
 $(if [[ "$GPU_BACKEND" == "amd" ]]; then
-    # Read gfx target from topology detection. Falls back to gfx1151 (Strix Halo)
-    # if the topology probe failed — preserves prior behavior for the OG target.
-    _amd_gfx_detected=$(echo "${GPU_TOPOLOGY_JSON:-{\}}" | jq -r '[.gpus[]?.gfx_version] | unique | .[0] // "gfx1151"' 2>/dev/null || echo "gfx1151")
-    [[ -z "$_amd_gfx_detected" || "$_amd_gfx_detected" == "null" || "$_amd_gfx_detected" == "unknown" ]] && _amd_gfx_detected="gfx1151"
+    # _amd_gfx_detected was resolved above and is known to be non-empty — this
+    # block never guesses a target.
 
     # HSA_OVERRIDE_GFX_VERSION is a Strix Halo (gfx1151) workaround — that target
     # is not in ROCm 7.x's official support list, so we coerce HSA to load
