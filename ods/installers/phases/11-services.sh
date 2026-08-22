@@ -686,7 +686,10 @@ else
         GGUF_URL="$BOOTSTRAP_GGUF_URL"
         GGUF_SHA256="${BOOTSTRAP_GGUF_SHA256:-}"
         LLM_MODEL="$BOOTSTRAP_LLM_MODEL"
-        MAX_CONTEXT="$BOOTSTRAP_MAX_CONTEXT"
+        MAX_CONTEXT="$(bootstrap_max_context "$FULL_MAX_CONTEXT" "${GPU_VRAM:-0}" "${GPU_MEMORY_TYPE:-}")"
+        if [[ "$MAX_CONTEXT" != "$BOOTSTRAP_MAX_CONTEXT" ]]; then
+            ai_warn "Bootstrap context held at ${MAX_CONTEXT} (not ${BOOTSTRAP_MAX_CONTEXT}): ${GPU_VRAM}MB of dedicated VRAM cannot hold a 64K KV cache."
+        fi
         ai "Fast-start mode: downloading bootstrap model (~1.5GB) for instant chat."
         ai "Your full model ($FULL_LLM_MODEL) will download in the background."
     fi

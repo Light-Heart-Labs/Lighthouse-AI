@@ -25,6 +25,7 @@ test: ## Run unit and contract tests
 	@bash tests/test-tier-map.sh
 	@bash tests/test-installer-context-parity.sh
 	@bash tests/test-hermes-context-floor.sh
+	@bash tests/test-bootstrap-context-vram.sh
 	@echo ""
 	@echo "=== Hermes slash worker prune ==="
 	@bash tests/test-hermes-slash-worker-prune.sh

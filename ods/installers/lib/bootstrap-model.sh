@@ -23,6 +23,34 @@ BOOTSTRAP_GGUF_URL="https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/
 BOOTSTRAP_GGUF_SHA256="aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
 BOOTSTRAP_LLM_MODEL="qwen3.5-2b"
 BOOTSTRAP_MAX_CONTEXT=65536
+# Below this much dedicated VRAM, the bootstrap weights plus a 64K KV cache do
+# not fit and the kernel SIGKILLs llama-server at boot (exit 137).
+BOOTSTRAP_MIN_VRAM_MB=8192
+
+# bootstrap_max_context — context the bootstrap server can actually hold.
+#
+# Hermes wants a 64K floor, but raising MAX_CONTEXT to it unconditionally
+# OOM-kills llama-server on small discrete cards: the install reports success
+# over a port nothing is listening on. On such hardware keep the context the
+# tier map already fitted to this GPU's VRAM.
+#
+# Pure. Args: fitted context, VRAM in MB, GPU memory type ("discrete",
+# "unified", "mixed", "none"). Echoes the context to use.
+#
+# Only "discrete" is clamped: unified and mixed memory are not bounded by a
+# dedicated VRAM budget, and a CPU-only install reports 0 MB and pages from RAM.
+bootstrap_max_context() {
+    local fitted="${1:-0}" vram_mb="${2:-0}" memory_type="${3:-}"
+
+    if [[ "$memory_type" == "discrete" \
+          && "$vram_mb" -gt 0 && "$vram_mb" -lt "$BOOTSTRAP_MIN_VRAM_MB" \
+          && "$fitted" -gt 0 && "$fitted" -lt "$BOOTSTRAP_MAX_CONTEXT" ]]; then
+        echo "$fitted"
+        return 0
+    fi
+
+    echo "$BOOTSTRAP_MAX_CONTEXT"
+}
 
 # bootstrap_needed — Should we use the fast-start bootstrap pattern?
 #
