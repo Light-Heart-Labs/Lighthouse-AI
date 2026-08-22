@@ -12,15 +12,32 @@ const DEFAULT_THEME = 'ods'
 
 const ThemeContext = createContext(null)
 
-export function ThemeProvider({ children }) {
-  const [theme, setThemeState] = useState(() => {
+function readStoredTheme() {
+  try {
     const stored = localStorage.getItem(STORAGE_KEY)
     return THEMES.includes(stored) ? stored : DEFAULT_THEME
-  })
+  } catch {
+    // Storage access itself throws when site data is blocked (strict
+    // cookie settings, kiosk profiles): fall back to the default theme
+    // instead of crashing the whole provider tree.
+    return DEFAULT_THEME
+  }
+}
+
+function persistTheme(nextTheme) {
+  try {
+    localStorage.setItem(STORAGE_KEY, nextTheme)
+  } catch {
+    // Same blocked-storage case on write; session-only theme is fine.
+  }
+}
+
+export function ThemeProvider({ children }) {
+  const [theme, setThemeState] = useState(readStoredTheme)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem(STORAGE_KEY, theme)
+    persistTheme(theme)
   }, [theme])
 
   const setTheme = useCallback((t) => {
