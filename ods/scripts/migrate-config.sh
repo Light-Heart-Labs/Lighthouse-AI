@@ -104,17 +104,30 @@ cmd_backup() {
     backup_path="${BACKUP_DIR}/${backup_name}"
     
     mkdir -p "$backup_path"
-    
-    # Backup key config files
-    local cp_exit=0
-    cp "${INSTALL_DIR}/.env" "$backup_path/" 2>&1 || cp_exit=$?
-    cp "${INSTALL_DIR}/.version" "$backup_path/" 2>&1 || cp_exit=$?
-    cp "${INSTALL_DIR}/docker-compose.yml" "$backup_path/" 2>&1 || cp_exit=$?
-    cp -r "${INSTALL_DIR}/config" "$backup_path/" 2>&1 || cp_exit=$?
 
-    # Backup user data references
-    cp -r "${DATA_DIR}" "$backup_path/data/" 2>&1 || cp_exit=$?
-    
+    # Backup key config files. Absent ones are legitimate on a partial install;
+    # a copy that fails for any other reason must not be swallowed.
+    local item
+    for item in .env .version docker-compose.yml config; do
+        if [[ -e "${INSTALL_DIR}/${item}" ]]; then
+            cp -r "${INSTALL_DIR}/${item}" "$backup_path/"
+        else
+            log_warn "Not present, skipping: ${INSTALL_DIR}/${item}" >&2
+        fi
+    done
+
+    # Backup user data. BACKUP_DIR lives *inside* DATA_DIR, so copying DATA_DIR
+    # wholesale asks cp to copy a directory into itself — it refuses and the
+    # backup silently ends up with no data at all. Copy the top-level entries
+    # and skip the backups tree instead.
+    mkdir -p "$backup_path/data"
+    local entry
+    for entry in "${DATA_DIR}"/* "${DATA_DIR}"/.[!.]*; do
+        [[ -e "$entry" ]] || continue
+        [[ "$entry" -ef "$BACKUP_DIR" ]] && continue
+        cp -r "$entry" "$backup_path/data/"
+    done
+
     log_success "Configuration backed up to: $backup_path"
     echo "$backup_path"
 }
