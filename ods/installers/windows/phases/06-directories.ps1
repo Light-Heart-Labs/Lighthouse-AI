@@ -389,8 +389,15 @@ function Update-HermesConfigFile {
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $content = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
-    $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$Model`""
-    $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
+    # .NET reads '$' in a -replace *replacement* as a group-substitution token
+    # ($1, ${name}, $$ ...), so a model id or URL carrying '$' is rewritten on
+    # its way into the file. Doubling is the documented escape. The verification
+    # near the end of this function still compares against the raw values, which
+    # is what should actually land on disk.
+    $modelReplacement = $Model.Replace('$', '$$')
+    $baseUrlReplacement = $BaseUrl.Replace('$', '$$')
+    $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$modelReplacement`""
+    $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$baseUrlReplacement`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
     $content = $content -replace '(?m)^    context_length: .+\r?$', "    context_length: $ContextLength"
     if ($MaxTokens -lt 1) { $MaxTokens = 1024 }
