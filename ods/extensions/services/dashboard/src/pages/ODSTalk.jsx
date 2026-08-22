@@ -188,6 +188,18 @@ export default function ODSTalk() {
     return () => {
       streamControllerRef.current?.abort()
       streamControllerRef.current = null
+      // Leaving the page mid-recording must release the microphone. The
+      // recorder's onstop handler is what stops the media tracks, so stop
+      // the recorder here instead of only through the button path.
+      const recorder = recorderRef.current
+      recorderRef.current = null
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop()
+        } catch (err) {
+          console.debug('recorder stop on unmount failed', err)
+        }
+      }
     }
   }, [])
 
