@@ -92,6 +92,7 @@ _HOP_BY_HOP = {
     "te", "trailer", "transfer-encoding", "upgrade", "host", "authorization",
     "content-length",
 }
+_DROP_RESPONSE_HEADERS = _HOP_BY_HOP | {"content-encoding"}
 
 _PROBE_RE = re.compile(
     r"\[ODS_PROBE id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) "
@@ -630,6 +631,24 @@ def _sanitize_headers(request: Request) -> dict[str, str]:
     return headers
 
 
+def _response_headers(
+    headers: httpx.Headers,
+    overrides: dict[str, str],
+) -> dict[str, str]:
+    blocked = set(_DROP_RESPONSE_HEADERS)
+    blocked.update(name.lower() for name in overrides)
+    blocked.update(
+        token.strip().lower()
+        for token in headers.get("connection", "").split(",")
+        if token.strip()
+    )
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in blocked
+    }
+
+
 def _strip_chat_template_artifacts(text: str) -> str:
     cleaned = text
     for pattern in _CHAT_TEMPLATE_ARTIFACTS:
@@ -1027,7 +1046,11 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                                               "text/event-stream")
             return StreamingResponse(
                 stream_body(), status_code=upstream.status_code,
-                media_type=media_type, headers=ods_headers,
+                media_type=media_type,
+                headers={
+                    **_response_headers(upstream.headers, ods_headers),
+                    **ods_headers,
+                },
             ), True
 
         upstream = await client.post(
@@ -1098,7 +1121,9 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
 
     media_type = upstream.headers.get("content-type", "application/json")
     return Response(content=content, status_code=upstream.status_code,
-                    media_type=media_type, headers=ods_headers), False
+                    media_type=media_type,
+                    headers={**_response_headers(upstream.headers, ods_headers),
+                             **ods_headers}), False
 
 
 @app.on_event("startup")

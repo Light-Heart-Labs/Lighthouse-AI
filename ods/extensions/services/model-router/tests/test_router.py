@@ -171,6 +171,44 @@ class _RecordingTelemetry:
 
 
 class TestForwarding:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_preserves_end_to_end_upstream_response_headers(self, router, stream):
+        mod, client, write_state, calls = router
+        write_state()
+
+        def handler(_request):
+            return httpx.Response(
+                429,
+                json={"error": "runtime busy"},
+                headers={
+                    "retry-after": "17",
+                    "x-runtime-request-id": "up-123",
+                    "cache-control": "no-store",
+                    "connection": "x-private",
+                    "x-private": "must-not-cross-proxy",
+                    "content-length": "999",
+                },
+            )
+
+        asyncio.run(mod.app.state.http.aclose())
+        mod.app.state.http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+
+        response = client.post("/v1/chat/completions", json={
+            "model": "ods/current",
+            "stream": stream,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+
+        assert response.status_code == 429
+        assert response.headers["retry-after"] == "17"
+        assert response.headers["x-runtime-request-id"] == "up-123"
+        assert response.headers["cache-control"] == "no-store"
+        assert "connection" not in response.headers
+        assert "x-private" not in response.headers
+        assert response.headers.get("content-length") != "999"
+
     def test_alias_rewritten_in_and_out(self, router):
         mod, client, write_state, calls = router
         write_state()
