@@ -1065,7 +1065,7 @@ app = FastAPI(
 def get_allowed_origins():
     env_origins = os.environ.get("DASHBOARD_ALLOWED_ORIGINS", "")
     if env_origins:
-        return env_origins.split(",")
+        return [origin.strip() for origin in env_origins.split(",") if origin.strip()]
     origins = [
         "http://localhost:3001", "http://127.0.0.1:3001",
         "http://localhost:3000", "http://127.0.0.1:3000",

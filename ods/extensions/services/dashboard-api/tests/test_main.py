@@ -54,6 +54,21 @@ class TestGetAllowedOrigins:
         origins = get_allowed_origins()
         assert origins == ["http://foo:3000", "http://bar:3001"]
 
+    def test_strips_whitespace_around_env_origins(self, monkeypatch):
+        monkeypatch.setenv(
+            "DASHBOARD_ALLOWED_ORIGINS",
+            "http://foo:3000, http://bar:3001 , http://baz:3002",
+        )
+        assert get_allowed_origins() == [
+            "http://foo:3000", "http://bar:3001", "http://baz:3002",
+        ]
+
+    def test_drops_blank_env_origin_entries(self, monkeypatch):
+        monkeypatch.setenv(
+            "DASHBOARD_ALLOWED_ORIGINS", "http://foo:3000,, http://bar:3001"
+        )
+        assert get_allowed_origins() == ["http://foo:3000", "http://bar:3001"]
+
     def test_returns_defaults_when_env_not_set(self, monkeypatch):
         monkeypatch.delenv("DASHBOARD_ALLOWED_ORIGINS", raising=False)
         origins = get_allowed_origins()
