@@ -389,6 +389,11 @@ function Update-HermesConfigFile {
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $content = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
+    # Escape '$' so a value containing '$' (e.g. a model id or URL with a
+    # regex-style '$1') is not treated as a .NET group-substitution token in
+    # the -replace replacement string.
+    $Model = $Model -replace '\$', '$$'
+    $BaseUrl = $BaseUrl -replace '\$', '$$'
     $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$Model`""
     $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
