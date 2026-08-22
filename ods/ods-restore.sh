@@ -427,6 +427,16 @@ restore_config() {
     local backup_dir="$1"
     log_step "Restoring configuration..."
 
+    # A present-but-empty config/ means the backup was truncated. Bail before
+    # anything is copied or removed: replacing a working config with nothing is
+    # strictly worse than not restoring at all.
+    if [[ -d "$backup_dir/config" && -z "$(ls -A "$backup_dir/config")" ]]; then
+        log_error "Backup's config directory is empty: $backup_dir/config"
+        log_error "This backup is incomplete — refusing to replace the live config at $ODS_DIR/config"
+        log_error "Restore from a complete backup, or re-run with --data-only to skip configuration."
+        exit 1
+    fi
+
     local restored_any=false
 
     # Dynamically discover config files (dotfiles + compose overlays + scripts)
