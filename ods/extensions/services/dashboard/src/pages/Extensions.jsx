@@ -15,6 +15,7 @@ export { getTemplateStatus }
 
 // API/backend services with no user-facing web UI — show badge instead of port link.
 const HEADLESS_EXTENSIONS = new Set(['embeddings', 'tts', 'whisper', 'privacy-shield'])
+const PLANNED_ACTIONS = new Set(['install', 'enable', 'disable', 'uninstall'])
 
 // Auth: nginx injects "Authorization: Bearer ${DASHBOARD_API_KEY}" via
 // proxy_set_header for all /api/ requests (see nginx.conf).  All fetches
@@ -92,6 +93,7 @@ export default function Extensions() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [expanded, setExpanded] = useState(null)
   const [mutating, setMutating] = useState(null)
+  const [planning, setPlanning] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [toast, setToast] = useState(null)
   const [consoleExt, setConsoleExt] = useState(null)
@@ -102,6 +104,8 @@ export default function Extensions() {
   const [templatesOpen, setTemplatesOpen] = useState(false)
   const [pollingLost, setPollingLost] = useState(false)
   const installProgressRef = useRef(null)
+  const planInFlightRef = useRef(false)
+  const mutationInFlightRef = useRef(false)
   const activePollers = useRef({})
   // Per-service recovery tracker: counts consecutive fetch failures and
   // fires onThresholdReached/onRecovered to drive the polling-lost banner.
@@ -231,6 +235,8 @@ export default function Extensions() {
   }
 
   const handleMutation = async (serviceId, action, { autoEnableDeps = false, force = false } = {}) => {
+    if (mutationInFlightRef.current) return
+    mutationInFlightRef.current = true
     setMutating(serviceId)
     setConfirm(null)
     setDepConfirm(null)
@@ -294,11 +300,13 @@ export default function Extensions() {
       const base = friendlyError(err.message) || `Failed to ${action} extension`
       setToast({ type: 'error', text: base })
     } finally {
+      mutationInFlightRef.current = false
       setMutating(null)
     }
   }
 
-  const requestAction = (ext, action) => {
+  const requestAction = async (ext, action) => {
+    if (mutating || planInFlightRef.current) return
     const messages = {
       install: `Install ${ext.name}? This will download and start the service.`,
       enable: `Enable ${ext.name}? The service will be started.`,
@@ -312,7 +320,32 @@ export default function Extensions() {
         : `Update ${ext.name} from the ODS library? The current definition will be retained for rollback.`,
       rollback: `Restore the previous ${ext.name} extension definition? Current service data and configuration will be preserved.`,
     }
-    setConfirm({ action, ext, message: messages[action] })
+    if (!PLANNED_ACTIONS.has(action)) {
+      setConfirm({ action, ext, message: messages[action] })
+      return
+    }
+
+    planInFlightRef.current = true
+    setPlanning(ext.id)
+    try {
+      const autoDeps = action === 'enable' ? '&auto_enable_deps=true' : ''
+      const res = await fetchJson(`/api/extensions/${ext.id}/plan?action=${action}${autoDeps}`)
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}))
+        throw new Error(
+          (typeof errorBody.detail === 'string' && errorBody.detail)
+          || `Failed to preview ${action}`,
+        )
+      }
+      const plan = await res.json()
+      setConfirm({ action, ext, message: messages[action], plan })
+    } catch (err) {
+      const base = friendlyError(err.message) || `Failed to preview ${action}`
+      setToast({ type: 'error', text: base })
+    } finally {
+      planInFlightRef.current = false
+      setPlanning(null)
+    }
   }
 
   if (loading && !catalog) {
@@ -511,7 +544,7 @@ export default function Extensions() {
               onDetails={() => setExpanded(ext.id)}
               onConsole={() => setConsoleExt(ext)}
               onAction={requestAction}
-              mutating={mutating}
+              mutating={mutating || planning}
               progressData={progressMap[ext.id]}
             />
           ))}
@@ -535,7 +568,8 @@ export default function Extensions() {
             <h3 className="text-base font-semibold text-theme-text mb-2">
               {confirm.action === 'uninstall' ? 'Remove' : confirm.action === 'purge' ? 'Purge Data' : confirm.action.charAt(0).toUpperCase() + confirm.action.slice(1)} Extension
             </h3>
-            <p className="text-[11px] text-theme-text-muted/70 mb-5 leading-relaxed">{confirm.message}</p>
+            <p className="text-[11px] text-theme-text-muted/70 mb-3 leading-relaxed">{confirm.message}</p>
+            {confirm.plan && <ExtensionChangePlan plan={confirm.plan} />}
             {confirm.action === 'disable' && confirm.ext.dependents?.length > 0 && (
               <DisableDependentWarning dependents={confirm.ext.dependents} />
             )}
@@ -543,11 +577,14 @@ export default function Extensions() {
               <button onClick={() => setConfirm(null)} autoFocus className="px-4 py-2 text-[10px] font-mono uppercase tracking-[0.16em] text-theme-text-muted/65 hover:text-theme-text transition-colors">Cancel</button>
               <button
                 onClick={() => handleMutation(confirm.ext.id, confirm.action, {
+                  autoEnableDeps: confirm.action === 'enable' && confirm.plan?.dependencies?.length > 0,
                   force: confirm.action === 'update' && (
                     confirm.ext.locally_modified || confirm.ext.update_status === 'untracked'
                   ),
                 })}
-                className={`px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg transition-colors ${
+                disabled={confirm.plan && !confirm.plan.can_apply}
+                aria-label={`Confirm ${confirm.action}`}
+                className={`px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   confirm.action === 'uninstall' || confirm.action === 'purge' ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' :
                   'bg-theme-accent/15 text-theme-accent-light hover:bg-theme-accent/25'
                 }`}
@@ -592,6 +629,46 @@ function SummaryItem({ label, value, color }) {
       <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
       <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-theme-text-muted/55">{label}</span>
       <span className="text-theme-text font-medium font-mono">{value}</span>
+    </div>
+  )
+}
+
+function ExtensionChangePlan({ plan }) {
+  const operationLabel = (operation) => operation.replaceAll('_', ' ')
+
+  return (
+    <div className="mb-5 rounded-lg border border-theme-border bg-theme-bg/50 p-3 text-[10px] text-theme-text-secondary">
+      <h4 className="mb-2 font-semibold uppercase tracking-[0.14em] text-theme-text">Deployment plan</h4>
+      <div className="mb-2 font-mono text-theme-text-muted">
+        {plan.current_state} → {plan.target_state}
+      </div>
+      {plan.affected_services?.length > 0 && (
+        <p className="mb-1"><span className="text-theme-text-muted">Affected services:</span> {plan.affected_services.join(', ')}</p>
+      )}
+      {plan.dependencies?.length > 0 && (
+        <p className="mb-1"><span className="text-theme-text-muted">Dependencies:</span> {plan.dependencies.join(', ')}</p>
+      )}
+      {plan.dependents?.length > 0 && (
+        <p className="mb-1"><span className="text-theme-text-muted">Enabled dependents:</span> {plan.dependents.join(', ')}</p>
+      )}
+      {plan.steps?.length > 0 && (
+        <ol className="my-2 list-decimal space-y-1 pl-4 text-theme-text-muted">
+          {plan.steps.map((step, index) => (
+            <li key={`${step.operation}-${index}`}>
+              {operationLabel(step.operation)}
+              {step.services?.length > 0 ? `: ${step.services.join(', ')}` : ''}
+            </li>
+          ))}
+        </ol>
+      )}
+      {plan.data?.preserved && (
+        <p className="text-green-400/80">Service data is preserved at {plan.data.path}.</p>
+      )}
+      {plan.blocking_reasons?.length > 0 && (
+        <div className="mt-2 rounded border border-red-500/20 bg-red-500/10 p-2 text-red-300">
+          {plan.blocking_reasons.map(reason => <p key={reason}>{reason}</p>)}
+        </div>
+      )}
     </div>
   )
 }
