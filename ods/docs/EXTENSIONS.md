@@ -53,7 +53,9 @@ python3 scripts/extension-dependency-graph.py \
 
 The command fails on missing dependency definitions, duplicate service IDs, or
 cycles. JSON includes a dependency-first order for automation; DOT output can
-be rendered with Graphviz.
+be rendered with Graphviz. The same full-catalog graph validation runs through
+`ods config validate` / `scripts/validate-manifests.sh`, so install-time and CI
+manifest checks reject dependency topology that cannot be activated safely.
 
 ## What You Can Extend
 
