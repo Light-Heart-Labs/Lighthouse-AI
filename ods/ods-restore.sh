@@ -350,7 +350,7 @@ dry_run_preview() {
     if [[ "$restore_data" == "true" ]]; then
         echo "User Data to Restore:"
         echo "───────────────────────────────────────────────────────────────────"
-        local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama")
+        local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama" "data/models")
         for dir in "${data_dirs[@]}"; do
             if [[ -d "$backup_dir/$dir" ]]; then
                 local size
@@ -440,7 +440,7 @@ restore_user_data() {
     local backup_dir="$1"
     log_step "Restoring user data..."
 
-    local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama")
+    local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama" "data/models")
 
     local restored_any=false
     for dir in "${data_dirs[@]}"; do

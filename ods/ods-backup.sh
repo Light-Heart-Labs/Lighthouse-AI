@@ -95,9 +95,10 @@ estimate_backup_bytes() {
 
     # cache (models + some caches)
     if [[ "$backup_type" == "full" ]]; then
-        if [[ -d "$ODS_DIR/models" ]]; then
+        # Models live at data/models (docker-compose.base.yml mounts ./data/models:/models)
+        if [[ -d "$ODS_DIR/data/models" ]]; then
             local b
-            b=$(du -sk "$ODS_DIR/models" 2>/dev/null | awk '{print $1 * 1024}')
+            b=$(du -sk "$ODS_DIR/data/models" 2>/dev/null | awk '{print $1 * 1024}')
             total=$(( total + ${b:-0} ))
         fi
         local -a cache_paths=("data/whisper/cache" "data/kokoro/cache")
@@ -409,9 +410,11 @@ backup_cache() {
     local backup_dir="$1"
     log_info "Backing up cache (models, etc.)..."
 
-    if [[ -d "$ODS_DIR/models" ]]; then
-        rsync_with_progress "$ODS_DIR/models" "$backup_dir/" "Backing up models/"
-        log_success "Backed up: models/"
+    # Models live at data/models (docker-compose.base.yml mounts ./data/models:/models);
+    # the old $ODS_DIR/models path never existed, so full backups silently omitted them.
+    if [[ -d "$ODS_DIR/data/models" ]]; then
+        rsync_with_progress "$ODS_DIR/data/models" "$backup_dir/" "Backing up data/models/"
+        log_success "Backed up: data/models/"
     fi
 
     # Docker volumes that contain cache data
