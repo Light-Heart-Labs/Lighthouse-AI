@@ -171,6 +171,22 @@ class _RecordingTelemetry:
 
 
 class TestForwarding:
+    @pytest.mark.parametrize("stream", ["false", "true", 0, 1, None, [], {}])
+    def test_rejects_non_boolean_stream_before_upstream(self, router, stream):
+        mod, client, write_state, calls = router
+        write_state()
+
+        response = client.post("/v1/chat/completions", json={
+            "model": "ods/current",
+            "stream": stream,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert response.json()["error"]["message"] == "stream must be a boolean"
+        assert calls == []
+
     def test_alias_rewritten_in_and_out(self, router):
         mod, client, write_state, calls = router
         write_state()
