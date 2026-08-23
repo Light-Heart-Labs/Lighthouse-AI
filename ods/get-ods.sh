@@ -504,4 +504,8 @@ echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 cd "$INSTALL_DIR"
-exec ./install.sh "$@"
+# Do not `exec` here: bash does not run EXIT traps across exec, so the
+# cleanup trap for $TEMP_DIR would never fire and every successful
+# bootstrap would leak the cloned repo into /tmp.
+./install.sh "$@"
+exit $?
