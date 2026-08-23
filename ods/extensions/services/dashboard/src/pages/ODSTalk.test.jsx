@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { render } from '../test/test-utils'
 import ODSTalk from './ODSTalk' // eslint-disable-line no-unused-vars
 
@@ -96,6 +96,39 @@ describe('ODSTalk', () => {
 
     expect(await screen.findByText('What can you do?')).toBeInTheDocument()
     expect(await screen.findByText('I can help from this ODS.')).toBeInTheDocument()
+  })
+
+  test('submits one text turn when submit events arrive in the same task', async () => {
+    let releaseStream
+    const pendingStream = new Promise(resolve => { releaseStream = resolve })
+    const fetchMock = vi.fn(async (url, options = {}) => {
+      if (url === '/api/talk/status') {
+        return response({ capabilities: { text_chat: true } })
+      }
+      if (url === '/api/talk/message/stream' && options.method === 'POST') {
+        await pendingStream
+        return sseResponse([{ type: 'done' }])
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ODSTalk />)
+    expect(await screen.findByText('Ready')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText('Message ODS'), {
+      target: { value: 'send once' },
+    })
+    const form = screen.getByRole('button', { name: 'Send message' }).closest('form')
+
+    await act(async () => {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+
+    const sends = fetchMock.mock.calls.filter(([url]) => url === '/api/talk/message/stream')
+    expect(sends).toHaveLength(1)
+    releaseStream()
   })
 
   test('shows model compatibility reason and disables send when text chat is blocked', async () => {

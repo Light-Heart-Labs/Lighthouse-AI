@@ -83,6 +83,7 @@ export default function ODSTalk() {
   const recorderRef = useRef(null)
   const recordingChunksRef = useRef([])
   const streamControllerRef = useRef(null)
+  const textSendInFlightRef = useRef(false)
   // Track the currently-playing TTS state so we can shut down whatever
   // is in flight before starting the next reply's audio.
   const activeSpeechRef = useRef(null)
@@ -370,7 +371,8 @@ export default function ODSTalk() {
     // prompt for images ("Describe what you see in this image."). Without
     // either a caption or an attachment, there's nothing to send.
     if (!clean && !attachment) return
-    if (sending || status !== 'ready') return
+    if (sending || textSendInFlightRef.current || status !== 'ready') return
+    textSendInFlightRef.current = true
     setSending(true)
 
     const userId = transcriptId || makeId('user')
@@ -527,6 +529,7 @@ export default function ODSTalk() {
       if (streamControllerRef.current === controller) {
         streamControllerRef.current = null
       }
+      textSendInFlightRef.current = false
       setSending(false)
     }
   }, [sending, speak, status])
