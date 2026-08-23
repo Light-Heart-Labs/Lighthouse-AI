@@ -61,6 +61,7 @@ function isIos() {
 
 export function usePwaInstallPrompt() {
   const promptEventRef = useRef(null)
+  const promptPendingRef = useRef(false)
   // installable: browser fired beforeinstallprompt OR we detected iOS
   // (where the install path is manual but the banner is still useful).
   const [installable, setInstallable] = useState(false)
@@ -133,6 +134,8 @@ export function usePwaInstallPrompt() {
       // and the banner's iOS-specific copy explains what to do.
       return { platform: 'ios', outcome: 'manual' }
     }
+    if (promptPendingRef.current) return { outcome: 'pending' }
+    promptPendingRef.current = true
     try {
       await event.prompt()
       const choice = await event.userChoice
@@ -153,6 +156,8 @@ export function usePwaInstallPrompt() {
       promptEventRef.current = null
       setInstallable(false)
       return { outcome: 'error' }
+    } finally {
+      promptPendingRef.current = false
     }
   }, [])
 
