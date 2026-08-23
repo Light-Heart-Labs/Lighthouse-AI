@@ -23,7 +23,14 @@ export function useGPUDetailed() {
           fetch('/api/gpu/history'),
           fetch('/api/gpu/topology'),
         ])
-        if (detRes.ok) setDetailed(await detRes.json())
+        // The detailed snapshot drives the entire GPU Monitor page. Treat an
+        // HTTP failure as an outage instead of clearing the error and leaving
+        // an older snapshot looking live. History and topology are optional
+        // enhancements, so they may still degrade independently.
+        if (!detRes.ok) {
+          throw new Error(`GPU detail request failed (${detRes.status})`)
+        }
+        setDetailed(await detRes.json())
         if (histRes.ok) setHistory(await histRes.json())
         if (topoRes.ok) setTopology(await topoRes.json())
         setError(null)
