@@ -12,8 +12,27 @@
 #   Add new background task types here.
 # ============================================================================
 
-# Registry file for background tasks
-BG_TASK_REGISTRY="${BG_TASK_REGISTRY:-/tmp/ods-bg-tasks.json}"
+# Registry file for background tasks.
+# Per-UID path + noclobber creation: a fixed shared /tmp name is both a
+# cross-user collision and a symlink-clobber vector (echo > follows
+# symlinks), the same class of issue lib/service-registry.sh avoids with
+# mktemp. Callers may still override BG_TASK_REGISTRY explicitly.
+BG_TASK_REGISTRY="${BG_TASK_REGISTRY:-${TMPDIR:-/tmp}/ods-bg-tasks-${UID}.json}"
+
+# Create the registry atomically if missing; never trust a pre-existing path:
+# refuse symlinks and foreign-owned files instead of writing through them.
+# Returns non-zero if no usable registry exists.
+_bg_task_init_registry() {
+    if [[ -e "$BG_TASK_REGISTRY" || -L "$BG_TASK_REGISTRY" ]]; then
+        # Exists (possibly as a planted symlink): must be a plain,
+        # self-owned regular file.
+        [[ -f "$BG_TASK_REGISTRY" && ! -L "$BG_TASK_REGISTRY" && -O "$BG_TASK_REGISTRY" ]] || return 1
+    else
+        ( set -o noclobber; printf '[]\n' > "$BG_TASK_REGISTRY" ) 2>/dev/null || return 1
+    fi
+    chmod 600 "$BG_TASK_REGISTRY" 2>/dev/null || true
+    [[ -f "$BG_TASK_REGISTRY" && ! -L "$BG_TASK_REGISTRY" && -O "$BG_TASK_REGISTRY" ]]
+}
 
 # Start tracking a background task
 # Usage: bg_task_start <task_id> <pid> <description> <log_file>
@@ -22,11 +41,9 @@ bg_task_start() {
     local pid="$2"
     local description="$3"
     local log_file="$4"
-    
+
     # Create registry if it doesn't exist
-    if [[ ! -f "$BG_TASK_REGISTRY" ]]; then
-        echo "[]" > "$BG_TASK_REGISTRY"
-    fi
+    _bg_task_init_registry || return 1
     
     # Add task to registry
     python3 - "$BG_TASK_REGISTRY" "$task_id" "$pid" "$description" "$log_file" <<'PY'

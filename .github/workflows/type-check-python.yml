@@ -30,7 +30,12 @@ jobs:
       - name: Install mypy
         run: pip install mypy
 
+      # Each leg keeps continue-on-error so the others still run and report,
+      # but the outcomes are aggregated by the gate step below: without it
+      # this job could never fail, no matter what mypy found.
+
       - name: Type check dashboard-api
+        id: typecheck-dashboard-api
         continue-on-error: true
         working-directory: ods/extensions/services/dashboard-api
         run: |
@@ -38,6 +43,7 @@ jobs:
           mypy . --ignore-missing-imports --no-strict-optional --check-untyped-defs
 
       - name: Type check token-spy
+        id: typecheck-token-spy
         continue-on-error: true
         working-directory: ods/extensions/services/token-spy
         run: |
@@ -45,6 +51,7 @@ jobs:
           mypy . --ignore-missing-imports --no-strict-optional --check-untyped-defs
 
       - name: Type check privacy-shield
+        id: typecheck-privacy-shield
         continue-on-error: true
         working-directory: ods/extensions/services/privacy-shield
         run: |
@@ -52,7 +59,24 @@ jobs:
           mypy . --ignore-missing-imports --no-strict-optional --check-untyped-defs
 
       - name: Type check scripts
+        id: typecheck-scripts
         continue-on-error: true
         working-directory: ods/scripts
         run: |
           mypy *.py --ignore-missing-imports --no-strict-optional --check-untyped-defs
+
+      - name: Enforce type check results
+        run: |
+          failed=0
+          for id in dashboard-api token-spy privacy-shield scripts; do
+            outcome="${{ steps.typecheck-$id.outcome }}"
+            if [ "$outcome" = "failure" ]; then
+              echo "::error::mypy failed for $id"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more mypy legs failed; see the logs above." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "All mypy legs passed." >> "$GITHUB_STEP_SUMMARY"
