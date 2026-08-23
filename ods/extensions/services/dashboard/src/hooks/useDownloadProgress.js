@@ -30,19 +30,18 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
   const [cancelError, setCancelError] = useState(null)
   const [isCancelling, setIsCancelling] = useState(false)
   const lastCompleteKeyRef = useRef(null)
-  const progressRequestRef = useRef(0)
-  const latestAppliedProgressRequestRef = useRef(0)
+  const progressInFlightRef = useRef(false)
   const cancelInFlightRef = useRef(false)
 
   const fetchProgress = useCallback(async () => {
-    const requestId = ++progressRequestRef.current
+    if (progressInFlightRef.current) return null
+    progressInFlightRef.current = true
+
     try {
       const response = await fetch('/api/models/download-status')
       if (!response.ok) return
       
       const data = await response.json()
-      if (requestId < latestAppliedProgressRequestRef.current) return data
-      latestAppliedProgressRequestRef.current = requestId
       
       if (data.status === 'downloading' || data.status === 'verifying') {
         const downloaded = data.bytesDownloaded || 0
@@ -95,6 +94,8 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     } catch {
       // Silently fail - API might not be available
       return null
+    } finally {
+      progressInFlightRef.current = false
     }
   }, [])
 
