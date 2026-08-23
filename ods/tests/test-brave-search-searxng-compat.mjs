@@ -195,6 +195,19 @@ async function testV1Route(base) {
     JSON.stringify(noQ),
   );
 
+  const upstreamCallsBeforeBlank = observedTokens.length;
+  const blankQ = await getJson(base, "/v1/search?q=%20%20%20");
+  check(
+    "400 for a whitespace-only q",
+    blankQ.status === 400 && blankQ.body.error === "missing_query_param_q",
+    JSON.stringify(blankQ),
+  );
+  check(
+    "whitespace-only q does not consume an upstream request",
+    observedTokens.length === upstreamCallsBeforeBlank,
+    `before=${upstreamCallsBeforeBlank} after=${observedTokens.length}`,
+  );
+
   const err = await getJson(base, "/v1/search?q=err500");
   check(
     "502 on upstream HTTP error",
@@ -297,6 +310,19 @@ async function testCompatEnabled(base) {
     "400 without q",
     noQ.status === 400 && noQ.body.error === "missing_query_param_q",
     JSON.stringify(noQ),
+  );
+
+  const upstreamCallsBeforeBlank = observedTokens.length;
+  const blankQ = await getJson(base, "/search?format=json&q=%20%20%20");
+  check(
+    "400 for a whitespace-only q",
+    blankQ.status === 400 && blankQ.body.error === "missing_query_param_q",
+    JSON.stringify(blankQ),
+  );
+  check(
+    "compat whitespace-only q does not consume an upstream request",
+    observedTokens.length === upstreamCallsBeforeBlank,
+    `before=${upstreamCallsBeforeBlank} after=${observedTokens.length}`,
   );
 
   const images = await getJson(base, "/search?format=json&q=ok&categories=images");
