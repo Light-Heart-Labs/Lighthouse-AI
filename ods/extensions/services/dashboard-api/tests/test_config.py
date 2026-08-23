@@ -411,6 +411,33 @@ class TestLoadExtensionManifests:
 
         assert services["host-network-service"]["host_network"] is True
 
+    @pytest.mark.parametrize(
+        ("field", "yaml_value"),
+        [
+            ("external_link", "'false'"),
+            ("macos_host_supported", "1"),
+            ("host_network", "[]"),
+        ],
+    )
+    def test_rejects_non_boolean_service_flags(self, tmp_path, field, yaml_value):
+        svc_dir = tmp_path / "invalid-flags"
+        svc_dir.mkdir()
+        (svc_dir / "manifest.yaml").write_text(
+            "schema_version: ods.services.v1\n"
+            "service:\n"
+            "  id: invalid-flags\n"
+            "  name: Invalid Flags\n"
+            "  port: 8080\n"
+            f"  {field}: {yaml_value}\n"
+        )
+
+        services, features, errors = load_extension_manifests(tmp_path, "nvidia")
+
+        assert services == {}
+        assert features == []
+        assert len(errors) == 1
+        assert errors[0]["error"] == f"service.{field} must be a boolean"
+
     def test_skips_wrong_schema_version(self, tmp_path):
         svc_dir = tmp_path / "old-service"
         svc_dir.mkdir()
