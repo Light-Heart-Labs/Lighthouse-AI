@@ -85,6 +85,7 @@ async def test_stream_resumes_after_last_event_id_and_waits_for_a_change(monkeyp
         heartbeat_seconds=15,
         last_event_id=previous["id"],
         max_events=1,
+        service_ids=None,
     )
     resumed = await anext(stream)
 
@@ -112,6 +113,31 @@ def test_http_stream_can_emit_one_bounded_snapshot(test_client, monkeypatch):
     assert _event_data(response.text)["services"] == [
         {"id": "dashboard-api", "status": "healthy"},
         {"id": "llama-server", "status": "starting"},
+    ]
+
+
+def test_http_stream_can_scope_snapshots_to_repeated_service_filters(
+    test_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "routers.events.get_cached_services",
+        lambda: [
+            _service("dashboard-api", "healthy"),
+            _service("llama-server", "starting"),
+            _service("open-webui", "healthy"),
+        ],
+    )
+
+    response = test_client.get(
+        "/api/events/services?max_events=1&service=open-webui&service=llama-server",
+        headers=test_client.auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert _event_data(response.text)["services"] == [
+        {"id": "llama-server", "status": "starting"},
+        {"id": "open-webui", "status": "healthy"},
     ]
 
 

@@ -82,6 +82,7 @@ async def service_event_stream(
     heartbeat_seconds: float,
     last_event_id: str | None,
     max_events: int | None,
+    service_ids: frozenset[str] | None,
 ):
     tracker = ServiceStateTracker()
     emitted = 0
@@ -89,7 +90,14 @@ async def service_event_stream(
 
     while not await request.is_disconnected():
         cached = get_cached_services()
-        observation = tracker.observe(cached or [], cache_ready=cached is not None)
+        statuses = cached or []
+        if service_ids is not None:
+            statuses = [
+                service
+                for service in statuses
+                if str(service.id) in service_ids
+            ]
+        observation = tracker.observe(statuses, cache_ready=cached is not None)
         if observation is not None and observation["id"] != last_event_id:
             yield format_sse(observation)
             emitted += 1
@@ -109,6 +117,7 @@ async def service_events(
     poll_seconds: float = Query(2.0, ge=0.5, le=30.0),
     heartbeat_seconds: float = Query(15.0, ge=5.0, le=120.0),
     max_events: int | None = Query(None, ge=1, le=1000),
+    service: list[str] | None = Query(None),
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
     api_key: str = Depends(verify_api_key),
 ):
@@ -119,6 +128,7 @@ async def service_events(
         heartbeat_seconds=heartbeat_seconds,
         last_event_id=last_event_id,
         max_events=max_events,
+        service_ids=frozenset(service) if service else None,
     )
     return StreamingResponse(
         stream,
