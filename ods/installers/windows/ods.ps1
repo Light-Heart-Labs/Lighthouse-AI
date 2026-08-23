@@ -68,7 +68,13 @@ function Test-DockerRunning {
     .SYNOPSIS
         Quick check if Docker daemon is responsive. Shows friendly message if not.
     #>
+    # On Windows PowerShell 5.1 a native stderr redirect becomes an
+    # ErrorRecord, which terminates under the global 'Stop' preference.
+    # Scope it like the other native calls in this script.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
     $null = docker info 2>$null
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) {
         Write-AIError "Docker Desktop is not running."
         Write-AI "Start it from the Start Menu, then try again."
@@ -667,8 +673,14 @@ function Invoke-ODSSttModelDownloadTrigger {
     # bounded so slow Hugging Face transfers do not wedge ods.ps1 or install.
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
+        # PS 5.1: '2>&1' turns each stderr line into an ErrorRecord that
+        # terminates under the global 'Stop' preference - before the exit 28
+        # tolerance below could run. Scope it like the other native calls.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
         $curlOutput = & $curl.Source --fail --silent --show-error --max-time 30 -X POST $ModelUrl 2>&1
         $curlExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
         if ($curlExit -eq 0 -or $curlExit -eq 28) { return $true }
         Write-AIWarn "STT model download trigger returned curl exit $curlExit; verifying cache before failing."
         if ($curlOutput) {
@@ -1975,7 +1987,11 @@ function Invoke-Status {
 
         # Docker services
         Write-Host ""
+        # PS 5.1: stderr redirect + global 'Stop' would terminate; scope it.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
         & docker compose @flags ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>$null
+        $ErrorActionPreference = $prevEAP
 
         # Health checks
         Write-Host ""

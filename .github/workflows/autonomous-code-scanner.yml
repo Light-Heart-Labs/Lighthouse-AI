@@ -855,14 +855,20 @@ jobs:
           echo "**Secret scan**: Passed" >> $GITHUB_STEP_SUMMARY
 
           # 2. Python syntax check
+          # The loop must not run in a piped subshell: an `exit 1` there only
+          # kills the subshell and the step would report success anyway.
           if git diff --name-only | grep -q '\.py$'; then
-            find . -name "*.py" -type f | while read -r file; do
+            syntax_status=0
+            while IFS= read -r file; do
               if ! python3 -m py_compile "$file" 2>/dev/null; then
                 echo "::error::Syntax error in $file"
                 echo "**Syntax check**: FAILED ($file)" >> $GITHUB_STEP_SUMMARY
-                exit 1
+                syntax_status=1
               fi
-            done
+            done < <(find . -name "*.py" -type f)
+            if [ "$syntax_status" -ne 0 ]; then
+              exit 1
+            fi
             echo "**Syntax check**: Passed" >> $GITHUB_STEP_SUMMARY
           fi
 

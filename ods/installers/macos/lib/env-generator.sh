@@ -75,8 +75,14 @@ upsert_env_value() {
     local env_path="$1"
     local key="$2"
     local value="$3"
+    # Escape sed replacement metacharacters: '\' starts backreferences,
+    # '&' re-expands to the whole match, and '|' is our s||| delimiter.
+    # Without this, a secret like abc&123 silently corrupted the line.
+    local esc="${value//\\/\\\\}"
+    esc="${esc//&/\\&}"
+    esc="${esc//|/\\|}"
     if grep -qE "^${key}=" "$env_path" 2>/dev/null; then
-        sed -i '' "s|^${key}=.*|${key}=${value}|" "$env_path"
+        sed -i '' "s|^${key}=.*|${key}=${esc}|" "$env_path"
     else
         printf '%s=%s\n' "$key" "$value" >> "$env_path"
     fi

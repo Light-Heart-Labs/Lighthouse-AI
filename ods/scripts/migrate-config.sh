@@ -235,33 +235,36 @@ cmd_migrate() {
     
     # Run migrations in order
     local failed=0
-    local ls_exit=0
-    local migrations
-    migrations=$(ls -1 "$MIGRATIONS_DIR"/migrate-v*.sh 2>&1 | sort) || ls_exit=$?
-    if [[ $ls_exit -ne 0 ]]; then
+    local migration_scripts=()
+    # Use a glob array instead of parsing `ls`: an unquoted for-loop over the
+    # output word-splits on spaces, so install paths containing a space would
+    # skip every migration yet still fall through to stamping the version.
+    shopt -s nullglob
+    migration_scripts=("$MIGRATIONS_DIR"/migrate-v*.sh)
+    shopt -u nullglob
+    if (( ${#migration_scripts[@]} == 0 )); then
         log_success "No migration scripts found"
         return 0
     fi
 
-    for migration in $migrations; do
-        if [[ -f "$migration" ]]; then
-            local migration_version
-            migration_version=$(basename "$migration" | sed 's/migrate-v//;s/.sh//')
-            
-            # Check if this migration is needed
-            local mig_cmp=0
-            compare_versions "$migration_version" "$last_migrated" || mig_cmp=$?
-            if [[ $mig_cmp -eq 1 ]]; then
-                log_info "Running migration: $migration_version"
-                
-                if bash "$migration"; then
-                    log_success "Migration $migration_version completed"
-                    set_last_migrated_version "$migration_version"
-                else
-                    log_error "Migration $migration_version failed!"
-                    failed=$((failed + 1))
-                    break
-                fi
+    # Glob expansion is sorted, preserving the previous `sort` ordering.
+    for migration in "${migration_scripts[@]}"; do
+        local migration_version
+        migration_version=$(basename "$migration" | sed 's/migrate-v//;s/.sh//')
+
+        # Check if this migration is needed
+        local mig_cmp=0
+        compare_versions "$migration_version" "$last_migrated" || mig_cmp=$?
+        if [[ $mig_cmp -eq 1 ]]; then
+            log_info "Running migration: $migration_version"
+
+            if bash "$migration"; then
+                log_success "Migration $migration_version completed"
+                set_last_migrated_version "$migration_version"
+            else
+                log_error "Migration $migration_version failed!"
+                failed=$((failed + 1))
+                break
             fi
         fi
     done
