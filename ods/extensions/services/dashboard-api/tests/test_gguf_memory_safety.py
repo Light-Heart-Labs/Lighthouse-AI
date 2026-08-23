@@ -1,7 +1,6 @@
 """Tests for GGUF metadata inspection and model memory estimation safety."""
 
 import unittest
-from pathlib import Path
 
 from gguf_inspector import inspect_gguf
 from model_memory import estimated_param_billions, _positive_number
@@ -18,11 +17,11 @@ class TestGGUFMemorySafety(unittest.TestCase):
     def test_positive_number_parsing(self):
         self.assertEqual(_positive_number("7.5"), 7.5)
         self.assertEqual(_positive_number("14"), 14.0)
-        self.assertIsNone(_positive_number("-5"))
-        self.assertIsNone(_positive_number("invalid"))
-        self.assertIsNone(_positive_number(None))
-        self.assertIsNone(_positive_number(float("inf")))
-        self.assertIsNone(_positive_number(float("nan")))
+        self.assertEqual(_positive_number("-5"), 0.0)
+        self.assertEqual(_positive_number("invalid"), 0.0)
+        self.assertEqual(_positive_number(None), 0.0)
+        self.assertEqual(_positive_number(float("inf")), 0.0)
+        self.assertEqual(_positive_number(float("nan")), 0.0)
 
     def test_estimated_param_billions_parsing(self):
         self.assertEqual(estimated_param_billions("llama-3-8b-instruct.gguf"), 8.0)

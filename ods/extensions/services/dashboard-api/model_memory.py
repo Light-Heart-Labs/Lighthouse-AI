@@ -7,12 +7,12 @@ import re
 from typing import Any
 
 
-def _positive_number(value: object) -> float | None:
+def _positive_number(value: object) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) and number > 0 else None
+        return 0.0
+    return number if math.isfinite(number) and number > 0 else 0.0
 
 
 def estimated_param_billions(model: dict[str, Any] | str) -> float:
@@ -24,7 +24,7 @@ def estimated_param_billions(model: dict[str, Any] | str) -> float:
 
     for key in ("total_params_b", "params_b"):
         val = _positive_number(model.get(key))
-        if val is not None:
+        if val > 0:
             return val
 
     numbers: list[float] = []
@@ -37,13 +37,13 @@ def estimated_param_billions(model: dict[str, Any] | str) -> float:
     ):
         for match in re.findall(r"(\d+(?:\.\d+)?)\s*b", str(text or ""), re.I):
             parsed = _positive_number(match)
-            if parsed is not None:
+            if parsed > 0:
                 numbers.append(parsed)
     if numbers:
         return max(numbers)
 
     size_mb = _positive_number(model.get("size_mb"))
-    if size_mb is not None:
+    if size_mb > 0:
         # Q4_K_M GGUFs are roughly 0.55-0.65 GiB per billion parameters.
         return max(size_mb / 600.0, 1.0)
     return 4.0
