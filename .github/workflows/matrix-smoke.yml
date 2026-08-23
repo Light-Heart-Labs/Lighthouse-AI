@@ -206,9 +206,17 @@ jobs:
         run: |
           bash -n install-core.sh
           bash -n installers/lib/packaging.sh
+          fails=0
           for f in installers/phases/*.sh; do
-            bash -n "$f" && echo "  OK: $f" || echo "  FAIL: $f"
+            if out=$(bash -n "$f" 2>&1); then
+              echo "  OK: $f"
+            else
+              echo "  FAIL: $f"
+              echo "$out"
+              fails=$((fails + 1))
+            fi
           done
+          exit "$fails"
 
   macos-smoke:
     runs-on: macos-latest
