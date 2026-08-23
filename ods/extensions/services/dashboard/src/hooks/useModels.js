@@ -235,6 +235,14 @@ export function useModels() {
       const response = await fetch('/api/models', { signal: controller.signal })
       if (!response.ok) throw new Error('Failed to fetch models')
       const data = await response.json()
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        !Array.isArray(data.models)
+      ) {
+        throw new Error('Models API returned an invalid models list')
+      }
 
       // A slower, older request must not overwrite a newer snapshot.
       if (requestId < latestSettledModelsRequestRef.current) return data

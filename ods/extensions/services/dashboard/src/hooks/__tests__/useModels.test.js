@@ -85,6 +85,20 @@ describe('useModels', () => {
     expect(result.current.error).toBeNull()
   })
 
+  test('rejects a malformed models list without corrupting render state', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ models: { id: 'not-a-list' } }),
+    })
+
+    const { result } = renderHook(() => useModels())
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    expect(result.current.models).toEqual([])
+    expect(result.current.error).toBe('Models API returned an invalid models list')
+  })
+
   test('surfaces backend-owned activation as a pending model action', async () => {
     const target = 'slow-model'
     fetch.mockResolvedValue(modelsResponse(
