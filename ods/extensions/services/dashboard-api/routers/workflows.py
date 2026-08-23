@@ -30,21 +30,34 @@ def find_installed_n8n_workflow(catalog_name: str, n8n_workflows: list[dict]) ->
     """Return the n8n workflow that corresponds to *catalog_name*, if any.
 
     n8n stores whatever name the imported template carried, which is not
-    guaranteed to equal the catalog name, so the match is a containment test in
-    both directions. Every caller must use the same rule: the list endpoint
-    reporting a workflow as installed while disable/executions cannot find it
-    leaves the UI offering a Disable action that always 404s.
+    guaranteed to equal the catalog name, so a unique containment match remains
+    a compatibility fallback. Prefer a unique exact match and reject ambiguous
+    candidates: choosing the first substring match can delete or inspect an
+    unrelated user-created workflow merely because n8n returned it first.
+
+    Every caller must use the same rule. Otherwise the list endpoint can report
+    a different workflow from the one disable/executions operate on.
     """
-    target = (catalog_name or "").lower()
+    target = (catalog_name or "").casefold()
     if not target:
         return None
+
+    exact_matches = []
+    partial_matches = []
     for workflow in n8n_workflows:
-        name = (workflow.get("name") or "").lower()
+        name = (workflow.get("name") or "").casefold()
         if not name:
             continue
-        if target in name or name in target:
-            return workflow
-    return None
+        if name == target:
+            exact_matches.append(workflow)
+        elif target in name or name in target:
+            partial_matches.append(workflow)
+
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches:
+        return None
+    return partial_matches[0] if len(partial_matches) == 1 else None
 
 
 def load_workflow_catalog() -> dict:

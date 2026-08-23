@@ -945,9 +945,13 @@ def test_workflow_enable_rejects_path_traversal_in_catalog_file(test_client, mon
 # ---------------------------------------------------------------------------
 
 
-def test_find_installed_n8n_workflow_matches_both_directions():
-    """Containment is symmetric: catalog-in-n8n and n8n-in-catalog both match."""
+def test_find_installed_n8n_workflow_prefers_exact_then_unique_containment():
+    """Exact identity wins; a unique legacy containment match remains valid."""
     from routers.workflows import find_installed_n8n_workflow
+
+    exact = {"id": "exact", "name": "Daily Digest"}
+    extended = {"id": "extended", "name": "Daily Digest Extended"}
+    assert find_installed_n8n_workflow("daily digest", [extended, exact]) == exact
 
     n8n = [{"id": "1", "name": "Daily Digest"}]
     # n8n name is a prefix of the catalog name
@@ -959,6 +963,26 @@ def test_find_installed_n8n_workflow_matches_both_directions():
     # empty names never match
     assert find_installed_n8n_workflow("", n8n) is None
     assert find_installed_n8n_workflow("Daily Digest", [{"id": "1", "name": ""}]) is None
+
+
+def test_find_installed_n8n_workflow_rejects_ambiguous_candidates():
+    """No arbitrary first-match selection is made when a name is ambiguous."""
+    from routers.workflows import find_installed_n8n_workflow
+
+    assert find_installed_n8n_workflow(
+        "Daily Digest",
+        [
+            {"id": "1", "name": "Daily Digest"},
+            {"id": "2", "name": "DAILY DIGEST"},
+        ],
+    ) is None
+    assert find_installed_n8n_workflow(
+        "Daily Digest",
+        [
+            {"id": "1", "name": "Daily Digest Emailer"},
+            {"id": "2", "name": "Daily Digest Extended"},
+        ],
+    ) is None
 
 
 def _shorter_n8n_name_catalog(tmp_path, monkeypatch):
@@ -1016,6 +1040,89 @@ def test_workflow_list_and_disable_agree_on_installed(test_client, tmp_path, mon
 
     assert disabled.status_code == 200, disabled.json()
     assert disabled.json()["status"] == "success"
+
+
+def test_workflow_disable_prefers_exact_name_over_earlier_partial_match(
+    test_client, tmp_path, monkeypatch,
+):
+    """Disable targets the exact workflow, independent of n8n list ordering."""
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "digest-wf", "name": "Daily Digest", "description": "test",
+             "file": "digest.json", "dependencies": []}
+        ],
+        "categories": {},
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+    n8n_workflows = [
+        {"id": "wrong", "name": "Daily Digest Extended"},
+        {"id": "exact", "name": "daily digest"},
+    ]
+
+    resp_mock = AsyncMock()
+    resp_mock.status = 204
+    request_ctx = AsyncMock()
+    request_ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+    request_ctx.__aexit__ = AsyncMock(return_value=False)
+    session_mock = AsyncMock()
+    session_mock.delete = MagicMock(return_value=request_ctx)
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session_mock)
+    session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "routers.workflows.get_n8n_workflows",
+        new_callable=AsyncMock,
+        return_value=n8n_workflows,
+    ), patch("aiohttp.ClientSession", return_value=session_ctx):
+        response = test_client.delete(
+            "/api/workflows/digest-wf",
+            headers=test_client.auth_headers,
+        )
+
+    assert response.status_code == 200
+    delete_url = session_mock.delete.call_args.args[0]
+    assert delete_url.endswith("/api/v1/workflows/exact")
+
+
+def test_workflow_disable_refuses_ambiguous_partial_matches(
+    test_client, tmp_path, monkeypatch,
+):
+    """Disable never deletes an arbitrary workflow when no name is unique."""
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "digest-wf", "name": "Daily Digest", "description": "test",
+             "file": "digest.json", "dependencies": []}
+        ],
+        "categories": {},
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+    n8n_workflows = [
+        {"id": "one", "name": "Daily Digest Emailer"},
+        {"id": "two", "name": "Daily Digest Extended"},
+    ]
+
+    with patch(
+        "routers.workflows.get_n8n_workflows",
+        new_callable=AsyncMock,
+        return_value=n8n_workflows,
+    ), patch("aiohttp.ClientSession") as session_cls:
+        response = test_client.delete(
+            "/api/workflows/digest-wf",
+            headers=test_client.auth_headers,
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Workflow not installed in n8n"
+    session_cls.assert_not_called()
 
 
 def test_workflow_executions_match_list_installed(test_client, tmp_path, monkeypatch):
