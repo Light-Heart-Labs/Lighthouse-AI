@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -875,6 +876,25 @@ def test_chat_connection_error(test_client, monkeypatch):
         )
 
     assert resp.status_code == 503
+
+
+def test_chat_timeout_returns_gateway_timeout(test_client):
+    """POST /api/chat maps the configured upstream timeout to HTTP 504."""
+    session_mock = MagicMock()
+    session_mock.post = MagicMock(side_effect=asyncio.TimeoutError)
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session_mock)
+    session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.setup.aiohttp.ClientSession", return_value=session_ctx):
+        response = test_client.post(
+            "/api/chat",
+            json={"message": "hi"},
+            headers=test_client.auth_headers,
+        )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "LLM request timed out"
 
 
 # ---------------------------------------------------------------------------

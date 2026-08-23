@@ -256,6 +256,9 @@ async def chat(request: ChatRequest, api_key: str = Depends(verify_api_key)):
                 else:
                     error_text = await resp.text()
                     raise HTTPException(status_code=resp.status, detail=f"LLM error: {error_text}")
+    except asyncio.TimeoutError as exc:
+        logger.warning("LLM request timed out")
+        raise HTTPException(status_code=504, detail="LLM request timed out") from exc
     except aiohttp.ClientError:
         logger.exception("Cannot reach LLM backend")
         raise HTTPException(status_code=503, detail="Cannot reach LLM backend")
