@@ -383,16 +383,55 @@ dry_run_preview() {
 stop_containers() {
     log_step "Stopping containers..."
 
-    if ! docker compose ls --quiet 2>/dev/null | grep -q "$(basename "$ODS_DIR")"; then
+    # The install tree ships no top-level docker-compose.yml (the stack is
+    # base + overlays), so a bare `docker compose down` fails with "no
+    # configuration file provided" and restore would then rsync over live
+    # volumes. Resolve the same flag set ods-uninstall.sh uses.
+    local flags=""
+
+    if [[ -f "$ODS_DIR/.compose-flags" ]]; then
+        flags="$(tr '\n' ' ' < "$ODS_DIR/.compose-flags" | xargs 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$flags" && -x "$ODS_DIR/scripts/resolve-compose-stack.sh" ]]; then
+        flags="$("$ODS_DIR/scripts/resolve-compose-stack.sh" \
+            --script-dir "$ODS_DIR" \
+            --tier "${TIER:-1}" \
+            --gpu-backend "${GPU_BACKEND:-nvidia}" \
+            --gpu-count "${GPU_COUNT:-1}" \
+            --ods-mode "${ODS_MODE:-local}" 2>/dev/null || true)"
+    fi
+
+    if [[ -z "$flags" && -f "$ODS_DIR/docker-compose.base.yml" ]]; then
+        flags="-f docker-compose.base.yml"
+        case "${GPU_BACKEND:-}" in
+            amd|nvidia|intel|apple|arc|cpu)
+                [[ -f "$ODS_DIR/docker-compose.${GPU_BACKEND}.yml" ]] && flags="$flags -f docker-compose.${GPU_BACKEND}.yml"
+                ;;
+        esac
+    fi
+
+    if [[ -z "$flags" ]]; then
+        log_error "Could not resolve the compose stack for: $ODS_DIR"
+        log_error "Refusing to restore over potentially running containers."
+        log_error "Stop the stack manually (see ods-uninstall.sh) and re-run the restore."
+        return 1
+    fi
+
+    local compose_args=()
+    read -ra compose_args <<< "$flags"
+
+    if ! docker compose "${compose_args[@]}" ps -q 2>/dev/null | grep -q .; then
         log_info "No running containers found"
         return 0
     fi
 
     cd "$ODS_DIR"
-    if docker compose down; then
+    if docker compose "${compose_args[@]}" down --remove-orphans; then
         log_success "Containers stopped"
     else
-        log_warn "Some containers may not have stopped cleanly"
+        log_error "Failed to stop containers; refusing to restore over a live stack."
+        return 1
     fi
 }
 
