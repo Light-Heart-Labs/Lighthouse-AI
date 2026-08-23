@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { useSystemStatus } from '../useSystemStatus'
 
 describe('useSystemStatus', () => {
@@ -67,6 +67,49 @@ describe('useSystemStatus', () => {
       expect(result.current.error).toBe('network down')
     })
     expect(result.current.loading).toBe(false)
+  })
+
+  test('times out a hung initial request and retries on the next poll', async () => {
+    vi.useFakeTimers()
+    const recoveredStatus = {
+      gpu: { name: 'Recovered GPU' },
+      services: [],
+      model: null,
+      bootstrap: null,
+      uptime: 200,
+    }
+    fetch
+      .mockImplementationOnce((_url, options) => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        })
+      }))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(recoveredStatus),
+      })
+
+    try {
+      const { result } = renderHook(() => useSystemStatus())
+      expect(result.current.loading).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12000)
+      })
+      expect(result.current.loading).toBe(false)
+      expect(result.current.error).toBe('Status request timed out')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+      expect(result.current.status.gpu?.name).toBe('Recovered GPU')
+      expect(result.current.error).toBeNull()
+      expect(fetch).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('does not clear status on error (preserves previous data)', async () => {
