@@ -6,9 +6,6 @@ from unittest.mock import MagicMock
 
 from host_agent_client import (
     AgentHTTPError,
-    AgentProtocolError,
-    AgentTimeout,
-    AgentUnavailable,
     _error_detail,
     _is_transient_route_connect_error,
 )
