@@ -889,7 +889,16 @@ cmd_changelog() {
         else
             log_warn "No local CHANGELOG.md found."
             log_info "Fetching latest release notes from GitHub..."
-            cmd_changelog "$(curl -sf --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | jq -r '.tag_name // empty')" || true
+            # Resolve the latest tag here instead of recursing: a failed or
+            # empty fetch would re-enter this same branch and poll GitHub
+            # unboundedly.
+            local latest_tag
+            latest_tag="$(curl -sf --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | jq -r '.tag_name // empty')" || true
+            if [[ -z "$latest_tag" ]]; then
+                log_error "Could not determine the latest release tag."
+                return 1
+            fi
+            cmd_changelog "$latest_tag"
         fi
     fi
 }
