@@ -12,6 +12,12 @@ import { fallbackServiceUrl } from '../lib/serviceUrls'
 // Derive external service URLs from current host
 const getExternalUrl = (port) => fallbackServiceUrl(port)
 
+function withQueryParameter(rawUrl, key, value) {
+  const url = new URL(rawUrl)
+  url.searchParams.set(key, value)
+  return url.toString()
+}
+
 function OsmanticLogo({ compact = false }) {
   return (
     <img
@@ -53,7 +59,7 @@ export default function Sidebar({ status, collapsed, onToggle }) {
     const links = getSidebarExternalLinks({ status, getExternalUrl, apiLinks })
     return links.map(link => {
       if (link.key === 'openclaw' && serviceTokens.openclaw) {
-        return { ...link, url: `${link.url}/?token=${serviceTokens.openclaw}` }
+        return { ...link, url: withQueryParameter(link.url, 'token', serviceTokens.openclaw) }
       }
       return link
     })
