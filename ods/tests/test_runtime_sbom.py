@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "generate-runtime-sbom.py"
 
 
-def _generate() -> tuple[bytes, dict]:
+def _generate(*args: str) -> tuple[bytes, dict]:
     result = subprocess.run(
-        [sys.executable, str(SCRIPT)],
+        [sys.executable, str(SCRIPT), *args],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -72,9 +72,54 @@ def test_output_path_is_parseable_and_matches_stdout(tmp_path):
     assert json.loads(output.read_text(encoding="utf-8")) == expected
 
 
+def test_source_commit_ties_the_inventory_to_an_exact_candidate():
+    commit = "a" * 40
+
+    first_bytes, bom = _generate("--source-commit", commit)
+    second_bytes, _ = _generate("--source-commit", commit)
+
+    assert first_bytes == second_bytes
+    assert {
+        prop["name"]: prop["value"]
+        for prop in bom["metadata"]["properties"]
+    }["ods:source-commit"] == commit
+    assert bom["metadata"]["component"]["externalReferences"] == [{
+        "type": "vcs",
+        "url": f"https://github.com/Osmantic/ODS/tree/{commit}",
+    }]
+    with tempfile.TemporaryDirectory() as temporary:
+        output = Path(temporary) / "candidate.cdx.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--source-commit", commit,
+                "--output", str(output),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        assert output.read_bytes() == first_bytes
+
+
+def test_source_commit_rejects_moving_or_abbreviated_refs():
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--source-commit", "main"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "full 40- or 64-character hexadecimal object id" in result.stderr
+
+
 if __name__ == "__main__":
     test_cli_emits_deterministic_cyclonedx_inventory()
     test_every_source_image_is_represented_once()
     with tempfile.TemporaryDirectory() as temporary:
         test_output_path_is_parseable_and_matches_stdout(Path(temporary))
-    print("PASS: 3 runtime SBOM tests")
+    test_source_commit_ties_the_inventory_to_an_exact_candidate()
+    test_source_commit_rejects_moving_or_abbreviated_refs()
+    print("PASS: 5 runtime SBOM tests")

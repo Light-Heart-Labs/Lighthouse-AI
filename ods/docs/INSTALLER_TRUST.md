@@ -217,8 +217,15 @@ Maintainers and downstream forks can reproduce the current source inventory:
 
 ```bash
 cd ods
-python3 scripts/generate-runtime-sbom.py --output artifacts/ods-runtime.cdx.json
+python3 scripts/generate-runtime-sbom.py \
+  --source-commit "$(git rev-parse HEAD)" \
+  --output artifacts/ods-runtime.cdx.json
 ```
+
+Published CI artifacts include that exact commit in CycloneDX metadata, use the
+commit in the artifact name, and ship a SHA-256 receipt beside the inventory.
+Omit `--source-commit` only for source exports where Git metadata is unavailable;
+the image inventory remains deterministic but no longer claims an exact VCS object.
 
 ## Related Validation
 

@@ -13,6 +13,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 from collections import defaultdict
@@ -61,7 +62,11 @@ def _component_identity(reference: str) -> tuple[str, str, str]:
     return name, version, purl
 
 
-def build_bom(root: Path = ROOT, checker: ModuleType | None = None) -> dict:
+def build_bom(
+    root: Path = ROOT,
+    checker: ModuleType | None = None,
+    source_commit: str | None = None,
+) -> dict:
     checker = checker or _load_pin_checker(root / "scripts" / "check-dependency-pins.py")
     scoped_refs = [
         ("runtime", ref) for ref in checker.discover_image_refs(root)
@@ -102,24 +107,35 @@ def build_bom(root: Path = ROOT, checker: ModuleType | None = None) -> dict:
 
     ods_version = _ods_version(root)
     root_ref = f"pkg:github/Osmantic/ODS@{quote(ods_version, safe='')}"
+    root_component = {
+        "type": "application",
+        "bom-ref": root_ref,
+        "name": "ODS",
+        "version": ods_version,
+        "purl": root_ref,
+    }
+    metadata_properties = [
+        {
+            "name": "ods:generation-mode",
+            "value": "offline-source-inventory",
+        }
+    ]
+    if source_commit is not None:
+        root_component["externalReferences"] = [{
+            "type": "vcs",
+            "url": f"https://github.com/Osmantic/ODS/tree/{source_commit}",
+        }]
+        metadata_properties.append({
+            "name": "ods:source-commit",
+            "value": source_commit,
+        })
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
         "metadata": {
-            "component": {
-                "type": "application",
-                "bom-ref": root_ref,
-                "name": "ODS",
-                "version": ods_version,
-                "purl": root_ref,
-            },
-            "properties": [
-                {
-                    "name": "ods:generation-mode",
-                    "value": "offline-source-inventory",
-                }
-            ],
+            "component": root_component,
+            "properties": metadata_properties,
         },
         "components": components,
         "dependencies": [
@@ -158,12 +174,26 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="write atomically to this path (default: stdout)",
     )
+    parser.add_argument(
+        "--source-commit",
+        type=_source_commit,
+        help="embed the exact 40- or 64-character Git commit in the inventory",
+    )
     return parser.parse_args()
+
+
+def _source_commit(value: str) -> str:
+    normalized = value.strip().lower()
+    if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", normalized) is None:
+        raise argparse.ArgumentTypeError(
+            "source commit must be a full 40- or 64-character hexadecimal object id"
+        )
+    return normalized
 
 
 def main() -> int:
     args = parse_args()
-    content = _serialized(build_bom())
+    content = _serialized(build_bom(source_commit=args.source_commit))
     if args.output is None:
         # Write bytes so stdout is byte-for-byte reproducible on Windows too;
         # TextIO otherwise translates LF to CRLF.

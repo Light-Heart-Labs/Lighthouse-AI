@@ -38,14 +38,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          python3 scripts/generate-runtime-sbom.py --output artifacts/ods-runtime.cdx.json
-          python3 scripts/generate-runtime-sbom.py > artifacts/ods-runtime.second.cdx.json
+          python3 scripts/generate-runtime-sbom.py --source-commit "$GITHUB_SHA" --output artifacts/ods-runtime.cdx.json
+          python3 scripts/generate-runtime-sbom.py --source-commit "$GITHUB_SHA" > artifacts/ods-runtime.second.cdx.json
           cmp artifacts/ods-runtime.cdx.json artifacts/ods-runtime.second.cdx.json
+          sha256sum artifacts/ods-runtime.cdx.json > artifacts/ods-runtime.cdx.json.sha256
           python3 tests/test_runtime_sbom.py
 
       - name: Upload runtime inventory
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ods-runtime-cyclonedx
-          path: ods/artifacts/ods-runtime.cdx.json
+          name: ods-runtime-cyclonedx-${{ github.sha }}
+          path: |
+            ods/artifacts/ods-runtime.cdx.json
+            ods/artifacts/ods-runtime.cdx.json.sha256
           if-no-files-found: error
