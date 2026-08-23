@@ -59,6 +59,58 @@ def test_remote_provider_status_requires_auth(test_client):
     assert resp.status_code == 401
 
 
+def test_remote_provider_receipts_require_json_booleans():
+    from routers import remote_provider_status as rps
+
+    probe = rps._safe_probe_receipt({
+        "ok": "false",
+        "resolution": {"ok": 1},
+    })
+    route = rps._safe_route_status({"proven": "false", "lastProbe": {"ok": 1}})
+    supervisor = rps._safe_ssh_supervisor_status({
+        "schema": "ods.remote-provider-ssh-supervisor-plan.v1",
+        "ready": "false",
+        "readyToStart": 1,
+        "secrets": {"sshIdentity": {"configured": "false"}},
+    })
+
+    assert probe is not None
+    assert probe["ok"] is False
+    assert probe["resolution"]["ok"] is False
+    assert route["proven"] is False
+    assert route["lastProbe"]["ok"] is False
+    assert supervisor["ready"] is False
+    assert supervisor["readyToStart"] is False
+    assert supervisor["secrets"]["sshIdentity"]["configured"] is False
+
+
+def test_remote_provider_egress_receipts_require_json_booleans():
+    from routers import remote_provider_status as rps
+
+    health = rps._sanitize_egress_health({
+        "ready": "false",
+        "secret": {"configured": 1},
+        "resolution": {"ok": "false"},
+        "tunnel": {"ok": "false", "ready": 1},
+    })
+    probe = rps._sanitize_egress_probe_response({
+        "schema": "ods.remote-provider-egress-probe.v1",
+        "ok": "false",
+        "probe": {"ok": "false"},
+        "tunnel": {"ok": 1, "ready": "false"},
+    })
+
+    assert health["ready"] is False
+    assert health["secret"]["configured"] is False
+    assert health["resolution"]["ok"] is False
+    assert health["tunnel"]["ok"] is False
+    assert health["tunnel"]["ready"] is False
+    assert probe["ok"] is False
+    assert probe["probe"]["ok"] is False
+    assert probe["tunnel"]["ok"] is False
+    assert probe["tunnel"]["ready"] is False
+
+
 def test_remote_provider_status_missing_state_is_disabled(
     test_client,
     monkeypatch,
