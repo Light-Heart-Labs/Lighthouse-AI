@@ -67,6 +67,26 @@ describe('useDownloadProgress', () => {
     expect(result.current.progress.percent).toBe(100)
   })
 
+  test('uses the backend percentage while total bytes are unknown', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        status: 'downloading',
+        model: 'bootstrap-model',
+        percent: 37.5,
+        bytesDownloaded: 3e9,
+        bytesTotal: 0,
+      })
+    })
+
+    const { result } = renderHook(() => useDownloadProgress())
+
+    await waitFor(() => {
+      expect(result.current.isDownloading).toBe(true)
+    })
+    expect(result.current.progress.percent).toBe(37.5)
+  })
+
   test('clears progress when status is complete', async () => {
     fetch.mockResolvedValue({
       ok: true,
