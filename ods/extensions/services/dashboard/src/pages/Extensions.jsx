@@ -1121,7 +1121,10 @@ function ConsoleModal({ ext, onClose }) {
   // Fetch install progress info
   useEffect(() => {
     let active = true
+    let inFlight = false
     const fetchProgress = async () => {
+      if (inFlight) return
+      inFlight = true
       try {
         const res = await fetchJson(`/api/extensions/${ext.id}/progress`)
         if (res.ok && active) {
@@ -1129,6 +1132,7 @@ function ConsoleModal({ ext, onClose }) {
           if (data.status !== 'idle') setInstallInfo(data)
         }
       } catch { /* ignore */ }
+      finally { inFlight = false }
     }
     fetchProgress()
     const interval = setInterval(fetchProgress, 5000)
