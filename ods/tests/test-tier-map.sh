@@ -551,6 +551,13 @@ else
 fi
 rm -f "$_selector_catalog"
 trap - EXIT
+
+echo ""
+if python3 "$SCRIPT_DIR/tests/test-gemma4-artifact-pins.py"; then
+    ((PASS++))
+else
+    ((FAIL++))
+fi
 echo ""
 
 # --- Summary ---
