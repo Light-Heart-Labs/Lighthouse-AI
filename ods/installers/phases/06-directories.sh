@@ -44,6 +44,12 @@ if $DRY_RUN; then
     [[ "$ENABLE_OPENCLAW" == "true" ]] && log "[DRY RUN] Would configure OpenClaw (model: $LLM_MODEL, config: ${OPENCLAW_CONFIG:-default})"
     log "[DRY RUN] Would validate .env against schema"
 else
+    # shellcheck source=../lib/llama-memory-budget.sh
+    source "$SCRIPT_DIR/installers/lib/llama-memory-budget.sh"
+
+    # shellcheck source=../../lib/dotenv-quote.sh
+    source "$SCRIPT_DIR/lib/dotenv-quote.sh"
+
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
         # shellcheck source=../../lib/rootless-ownership.sh
@@ -79,12 +85,18 @@ else
         echo "$default"
     }
 
-    _phase06_compose_uid=$(_env_get UID "${SUDO_UID:-$(id -u)}")
-    _phase06_compose_gid=$(_env_get GID "${SUDO_GID:-$(id -g)}")
+    _phase06_compose_uid=$(_env_get ODS_UID "")
+    _phase06_compose_gid=$(_env_get ODS_GID "")
+    # Migrate the old Compose-only UID/GID keys without writing Bash's
+    # readonly UID variable back into the generated dotenv file.
+    [[ -n "$_phase06_compose_uid" ]] \
+        || _phase06_compose_uid=$(_env_get UID "${SUDO_UID:-$(id -u)}")
+    [[ -n "$_phase06_compose_gid" ]] \
+        || _phase06_compose_gid=$(_env_get GID "${SUDO_GID:-$(id -g)}")
     [[ "$_phase06_compose_uid" =~ ^[0-9]+$ ]] \
-        || error "UID must be a non-negative integer, got: $_phase06_compose_uid"
+        || error "ODS_UID must be a non-negative integer, got: $_phase06_compose_uid"
     [[ "$_phase06_compose_gid" =~ ^[0-9]+$ ]] \
-        || error "GID must be a non-negative integer, got: $_phase06_compose_gid"
+        || error "ODS_GID must be a non-negative integer, got: $_phase06_compose_gid"
 
     # Create directories
     _phase06_step "create-directories"
@@ -95,6 +107,28 @@ else
     mkdir -p "$INSTALL_DIR"/data/langfuse/{postgres,clickhouse,redis,minio}
     mkdir -p "$INSTALL_DIR"/config/{n8n,litellm,openclaw,searxng}
 
+    _phase06_repair_host_path() {
+        local target="$1" description="$2"
+
+        if $_phase06_rootless; then
+            local relative="${target#"$INSTALL_DIR"/}"
+            if [[ "$relative" == "$target" ]] || \
+               ! ods_rootless_make_host_writable "$INSTALL_DIR" "$relative"; then
+                error "Failed to repair $description in the rootless namespace: $target"
+                return 1
+            fi
+            return 0
+        fi
+        if ! ods_sudo_available; then
+            error "Cannot repair $description without privileged access: $target. Fix its ownership manually, then re-run ODS."
+            return 1
+        fi
+        if ! ods_sudo chown -R "$(id -u):$(id -g)" "$target" 2>/dev/null; then
+            error "Failed to repair $description: $target"
+            return 1
+        fi
+    }
+
     # Hermes remaps its in-container user to the persisted host UID/GID and
     # keeps HERMES_HOME at data/hermes mounted as /opt/data.
     # Upstream intentionally makes that directory 0700. A reinstall running
@@ -102,9 +136,22 @@ else
     # status and ODS Talk JSON-RPC paths fail with PermissionError.
     if ! $_phase06_rootless \
         && [[ "${ENABLE_HERMES:-false}" == "true" && -d "$INSTALL_DIR/data/hermes" ]]; then
-        sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid" "$INSTALL_DIR/data/hermes" 2>/dev/null || \
-            warn "Failed to restore data/hermes ownership to $_phase06_compose_uid:$_phase06_compose_gid (Hermes dashboard may be unhealthy)"
-        sudo chmod 700 "$INSTALL_DIR/data/hermes" 2>/dev/null || true
+        _hermes_metadata=$(stat -c '%u:%g:%a' "$INSTALL_DIR/data/hermes" 2>/dev/null || true)
+        if [[ "$_hermes_metadata" != "$_phase06_compose_uid:$_phase06_compose_gid:700" ]]; then
+            if ! ods_sudo_available; then
+                error "Hermes requires data/hermes ownership $_phase06_compose_uid:$_phase06_compose_gid and mode 700 with a rootful runtime. Grant privileged access or disable Hermes, then re-run ODS."
+                return 1
+            fi
+            ods_sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid" "$INSTALL_DIR/data/hermes" 2>/dev/null || {
+                error "Failed to restore data/hermes ownership to $_phase06_compose_uid:$_phase06_compose_gid"
+                return 1
+            }
+            ods_sudo chmod 700 "$INSTALL_DIR/data/hermes" 2>/dev/null || {
+                error "Failed to preserve private mode 700 on data/hermes"
+                return 1
+            }
+        fi
+        unset _hermes_metadata
     fi
 
     # Fix ownership of data/config dirs that may have been created by containers
@@ -113,13 +160,13 @@ else
         for _data_dir in "$INSTALL_DIR"/data/*/; do
             [[ "${ENABLE_HERMES:-false}" == "true" && "$_data_dir" == "$INSTALL_DIR/data/hermes/" ]] && continue
             if [[ -d "$_data_dir" ]] && ! [[ -w "$_data_dir" ]]; then
-                sudo chown -R "$(id -u):$(id -g)" "$_data_dir" 2>/dev/null || true
+                _phase06_repair_host_path "$_data_dir" "container-owned data directory" || return 1
             fi
         done
     fi
     for _cfg_dir in "$INSTALL_DIR"/config/*/; do
         if [[ -d "$_cfg_dir" ]] && ! [[ -w "$_cfg_dir" ]]; then
-            sudo chown -R "$(id -u):$(id -g)" "$_cfg_dir" 2>/dev/null || true
+            _phase06_repair_host_path "$_cfg_dir" "container-owned config directory" || return 1
         fi
     done
 
@@ -132,7 +179,7 @@ else
             [[ -d "$INSTALL_DIR/$_root" ]] || continue
             for _d in "$INSTALL_DIR/$_root"/*/; do
                 [[ "${ENABLE_HERMES:-false}" == "true" && "$_d" == "$INSTALL_DIR/data/hermes/" ]] && continue
-                [[ -d "$_d" ]] && ! [[ -w "$_d" ]] && _cant_write="$_cant_write ${_d#$INSTALL_DIR/}"
+                [[ -d "$_d" ]] && ! [[ -w "$_d" ]] && _cant_write="$_cant_write ${_d#"$INSTALL_DIR"/}"
             done
         done
         if [[ -n "$_cant_write" ]]; then
@@ -467,6 +514,10 @@ raise SystemExit(1)' 2>/dev/null && return 0
     # 32 random bytes hex-encoded. Rotating invalidates every issued cookie —
     # the only revocation mechanism we have today, so don't rotate casually.
     ODS_SESSION_SECRET=$(_env_get ODS_SESSION_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    # Upstream Hermes otherwise generates this token at process start. Keep it
+    # stable so an already-open dashboard can reconnect after a container
+    # restart instead of receiving a bare WebSocket 403.
+    HERMES_DASHBOARD_SESSION_TOKEN=$(_env_get HERMES_DASHBOARD_SESSION_TOKEN "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     SHIELD_API_KEY=$(_env_get SHIELD_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     DIFY_SECRET_KEY=$(_env_get DIFY_SECRET_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
     QDRANT_API_KEY=$(_env_get QDRANT_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
@@ -515,6 +566,14 @@ raise SystemExit(1)' 2>/dev/null && return 0
         fi
         EXTERNAL_LLM_ACTIVE=true
         LLM_MODEL="$EXTERNAL_SELECTED_MODEL"
+    fi
+    LLAMA_SERVER_MEMORY_LIMIT_VALUE=""
+    if [[ "$GPU_BACKEND" == "nvidia" && "$EXTERNAL_LLM_ACTIVE" != "true" && "${ODS_MODE:-local}" != "cloud" ]]; then
+        _docker_memory_gb="$(ods_docker_memory_gb 2>/dev/null || true)"
+        _effective_memory_gb="$(ods_effective_container_memory_gb "${RAM_GB:-0}" "$_docker_memory_gb")"
+        _llama_memory_default="$(ods_default_nvidia_llama_memory_limit "$_effective_memory_gb")"
+        LLAMA_SERVER_MEMORY_LIMIT_VALUE="$(_env_get LLAMA_SERVER_MEMORY_LIMIT "$_llama_memory_default")"
+        unset _docker_memory_gb _effective_memory_gb _llama_memory_default
     fi
     ODS_MODE_VALUE="$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "local"; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
     ODS_MODEL_SWITCHBOARD_VALUE=$(_env_get ODS_MODEL_SWITCHBOARD "${ODS_MODEL_SWITCHBOARD:-observe}")
@@ -710,6 +769,9 @@ raise SystemExit(1)' 2>/dev/null && return 0
     RAG_OPENAI_API_BASE_URL_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_BASE_URL "${RAG_OPENAI_API_BASE_URL:-}")
     RAG_OPENAI_API_KEY_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_KEY "${RAG_OPENAI_API_KEY:-}")
     EMBEDDINGS_MEMORY_LIMIT_VALUE=$(_env_get EMBEDDINGS_MEMORY_LIMIT "${EMBEDDINGS_MEMORY_LIMIT:-4G}")
+    N_GPU_LAYERS_VALUE=$(_env_get N_GPU_LAYERS "${N_GPU_LAYERS:-auto}")
+    N_GPU_LAYERS_VALUE="$(printf '%s' "$N_GPU_LAYERS_VALUE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    N_GPU_LAYERS_VALUE="${N_GPU_LAYERS_VALUE:-auto}"
 
     _phase06_lemonade_uses_host_9000() {
         [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]] && return 0
@@ -814,18 +876,19 @@ CTX_SIZE=${MAX_CONTEXT}
 MODEL_RECOMMENDED_MODEL=${MODEL_RECOMMENDED_MODEL_VALUE}
 MODEL_RECOMMENDED_GGUF=${MODEL_RECOMMENDED_GGUF_VALUE}
 MODEL_RECOMMENDED_CONTEXT=${MODEL_RECOMMENDED_CONTEXT_VALUE}
-MODEL_RECOMMENDATION_SOURCE=${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}
-MODEL_RECOMMENDATION_POLICY=${MODEL_RECOMMENDATION_POLICY:-tier-map}
-MODEL_RECOMMENDATION_CONFIDENCE=${MODEL_RECOMMENDATION_CONFIDENCE:-medium}
-MODEL_RECOMMENDATION_REASON=${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${TIER} (${TIER_NAME}) for ${GPU_BACKEND} backend; benchmark locally after first launch.}
-MODEL_RECOMMENDED_ALTERNATIVES=${MODEL_RECOMMENDED_ALTERNATIVES:-}
+MODEL_RECOMMENDATION_SOURCE=$(dotenv_quote "${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}")
+MODEL_RECOMMENDATION_POLICY=$(dotenv_quote "${MODEL_RECOMMENDATION_POLICY:-tier-map}")
+MODEL_RECOMMENDATION_CONFIDENCE=$(dotenv_quote "${MODEL_RECOMMENDATION_CONFIDENCE:-medium}")
+MODEL_RECOMMENDATION_REASON=$(dotenv_quote "${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${TIER} (${TIER_NAME}) for ${GPU_BACKEND} backend; benchmark locally after first launch.}")
+MODEL_RECOMMENDED_ALTERNATIVES=$(dotenv_quote "${MODEL_RECOMMENDED_ALTERNATIVES:-}")
 MODEL_PERFORMANCE_SOURCE=benchmark_required
-MODEL_PERFORMANCE_LABEL=Benchmark after first launch
+MODEL_PERFORMANCE_LABEL=$(dotenv_quote "Benchmark after first launch")
 GPU_BACKEND=${GPU_BACKEND}
 SYSTEM_RAM_GB=${RAM_GB:-0}
-N_GPU_LAYERS=${N_GPU_LAYERS:-99}
+N_GPU_LAYERS=${N_GPU_LAYERS_VALUE}
 $(if [[ -n "${LLAMA_SERVER_IMAGE:-}" ]]; then echo "LLAMA_SERVER_IMAGE=${LLAMA_SERVER_IMAGE}"; fi)
 $(if [[ -n "${LLAMA_SERVER_IMAGE_FALLBACK:-}" ]]; then echo "LLAMA_SERVER_IMAGE_FALLBACK=${LLAMA_SERVER_IMAGE_FALLBACK}"; fi)
+$(if [[ -n "$LLAMA_SERVER_MEMORY_LIMIT_VALUE" ]]; then echo "LLAMA_SERVER_MEMORY_LIMIT=${LLAMA_SERVER_MEMORY_LIMIT_VALUE}"; fi)
 #=== llama.cpp Runtime Tuning ===
 LLAMA_ARG_FLASH_ATTN=${LLAMA_ARG_FLASH_ATTN:-auto}
 LLAMA_ARG_CACHE_TYPE_K=${LLAMA_ARG_CACHE_TYPE_K:-f16}
@@ -853,9 +916,9 @@ COMFYUI_CPU_LIMIT=${COMFYUI_CPU_LIMIT}
 COMFYUI_CPU_RESERVATION=${COMFYUI_CPU_RESERVATION}
 
 #=== Host File Ownership ===
-# Docker Compose reads these from .env; Bash's readonly UID is not exported.
-UID=${_phase06_compose_uid}
-GID=${_phase06_compose_gid}
+# Docker Compose reads these from .env without colliding with Bash's readonly UID.
+ODS_UID=${_phase06_compose_uid}
+ODS_GID=${_phase06_compose_gid}
 
 $(if [[ "$GPU_BACKEND" == "amd" ]]; then
     # Read gfx target from topology detection. Falls back to gfx1151 (Strix Halo)
@@ -953,6 +1016,7 @@ WEBUI_SECRET=${WEBUI_SECRET}
 DASHBOARD_API_KEY=${DASHBOARD_API_KEY}
 ODS_AGENT_KEY=${ODS_AGENT_KEY}
 ODS_SESSION_SECRET=${ODS_SESSION_SECRET}
+HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
 SHIELD_API_KEY=${SHIELD_API_KEY}
 N8N_USER=admin@ods.local
 N8N_PASS=${N8N_PASS}
@@ -1183,7 +1247,7 @@ ENV_EOF
     _phase06_step "generate-searxng-config"
     mkdir -p "$INSTALL_DIR/config/searxng"
     if [[ -f "$INSTALL_DIR/config/searxng/settings.yml" ]] && ! [[ -w "$INSTALL_DIR/config/searxng/settings.yml" ]]; then
-        sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR/config/searxng/settings.yml" 2>/dev/null || true
+        _phase06_repair_host_path "$INSTALL_DIR/config/searxng/settings.yml" "SearXNG configuration" || return 1
     fi
     cat > "$INSTALL_DIR/config/searxng/settings.yml" << SEARXNG_EOF
 use_default_settings: true

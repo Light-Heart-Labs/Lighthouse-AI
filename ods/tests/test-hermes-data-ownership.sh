@@ -14,22 +14,22 @@ fail() {
     exit 1
 }
 
-grep -Fq 'sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid" "$INSTALL_DIR/data/hermes"' "$PHASE06" \
+grep -Fq 'ods_sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid" "$INSTALL_DIR/data/hermes"' "$PHASE06" \
     || fail "phase 06 must align data/hermes with the persisted compose IDs"
 
-grep -Fq 'UID=${_phase06_compose_uid}' "$PHASE06" \
+grep -Fq 'ODS_UID=${_phase06_compose_uid}' "$PHASE06" \
     || fail "phase 06 must persist the host UID for Docker Compose"
 
-grep -Fq 'GID=${_phase06_compose_gid}' "$PHASE06" \
+grep -Fq 'ODS_GID=${_phase06_compose_gid}' "$PHASE06" \
     || fail "phase 06 must persist the host GID for Docker Compose"
 
-grep -Fq 'upsert_env_value "$env_path" "UID" "$host_uid"' "$MACOS_ENV" \
+grep -Fq 'upsert_env_value "$env_path" "ODS_UID" "$compose_uid"' "$MACOS_ENV" \
     || fail "macOS upgrades must backfill the host UID"
 
-grep -Fq 'upsert_env_value "$env_path" "GID" "$host_gid"' "$MACOS_ENV" \
+grep -Fq 'upsert_env_value "$env_path" "ODS_GID" "$compose_gid"' "$MACOS_ENV" \
     || fail "macOS upgrades must backfill the host GID"
 
-grep -Fq 'sudo chmod 700 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
+grep -Fq 'ods_sudo chmod 700 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
     || fail "phase 06 must preserve Hermes private HERMES_HOME mode"
 
 grep -Fq '[[ "${ENABLE_HERMES:-false}" == "true" && "$_data_dir" == "$INSTALL_DIR/data/hermes/" ]] && continue' "$PHASE06" \
