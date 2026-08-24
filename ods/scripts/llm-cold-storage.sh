@@ -78,7 +78,7 @@ get_last_access_days() {
     local now
     now="$(date +%s)"
     local age_secs
-    age_secs="$(echo "$now - ${newest_atime%.*}" | bc)"
+    age_secs=$(( now - ${newest_atime%.*} ))
     echo "$(( age_secs / 86400 ))"
 }
 
@@ -88,6 +88,22 @@ do_archive() {
     local skipped=0
 
     log "========== LLM cold storage scan started (dry_run=$dry_run) =========="
+
+    # PR #20: Warn if cold storage is on the same filesystem as the cache
+    # (mv on same FS just renames — no disk space is freed)
+    mkdir -p "$COLD_DIR"
+    local _cache_dev _cold_dev
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        _cache_dev=$(stat -f%d "$HF_CACHE" 2>/dev/null || echo "")
+        _cold_dev=$(stat -f%d "$COLD_DIR" 2>/dev/null || echo "")
+    else
+        _cache_dev=$(stat -c%d "$HF_CACHE" 2>/dev/null || echo "")
+        _cold_dev=$(stat -c%d "$COLD_DIR" 2>/dev/null || echo "")
+    fi
+    if [[ -n "$_cache_dev" && -n "$_cold_dev" && "$_cache_dev" == "$_cold_dev" ]]; then
+        log "WARNING: COLD_DIR ($COLD_DIR) is on the same filesystem as HF_CACHE ($HF_CACHE)."
+        log "WARNING: Moving models will NOT free disk space. Use a different drive for COLD_DIR."
+    fi
 
     for model_dir in "$HF_CACHE"/models--*/; do
         [[ -d "$model_dir" ]] || continue
