@@ -144,9 +144,12 @@ for f in "$SESSIONS_DIR"/*.jsonl; do
     [ -f "$f" ] || continue
     BASENAME=$(basename "$f" .jsonl)
 
-    # Check if this session is active
+    # Check if this session is active. ACTIVE_IDS is empty when the gateway
+    # has no registered sessions (fresh install or all wiped); expanding it
+    # unguarded aborts with "unbound variable" under `set -u` on Bash < 4.4,
+    # so the cleanup timer dies exactly when there is nothing to keep.
     IS_ACTIVE=false
-    for ID in "${ACTIVE_IDS[@]}"; do
+    for ID in ${ACTIVE_IDS[@]+"${ACTIVE_IDS[@]}"}; do
         if [ "$BASENAME" = "$ID" ]; then
             IS_ACTIVE=true
             break

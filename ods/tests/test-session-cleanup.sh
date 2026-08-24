@@ -304,6 +304,42 @@ else
 fi
 
 # ============================================================================
+# Test 8g: Empty active set must not abort under set -u (Bash < 4.4 guard)
+# ============================================================================
+# A fresh install (or a gateway with every session wiped) has sessions.json
+# entries without sessionId or an empty object entirely. ACTIVE_IDS then ends
+# up empty, and an unguarded "${ACTIVE_IDS[@]}" loop kills the cleanup timer
+# with "unbound variable" on Bash < 4.4 — precisely when there is nothing to
+# keep, so bloated files are never pruned.
+SDIR7="$TEMP_DIR/empty-active"
+mkdir -p "$SDIR7"
+printf '{}' > "$SDIR7/sessions.json"
+printf 'stale payload\n' > "$SDIR7/orphaned.jsonl"
+
+empty_exit=0
+SESSIONS_DIR="$SDIR7" MAX_SIZE=100 \
+    bash "$SESSION_CLEANUP_SCRIPT" >"$TEMP_DIR/empty-active.log" 2>&1 || empty_exit=$?
+if [[ $empty_exit -ne 0 ]] && grep -q 'unbound variable' "$TEMP_DIR/empty-active.log"; then
+    fail "Empty ACTIVE_IDS aborted the run under nounset (exit $empty_exit)"
+elif [[ $empty_exit -ne 0 ]]; then
+    fail "Empty ACTIVE_IDS run failed unexpectedly (exit $empty_exit)"
+else
+    pass "Empty active set completes without an unbound-variable abort"
+fi
+
+if [[ ! -f "$SDIR7/orphaned.jsonl" ]]; then
+    pass "Orphaned session file is still removed when no session is active"
+else
+    fail "Orphaned session file survived an empty-index cleanup"
+fi
+
+if ! grep -qE 'for ID in "\$\{ACTIVE_IDS\[@\]\}"' "$SESSION_CLEANUP_SCRIPT"; then
+    pass "ACTIVE_IDS loop uses the set -u safe guarded expansion"
+else
+    fail "Unguarded ACTIVE_IDS expansion remains (crashes on Bash < 4.4)"
+fi
+
+# ============================================================================
 # Test 9: Script does not use silent error suppression
 # ============================================================================
 suppression_count=0
