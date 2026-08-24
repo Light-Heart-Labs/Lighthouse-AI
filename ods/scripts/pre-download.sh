@@ -105,7 +105,16 @@ check_dependencies() {
     # Ensure huggingface_hub is installed
     if ! "$pycmd" -c "import huggingface_hub" 2>/dev/null; then
         log "Installing huggingface_hub..."
-        "$pipcmd" install -q huggingface_hub
+        # PEP 668 (Debian 12+, Fedora 38+): system-wide pip is blocked.
+        # Try --user first, then --break-system-packages as last resort.
+        if ! "$pipcmd" install --user -q huggingface_hub 2>/dev/null; then
+            warn "pip --user failed; trying --break-system-packages..."
+            "$pipcmd" install --break-system-packages -q huggingface_hub || {
+                error "Failed to install huggingface_hub. Install manually:"
+                error "  $pipcmd install --user huggingface_hub"
+                exit 1
+            }
+        fi
     fi
 
     export ODS_PYTHON_CMD="$pycmd"
