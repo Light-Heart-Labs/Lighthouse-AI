@@ -3081,6 +3081,118 @@ validate_preset_compatibility() {
     return 0
 }
 
+# Validate and extract one preset archive into a private staging directory.
+# The same open tar handle is used for inspection and extraction so the
+# archive cannot change between those two operations. Only regular files and
+# directories under one top-level preset root are accepted; links and special
+# files are unnecessary for preset data and could escape later reads.
+_extract_preset_archive() {
+    local archive="$1"
+    local destination="$2"
+    local py
+    py=$(command -v python3 || command -v python || true)
+    [[ -n "$py" ]] || {
+        log_error "Python is required to validate preset archives"
+        return 1
+    }
+
+    "$py" - "$archive" "$destination" <<'PYEOF'
+import sys
+import tarfile
+from pathlib import Path, PurePosixPath
+
+archive = Path(sys.argv[1]).resolve(strict=True)
+destination = Path(sys.argv[2])
+
+try:
+    with tarfile.open(archive, mode="r:gz") as bundle:
+        members = bundle.getmembers()
+        if not members:
+            raise ValueError("archive is empty")
+
+        root = None
+        for member in members:
+            name = member.name
+            path = PurePosixPath(name)
+            if not name or "\\" in name or path.is_absolute():
+                raise ValueError(f"unsafe member path: {name!r}")
+            if not path.parts or any(part in ("", ".", "..") for part in path.parts):
+                raise ValueError(f"unsafe member path: {name!r}")
+            if ":" in path.parts[0]:
+                raise ValueError(f"unsafe preset root: {path.parts[0]!r}")
+            if root is None:
+                root = path.parts[0]
+                if root.startswith(".preset-import."):
+                    raise ValueError("reserved preset root")
+            elif path.parts[0] != root:
+                raise ValueError("archive contains multiple preset roots")
+            if not (member.isfile() or member.isdir()):
+                raise ValueError(f"unsupported archive member type: {name!r}")
+
+        for member in members:
+            bundle.extract(member, path=destination)
+except (OSError, tarfile.TarError, ValueError) as exc:
+    print(f"Invalid preset archive: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(root)
+PYEOF
+}
+
+# Import in a subshell so the staging cleanup trap cannot leak into the main
+# CLI process. Existing presets are moved aside only after the staged preset
+# passes validation, and restored if publication fails.
+_import_preset_archive() (
+    local archive="$1"
+    [[ -f "$archive" ]] || error "Archive not found: $archive"
+
+    log "Validating archive..."
+    mkdir -p "$PRESETS_DIR"
+
+    local staging_dir
+    staging_dir=$(mktemp -d "$PRESETS_DIR/.preset-import.XXXXXX") \
+        || error "Failed to create preset import staging directory"
+    trap 'rm -rf "$staging_dir"' EXIT
+
+    local archive_name
+    if ! archive_name=$(_extract_preset_archive "$archive" "$staging_dir"); then
+        error "Preset archive validation failed"
+    fi
+
+    local staged_preset="$staging_dir/$archive_name"
+    [[ -f "$staged_preset/meta.txt" ]] \
+        || error "Invalid preset: missing meta.txt"
+    [[ -f "$staged_preset/extensions.list" ]] \
+        || error "Invalid preset: missing extensions.list"
+
+    local target="$PRESETS_DIR/$archive_name"
+    local previous=""
+    if [[ -e "$target" || -L "$target" ]]; then
+        warn "Preset '${archive_name}' already exists"
+        read -p "Overwrite? [y/N] " -n 1 -r
+        echo ""
+        [[ $REPLY =~ ^[Yy]$ ]] || { log "Cancelled."; return 0; }
+
+        previous="$staging_dir/.previous"
+        mv "$target" "$previous" \
+            || error "Failed to stage existing preset for replacement"
+    fi
+
+    if ! mv "$staged_preset" "$target"; then
+        if [[ -n "$previous" && -e "$previous" ]]; then
+            if ! mv "$previous" "$target"; then
+                trap - EXIT
+                log_error "Failed to restore the previous preset after publish failure"
+                log_error "Previous preset preserved at: $previous"
+            fi
+        fi
+        error "Failed to publish imported preset"
+    fi
+
+    success "Preset '${archive_name}' imported successfully"
+    log "Use 'ods preset load ${archive_name}' to apply it"
+)
+
 cmd_preset() {
     check_install
     sr_load
@@ -3265,49 +3377,7 @@ META
         import|i)
             local archive="${2:-}"
             [[ -z "$archive" ]] && { log "Usage: ods preset import <preset.tar.gz>"; exit 1; }
-            [[ -f "$archive" ]] || error "Archive not found: $archive"
-
-            log "Validating archive..."
-
-            # Security: Check for path traversal
-            if tar tzf "$archive" 2>/dev/null | grep -qE '(^/|\.\./|\.\.\\)'; then
-                error "Archive contains unsafe paths (absolute or ../) — refusing to import"
-            fi
-
-            # Validate archive structure
-            local archive_name
-            archive_name=$(tar tzf "$archive" 2>/dev/null | sed -n '1p' | cut -d/ -f1)
-            [[ -z "$archive_name" ]] && error "Invalid archive structure"
-
-            # Check if preset already exists
-            if [[ -d "${PRESETS_DIR}/${archive_name}" ]]; then
-                warn "Preset '${archive_name}' already exists"
-                read -p "Overwrite? [y/N] " -n 1 -r
-                echo ""
-                [[ $REPLY =~ ^[Yy]$ ]] || { log "Cancelled."; return 0; }
-                rm -rf "${PRESETS_DIR}/${archive_name}"
-            fi
-
-            # Extract archive
-            mkdir -p "$PRESETS_DIR"
-            cd "$PRESETS_DIR"
-            if tar xzf "$archive" 2>/dev/null; then
-                # Validate extracted preset
-                if [[ ! -f "${archive_name}/meta.txt" ]]; then
-                    rm -rf "${archive_name}"
-                    error "Invalid preset: missing meta.txt"
-                fi
-                if [[ ! -f "${archive_name}/extensions.list" ]]; then
-                    rm -rf "${archive_name}"
-                    error "Invalid preset: missing extensions.list"
-                fi
-
-                success "Preset '${archive_name}' imported successfully"
-                log "Use 'ods preset load ${archive_name}' to apply it"
-            else
-                error "Failed to extract archive"
-            fi
-            cd "$INSTALL_DIR"
+            _import_preset_archive "$archive"
             ;;
 
         diff|d)
