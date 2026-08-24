@@ -308,7 +308,7 @@ _macos_patch_hermes_persisted_config() {
         project_image="$(basename "$INSTALL_DIR" | tr '[:upper:]' '[:lower:]')-dashboard-api:latest"
         hermes_image="$(docker inspect --format '{{.Config.Image}}' ods-hermes 2>/dev/null || true)"
         [[ -n "$hermes_image" ]] || hermes_image="$(read_env_value "${INSTALL_DIR}/.env" "HERMES_AGENT_IMAGE")"
-        [[ -n "$hermes_image" ]] || hermes_image="nousresearch/hermes-agent:v2026.5.16"
+        [[ -n "$hermes_image" ]] || hermes_image="nousresearch/hermes-agent:v2026.6.5"
 
         # The Hermes runtime image is not guaranteed to include PyYAML. Probe
         # candidates instead of treating a cached image as a usable migrator.
@@ -2182,13 +2182,15 @@ else
         _cache_type_k=$(grep '^LLAMA_ARG_CACHE_TYPE_K=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
         _cache_type_v=$(grep '^LLAMA_ARG_CACHE_TYPE_V=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
         _n_cpu_moe=$(grep '^LLAMA_ARG_N_CPU_MOE=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
+        _gpu_layers=$(grep '^N_GPU_LAYERS=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "")
+        [[ -z "$_gpu_layers" ]] && _gpu_layers="auto"
         _spec_type=$(grep '^LLAMA_ARG_SPEC_TYPE=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
         _spec_draft_n_max=$(grep '^LLAMA_ARG_SPEC_DRAFT_N_MAX=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
         _llama_args=(
             --host "$_bind" --port "$_native_llama_port"
             --model "$MODEL_FULL_PATH"
             --ctx-size "$MAX_CONTEXT"
-            --n-gpu-layers 999
+            --n-gpu-layers "$_gpu_layers"
             --reasoning-format "$_reasoning_fmt"
             --metrics
         )
