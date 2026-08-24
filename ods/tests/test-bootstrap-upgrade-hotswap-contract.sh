@@ -619,3 +619,11 @@ grep -qF 'write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES"' <<<"$docker_t
 grep -qF 'exit 1' <<<"$docker_timeout_block" \
     || fail "Docker hot-swap timeout must exit non-zero"
 pass "Docker hot-swap timeout is honest"
+
+# The Windows Lemonade restart prepends GNU timeout only when the binary
+# exists. Hosts without it leave ps_timeout_prefix empty; an unguarded
+# "${ps_timeout_prefix[@]}" expansion aborts the whole restart with "unbound
+# variable" under `set -u` on Bash < 4.4 (macOS 3.2, RHEL 7).
+grep -qF '${ps_timeout_prefix[@]+"${ps_timeout_prefix[@]}"}' "$TARGET" \
+    || fail "Lemonade restart must expand the timeout prefix with the set -u safe guarded form"
+pass "Windows Lemonade restart tolerates a missing timeout binary"

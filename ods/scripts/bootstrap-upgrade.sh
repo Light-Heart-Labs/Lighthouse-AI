@@ -939,7 +939,10 @@ restart_windows_lemonade_with_full_model() {
     if command -v timeout >/dev/null 2>&1; then
         ps_timeout_prefix=(timeout --foreground --kill-after=5s "${restart_timeout}s")
     fi
-    if "${ps_env_cmd[@]}" "${ps_timeout_prefix[@]}" \
+    # The prefix stays empty on hosts without GNU timeout; expanding an empty
+    # array unguarded aborts with "unbound variable" under `set -u` on
+    # Bash < 4.4 (macOS 3.2, RHEL 7) instead of just skipping the timeout.
+    if "${ps_env_cmd[@]}" ${ps_timeout_prefix[@]+"${ps_timeout_prefix[@]}"} \
         "$ps_cmd" -NoProfile -ExecutionPolicy Bypass -Command '
         $ErrorActionPreference = "Stop"
 
