@@ -20,6 +20,7 @@ OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/ods/data/openclaw/home}"
 SESSIONS_DIR="${SESSIONS_DIR:-$OPENCLAW_DIR/agents/main/sessions}"
 SESSIONS_JSON="$SESSIONS_DIR/sessions.json"
 MAX_SIZE="${MAX_SIZE:-256000}"
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-30}"  # Sessions older than this are cleaned up (0 to disable)
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -35,6 +36,7 @@ usage() {
     echo "  OPENCLAW_DIR   Base OpenClaw dir (default: \$HOME/ods/data/openclaw/home)"
     echo "  SESSIONS_DIR   Sessions directory (default: \$OPENCLAW_DIR/agents/main/sessions)"
     echo "  MAX_SIZE       Max session file size in bytes (default: 256000)"
+    echo "  MAX_AGE_DAYS   Max session age in days before cleanup (default: 30, 0 to disable)"
     echo ""
     echo "Exit: 0 on success or when paths are missing (skipped with a log message);"
     echo "      1 when Python or sessions.json validation fails before any session mutation."
@@ -116,6 +118,9 @@ echo "[$(date)] Session cleanup starting"
 echo "[$(date)] Sessions dir: $SESSIONS_DIR"
 echo "[$(date)] Max size threshold: $MAX_SIZE bytes"
 echo "[$(date)] Active sessions found: ${#ACTIVE_IDS[@]}"
+if [[ "$MAX_AGE_DAYS" -gt 0 ]]; then
+    echo "[$(date)] Max age threshold: $MAX_AGE_DAYS days"
+fi
 
 # ── Clean up debris ────────────────────────────────────────────
 DELETED_EXIT=0
@@ -175,6 +180,20 @@ for f in "$SESSIONS_DIR"/*.jsonl; do
             echo "[$(date)] Session $BASENAME is bloated ($SIZE > ${SIZE_LABEL}), scheduling a fresh session"
             WIPE_IDS+=("$BASENAME")
             WIPE_FILES+=("$f")
+        elif [[ "$MAX_AGE_DAYS" -gt 0 ]]; then
+            # PR #8: Age-based expiration — clean up sessions not modified in MAX_AGE_DAYS
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                _mtime=$(stat -f%m "$f" 2>/dev/null || echo 0)
+            else
+                _mtime=$(stat -c%Y "$f" 2>/dev/null || echo 0)
+            fi
+            _now=$(date +%s)
+            _age_days=$(( (_now - _mtime) / 86400 ))
+            if [[ "$_age_days" -ge "$MAX_AGE_DAYS" ]]; then
+                echo "[$(date)] Session $BASENAME is ${_age_days}d old (>$MAX_AGE_DAYS), scheduling cleanup"
+                WIPE_IDS+=("$BASENAME")
+                WIPE_FILES+=("$f")
+            fi
         fi
     fi
 done
