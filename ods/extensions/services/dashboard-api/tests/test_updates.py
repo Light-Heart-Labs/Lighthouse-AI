@@ -721,4 +721,148 @@ class TestReleaseCacheRejectsNonReleases:
             resp = test_client.get("/api/version", headers=test_client.auth_headers)
 
         assert resp.json()["latest"] == "3.1.4"
-        assert updates_mod._version_cache["payload"]["latest"] == "3.1.4"
+        cached_payload = updates_mod._version_cache["payload"]
+        assert isinstance(cached_payload, dict)
+        assert cached_payload["latest"] == "3.1.4"
+
+
+class TestReleaseEndpointsRejectNonReleases:
+    """Every GitHub Releases consumer must reject errors and malformed data."""
+
+    def test_manifest_rejects_error_status_with_release_shaped_body(
+        self, test_client, tmp_path, monkeypatch
+    ):
+        import routers.updates as updates_mod
+
+        (tmp_path / ".version").write_text("1.2.3", encoding="utf-8")
+        monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+        request = httpx.Request("GET", updates_mod._GITHUB_RELEASES_API)
+        response = httpx.Response(403, request=request)
+        client = _mock_github_client(
+            [{"tag_name": "v9.9.9"}],
+            status_error=httpx.HTTPStatusError(
+                "rate limited", request=request, response=response
+            ),
+        )
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/releases/manifest", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["releases"][0]["version"] == "1.2.3"
+        assert resp.json()["error"] == "Could not fetch release information"
+
+    def test_manifest_rejects_non_object_release(
+        self, test_client, tmp_path, monkeypatch
+    ):
+        import routers.updates as updates_mod
+
+        (tmp_path / ".version").write_text("1.2.3", encoding="utf-8")
+        monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+        client = _mock_github_client(["not-a-release"])
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/releases/manifest", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["releases"][0]["version"] == "1.2.3"
+        assert resp.json()["error"] == "Could not fetch release information"
+
+    def test_manifest_accepts_null_optional_fields(self, test_client):
+        """GitHub uses null for optional fields such as missing release notes."""
+        client = _mock_github_client(
+            [
+                {
+                    "tag_name": "v1.6.0",
+                    "published_at": None,
+                    "name": None,
+                    "body": None,
+                    "html_url": None,
+                    "prerelease": False,
+                }
+            ]
+        )
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/releases/manifest", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        release = resp.json()["releases"][0]
+        assert release == {
+            "version": "1.6.0",
+            "date": "",
+            "title": "",
+            "changelog": "",
+            "url": "",
+            "prerelease": False,
+        }
+
+    def test_dry_run_rejects_error_status_with_release_shaped_body(
+        self, test_client, tmp_path, monkeypatch
+    ):
+        import routers.updates as updates_mod
+
+        monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+        request = httpx.Request("GET", f"{updates_mod._GITHUB_RELEASES_API}/latest")
+        response = httpx.Response(403, request=request)
+        client = _mock_github_client(
+            {"tag_name": "v9.9.9", "html_url": "https://example.invalid/release"},
+            status_error=httpx.HTTPStatusError(
+                "rate limited", request=request, response=response
+            ),
+        )
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/update/dry-run", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["latest_version"] is None
+        assert data["update_available"] is False
+        assert "rate limited" in data["version_check_error"]
+
+    def test_dry_run_reports_missing_release_tag(
+        self, test_client, tmp_path, monkeypatch
+    ):
+        import routers.updates as updates_mod
+
+        monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+        client = _mock_github_client({"message": "Not Found"})
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/update/dry-run", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["latest_version"] is None
+        assert data["update_available"] is False
+        assert "tag_name" in data["version_check_error"]
+
+    def test_dry_run_rejects_non_object_release(
+        self, test_client, tmp_path, monkeypatch
+    ):
+        import routers.updates as updates_mod
+
+        monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+        client = _mock_github_client([{"tag_name": "v9.9.9"}])
+
+        with patch("routers.updates.httpx.AsyncClient", return_value=client):
+            resp = test_client.get(
+                "/api/update/dry-run", headers=test_client.auth_headers
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["latest_version"] is None
+        assert data["update_available"] is False
+        assert "unexpected release response" in data["version_check_error"]
