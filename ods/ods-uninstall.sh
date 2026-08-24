@@ -20,33 +20,19 @@ log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-resolve_compose_flags() {
-    local flags=""
-
-    if [[ -f "$INSTALL_DIR/.compose-flags" ]]; then
-        flags="$(tr '\n' ' ' < "$INSTALL_DIR/.compose-flags" | xargs 2>/dev/null || true)"
-    fi
-
-    if [[ -z "$flags" && -x "$INSTALL_DIR/scripts/resolve-compose-stack.sh" ]]; then
-        flags="$("$INSTALL_DIR/scripts/resolve-compose-stack.sh" \
-            --script-dir "$INSTALL_DIR" \
-            --tier "${TIER:-1}" \
-            --gpu-backend "${GPU_BACKEND:-nvidia}" \
-            --gpu-count "${GPU_COUNT:-1}" \
-            --ods-mode "${ODS_MODE:-local}" 2>/dev/null || true)"
-    fi
-
-    if [[ -z "$flags" && -f "$INSTALL_DIR/docker-compose.base.yml" ]]; then
-        flags="-f docker-compose.base.yml"
-        case "${GPU_BACKEND:-}" in
-            amd|nvidia|intel|apple|arc|cpu)
-                [[ -f "$INSTALL_DIR/docker-compose.${GPU_BACKEND}.yml" ]] && flags="$flags -f docker-compose.${GPU_BACKEND}.yml"
-                ;;
-        esac
-    fi
-
-    printf '%s\n' "$flags"
-}
+# Source shared compose-flags resolution (PR #9: DRY with ods-update.sh)
+if [[ -f "$SCRIPT_DIR/lib/compose-flags.sh" ]]; then
+    . "$SCRIPT_DIR/lib/compose-flags.sh"
+else
+    # Inline fallback if lib not yet deployed
+    resolve_compose_flags() {
+        local flags=""
+        if [[ -f "$INSTALL_DIR/.compose-flags" ]]; then
+            flags="$(tr '\n' ' ' < "$INSTALL_DIR/.compose-flags" | xargs 2>/dev/null || true)"
+        fi
+        printf '%s\n' "$flags"
+    }
+fi
 
 KEEP_MODELS=false
 KEEP_DATA=false
@@ -375,6 +361,19 @@ if [[ -d "$HOME/.ods" ]]; then
     log_info "Removing backup directory..."
     rm -rf "$HOME/.ods"
     log_ok "Backups removed"
+fi
+
+# 6b. Clean up user-extensions (dashboard-installed extensions outside data/)
+if ! $KEEP_DATA; then
+    _user_ext="$INSTALL_DIR/data/user-extensions"
+    if [[ -d "$_user_ext" ]]; then
+        _ext_count=$(find "$_user_ext" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+        if [[ "$_ext_count" -gt 0 ]]; then
+            log_info "Removing $_ext_count user-installed extension(s)..."
+        fi
+        rm -rf "$_user_ext" 2>/dev/null || true
+        log_ok "User extensions cleaned"
+    fi
 fi
 
 # 7. Remove OpenCode config (if we created it)
