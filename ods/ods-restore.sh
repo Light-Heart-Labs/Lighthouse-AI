@@ -459,6 +459,7 @@ verify_restore() {
     log_step "Verifying restore..."
 
     local all_good=true
+    local warnings=0
 
     # Check critical paths
     # Check that at least one compose file exists (base or standalone)
@@ -469,16 +470,42 @@ verify_restore() {
     if [[ "$has_compose" == "false" ]]; then
         log_warn "Missing after restore: no docker-compose*.yml files found"
         all_good=false
+        warnings=$((warnings + 1))
     fi
+
+    # PR #21: Check .env file exists and is non-empty
+    if [[ ! -f "$ODS_DIR/.env" ]]; then
+        log_warn "Missing after restore: .env configuration file"
+        all_good=false
+        warnings=$((warnings + 1))
+    elif [[ ! -s "$ODS_DIR/.env" ]]; then
+        log_warn "Restored .env file is empty — configuration may be incomplete"
+        all_good=false
+        warnings=$((warnings + 1))
+    fi
+
     if [[ ! -d "$ODS_DIR/data/open-webui" ]]; then
         log_warn "Missing after restore: data/open-webui"
         all_good=false
+        warnings=$((warnings + 1))
+    fi
+
+    # PR #21: Verify data directory is not suspiciously small (partial restore)
+    if [[ -d "$ODS_DIR/data" ]]; then
+        local data_size_kb
+        data_size_kb=$(du -sk "$ODS_DIR/data" 2>/dev/null | awk '{print $1}')
+        if [[ -n "$data_size_kb" && "$data_size_kb" -lt 100 ]]; then
+            log_warn "Restored data directory is very small (${data_size_kb}KB) — restore may be incomplete"
+            all_good=false
+            warnings=$((warnings + 1))
+        fi
     fi
 
     if [[ "$all_good" == "true" ]]; then
         log_success "Restore verification passed"
         return 0
     else
+        log_warn "Restore verification found $warnings issue(s) — review above warnings"
         log_warn "Some paths may be missing (this may be normal if they weren't in backup)"
         return 0
     fi
