@@ -73,6 +73,9 @@ set_last_migrated_version() {
 compare_versions() {
     local v1="${1#v}"
     local v2="${2#v}"
+    # Strip pre-release suffixes (e.g. 2.6.0-beta.1 → 2.6.0)
+    v1="${v1%%-*}"
+    v2="${v2%%-*}"
     
     if [[ "$v1" == "$v2" ]]; then
         return 0
