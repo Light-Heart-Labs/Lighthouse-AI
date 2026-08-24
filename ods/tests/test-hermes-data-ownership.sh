@@ -13,10 +13,10 @@ fail() {
     exit 1
 }
 
-grep -Fq 'sudo chown -R 10000:10000 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
+grep -Fq 'ods_sudo chown -R 10000:10000 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
     || fail "phase 06 must restore data/hermes to Hermes uid 10000"
 
-grep -Fq 'sudo chmod 700 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
+grep -Fq 'ods_sudo chmod 700 "$INSTALL_DIR/data/hermes"' "$PHASE06" \
     || fail "phase 06 must preserve Hermes private HERMES_HOME mode"
 
 grep -Fq '[[ "${ENABLE_HERMES:-false}" == "true" && "$_data_dir" == "$INSTALL_DIR/data/hermes/" ]] && continue' "$PHASE06" \

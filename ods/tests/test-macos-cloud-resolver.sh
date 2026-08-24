@@ -260,11 +260,13 @@ render_state() {
         LITELLM_KEY=sk-resolver-test \
         HERMES_LLM_BASE_URL=http://litellm:4000/v1 \
         HERMES_LLM_API_KEY=sk-resolver-test \
+        HERMES_DASHBOARD_SESSION_TOKEN=resolver-hermes-dashboard-session-token \
             docker compose "${compose_args[@]}" config > "$render_file"
         WEBUI_SECRET=resolver-webui-secret \
         LITELLM_KEY=sk-resolver-test \
         HERMES_LLM_BASE_URL=http://litellm:4000/v1 \
         HERMES_LLM_API_KEY=sk-resolver-test \
+        HERMES_DASHBOARD_SESSION_TOKEN=resolver-hermes-dashboard-session-token \
             docker compose "${compose_args[@]}" config --services \
             | LC_ALL=C sort > "$services_file"
     )
@@ -296,7 +298,7 @@ PYTHON_CMD="$(ods_detect_python_cmd_with_module yaml)"
 
 if $DOCKER_COMPOSE_AVAILABLE; then
     render_state disabled \
-        'dashboard,dashboard-api,litellm,open-webui,qdrant' false
+        'dashboard,dashboard-api,litellm,open-webui,qdrant,remote-provider-egress,remote-provider-ssh-tunnel' false
     pass "Hermes-disabled Apple cloud stack renders with exact selected services and auth"
 fi
 
@@ -308,7 +310,7 @@ assert_selected_bases "$enabled_files" \
     'extensions/services/hermes/compose.yaml,extensions/services/litellm/compose.yaml,extensions/services/qdrant/compose.yaml'
 if $DOCKER_COMPOSE_AVAILABLE; then
     render_state enabled \
-        'dashboard,dashboard-api,hermes,litellm,open-webui,qdrant' true
+        'dashboard,dashboard-api,hermes,litellm,open-webui,qdrant,remote-provider-egress,remote-provider-ssh-tunnel' true
     pass "Hermes-enabled Apple cloud stack renders without missing client auth"
 fi
 
@@ -319,7 +321,7 @@ assert_selected_bases "$reenabled_files" \
     'extensions/services/litellm/compose.yaml,extensions/services/qdrant/compose.yaml'
 if $DOCKER_COMPOSE_AVAILABLE; then
     render_state redisabled \
-        'dashboard,dashboard-api,litellm,open-webui,qdrant' false
+        'dashboard,dashboard-api,litellm,open-webui,qdrant,remote-provider-egress,remote-provider-ssh-tunnel' false
     pass "Hermes re-disable renders cleanly without a partial service"
 else
     echo "[SKIP] docker compose unavailable; resolver selection checks still passed"

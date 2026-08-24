@@ -221,22 +221,15 @@
       "target_paths": [
         "config/litellm/lemonade.yaml"
       ],
+      "writer_marker": "ODS-CONTRACT-WRITER: litellm-lemonade",
       "writers": [
         {
           "platform": "canonical-renderer",
           "path": "scripts/render-runtime-configs.py"
         },
         {
-          "platform": "linux",
-          "path": "installers/phases/06-directories.sh"
-        },
-        {
-          "platform": "upgrade",
-          "path": "scripts/bootstrap-upgrade.sh"
-        },
-        {
-          "platform": "runtime",
-          "path": "bin/ods-host-agent.py"
+          "platform": "checked-in-template",
+          "path": "config/litellm/lemonade.yaml"
         }
       ],
       "invariants": [
@@ -253,10 +246,22 @@
           "needle": "LITELLM_LEMONADE_API_KEY"
         },
         {
-          "id": "bootstrap-writes-extra-model-alias",
+          "id": "bootstrap-supplies-extra-model-alias",
           "type": "file_contains",
           "path": "scripts/bootstrap-upgrade.sh",
           "needle": "extra."
+        },
+        {
+          "id": "windows-lemonade-delegates-to-canonical-renderer",
+          "type": "file_contains",
+          "path": "installers/windows/lib/env-generator.ps1",
+          "needle": "render-runtime-configs.py"
+        },
+        {
+          "id": "windows-lemonade-can-bootstrap-renderer-python",
+          "type": "file_contains",
+          "path": "installers/windows/lib/env-generator.ps1",
+          "needle": "Install-WindowsODSRuntimeConfigPython"
         }
       ]
     },
@@ -313,6 +318,37 @@
           "type": "file_contains",
           "path": "config/model-router/endpoints.json",
           "needle": "\"endpoints\""
+        }
+      ]
+    },
+    {
+      "id": "remote-routing-state",
+      "label": "Remote provider routing receipt",
+      "target_paths": [
+        "data/remote-provider/routing-state.json"
+      ],
+      "writers": [
+        {
+          "platform": "canonical-renderer",
+          "path": "scripts/render-runtime-configs.py"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "renderer-emits-remote-routing-state",
+          "type": "file_contains",
+          "path": "scripts/render-runtime-configs.py",
+          "needle": "def render_remote_routing_state"
+        },
+        {
+          "id": "schema-covers-remote-switch",
+          "type": "json_path_enum_contains",
+          "path": ".env.schema.json",
+          "json_path": "properties.REMOTE_LLM_ENABLED.enum",
+          "values": [
+            "true",
+            "false"
+          ]
         }
       ]
     },

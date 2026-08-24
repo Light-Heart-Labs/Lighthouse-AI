@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root "installers\windows\lib\model-activation.ps1")
 . (Join-Path $root "installers\windows\lib\tier-map.ps1")
+. (Join-Path $root "installers\windows\lib\backend-contract.ps1")
+. (Join-Path $root "installers\windows\lib\llm-endpoint.ps1")
+. (Join-Path $root "installers\windows\lib\opencode-config.ps1")
 
 function Assert-Equal {
     param($Actual, $Expected, [string]$Label)
@@ -34,6 +37,69 @@ Set-Content -LiteralPath (Join-Path $tempRoot "data\models\model.gguf") -Value "
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $tempRoot "config\model-library.json")
 
 try {
+    $openCodeInstall = Join-Path $tempRoot "opencode-context"
+    $openCodeConfig = Join-Path $tempRoot "opencode-config"
+    New-Item -ItemType Directory -Path $openCodeInstall -Force | Out-Null
+    @"
+LLM_URL=http://127.0.0.1:11435
+GGUF_FILE=LocalUpgrade.gguf
+LLM_MODEL=LocalUpgrade
+CTX_SIZE=131072
+MAX_CONTEXT=65536
+"@ | Set-Content -LiteralPath (Join-Path $openCodeInstall ".env")
+    Sync-WindowsOpenCodeConfigFromEnv `
+        -InstallDir $openCodeInstall `
+        -ConfigDir $openCodeConfig | Out-Null
+    $openCodeJson = Get-Content -LiteralPath (Join-Path $openCodeConfig "opencode.json") `
+        -Raw | ConvertFrom-Json
+    Assert-Equal `
+        $openCodeJson.provider.'llama-server'.models.'LocalUpgrade.gguf'.limit.context `
+        131072 "OpenCode canonical context precedence"
+
+    Set-Content -LiteralPath (Join-Path $openCodeInstall ".env") -Value @(
+        "LLM_URL=http://127.0.0.1:11435"
+        "GGUF_FILE=LocalUpgrade.gguf"
+        "LLM_MODEL=LocalUpgrade"
+        "CTX_SIZE=auto"
+        "MAX_CONTEXT=65536"
+    )
+    Sync-WindowsOpenCodeConfigFromEnv `
+        -InstallDir $openCodeInstall `
+        -ConfigDir $openCodeConfig | Out-Null
+    $openCodeJson = Get-Content -LiteralPath (Join-Path $openCodeConfig "opencode.json") `
+        -Raw | ConvertFrom-Json
+    Assert-Equal `
+        $openCodeJson.provider.'llama-server'.models.'LocalUpgrade.gguf'.limit.context `
+        65536 "OpenCode invalid canonical context fallback"
+
+    $largeContext = [long]9007199254740991
+    Set-Content -LiteralPath (Join-Path $openCodeInstall ".env") -Value @(
+        "LLM_URL=http://127.0.0.1:11435"
+        "GGUF_FILE=LocalUpgrade.gguf"
+        "LLM_MODEL=LocalUpgrade"
+        "CTX_SIZE=$largeContext"
+        "MAX_CONTEXT=$largeContext"
+    )
+    Sync-WindowsOpenCodeConfigFromEnv `
+        -InstallDir $openCodeInstall `
+        -ConfigDir $openCodeConfig | Out-Null
+    $openCodeJson = Get-Content -LiteralPath (Join-Path $openCodeConfig "opencode.json") `
+        -Raw | ConvertFrom-Json
+    Assert-Equal `
+        $openCodeJson.provider.'llama-server'.models.'LocalUpgrade.gguf'.limit.context `
+        $largeContext "OpenCode context above Int32"
+
+    $legacyLaunch = Get-ODSLemonadeLaunchContract `
+        -ExecutablePath "C:\fixture\LemonadeServer.exe" `
+        -Port 8080 `
+        -ModelsDir "C:\fixture\models" `
+        -ContextSize $largeContext `
+        -VersionOverride "10.0.0"
+    Assert-Equal $legacyLaunch.ContextSize $largeContext `
+        "Lemonade context above Int32"
+    Assert-Equal $legacyLaunch.ArgumentList[-1] ([string]$largeContext) `
+        "Lemonade large context argument"
+
     $previousModelProfile = $env:MODEL_PROFILE
     try {
         $env:MODEL_PROFILE = "qwen"

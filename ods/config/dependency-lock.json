@@ -92,6 +92,18 @@
       "value": "python:3.11-slim"
     },
     {
+      "id": "remote-provider-egress.python",
+      "type": "image",
+      "path": "extensions/services/remote-provider-egress/Dockerfile",
+      "value": "python:3.11-slim"
+    },
+    {
+      "id": "remote-provider-ssh-tunnel.python",
+      "type": "image",
+      "path": "extensions/services/remote-provider-ssh-tunnel/Dockerfile",
+      "value": "python:3.11-slim"
+    },
+    {
       "id": "ods-proxy.caddy",
       "type": "image",
       "path": "extensions/services/ods-proxy/compose.yaml",
@@ -107,7 +119,7 @@
       "id": "hermes.agent",
       "type": "image",
       "path": "extensions/services/hermes/compose.yaml",
-      "value": "nousresearch/hermes-agent:v2026.5.16"
+      "value": "nousresearch/hermes-agent:v2026.6.5"
     },
     {
       "id": "hermes-proxy.caddy",
@@ -280,6 +292,16 @@
       "path": "extensions/services/brave-search/compose.yaml",
       "value": "ods-brave-search:local",
       "reason": "Local extension image built from the adjacent Dockerfile."
+    },
+    {
+      "path": "docker-compose.base.yml",
+      "value": "ods-remote-provider-egress:local",
+      "reason": "Core internal egress service image is built from extensions/services/remote-provider-egress/Dockerfile."
+    },
+    {
+      "path": "docker-compose.base.yml",
+      "value": "ods-remote-provider-ssh-tunnel:local",
+      "reason": "Core internal SSH tunnel service image is built from extensions/services/remote-provider-ssh-tunnel/Dockerfile."
     }
   ],
   "allow_variable_refs": [
@@ -315,8 +337,8 @@
     },
     {
       "path": "extensions/services/hermes/compose.yaml",
-      "value": "${HERMES_AGENT_IMAGE:-nousresearch/hermes-agent:v2026.5.16}",
-      "default": "nousresearch/hermes-agent:v2026.5.16",
+      "value": "${HERMES_AGENT_IMAGE:-nousresearch/hermes-agent:v2026.6.5}",
+      "default": "nousresearch/hermes-agent:v2026.6.5",
       "reason": "Hermes Agent image can be overridden for upstream registry hotfixes, but the shipped default is locked."
     },
     {

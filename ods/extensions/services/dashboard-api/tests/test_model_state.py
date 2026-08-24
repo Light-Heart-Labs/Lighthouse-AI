@@ -186,6 +186,36 @@ class TestStateModule:
         assert sb.initialize_if_missing(path, {"GGUF_FILE": "Other.gguf"}) is None
         assert path.read_text(encoding="utf-8") == before
 
+    def test_initialize_prefers_canonical_context_when_upgrade_aliases_diverge(self, tmp_path):
+        path = tmp_path / "model-state.json"
+        doc = sb.initialize_if_missing(
+            path,
+            {
+                "GGUF_FILE": "Qwen3.5-9B-Q4_K_M.gguf",
+                "LLM_MODEL": "qwen3.5-9b",
+                "CTX_SIZE": "131072",
+                "MAX_CONTEXT": "65536",
+            },
+        )
+
+        assert doc["active"]["contextLength"] == 131072
+        assert doc["active"]["capabilities"]["agentViable"] is True
+
+    def test_initialize_skips_invalid_canonical_context_for_valid_legacy_alias(self, tmp_path):
+        path = tmp_path / "model-state.json"
+        doc = sb.initialize_if_missing(
+            path,
+            {
+                "GGUF_FILE": "Qwen3.5-9B-Q4_K_M.gguf",
+                "LLM_MODEL": "qwen3.5-9b",
+                "CTX_SIZE": "auto",
+                "MAX_CONTEXT": "65536",
+            },
+        )
+
+        assert doc["active"]["contextLength"] == 65536
+        assert doc["active"]["capabilities"]["agentViable"] is True
+
     def test_initialize_uses_lemonade_endpoint_id(self, tmp_path):
         path = tmp_path / "model-state.json"
         doc = sb.initialize_if_missing(

@@ -39,6 +39,11 @@ read_env_value() {
     grep -E "^${key}=" "$env_path" 2>/dev/null | sed -n '1p' | cut -d'=' -f2- | tr -d '\r' || true
 }
 
+# shellcheck source=../../../lib/dotenv-quote.sh
+_ODS_MACOS_ENV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+. "$_ODS_MACOS_ENV_ROOT/lib/dotenv-quote.sh"
+unset _ODS_MACOS_ENV_ROOT
+
 env_key_exists() {
     local env_path="$1"
     local key="$2"
@@ -172,6 +177,13 @@ normalize_ods_model_switchboard() {
     esac
 }
 
+normalize_n_gpu_layers() {
+    local value="${1:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "${value:-auto}"
+}
+
 generate_ods_env() {
     local install_dir="$1"
     local tier="$2"
@@ -277,6 +289,11 @@ generate_ods_env() {
         if [[ -z "$(read_env_value "$env_path" "ODS_SESSION_SECRET")" ]]; then
             upsert_env_value "$env_path" "ODS_SESSION_SECRET" "$(new_secure_hex 32)"
         fi
+        # Hermes v2026.6.5+ accepts a stable dashboard token. Backfill older
+        # installs once and preserve it on every later rerun.
+        if [[ -z "$(read_env_value "$env_path" "HERMES_DASHBOARD_SESSION_TOKEN")" ]]; then
+            upsert_env_value "$env_path" "HERMES_DASHBOARD_SESSION_TOKEN" "$(new_secure_hex 32)"
+        fi
         # ODS_DEVICE_NAME backfill: older macOS installs omitted this key,
         # so magic links defaulted to auth.ods.local/chat.ods.local and
         # collided with every other default install on the LAN.
@@ -301,6 +318,12 @@ generate_ods_env() {
         if [[ -z "$(read_env_value "$env_path" "EMBEDDINGS_MEMORY_LIMIT")" ]]; then
             upsert_env_value "$env_path" "EMBEDDINGS_MEMORY_LIMIT" "${EMBEDDINGS_MEMORY_LIMIT:-4G}"
         fi
+        local _n_gpu_layers
+        _n_gpu_layers="$(normalize_n_gpu_layers "$(read_env_value "$env_path" "N_GPU_LAYERS")")"
+        if ! env_key_exists "$env_path" "N_GPU_LAYERS"; then
+            _n_gpu_layers="$(normalize_n_gpu_layers "${N_GPU_LAYERS:-auto}")"
+        fi
+        upsert_env_value "$env_path" "N_GPU_LAYERS" "$_n_gpu_layers"
 
         # HOST_LAN_IP backfill: the fresh-install heredoc below populates
         # HOST_LAN_IP when BIND_ADDRESS=0.0.0.0 was pre-set, so openclaw can
@@ -319,6 +342,19 @@ generate_ods_env() {
             if [[ -n "$_host_lan_ip" ]]; then
                 upsert_env_value "$env_path" "HOST_LAN_IP" "$_host_lan_ip"
             fi
+        fi
+
+        # A local install may later be exposed by editing BIND_ADDRESS or
+        # enabling the ODS proxy. Do not preserve an authless localhost value
+        # across that transition.
+        local _existing_proxy
+        _existing_proxy="$(read_env_value "$env_path" "ENABLE_ODS_PROXY")"
+        if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]] \
+            || [[ "${_existing_proxy:-false}" == "true" ]] \
+            || [[ "$_existing_bind" != "127.0.0.1" && "$_existing_bind" != "::1" && "$_existing_bind" != "localhost" ]]; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "true"
+        elif ! env_key_exists "$env_path" "WEBUI_AUTH"; then
+            upsert_env_value "$env_path" "WEBUI_AUTH" "false"
         fi
         return 0
     fi
@@ -340,6 +376,8 @@ generate_ods_env() {
     ods_agent_key=$(new_secure_hex 32)
     local ods_session_secret
     ods_session_secret=$(new_secure_hex 32)
+    local hermes_dashboard_session_token
+    hermes_dashboard_session_token=$(new_secure_hex 32)
     local shield_api_key
     shield_api_key=$(new_secure_hex 32)
     local token_spy_api_key
@@ -428,6 +466,8 @@ generate_ods_env() {
     tz=$(detect_timezone)
     local timestamp
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local n_gpu_layers
+    n_gpu_layers="$(normalize_n_gpu_layers "${N_GPU_LAYERS:-auto}")"
     local hermes_llm_base_url="${llm_api_url}/v1"
     local hermes_llm_api_key="sk-ods-hermes-local"
     local open_webui_llm_base_url=""
@@ -443,6 +483,16 @@ generate_ods_env() {
     local rag_openai_api_base_url="${RAG_OPENAI_API_BASE_URL:-}"
     local rag_openai_api_key="${RAG_OPENAI_API_KEY:-}"
     local embeddings_memory_limit="${EMBEDDINGS_MEMORY_LIMIT:-4G}"
+    local bind_address="${BIND_ADDRESS:-127.0.0.1}"
+    local webui_auth
+    if [[ "${ENABLE_ODS_PROXY:-false}" == "true" ]]; then
+        webui_auth="true"
+    else
+        case "$bind_address" in
+            127.0.0.1|::1|localhost) webui_auth="${WEBUI_AUTH:-false}" ;;
+            *) webui_auth="true" ;;
+        esac
+    fi
 
     # Build .env content (matches Phase 06 format)
     cat > "$env_path" << ENVEOF
@@ -453,6 +503,7 @@ generate_ods_env() {
 #=== Network Binding ===
 # macOS has no --lan flag; operators opt in by setting BIND_ADDRESS=0.0.0.0
 # manually. HOST_LAN_IP is only populated when that pre-existed at install time.
+BIND_ADDRESS=${bind_address}
 HOST_LAN_IP=${host_lan_ip}
 # Device name used by ods-mdns/ods-proxy hostnames and magic-link URLs.
 # Derived from the macOS LocalHostName/hostname so multiple installs on one LAN
@@ -489,15 +540,16 @@ CTX_SIZE=${MAX_CONTEXT}
 MODEL_RECOMMENDED_MODEL=${LLM_MODEL}
 MODEL_RECOMMENDED_GGUF=${GGUF_FILE}
 MODEL_RECOMMENDED_CONTEXT=${MAX_CONTEXT}
-MODEL_RECOMMENDATION_SOURCE=${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}
-MODEL_RECOMMENDATION_POLICY=${MODEL_RECOMMENDATION_POLICY:-tier-map}
-MODEL_RECOMMENDATION_CONFIDENCE=${MODEL_RECOMMENDATION_CONFIDENCE:-medium}
-MODEL_RECOMMENDATION_REASON=${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${tier} (${TIER_NAME}) for apple backend; benchmark locally after first launch.}
-MODEL_RECOMMENDED_ALTERNATIVES=${MODEL_RECOMMENDED_ALTERNATIVES:-}
+MODEL_RECOMMENDATION_SOURCE=$(dotenv_quote "${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}")
+MODEL_RECOMMENDATION_POLICY=$(dotenv_quote "${MODEL_RECOMMENDATION_POLICY:-tier-map}")
+MODEL_RECOMMENDATION_CONFIDENCE=$(dotenv_quote "${MODEL_RECOMMENDATION_CONFIDENCE:-medium}")
+MODEL_RECOMMENDATION_REASON=$(dotenv_quote "${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${tier} (${TIER_NAME}) for apple backend; benchmark locally after first launch.}")
+MODEL_RECOMMENDED_ALTERNATIVES=$(dotenv_quote "${MODEL_RECOMMENDED_ALTERNATIVES:-}")
 MODEL_PERFORMANCE_SOURCE=benchmark_required
-MODEL_PERFORMANCE_LABEL=Benchmark after first launch
+MODEL_PERFORMANCE_LABEL=$(dotenv_quote "Benchmark after first launch")
 GPU_BACKEND=apple
 HOST_RAM_GB=${SYSTEM_RAM_GB}
+N_GPU_LAYERS=${n_gpu_layers}
 $(if [[ -n "${LLAMA_SERVER_IMAGE:-}" ]]; then echo "LLAMA_SERVER_IMAGE=${LLAMA_SERVER_IMAGE}"; fi)
 #=== llama.cpp Runtime Tuning ===
 LLAMA_ARG_FLASH_ATTN=${LLAMA_ARG_FLASH_ATTN:-auto}
@@ -549,6 +601,7 @@ WEBUI_SECRET=${webui_secret}
 DASHBOARD_API_KEY=${dashboard_api_key}
 ODS_AGENT_KEY=${ods_agent_key}
 ODS_SESSION_SECRET=${ods_session_secret}
+HERMES_DASHBOARD_SESSION_TOKEN=${hermes_dashboard_session_token}
 SHIELD_API_KEY=${shield_api_key}
 N8N_USER=admin@ods.local
 N8N_PASS=${n8n_pass}
@@ -582,7 +635,8 @@ RAG_OPENAI_API_KEY=${rag_openai_api_key}
 EMBEDDINGS_MEMORY_LIMIT=${embeddings_memory_limit}
 
 #=== Web UI Settings ===
-WEBUI_AUTH=true
+# Loopback installs open directly. Network-bound installs require a login.
+WEBUI_AUTH=${webui_auth}
 ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
 OPEN_WEBUI_LLM_BASE_URL=${open_webui_llm_base_url}

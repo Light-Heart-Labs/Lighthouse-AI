@@ -323,7 +323,12 @@ function ArtifactDialog({ model, details, loading, error, gpu, downloadBusy, imp
             <>
               <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 <Metric icon={ShieldCheck} label="License" value={formatLicense(details.license)} />
-                <Metric icon={Gauge} label="Context metadata" value={formatContext(details.contextLength)} detail={details.contextSource === 'hub_config' ? 'Hub config' : 'ODS fallback'} />
+                <Metric
+                  icon={Gauge}
+                  label="Context metadata"
+                  value={formatContext(details.contextLength)}
+                  detail={contextSourceLabel(details.contextSource)}
+                />
                 <Metric icon={HardDrive} label="Available artifacts" value={`${details.artifacts.length} choices`} />
                 <Metric icon={CheckCircle2} label="Pinned revision" value={details.sha?.slice(0, 10) || 'Unknown'} mono />
               </div>
@@ -456,6 +461,12 @@ function formatBytes(value) {
 function formatContext(value) {
   const tokens = Number(value || 0)
   return tokens ? `${Math.round(tokens / 1024)}K tokens` : 'Unknown'
+}
+
+function contextSourceLabel(source) {
+  if (source === 'gguf_metadata') return 'GGUF metadata'
+  if (source === 'hub_config') return 'Hub config'
+  return 'Not published by repository'
 }
 
 function authorFallbackStyle(author) {

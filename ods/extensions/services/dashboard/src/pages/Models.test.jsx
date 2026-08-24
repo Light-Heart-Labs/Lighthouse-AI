@@ -97,6 +97,10 @@ function renderModels() {
   return render(createElement(MemoryRouter, null, createElement(Models)))
 }
 
+function confirmModelRun() {
+  fireEvent.click(screen.getByRole('button', { name: 'Run model' }))
+}
+
 test('renders the model library layout from catalog fields only', () => {
   useModelsMock.mockReturnValue(baseState({
     currentModel: 'qwen3.5-9b-q4',
@@ -346,6 +350,7 @@ test('ignores repository metadata that arrives after its dialog was replaced', a
       resolveSecondDetails({ ok: true, json: async () => details('second') })
     })
     expect(await screen.findByText('second-only-Q4.gguf')).toBeInTheDocument()
+    expect(screen.getByText('Hub config')).toBeInTheDocument()
     expect(screen.queryByText('first-only-Q4.gguf')).not.toBeInTheDocument()
   } finally {
     vi.unstubAllGlobals()
@@ -457,8 +462,9 @@ test('keeps Run and Delete visible for downloaded models', () => {
 
   renderModels()
   fireEvent.click(screen.getByRole('button', { name: /^run$/i }))
+  confirmModelRun()
 
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 65536 })
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
   fireEvent.click(deleteButton)
@@ -467,6 +473,151 @@ test('keeps Run and Delete visible for downloaded models', () => {
   expect(screen.getByRole('dialog', { name: /delete qwen 3\.5 9b/i })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /delete model/i }))
   expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+})
+
+test('chooses the full catalog context before running a downloaded model', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      status: 'downloaded',
+      contextLength: 65536,
+      maxContextLength: 262144,
+      contextOptions: [
+        {
+          contextLength: 65536,
+          estimatedRequired: 7.2,
+          recommended: true,
+          fullContext: false,
+          fitsVram: true,
+        },
+        {
+          contextLength: 262144,
+          estimatedRequired: 9.1,
+          recommended: false,
+          fullContext: true,
+          fitsVram: false,
+        },
+      ],
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+  expect(screen.getByRole('dialog', { name: 'Qwen 3.5 9B' })).toBeInTheDocument()
+  expect(screen.getByText('Declared limit 256K')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /256K Full context/i }))
+  expect(screen.getByText('~9.1 GB')).toBeInTheDocument()
+  expect(screen.getByText(/exceeds the reported GPU memory estimate/i)).toBeInTheDocument()
+
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', {
+      contextLength: 262144,
+    })
+  })
+})
+
+test('allows a custom context beyond the declared model limit with a warning', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      status: 'downloaded',
+      contextLength: 8192,
+      maxContextLength: 262144,
+      contextOptions: [{
+        contextLength: 8192,
+        estimatedRequired: 3,
+        recommended: true,
+        fullContext: false,
+        fitsVram: true,
+      }],
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+  fireEvent.change(screen.getByRole('spinbutton', {
+    name: 'Custom context in tokens',
+  }), {
+    target: { value: '2097152' },
+  })
+
+  expect(screen.getByText(/exceeds the model's declared context/i)).toBeInTheDocument()
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', {
+      contextLength: 2097152,
+    })
+  })
+})
+
+test('does not invent a declared limit for imports with unknown context metadata', async () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({
+      id: 'hf-community',
+      name: 'Community model',
+      status: 'downloaded',
+      contextLength: 8192,
+      maxContextLength: null,
+      contextOptions: [{
+        contextLength: 8192,
+        estimatedRequired: 3,
+        recommended: true,
+        fullContext: false,
+        fitsVram: true,
+      }],
+      metadata: {
+        catalogSource: 'huggingface',
+        contextSource: 'unavailable',
+        contextLimitKnown: false,
+      },
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('tab', { name: /installed/i }))
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+  fireEvent.change(screen.getByRole('spinbutton', {
+    name: 'Custom context in tokens',
+  }), {
+    target: { value: '131072' },
+  })
+
+  expect(screen.queryByText(/exceeds the model's declared context/i)).not.toBeInTheDocument()
+  confirmModelRun()
+
+  await waitFor(() => {
+    expect(loadModel).toHaveBeenCalledWith('hf-community', {
+      contextLength: 131072,
+    })
+  })
+})
+
+test('opens context configuration for the active model without replacing benchmark', () => {
+  useModelsMock.mockReturnValue(baseState({
+    currentModel: 'qwen3.5-9b-q4',
+    models: [model({
+      status: 'loaded',
+      contextLength: 65536,
+      maxContextLength: 262144,
+    })],
+  }))
+
+  renderModels()
+
+  expect(screen.getByRole('button', { name: 'Benchmark' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Configure context for Qwen 3.5 9B',
+  }))
+  expect(screen.getByRole('button', { name: 'Already active' })).toBeDisabled()
+  expect(screen.getByText('Active: 64K')).toBeInTheDocument()
 })
 
 test('allows low-context downloaded models to run with an agent-readiness warning', () => {
@@ -484,7 +635,8 @@ test('allows low-context downloaded models to run with an agent-readiness warnin
   expect(runButton).toBeEnabled()
   expect(runButton).toHaveAttribute('title', 'Run Qwen 3.5 9B')
   fireEvent.click(runButton)
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 8192 })
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
   expect(screen.getByText('Needs 64K')).toBeInTheDocument()
 
@@ -524,7 +676,8 @@ test('allows explicit Talk-incompatible models to run with an agent-readiness wa
   expect(runButton).toBeEnabled()
   expect(runButton).toHaveAttribute('title', 'Run Phi-4 Mini')
   fireEvent.click(runButton)
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 128000 })
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
   expect(screen.getByText('Agent blocked')).toBeInTheDocument()
 
@@ -785,6 +938,8 @@ test('keeps Delete visible but disabled while that model is working', () => {
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeDisabled()
   expect(deleteButton).toHaveAttribute('title', 'Wait for the current model action to finish before deleting it.')
+  const row = screen.getByText('Qwen 3.5 9B').closest('.grid')
+  expect(row).toHaveClass('lg:grid-cols-[minmax(250px,1.7fr)_184px_70px_110px_120px_90px_130px]')
 })
 
 test('locks every model action while activation is in progress, including rollback and downloads', () => {
@@ -871,7 +1026,8 @@ test('allows the selected install model to run even when the VRAM estimate is hi
   expect(runButton).toBeEnabled()
   expect(runButton).toHaveAttribute('title', 'Run Qwen 3.5 9B')
   fireEvent.click(runButton)
-  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 65536 })
 })
 
 test('shows effective and configured runtime modes when they differ', () => {

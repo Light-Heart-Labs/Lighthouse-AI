@@ -30,6 +30,10 @@ echo "[contract] capability profile schema has hardware_class"
 jq -e '.properties.hardware_class and (.required | index("hardware_class"))' config/capability-profile.schema.json >/dev/null \
   || { echo "[FAIL] capability profile schema missing hardware_class"; exit 1; }
 
+echo "[contract] cross-platform installed footprint"
+python3 tests/test-install-footprint-contract.py
+bash tests/contracts/test-install-footprint-macos.sh
+
 echo "[contract] AMD phase-06 env keys exist in schema"
 for key in HSA_XNACK AMDGPU_TARGET LLAMA_CPP_REF; do
   jq -e --arg key "$key" '.properties[$key]' .env.schema.json >/dev/null \
@@ -203,7 +207,7 @@ if PRE_ODS_INSTALL_DIR="" ODS_ALLOW_LEGACY_PARALLEL="" \
 fi
 grep -qF 'related install directory' "$_pre_ods_guard_tmp/auto-symlink.log" \
   || { echo "[FAIL] symlinked related-install rejection must identify the directory"; rm -rf "$_pre_ods_guard_tmp"; exit 1; }
-rm -f "$_pre_ods_guard_tmp/home/related-link"
+rm -rf "$_pre_ods_guard_tmp/home/related-link"
 
 cat > "$_pre_ods_guard_tmp/docker-rows" <<'ROWS'
 stack-llm|stack|llama-server
@@ -307,6 +311,9 @@ bash tests/test-macos-cloud-resolver.sh
 
 echo "[contract] macOS installer preserves authenticated local/cloud transitions"
 bash tests/test-macos-installer-transitions.sh
+
+echo "[contract] macOS Compose pre-pull reuses matching platform caches"
+bash tests/test-macos-compose-image-cache.sh
 
 echo "[contract] AMD reassign keeps HSA override Strix-only"
 grep -q '_env_set "HSA_OVERRIDE_GFX_VERSION" "11.5.1"' ods-cli \
@@ -776,5 +783,9 @@ bash tests/test-installer-context-parity.sh
 
 echo "[contract] Linux installer/background model lifecycle serialization"
 bash tests/test-linux-installer-model-lifecycle-lock.sh
+
+echo "[contract] Podman and no-sudo rootless lifecycle"
+bash tests/test-podman-rootless-contracts.sh
+bash tests/test-installer-noninteractive-sudo.sh
 
 echo "[PASS] installer contracts"

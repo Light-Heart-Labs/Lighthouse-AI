@@ -18,6 +18,7 @@ import aiohttp
 import httpx
 
 from config import SERVICES, INSTALL_DIR, DATA_DIR, LLM_BACKEND, read_live_env_value
+from env_values import strip_matching_quotes
 from host_agent_client import AgentClientError, async_request_json as request_agent_json
 from models import ServiceStatus, DiskUsage, ModelInfo, BootstrapStatus
 
@@ -826,27 +827,25 @@ def get_model_info() -> Optional[ModelInfo]:
                     key = key.strip()
                     if not key:
                         continue
-                    value = value.strip()
-                    # Strip exactly one matching pair of surrounding quotes.
-                    # str.strip("\"'") removes any run of either quote from
-                    # both ends, so a value legitimately ending in a quote is
-                    # truncated and "'literal'" loses its inner quotes. Keep
-                    # mismatched quotes verbatim, matching lib/safe-env.sh.
-                    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                        value = value[1:-1]
+                    value = strip_matching_quotes(value)
                     env_values[key] = value
 
             model_name = env_values.get("LLM_MODEL")
             if model_name:
                 size_gb, quant = 15.0, None
-                # MAX_CONTEXT/CTX_SIZE come straight from .env and may be
+                # CTX_SIZE/MAX_CONTEXT come straight from .env and may be
                 # non-numeric (e.g. "auto", "8k", or a trailing comment); fall
                 # back to the default rather than 500-ing every caller. Mirrors
                 # the guard already used in routers/models.py.
-                try:
-                    context = int(env_values.get("MAX_CONTEXT") or env_values.get("CTX_SIZE") or 32768)
-                except (TypeError, ValueError):
-                    context = 32768
+                context = 32768
+                for key in ("CTX_SIZE", "MAX_CONTEXT"):
+                    try:
+                        candidate = int(env_values.get(key) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if candidate > 0:
+                        context = candidate
+                        break
 
                 import re as _re
 

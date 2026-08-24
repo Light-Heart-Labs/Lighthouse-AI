@@ -85,6 +85,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 . (Join-Path $LibDir "tier-map.ps1")
 . (Join-Path $LibDir "detection.ps1")
 . (Join-Path $LibDir "env-generator.ps1")
+. (Join-Path $LibDir "installed-footprint.ps1")
 . (Join-Path $LibDir "llm-endpoint.ps1")
 . (Join-Path $LibDir "opencode-config.ps1")
 . (Join-Path $LibDir "readiness-summary.ps1")
@@ -538,11 +539,18 @@ if ($dryRun) {
                 New-Item -ItemType Directory -Path $pidDir -Force | Out-Null
 
                 $adminApiKey = Get-ODSLemonadeAdminApiKey -EnvPath $_envPath
+                $contextRaw = Get-ODSEnvFileValue -EnvPath $_envPath -Key "CTX_SIZE"
+                if ([string]::IsNullOrWhiteSpace($contextRaw)) {
+                    $contextRaw = Get-ODSEnvFileValue -EnvPath $_envPath -Key "MAX_CONTEXT"
+                }
+                $contextSize = [long]0
+                $null = [long]::TryParse([string]$contextRaw, [ref]$contextSize)
                 $launchContract = Get-ODSLemonadeLaunchContract `
                     -ExecutablePath $script:LEMONADE_EXE `
                     -Port $script:LEMONADE_PORT `
                     -BindAddress $bindAddr `
                     -ModelsDir $modelsDir `
+                    -ContextSize $contextSize `
                     -AdminApiKey $adminApiKey
                 Write-AI "Lemonade $($launchContract.Version) launch contract: $($launchContract.ArgumentString)"
                 $diagnosticLog = Join-Path (Join-Path $installDir "logs") "lemonade-launch.log"
@@ -702,19 +710,38 @@ if ($dryRun) {
                 # Start native llama-server
                 Write-AI "Starting native llama-server (Vulkan)..."
                 $modelFullPath = Join-Path (Join-Path $installDir "data\models") $tierConfig.GgufFile
-                $llamaArgs = @(
-                    "--model", $modelFullPath,
-                    "--host", $bindAddr,
-                    "--port", [string]$script:LEMONADE_PORT,
-                    "--n-gpu-layers", "999",
-                    "--ctx-size", "$($tierConfig.MaxContext)"
-                )
                 $_llamaEnv = @{}
                 Get-Content -LiteralPath (Join-Path $installDir ".env") -ErrorAction SilentlyContinue | ForEach-Object {
                     if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
                     $parts = $_ -split '=', 2
                     $_llamaEnv[$parts[0].Trim()] = $parts[1].Trim().Trim('"')
                 }
+                $_gpuLayers = $_llamaEnv["N_GPU_LAYERS"]
+                if (-not $_gpuLayers) { $_gpuLayers = "auto" }
+                $llamaArgs = @(
+                    "--model", $modelFullPath,
+                    "--host", $bindAddr,
+                    "--port", [string]$script:LEMONADE_PORT,
+                    "--n-gpu-layers", $_gpuLayers,
+                    "--ctx-size", "$($tierConfig.MaxContext)",
+                    # llama.cpp keeps /metrics off unless asked. The dashboard's
+                    # tokens/sec reading and the Usage page's local-runtime
+                    # counters both scrape that endpoint, so every other launch
+                    # path passes this too.
+                    "--metrics"
+                )
+                # Map the .env values (off/on/auto) onto llama-server's own
+                # vocabulary, the same way scripts/bootstrap-upgrade.sh does for
+                # its Windows hot-swap. Defaulting to off keeps thinking models
+                # from spending the whole token budget on internal reasoning.
+                $_reasoning = $_llamaEnv["LLAMA_REASONING"]
+                if (-not $_reasoning) { $_reasoning = "off" }
+                switch ($_reasoning) {
+                    "off"   { $_reasoningFmt = "none" }
+                    "on"    { $_reasoningFmt = "deepseek" }
+                    default { $_reasoningFmt = $_reasoning }
+                }
+                $llamaArgs += @("--reasoning-format", $_reasoningFmt)
                 if ($_llamaEnv["LLAMA_ARG_FLASH_ATTN"]) { $llamaArgs += @("--flash-attn", $_llamaEnv["LLAMA_ARG_FLASH_ATTN"]) }
                 if ($_llamaEnv["LLAMA_ARG_CACHE_TYPE_K"]) { $llamaArgs += @("--cache-type-k", $_llamaEnv["LLAMA_ARG_CACHE_TYPE_K"]) }
                 if ($_llamaEnv["LLAMA_ARG_CACHE_TYPE_V"]) { $llamaArgs += @("--cache-type-v", $_llamaEnv["LLAMA_ARG_CACHE_TYPE_V"]) }
@@ -1661,7 +1688,7 @@ litellm_settings:
             $hasHermesImageOverride = -not [string]::IsNullOrWhiteSpace($envHermesImage)
             $envHermesFallbackImage = Get-ODSEnvValueFromFile -Path $_envCheck -Key "HERMES_AGENT_IMAGE_FALLBACK"
             if ([string]::IsNullOrWhiteSpace($envHermesImage)) {
-                $envHermesImage = "nousresearch/hermes-agent:v2026.5.16"
+                $envHermesImage = "nousresearch/hermes-agent:v2026.6.5"
             }
 
             Write-AI "Validating Hermes Agent image tag before startup..."
@@ -1708,7 +1735,7 @@ litellm_settings:
         # `up -d`. llama-server runs natively on Windows (Lemonade or Vulkan
         # binary) so it is not built here. ComfyUI is only locally built on
         # NVIDIA; the Windows AMD stack uses a prebuilt image overlay.
-        $_buildServices = @("dashboard", "dashboard-api", "model-router")
+        $_buildServices = @("dashboard", "dashboard-api", "model-router", "remote-provider-egress", "remote-provider-ssh-tunnel")
         if (Test-ODSWindowsServiceEnabled -ServiceId "ape" -Plan $servicePlan) {
             $_buildServices += "ape"
         }

@@ -168,5 +168,15 @@ while IFS= read -r _key; do
 done <<< "$_profile_env_keys"
 pass "selector allowlist covers every catalog runtime-profile env key"
 
+echo "Test 14: load_env_file decodes the supported double-quoted escape set"
+unset FILE_ESCAPED 2>/dev/null || true
+cat > "$tmpdir/.env-escaped" << 'EOF'
+FILE_ESCAPED="it's \$HOME and \$(whoami) and \`id\` and C:\\path and \"dq\""
+EOF
+load_env_file "$tmpdir/.env-escaped"
+[[ "${FILE_ESCAPED:-}" == 'it'"'"'s $HOME and $(whoami) and `id` and C:\path and "dq"' ]] \
+    || fail "FILE_ESCAPED not decoded safely (got: ${FILE_ESCAPED:-})"
+pass "load_env_file decodes supported escapes without evaluation"
+
 echo ""
 echo "All safe-env tests passed."
