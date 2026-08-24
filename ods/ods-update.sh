@@ -12,9 +12,8 @@
 
 set -euo pipefail
 
-# Prerequisites
-command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed." >&2; echo "Install with: apt install jq (Debian/Ubuntu) or brew install jq (macOS)" >&2; exit 1; }
 
+# Prerequisites are checked after color definitions (see line ~40)
 #==============================================================================
 # CONFIGURATION
 #==============================================================================
@@ -449,13 +448,21 @@ cmd_check() {
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
     local response
     local curl_args=(-sf --max-time 15)
+    local _gh_header=""
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+        _gh_header="Authorization: Bearer ${GITHUB_TOKEN}"
     fi
 
-    if ! response=$(curl "${curl_args[@]}" "${api_url}" 2>/dev/null); then
-        log_error "Failed to check for updates. Check network or GITHUB_TOKEN."
-        return 1
+    if [[ -n "$_gh_header" ]]; then
+        if ! response=$(printf '%s' "$_gh_header" | curl "${curl_args[@]}" -H @- "${api_url}" 2>/dev/null); then
+            log_error "Failed to check for updates. Check network or GITHUB_TOKEN."
+            return 1
+        fi
+    else
+        if ! response=$(curl "${curl_args[@]}" "${api_url}" 2>/dev/null); then
+            log_error "Failed to check for updates. Check network or GITHUB_TOKEN."
+            return 1
+        fi
     fi
     
     local latest_version
