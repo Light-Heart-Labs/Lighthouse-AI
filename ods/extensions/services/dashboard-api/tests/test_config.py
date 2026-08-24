@@ -92,6 +92,20 @@ def test_extension_catalog_skips_non_object_entries(monkeypatch, tmp_path):
     assert config.load_extension_catalog() == [valid]
 
 
+def test_live_env_value_strips_one_pair_and_preserves_unmatched_quotes(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "PAIRED='model-v2'\n"
+        "UNMATCHED=model-v2'\n"
+        "REPEATED=''model-v2''\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "INSTALL_DIR", str(tmp_path))
+
+    assert config.read_live_env_value("PAIRED") == "model-v2"
+    assert config.read_live_env_value("UNMATCHED") == "model-v2'"
+    assert config.read_live_env_value("REPEATED") == "'model-v2'"
+
+
 class TestReadManifestFile:
 
     def test_reads_yaml(self, tmp_path):
