@@ -25,6 +25,11 @@ error() {
 }
 docker() {
     printf '%s\n' "$*" >> "$docker_log"
+    if [[ " $* " == *" config --services "* ]]; then
+        printf '%s\n' dashboard dashboard-api model-router remote-provider-egress \
+            remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search
+        return 0
+    fi
     return "${TEST_DOCKER_BUILD_RC:-0}"
 }
 
