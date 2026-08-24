@@ -12,8 +12,9 @@
 #   Add new background task types here.
 # ============================================================================
 
-# Registry file for background tasks
-BG_TASK_REGISTRY="${BG_TASK_REGISTRY:-/tmp/ods-bg-tasks.json}"
+# Registry file for background tasks — use a private temp file to prevent
+# symlink/TOCTOU attacks (same rationale as service-registry.sh mktemp).
+BG_TASK_REGISTRY="${BG_TASK_REGISTRY:-$(umask 077; mktemp "${TMPDIR:-/tmp}/ods-bg-tasks.XXXXXX")}"
 
 # Start tracking a background task
 # Usage: bg_task_start <task_id> <pid> <description> <log_file>
@@ -101,8 +102,17 @@ try:
     os.kill(pid, 0)
     sys.exit(0)  # Running
 except OSError:
-    # Process not running - check log for success/failure
+    # Process not running - check for structured exit code first,
+    # then fall back to log heuristic
     log_file = task.get("log_file", "")
+    exit_file = log_file + ".exit" if log_file else ""
+    if exit_file and Path(exit_file).exists():
+        try:
+            code = int(Path(exit_file).read_text().strip())
+            sys.exit(2 if code != 0 else 1)
+        except (ValueError, OSError):
+            pass
+    # Fallback: heuristic log scan (only when no exit code file)
     if log_file and Path(log_file).exists():
         log_content = Path(log_file).read_text()
         if "ERROR" in log_content or "FAILED" in log_content or "failed" in log_content:
