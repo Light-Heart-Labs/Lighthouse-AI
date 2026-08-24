@@ -3119,6 +3119,23 @@ class TestInstallProgress:
         assert data["status"] == "pulling"
         assert data["phase_label"] == "Downloading image..."
 
+    @pytest.mark.parametrize("payload", [None, [], "pulling", 1, True])
+    def test_progress_endpoint_treats_non_object_receipts_as_idle(
+        self, test_client, monkeypatch, tmp_path, payload
+    ):
+        _patch_mutation_config(monkeypatch, tmp_path)
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        (progress_dir / "my-ext.json").write_text(json.dumps(payload))
+
+        response = test_client.get(
+            "/api/extensions/my-ext/progress",
+            headers=test_client.auth_headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"service_id": "my-ext", "status": "idle"}
+
     def test_status_installing_when_progress_pulling(self, monkeypatch, tmp_path):
         """Progress file with status 'pulling' → _compute_extension_status returns 'installing'."""
         from routers.extensions import _compute_extension_status
@@ -3953,6 +3970,25 @@ class TestWriteErrorProgress:
         assert data["status"] == "error"
         assert data["error"] == "Agent unreachable"
         assert "phase_label" in data
+
+    @pytest.mark.parametrize("payload", [None, [], "pulling", 1, True])
+    def test_repairs_non_object_progress_when_recording_error(
+        self, monkeypatch, tmp_path, payload
+    ):
+        from routers.extensions import _write_error_progress
+
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        progress_dir = tmp_path / "extension-progress"
+        progress_dir.mkdir()
+        progress_file = progress_dir / "my-ext.json"
+        progress_file.write_text(json.dumps(payload))
+
+        _write_error_progress("my-ext", "Agent unavailable")
+
+        repaired = json.loads(progress_file.read_text())
+        assert repaired["service_id"] == "my-ext"
+        assert repaired["status"] == "error"
+        assert repaired["error"] == "Agent unavailable"
 
 # --- _activate_service: built-in (EXTENSIONS_DIR) branch ---
 
