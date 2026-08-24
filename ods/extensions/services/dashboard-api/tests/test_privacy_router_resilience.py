@@ -1,6 +1,6 @@
 """Unit tests for privacy shield router status and toggle endpoints."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 import pytest
 
 from routers.privacy import get_privacy_shield_status, toggle_privacy_shield
