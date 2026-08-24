@@ -32,6 +32,14 @@ function Add-Check([string]$Id, [string]$Status, [string]$Message, [string]$Acti
 }
 
 function Convert-ToWslPath([string]$WindowsPath) {
+    # Prefer WSL's built-in wslpath (handles UNC paths, mapped drives, spaces)
+    try {
+        $result = (& wsl.exe wslpath -u ($WindowsPath -replace '\\', '\\') 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $result) {
+            return $result.Trim()
+        }
+    } catch { }
+    # Fallback: manual conversion for simple drive-letter paths
     if ($WindowsPath -match '^([A-Za-z]):\\(.*)$') {
         $drive = $Matches[1].ToLower()
         $rest = $Matches[2] -replace '\\', '/'
