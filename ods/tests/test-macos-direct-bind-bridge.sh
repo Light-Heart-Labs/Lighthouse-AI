@@ -38,8 +38,10 @@ pass() {
 [[ -f "$INSTALLER" ]] || fail "missing $INSTALLER"
 [[ -f "$BRIDGE_MANAGER" ]] || fail "missing $BRIDGE_MANAGER"
 
-python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-[[ -n "$python_cmd" ]] || fail "python is required to parse embedded installer programs"
+# shellcheck source=lib/python-cmd.sh
+. "$ROOT_DIR/lib/python-cmd.sh"
+python_cmd="$(ods_detect_python_cmd)" \
+    || fail "python is required to parse embedded installer programs"
 
 "$python_cmd" - "$INSTALLER" "$BRIDGE_MANAGER" <<'PY'
 import ast
@@ -198,6 +200,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
         WEBUI_SECRET="render-webui-secret" \
         LITELLM_KEY="$render_key" \
         HERMES_LLM_API_KEY="$render_key" \
+        HERMES_DASHBOARD_SESSION_TOKEN="render-hermes-dashboard-session-token" \
         ODS_MODE=cloud \
         LLM_API_URL=http://litellm:4000 \
         HERMES_LLM_BASE_URL=http://litellm:4000/v1 \
@@ -222,6 +225,7 @@ assert services["hermes"]["environment"]["OPENAI_API_KEY"] == key
         WEBUI_SECRET="render-webui-secret" \
         LITELLM_KEY="$render_key" \
         HERMES_LLM_API_KEY="$local_hermes_key" \
+        HERMES_DASHBOARD_SESSION_TOKEN="render-hermes-dashboard-session-token" \
         ODS_MODE=local \
         LLM_API_URL=http://llama-server:8080 \
         HERMES_LLM_BASE_URL=http://llama-server:8080/v1 \

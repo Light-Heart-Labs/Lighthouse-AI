@@ -49,6 +49,15 @@ else
     failed=$((failed + 1))
 fi
 
+if grep -Fq '[ -z "$$CONFIG_PATH" ]' "$COMPOSE" \
+    && grep -Fq 'LiteLLM config selector returned an unreadable path' "$COMPOSE"; then
+    printf '[PASS] Compose fails closed when selector output is empty or unreadable\n'
+    passed=$((passed + 1))
+else
+    printf '[FAIL] Compose does not guard selector output before LiteLLM startup\n'
+    failed=$((failed + 1))
+fi
+
 if grep -Fq 'model_name: ods/current' "$CLOUD_CONFIG"; then
     printf '[PASS] Cloud config exposes the stable ods/current alias\n'
     passed=$((passed + 1))

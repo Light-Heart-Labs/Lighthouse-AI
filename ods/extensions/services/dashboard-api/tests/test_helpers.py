@@ -92,6 +92,30 @@ class TestGetModelInfo:
         assert info is not None
         assert info.context_length == 8192
 
+    def test_prefers_canonical_context_when_upgrade_aliases_diverge(self, install_dir):
+        env_file = install_dir / ".env"
+        env_file.write_text(
+            "LLM_MODEL=Qwen2.5-7B-Instruct\n"
+            "CTX_SIZE=131072\n"
+            "MAX_CONTEXT=65536\n"
+        )
+
+        info = get_model_info()
+        assert info is not None
+        assert info.context_length == 131072
+
+    def test_invalid_canonical_context_falls_back_to_valid_legacy_alias(self, install_dir):
+        env_file = install_dir / ".env"
+        env_file.write_text(
+            "LLM_MODEL=Qwen2.5-7B-Instruct\n"
+            "CTX_SIZE=auto\n"
+            "MAX_CONTEXT=65536\n"
+        )
+
+        info = get_model_info()
+        assert info is not None
+        assert info.context_length == 65536
+
     def test_non_numeric_context_falls_back_to_default(self, install_dir):
         # A non-numeric CTX_SIZE/MAX_CONTEXT (e.g. "auto") must not 500 every
         # caller of get_model_info(); it falls back to the default context.

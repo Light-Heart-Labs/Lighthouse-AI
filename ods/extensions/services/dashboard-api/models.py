@@ -187,6 +187,8 @@ class ModelLibraryEntry(BaseModel):
     vramRequired: float
     estimatedRequired: Optional[float] = None
     contextLength: int
+    maxContextLength: Optional[int] = None
+    contextOptions: list[dict[str, Any]] = Field(default_factory=list)
     specialty: str
     description: str
     tokensPerSec: Optional[float] = None
@@ -228,3 +230,4 @@ class ModelLibraryResponse(BaseModel):
     modelLifecycle: Optional[dict[str, Any]] = None
     odsMode: str = "unknown"
     configuredMode: str = "unknown"
+    llmBackend: str = "unknown"

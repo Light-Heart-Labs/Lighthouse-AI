@@ -61,6 +61,45 @@ function Resolve-WindowsODSPort {
     return $DefaultPort
 }
 
+function Get-ODSDockerMemoryGB {
+    try {
+        $raw = (& docker info --format "{{.MemTotal}}" 2>$null | Select-Object -First 1)
+        $bytes = [int64]0
+        if ([int64]::TryParse(([string]$raw).Trim(), [ref]$bytes) -and $bytes -ge 1GB) {
+            return [int][Math]::Floor($bytes / 1GB)
+        }
+    } catch { }
+    return 0
+}
+
+function Get-ODSEffectiveContainerMemoryGB {
+    param(
+        [int]$SystemRamGB,
+        [int]$DockerRamGB
+    )
+
+    if ($SystemRamGB -gt 0 -and $DockerRamGB -gt 0) {
+        return [Math]::Min($SystemRamGB, $DockerRamGB)
+    }
+    if ($DockerRamGB -gt 0) {
+        return $DockerRamGB
+    }
+    return [Math]::Max(0, $SystemRamGB)
+}
+
+function Get-ODSDefaultNvidiaLlamaMemoryLimit {
+    param([int]$AvailableRamGB)
+
+    if ($AvailableRamGB -le 0) {
+        return "64G"
+    }
+
+    $reserveGB = $(if ($AvailableRamGB -lt 16) { 3 } else { 4 })
+    $usableGB = [Math]::Max(1, $AvailableRamGB - $reserveGB)
+    $usableGB = [Math]::Min(64, $usableGB)
+    return "${usableGB}G"
+}
+
 function Write-Utf8NoBom {
     <#
     .SYNOPSIS
@@ -83,6 +122,191 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
+function Get-WindowsODSRuntimeConfigRenderer {
+    [CmdletBinding()]
+    param(
+        [string]$InstallDir = ""
+    )
+
+    $candidates = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($InstallDir)) {
+        [void]$candidates.Add((Join-Path (Join-Path $InstallDir "scripts") "render-runtime-configs.py"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        [void]$candidates.Add((Join-Path (Join-Path $repoRoot "scripts") "render-runtime-configs.py"))
+    }
+
+    $seen = @{}
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if ($seen.ContainsKey($candidate)) { continue }
+        $seen[$candidate] = $true
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+
+    throw "Runtime config renderer not found for Windows Lemonade route."
+}
+
+function Test-WindowsODSRuntimeConfigPythonCandidate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$PrefixArgs = @()
+    )
+
+    if ([string]::IsNullOrWhiteSpace($FilePath)) {
+        return $false
+    }
+
+    $commandPath = $FilePath
+    $resolvedCommand = Get-Command $FilePath -CommandType Application -ErrorAction SilentlyContinue
+    if ($resolvedCommand -and $resolvedCommand.Source) {
+        $commandPath = $resolvedCommand.Source
+    }
+    if ($commandPath -match '\\WindowsApps\\python3?\.exe$') {
+        return $false
+    }
+
+    $probeArgs = @($PrefixArgs) + @("-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)")
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & $FilePath @probeArgs 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+function New-WindowsODSRuntimeConfigPythonCandidate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$PrefixArgs = @()
+    )
+
+    [pscustomobject]@{
+        FilePath = $FilePath
+        PrefixArgs = @($PrefixArgs)
+    }
+}
+
+function Resolve-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $candidateFiles = New-Object 'System.Collections.Generic.List[string]'
+    $candidateRoots = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        [void]$candidateRoots.Add((Join-Path $env:LOCALAPPDATA "Programs\Python"))
+    }
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not [string]::IsNullOrWhiteSpace($root)) { [void]$candidateRoots.Add($root) }
+    }
+
+    foreach ($root in $candidateRoots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) { continue }
+        Get-ChildItem -LiteralPath $root -Directory -Filter "Python*" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $exe = Join-Path $_.FullName "python.exe"
+                if (Test-Path -LiteralPath $exe -PathType Leaf) { [void]$candidateFiles.Add($exe) }
+            }
+    }
+
+    $sharedResolver = Get-Command Get-ODSPythonDownloadCommand -ErrorAction SilentlyContinue
+    if ($sharedResolver) {
+        $resolved = Get-ODSPythonDownloadCommand
+        if ($resolved -and (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))
+        }
+    }
+
+    $candidates = @(
+        @{ FilePath = "python3"; PrefixArgs = @() },
+        @{ FilePath = "python"; PrefixArgs = @() },
+        @{ FilePath = "py"; PrefixArgs = @("-3") }
+    )
+
+    $seen = @{}
+    foreach ($candidateFile in $candidateFiles) {
+        $key = $candidateFile.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $candidateFile) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $candidateFile)
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        $filePath = [string]$candidate.FilePath
+        $prefixArgs = @($candidate.PrefixArgs)
+        if (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $filePath -PrefixArgs $prefixArgs) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $filePath -PrefixArgs $prefixArgs)
+        }
+    }
+
+    return $null
+}
+
+function Install-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $sharedInstaller = Get-Command Install-ODSHostAgentPython -ErrorAction SilentlyContinue
+    if ($sharedInstaller) {
+        $resolved = Install-ODSHostAgentPython
+        if ($resolved -and (Test-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))) {
+            return (New-WindowsODSRuntimeConfigPythonCandidate -FilePath $resolved.FilePath -PrefixArgs @($resolved.PrefixArgs))
+        }
+    }
+
+    $winget = Get-Command winget -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        return $null
+    }
+
+    if (Get-Command Write-AIWarn -ErrorAction SilentlyContinue) {
+        Write-AIWarn "Python 3 not found. Installing Python 3.12 via winget for runtime config rendering..."
+    } else {
+        Write-Warning "Python 3 not found. Installing Python 3.12 via winget for runtime config rendering..."
+    }
+
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & winget install --exact --id Python.Python.3.12 --silent --disable-interactivity --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+
+    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    $env:PATH = "$machinePath;$userPath"
+    return (Resolve-WindowsODSRuntimeConfigPython)
+}
+
+function Get-WindowsODSRuntimeConfigPython {
+    [CmdletBinding()]
+    param()
+
+    $resolved = Resolve-WindowsODSRuntimeConfigPython
+    if ($resolved) { return $resolved }
+
+    $installed = Install-WindowsODSRuntimeConfigPython
+    if ($installed) { return $installed }
+
+    throw "Python 3 is required to render Windows Lemonade LiteLLM config and could not be installed automatically."
+}
+
 function Write-WindowsODSLemonadeLiteLlmConfig {
     [CmdletBinding()]
     param(
@@ -102,38 +326,39 @@ function Write-WindowsODSLemonadeLiteLlmConfig {
     if ($ModelId -match '[\r\n]') {
         throw "Lemonade model ID cannot contain line breaks."
     }
+    if ($ApiKey -match '[\r\n]') {
+        throw "Lemonade API key cannot contain line breaks."
+    }
+    $parsedPort = 0
+    if (-not [int]::TryParse($Port, [ref]$parsedPort) -or $parsedPort -lt 1 -or $parsedPort -gt 65535) {
+        throw "Lemonade port must be an integer in 1..65535."
+    }
 
     $litellmDir = Join-Path (Join-Path $InstallDir "config") "litellm"
     New-Item -ItemType Directory -Path $litellmDir -Force | Out-Null
-    $lemonadeApiBase = "http://host.docker.internal:$Port/api/v1"
-    $lemonadeConfig = @"
-model_list:
-  - model_name: default
-    litellm_params:
-      model: openai/$ModelId
-      api_base: $lemonadeApiBase
-      api_key: $ApiKey
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
+    $renderer = Get-WindowsODSRuntimeConfigRenderer -InstallDir $InstallDir
+    $python = Get-WindowsODSRuntimeConfigPython
+    $lemonadeApiBase = "http://host.docker.internal:$parsedPort/api/v1"
+    $renderArgs = @($python.PrefixArgs) + @(
+        $renderer,
+        "--surface", "litellm-lemonade",
+        "--ods-mode", "lemonade",
+        "--gpu-backend", "amd",
+        "--lemonade-model-id", $ModelId,
+        "--lemonade-api-base", $lemonadeApiBase,
+        "--litellm-key", $ApiKey,
+        "--output-root", $InstallDir,
+        "--write"
+    )
+    $renderOutput = & $python.FilePath @renderArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runtime config renderer failed for Windows Lemonade route: $($renderOutput -join "`n")"
+    }
 
-  - model_name: "*"
-    litellm_params:
-      model: openai/$ModelId
-      api_base: $lemonadeApiBase
-      api_key: $ApiKey
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: false
-
-litellm_settings:
-  drop_params: true
-  set_verbose: false
-  request_timeout: 900
-  stream_timeout: 900
-"@
     $configPath = Join-Path $litellmDir "lemonade.yaml"
-    Write-Utf8NoBom -Path $configPath -Content $lemonadeConfig
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw "Runtime config renderer did not create $configPath"
+    }
     return $configPath
 }
 
@@ -232,6 +457,22 @@ function New-SecureBase64 {
     return [Convert]::ToBase64String($buf)
 }
 
+function ConvertTo-ODSDotenvValue {
+    <# Serialize a value for Bash, Docker Compose, and ODS safe-env readers. #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    $text = ([string]$Value) -replace "`r", " " -replace "`n", " "
+    if ($text.IndexOf("'") -ge 0) {
+        # Bash and Compose disagree about \` inside double-quoted dotenv
+        # values. Normalize it only in this apostrophe fallback so both readers
+        # receive the same safe text.
+        $text = $text.Replace('`', 'ˋ')
+        $escaped = $text.Replace('\', '\\').Replace('"', '\"').Replace('$', '\$')
+        return '"' + $escaped + '"'
+    }
+    return "'" + $text + "'"
+}
+
 function New-ODSEnv {
     <#
     .SYNOPSIS
@@ -271,7 +512,8 @@ function New-ODSEnv {
         # user already had in .env (via Get-EnvOrNew), so manual
         # `ods enable langfuse` edits survive.
         [bool]$EnableLangfuse = $false,
-        [bool]$EnableLan = $false
+        [bool]$EnableLan = $false,
+        [bool]$EnableODSProxy = $false
     )
 
     # Preserve existing secrets on re-install (mirrors Linux _env_get logic)
@@ -300,6 +542,25 @@ function New-ODSEnv {
             return $existingEnv[$Key]
         }
         return $Default
+    }
+
+    $bindAddressDefault = if ($EnableLan) { "0.0.0.0" } else { "127.0.0.1" }
+    $bindAddress = if ($EnableLan) {
+        # An explicit -Lan rerun must override a stale loopback-only .env.
+        $bindAddressDefault
+    } else {
+        Get-EnvOrNew "BIND_ADDRESS" $bindAddressDefault
+    }
+    $networkExposed = (
+        $bindAddress -notin @("127.0.0.1", "::1", "localhost") -or
+        $EnableODSProxy
+    )
+    if ($networkExposed) {
+        # Never carry an authless localhost value into a network-exposed rerun.
+        $webuiAuth = "true"
+    } else {
+        # On loopback, preserve an operator's explicit opt-in to authentication.
+        $webuiAuth = Get-EnvOrNew "WEBUI_AUTH" "false"
     }
 
     $webuiPort = Resolve-WindowsODSPort `
@@ -408,6 +669,9 @@ function New-ODSEnv {
     # session_signer raises on issue() and verify-session returns no-secret —
     # the magic-link gate effectively breaks.
     $odsSessionSecret = Get-EnvOrNew "ODS_SESSION_SECRET" (New-SecureHex -Bytes 32)
+    # Hermes otherwise rotates its dashboard token on every process start,
+    # invalidating WebSocket URLs held by already-open browser tabs.
+    $hermesDashboardSessionToken = Get-EnvOrNew "HERMES_DASHBOARD_SESSION_TOKEN" (New-SecureHex -Bytes 32)
     $shieldApiKey    = Get-EnvOrNew "SHIELD_API_KEY"     (New-SecureHex -Bytes 32)
     $tokenSpyApiKeyDefault = Get-ExistingTokenSpyApiKey
     if ([string]::IsNullOrWhiteSpace($tokenSpyApiKeyDefault)) {
@@ -481,6 +745,15 @@ function New-ODSEnv {
         $nativeInferencePort = [string]$parsedNativeInferencePort
     }
     $effectiveODSMode = $(if ($windowsAmdLemonade) { "lemonade" } else { $ODSMode })
+    $llamaServerMemoryLimit = ""
+    if ($GpuBackend -eq "nvidia" -and $effectiveODSMode -ne "cloud") {
+        $dockerRamGB = Get-ODSDockerMemoryGB
+        $availableRamGB = Get-ODSEffectiveContainerMemoryGB `
+            -SystemRamGB $SystemRamGB -DockerRamGB $dockerRamGB
+        $llamaMemoryDefault = Get-ODSDefaultNvidiaLlamaMemoryLimit `
+            -AvailableRamGB $availableRamGB
+        $llamaServerMemoryLimit = Get-EnvOrNew "LLAMA_SERVER_MEMORY_LIMIT" $llamaMemoryDefault
+    }
     $existingLemonadeModel = Get-EnvOrNew "LEMONADE_MODEL" ""
     $existingGgufFile = Get-EnvOrNew "GGUF_FILE" ""
     $effectiveLemonadeModel = $existingLemonadeModel
@@ -613,8 +886,19 @@ function New-ODSEnv {
     $embeddingsMemoryLimitDefault = [Environment]::GetEnvironmentVariable("EMBEDDINGS_MEMORY_LIMIT")
     if ([string]::IsNullOrWhiteSpace($embeddingsMemoryLimitDefault)) { $embeddingsMemoryLimitDefault = "4G" }
     $embeddingsMemoryLimit = Get-EnvOrNew "EMBEDDINGS_MEMORY_LIMIT" $embeddingsMemoryLimitDefault
+    $nGpuLayersDefault = [Environment]::GetEnvironmentVariable("N_GPU_LAYERS")
+    if ([string]::IsNullOrWhiteSpace($nGpuLayersDefault)) { $nGpuLayersDefault = "auto" }
+    $nGpuLayers = (Get-EnvOrNew "N_GPU_LAYERS" $nGpuLayersDefault).Trim()
+    if ([string]::IsNullOrWhiteSpace($nGpuLayers)) { $nGpuLayers = "auto" }
 
     # Build .env content (matches Phase 06 format)
+    $recommendationSource = ConvertTo-ODSDotenvValue $(if ($TierConfig.RecommendationSource) { $TierConfig.RecommendationSource } else { "installer_tier_map" })
+    $recommendationPolicy = ConvertTo-ODSDotenvValue $(if ($TierConfig.RecommendationPolicy) { $TierConfig.RecommendationPolicy } else { "tier-map" })
+    $recommendationConfidence = ConvertTo-ODSDotenvValue $(if ($TierConfig.RecommendationConfidence) { $TierConfig.RecommendationConfidence } else { "medium" })
+    $recommendationReason = ConvertTo-ODSDotenvValue $(if ($TierConfig.RecommendationReason) { $TierConfig.RecommendationReason } else { "Selected by installer tier $Tier ($($TierConfig.TierName)) for $GpuBackend backend; benchmark locally after first launch." })
+    $recommendationAlternatives = ConvertTo-ODSDotenvValue $(if ($TierConfig.RecommendationAlternatives) { $TierConfig.RecommendationAlternatives } else { "" })
+    $performanceLabel = ConvertTo-ODSDotenvValue "Benchmark after first launch"
+
     $envContent = @"
 # ODS Configuration -- $($TierConfig.TierName) Edition
 # Generated by Windows installer v$($script:ODS_VERSION) on $timestamp
@@ -623,7 +907,7 @@ function New-ODSEnv {
 #=== Network Binding ===
 # 127.0.0.1 = localhost only (secure default)
 # 0.0.0.0   = accessible from LAN (install with -Lan or set manually)
-BIND_ADDRESS=$(Get-EnvOrNew "BIND_ADDRESS" "$(if ($EnableLan) { "0.0.0.0" } else { "127.0.0.1" })")
+BIND_ADDRESS=$bindAddress
 # Docker Desktop containers reach loopback-only host services through this name.
 ODS_AGENT_HOST=$(Get-EnvOrNew "ODS_AGENT_HOST" "host.docker.internal")
 # The dashboard-api container must call the host agent over Docker Desktop's
@@ -662,20 +946,22 @@ CTX_SIZE=$($TierConfig.MaxContext)
 MODEL_RECOMMENDED_MODEL=$($TierConfig.LlmModel)
 MODEL_RECOMMENDED_GGUF=$($TierConfig.GgufFile)
 MODEL_RECOMMENDED_CONTEXT=$($TierConfig.MaxContext)
-MODEL_RECOMMENDATION_SOURCE=$(if ($TierConfig.RecommendationSource) { $TierConfig.RecommendationSource } else { "installer_tier_map" })
-MODEL_RECOMMENDATION_POLICY=$(if ($TierConfig.RecommendationPolicy) { $TierConfig.RecommendationPolicy } else { "tier-map" })
-MODEL_RECOMMENDATION_CONFIDENCE=$(if ($TierConfig.RecommendationConfidence) { $TierConfig.RecommendationConfidence } else { "medium" })
-MODEL_RECOMMENDATION_REASON=$(if ($TierConfig.RecommendationReason) { $TierConfig.RecommendationReason } else { "Selected by installer tier $Tier ($($TierConfig.TierName)) for $GpuBackend backend; benchmark locally after first launch." })
-MODEL_RECOMMENDED_ALTERNATIVES=$(if ($TierConfig.RecommendationAlternatives) { $TierConfig.RecommendationAlternatives } else { "" })
+MODEL_RECOMMENDATION_SOURCE=$recommendationSource
+MODEL_RECOMMENDATION_POLICY=$recommendationPolicy
+MODEL_RECOMMENDATION_CONFIDENCE=$recommendationConfidence
+MODEL_RECOMMENDATION_REASON=$recommendationReason
+MODEL_RECOMMENDED_ALTERNATIVES=$recommendationAlternatives
 MODEL_RUNTIME_PROFILE=$(if ($TierConfig.RuntimeProfile) { $TierConfig.RuntimeProfile } else { "" })
 MODEL_RUNTIME_PROFILE_LABEL=$(if ($TierConfig.RuntimeProfileLabel) { $TierConfig.RuntimeProfileLabel } else { "" })
 MODEL_RUNTIME_PROFILE_SOURCE=$(if ($TierConfig.RuntimeProfileSource) { $TierConfig.RuntimeProfileSource } else { "" })
 MODEL_PERFORMANCE_SOURCE=benchmark_required
-MODEL_PERFORMANCE_LABEL=Benchmark after first launch
+MODEL_PERFORMANCE_LABEL=$performanceLabel
 GPU_BACKEND=$GpuBackend
 SYSTEM_RAM_GB=$SystemRamGB
+N_GPU_LAYERS=$nGpuLayers
 $(if ($LlamaServerImage) { "LLAMA_SERVER_IMAGE=$LlamaServerImage" } else { "#LLAMA_SERVER_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda" })
 $(if ($llamaServerImageFallback) { "LLAMA_SERVER_IMAGE_FALLBACK=$llamaServerImageFallback" } else { "#LLAMA_SERVER_IMAGE_FALLBACK=ghcr.io/ggml-org/llama.cpp:server-cuda-b9014" })
+$(if ($llamaServerMemoryLimit) { "LLAMA_SERVER_MEMORY_LIMIT=$llamaServerMemoryLimit" })
 $(if ($LemonadeServerImage) { "LEMONADE_SERVER_IMAGE=$LemonadeServerImage" } else { "#LEMONADE_SERVER_IMAGE=ghcr.io/lemonade-sdk/lemonade-server:v10.2.0" })
 #=== llama.cpp Runtime Tuning ===
 LLAMA_PARALLEL=$(Get-EnvOrNew "LLAMA_PARALLEL" "$(if ($TierConfig.LLAMA_PARALLEL) { $TierConfig.LLAMA_PARALLEL } else { "1" })")
@@ -728,6 +1014,7 @@ WEBUI_SECRET=$webuiSecret
 DASHBOARD_API_KEY=$dashboardApiKey
 ODS_AGENT_KEY=$odsAgentKey
 ODS_SESSION_SECRET=$odsSessionSecret
+HERMES_DASHBOARD_SESSION_TOKEN=$hermesDashboardSessionToken
 SHIELD_API_KEY=$shieldApiKey
 N8N_USER=admin@ods.local
 N8N_PASS=$n8nPass
@@ -764,7 +1051,8 @@ RAG_OPENAI_API_KEY=$ragOpenAiApiKey
 EMBEDDINGS_MEMORY_LIMIT=$embeddingsMemoryLimit
 
 #=== Web UI Settings ===
-WEBUI_AUTH=true
+# Loopback installs open directly. LAN installs require a login by default.
+WEBUI_AUTH=$webuiAuth
 ENABLE_WEB_SEARCH=true
 WEB_SEARCH_ENGINE=searxng
 

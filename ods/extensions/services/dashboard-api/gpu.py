@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from env_values import strip_matching_quotes
 from models import GPUInfo, IndividualGPU
 from host_agent_client import AgentClientError, request_json as request_agent_json
 
@@ -529,7 +530,9 @@ def read_gpu_topology() -> Optional[dict]:
 def decode_gpu_assignment() -> Optional[dict]:
     """Decode GPU_ASSIGNMENT_JSON_B64, preferring the live .env file over the
     container startup environment so reassignments are reflected without restart."""
-    b64 = _read_env_var_from_file("GPU_ASSIGNMENT_JSON_B64") or os.environ.get("GPU_ASSIGNMENT_JSON_B64", "")
+    found, b64 = _read_env_var_from_file_state("GPU_ASSIGNMENT_JSON_B64")
+    if not found:
+        b64 = os.environ.get("GPU_ASSIGNMENT_JSON_B64", "")
     if not b64:
         return None
     try:
@@ -538,17 +541,28 @@ def decode_gpu_assignment() -> Optional[dict]:
         return None
 
 
-def _read_env_var_from_file(key: str) -> str:
-    """Read a single variable directly from the .env file (split on first '=' only)."""
+def _read_env_var_from_file_state(key: str) -> tuple[bool, str]:
+    """Read a live .env value while preserving present-but-empty assignments."""
     install_dir = os.environ.get("ODS_INSTALL_DIR", os.path.expanduser("~/ods"))
     env_path = Path(install_dir) / ".env"
     try:
         for line in env_path.read_text().splitlines():
             if line.startswith(f"{key}="):
-                return line[len(key) + 1:].strip().strip("\"'")
+                return True, strip_matching_quotes(line[len(key) + 1:])
     except OSError:
         pass
-    return ""
+    return False, ""
+
+
+def _read_env_var_from_file(key: str) -> str:
+    """Backward-compatible value-only wrapper for live .env reads."""
+    return _read_env_var_from_file_state(key)[1]
+
+
+def _live_env_value(key: str) -> str:
+    """Prefer the persisted setting, including an intentional empty value."""
+    found, value = _read_env_var_from_file_state(key)
+    return value if found else os.environ.get(key, "")
 
 
 def _build_uuid_service_map(assignment: dict) -> dict[str, list[str]]:

@@ -29,7 +29,7 @@ assert_in_order() {
     shift 2
     local previous=0 pattern line
     for pattern in "$@"; do
-        line="$(grep -nF "$pattern" <<<"$block" | head -1 | cut -d: -f1 || true)"
+        line="$(grep -nF -- "$pattern" <<<"$block" | head -1 | cut -d: -f1 || true)"
         [[ -n "$line" ]] || fail "$label is missing ordered step: $pattern"
         (( line > previous )) || fail "$label has out-of-order step: $pattern"
         previous="$line"
@@ -40,6 +40,91 @@ assert_in_order() {
 
 # Strip comments so explanatory text cannot satisfy or fail the checks.
 active_code="$(grep -v '^[[:space:]]*#' "$TARGET")"
+
+yaml_scalar_block="$(function_block yaml_double_quoted_scalar_content | grep -v '^[[:space:]]*#')"
+sed_escape_block="$(function_block sed_replacement_escape | grep -v '^[[:space:]]*#')"
+hermes_host_patch_block="$(function_block patch_hermes_yaml_with_sed | grep -v '^[[:space:]]*#')"
+hermes_container_patch_block="$(function_block patch_hermes_yaml_in_container | grep -v '^[[:space:]]*#')"
+grep -qF '$DOCKER_CMD exec ods-hermes sed -i' <<<"$hermes_container_patch_block" \
+    || fail "Hermes live config patching must pass sed arguments directly to docker exec"
+if grep -qF 'exec ods-hermes sh -c' <<<"$active_code"; then
+    fail "Hermes live config patching must not reparse generated commands through sh -c"
+fi
+
+eval "$yaml_scalar_block"
+eval "$sed_escape_block"
+eval "$hermes_host_patch_block"
+eval "$hermes_container_patch_block"
+hermes_patch_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ods-hermes-patch.XXXXXX")"
+hermes_patch_marker="$hermes_patch_tmp/injected"
+hermes_config="$hermes_patch_tmp/config.yaml"
+cat >"$hermes_config" <<'YAML'
+model:
+  default: "old-model"
+  context_length: 8192
+provider:
+  base_url: "http://old.invalid/v1"
+  context_length: 8192
+compression:
+  enabled: false
+  threshold: 0.50
+  target_ratio: 0.25
+  protect_last_n: 20
+request:
+    request_timeout_seconds: 180
+YAML
+hermes_docker_calls=0
+hermes_docker_args=()
+docker() {
+    hermes_docker_calls=$((hermes_docker_calls + 1))
+    hermes_docker_args=("$@")
+    local arg_count=${#hermes_docker_args[@]}
+    local sed_arg_count=$((arg_count - 4))
+    command sed "${hermes_docker_args[@]:3:$sed_arg_count}" "$hermes_config"
+}
+DOCKER_CMD=docker
+hermes_malicious_model="model&branch|tag\\path\"quoted' ; touch ${hermes_patch_marker} ; #"
+hermes_malicious_url="http://example.invalid/v1\\path\"quoted' ; touch ${hermes_patch_marker}.url ; #"
+patch_hermes_yaml_in_container \
+    "$hermes_malicious_model" 65536 "$hermes_malicious_url" 900 true \
+    || fail "Hermes live patch helper rejected metacharacters that should remain data"
+[[ ! -e "$hermes_patch_marker" && ! -e "${hermes_patch_marker}.url" ]] \
+    || fail "Hermes live patch helper executed config values as shell input"
+[[ "${hermes_docker_args[0]:-}" == "exec" \
+    && "${hermes_docker_args[1]:-}" == "ods-hermes" \
+    && "${hermes_docker_args[2]:-}" == "sed" \
+    && "${hermes_docker_args[3]:-}" == "-i" \
+    && "${hermes_docker_args[${#hermes_docker_args[@]}-1]:-}" == "/opt/data/config.yaml" ]] \
+    || fail "Hermes live patch helper did not preserve the expected docker/sed argv boundary"
+for hermes_arg in "${hermes_docker_args[@]}"; do
+    [[ "$hermes_arg" != "sh" && "$hermes_arg" != "-c" ]] \
+        || fail "Hermes live patch helper reintroduced a container shell"
+done
+if patch_hermes_yaml_in_container "safe-model" "65536; touch ${hermes_patch_marker}" "" 180 false; then
+    fail "Hermes live patch helper accepted a non-numeric context"
+fi
+[[ "$hermes_docker_calls" -eq 1 && ! -e "$hermes_patch_marker" ]] \
+    || fail "Hermes live patch helper invoked docker for invalid numeric input"
+hermes_expected_model="$(yaml_double_quoted_scalar_content "$hermes_malicious_model")"
+hermes_expected_url="$(yaml_double_quoted_scalar_content "$hermes_malicious_url")"
+grep -Fq "  default: \"${hermes_expected_model}\"" "$hermes_config" \
+    || fail "Hermes live patch helper did not persist a valid double-quoted model scalar"
+grep -Fq "  base_url: \"${hermes_expected_url}\"" "$hermes_config" \
+    || fail "Hermes live patch helper did not persist a valid double-quoted base URL scalar"
+
+hermes_host_config="$hermes_patch_tmp/host-config.yaml"
+cp "$hermes_config" "$hermes_host_config"
+patch_hermes_yaml_with_sed \
+    "$hermes_host_config" "$hermes_malicious_model" 131072 "$hermes_malicious_url" 900 \
+    || fail "Hermes host patch helper rejected safe scalar metacharacters"
+grep -Fq "  default: \"${hermes_expected_model}\"" "$hermes_host_config" \
+    || fail "Hermes host patch helper did not persist a valid double-quoted model scalar"
+grep -Fq "  base_url: \"${hermes_expected_url}\"" "$hermes_host_config" \
+    || fail "Hermes host patch helper did not persist a valid double-quoted base URL scalar"
+rm -rf -- "$hermes_patch_tmp"
+unset -f docker patch_hermes_yaml_in_container patch_hermes_yaml_with_sed \
+    yaml_double_quoted_scalar_content sed_replacement_escape
+pass "Hermes live patch values stay inside explicit docker exec arguments"
 
 grep -qF 'up -d --force-recreate --no-deps llama-server' <<<"$active_code" \
     || fail "llama-server hot-swap must force-recreate llama-server without deps"
@@ -248,6 +333,8 @@ assert_in_order "$windows_lemonade_block" "Windows Lemonade main path" \
 pass "Windows Lemonade verifies the exact downstream route before commit"
 
 snapshot_block="$(function_block snapshot_active_model_config | grep -v '^[[:space:]]*#')"
+grep -qF '"$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade"' <<<"$snapshot_block" \
+    || fail "every model transaction must snapshot the canonical Lemonade route"
 grep -qF 'extensions/services/hermes/cli-config.yaml.template' <<<"$snapshot_block" \
     || fail "Windows Lemonade transaction must snapshot the Hermes template"
 grep -qF 'data/hermes/config.yaml' <<<"$snapshot_block" \
@@ -258,6 +345,8 @@ grep -qF 'windows-lemonade.included' <<<"$snapshot_block" \
     || fail "dependent snapshots must be explicitly scoped to Windows Lemonade"
 
 restore_block="$(function_block restore_active_model_config | grep -v '^[[:space:]]*#')"
+grep -qF '"$ACTIVE_CONFIG_SNAPSHOT_DIR/litellm-lemonade"' <<<"$restore_block" \
+    || fail "every model rollback must restore the canonical Lemonade route"
 grep -qF 'windows-lemonade/hermes-template' <<<"$restore_block" \
     || fail "Windows Lemonade rollback must restore the Hermes template"
 grep -qF 'windows-lemonade/hermes-live' <<<"$restore_block" \
@@ -270,7 +359,7 @@ litellm_refresh_block="$(function_block refresh_windows_lemonade_litellm_after_s
 grep -qF -- '--lemonade-model-id "$model_id"' <<<"$litellm_refresh_block" \
     || fail "Windows Lemonade LiteLLM renderer must receive the exact resolved model ID"
 grep -qF 'model: openai/${model_id}' <<<"$litellm_refresh_block" \
-    || fail "Windows Lemonade LiteLLM fallback must use the exact resolved model ID"
+    || fail "Windows Lemonade rendered config must verify the exact resolved model ID"
 grep -qF '$DOCKER_CMD restart ods-litellm' <<<"$litellm_refresh_block" \
     || fail "Windows Lemonade must reload LiteLLM after regenerating its config"
 
@@ -391,6 +480,41 @@ for injected_failure in native model-id litellm hermes openclaw openclaw-env rec
     fi
 done
 pass "Windows Lemonade activation rolls back every injected post-swap failure"
+
+docker_swap_block="$(awk '
+    /^elif \[\[ -n "\$DOCKER_CMD" \]\] && \$DOCKER_CMD ps/ { in_block=1 }
+    in_block { print }
+    in_block && /^elif \[\[ -f "\$INSTALL_DIR\/data\/\.llama-server\.pid" \]\]/ { exit }
+' "$TARGET" | grep -v '^[[:space:]]*#')"
+grep -qF 'if [[ "$_gpu_backend" == "amd" ]]' <<<"$docker_swap_block" \
+    || fail "Docker Lemonade route rendering must be gated to the AMD backend"
+assert_in_order "$docker_swap_block" "Docker model transaction commit" \
+    '--surface litellm-lemonade' \
+    '$DOCKER_CMD restart ods-litellm' \
+    'verify_model_completion_route' \
+    'HOT_SWAP_VERIFIED=true' \
+    'discard_active_model_config_snapshot'
+pass "Docker model transaction commits only after renderer, reload, and completion proof"
+
+docker_rollback_block="$(function_block restore_docker_llama_server_after_swap_failure | grep -v '^[[:space:]]*#')"
+assert_in_order "$docker_rollback_block" "Docker model transaction rollback" \
+    'previous_model_id="$(snapshot_env_value LEMONADE_MODEL)"' \
+    'restore_active_model_config' \
+    'compose_recreate_llama_server_with_retry' \
+    '$DOCKER_CMD restart ods-litellm' \
+    'verify_model_completion_route'
+pass "Docker rollback restores and proves the previous routed model"
+
+completion_route_block="$(function_block verify_model_completion_route | grep -v '^[[:space:]]*#')"
+grep -qF '"choices"[[:space:]]*:' <<<"$completion_route_block" \
+    || fail "model route proof must require a completion choices payload"
+grep -qF '"error"[[:space:]]*:' <<<"$completion_route_block" \
+    || fail "model route proof must reject an error payload"
+grep -qF 'ODS_MODEL_ROUTE_ATTEMPTS' <<<"$completion_route_block" \
+    || fail "model route proof must expose a bounded attempt count"
+grep -qF 'ODS_MODEL_ROUTE_TIMEOUT' <<<"$completion_route_block" \
+    || fail "model route proof must expose a bounded request timeout"
+pass "Docker model route proof is bounded and rejects error responses"
 
 grep -qF 'switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD' <<<"$active_code" \
     || fail "Hermes post-swap patch helper must read switchboard mode"
