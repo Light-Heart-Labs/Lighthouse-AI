@@ -36,6 +36,16 @@ if [[ -f "$SCRIPT_DIR/lib/service-registry.sh" ]]; then
     . "$SCRIPT_DIR/lib/service-registry.sh" 
     sr_load 
 fi
+# sr_load degrades to _SR_FAILED=true when manifests cannot be parsed (usually
+# missing PyYAML) and leaves SERVICE_IDS empty. Every later section iterates
+# "${SERVICE_IDS[@]}", which under `set -u` on Bash < 4.4 aborts with an
+# opaque "unbound variable" long after the real cause scrolled away. Diagnose
+# here, where the failure is still explainable.
+if [[ "${_SR_FAILED:-false}" == "true" ]] || ! declare -p SERVICE_IDS >/dev/null 2>&1; then
+    echo "health-check: service registry unavailable — cannot enumerate services." >&2
+    echo "  Usually PyYAML is missing. Install it with: pip3 install pyyaml" >&2
+    exit 1
+fi
 INSTALL_DIR="${INSTALL_DIR:-$HOME/ods}"
 LLM_HOST="${LLM_HOST:-localhost}"
 LLM_PORT="${LLM_PORT:-8080}"

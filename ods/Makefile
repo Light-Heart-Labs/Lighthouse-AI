@@ -155,6 +155,10 @@ test: ## Run unit and contract tests
 	@echo "=== session cleanup lifecycle ==="
 	@bash tests/test-session-cleanup.sh
 
+	@echo ""
+	@echo "=== health-check registry failure guard ==="
+	@bash tests/test-health-check-registry-guard.sh
+
 bats: ## Run BATS unit tests for shell libraries
 	@echo "=== BATS unit tests ==="
 	@bash tests/run-bats.sh
