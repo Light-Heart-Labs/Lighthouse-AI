@@ -248,7 +248,7 @@ ensure_dirs() {
 
 get_current_model() {
     if [[ -f "$STATE_FILE" ]]; then
-        grep -o '"current": *"[^"]*"' "$STATE_FILE" | cut -d'"' -f4
+        jq -r '.current // ""' "$STATE_FILE" 2>/dev/null || echo ""
     else
         echo ""
     fi
@@ -256,7 +256,7 @@ get_current_model() {
 
 get_previous_model() {
     if [[ -f "$STATE_FILE" ]]; then
-        grep -o '"previous": *"[^"]*"' "$STATE_FILE" | cut -d'"' -f4
+        jq -r '.previous // ""' "$STATE_FILE" 2>/dev/null || echo ""
     else
         echo ""
     fi
