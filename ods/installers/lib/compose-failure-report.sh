@@ -13,10 +13,11 @@ _ods_report_env_value() {
     [[ -f "$env_file" ]] || { printf '%s' "$default"; return 0; }
     local value
     value="$(grep -m1 "^${key}=" "$env_file" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)"
-    value="${value%\"}"
-    value="${value#\"}"
-    value="${value%\'}"
-    value="${value#\'}"
+    # Strip matched quote pairs only (avoid mangling mismatched quotes)
+    case "$value" in
+        \"*\") value="${value:1:${#value}-2}" ;;
+        \'*\') value="${value:1:${#value}-2}" ;;
+    esac
     printf '%s' "${value:-$default}"
 }
 
@@ -157,7 +158,7 @@ write_compose_failure_report() {
         echo "Compose config tail (redacted)"
         if command -v docker >/dev/null 2>&1; then
             # shellcheck disable=SC2086
-            docker compose $report_compose_flags config 2>&1 | _ods_report_redact_stream "$env_file" | tail -n 80 || true
+            docker compose --project-directory "$install_dir" $report_compose_flags config 2>&1 | _ods_report_redact_stream "$env_file" | tail -n 80 || true
         else
             echo "docker command not found"
         fi
@@ -165,7 +166,7 @@ write_compose_failure_report() {
         echo "Compose ps"
         if command -v docker >/dev/null 2>&1; then
             # shellcheck disable=SC2086
-            docker compose $report_compose_flags ps -a 2>&1 | sed -n '1,80p' || true
+            docker compose --project-directory "$install_dir" $report_compose_flags ps -a 2>&1 | sed -n '1,80p' || true
         else
             echo "docker command not found"
         fi
