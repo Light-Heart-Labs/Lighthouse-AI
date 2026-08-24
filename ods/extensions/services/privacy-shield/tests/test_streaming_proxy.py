@@ -131,27 +131,20 @@ class TestStreamingNotBuffered:
         )
 
 
-# ── 1b. Oversized-text cutover keeps ONE upstream iterator (#1268) ─────────
+# ── 1b. Unknown-length text keeps one restore mode (#1268) ─────────────────
 #
-# When a textual body crosses SHIELD_RESTORE_MAX_BYTES mid-stream, body_iter()
-# stops PII-restoring and passes the rest through untouched. The bug: it used
-# to start a *fresh* raw_chunks() loop after the cutover, abandoning the
-# original aiter_raw() generator and trying to iterate the single-consumption
-# httpx response a second time — silently dropping/truncating the remainder of
-# a large text response. Fix: keep draining the SAME already-open iterator.
+# A response without Content-Length cannot be classified as oversized before
+# streaming begins. Once restoration emits a prefix, changing to raw
+# passthrough would create a mixed response and leak later PII placeholders.
 
-class TestOversizedTextCutover:
-    def test_oversized_text_remainder_not_dropped(
+class TestUnknownLengthText:
+    def test_unknown_length_text_remainder_not_dropped(
         self, client, install_upstream, monkeypatch
     ):
-        # Tiny cap so a modest multi-chunk text body trips the cutover. No
-        # Content-Length header → declared_len == -1, so do_restore stays True
-        # and the size check happens mid-stream (the buggy code path).
+        # Tiny cap and no Content-Length exercise the unknown-length path.
         monkeypatch.setattr(proxy, "RESTORE_MAX_BYTES", 16)
 
-        # Chunks straddle the 16-byte cap: the cap is crossed inside chunk 2,
-        # and chunks 3..5 are the post-cutover remainder that the old code
-        # dropped by re-iterating the consumed httpx response.
+        # Chunks straddle the cap and must all use the original iterator.
         chunks = [
             b"AAAAAAAAAA",          # 10 bytes  (seen=10, under cap)
             b"BBBBBBBBBB",          # 10 bytes  (seen=20, crosses cap=16)
@@ -173,14 +166,69 @@ class TestOversizedTextCutover:
             assert resp.status_code == 200
             body = b"".join(resp.iter_bytes())
 
-        # Byte-for-byte: the post-cutover remainder (chunks 3-5) must NOT be
-        # dropped or truncated. There is no PII, so restore is identity and
-        # the proxied body must equal the upstream body exactly.
+        # There is no PII, so restore is identity and the proxied body must
+        # remain byte-for-byte equal to the upstream body.
         assert body == expected, (
-            "oversized-text remainder dropped/truncated — proxy re-iterated "
+            "unknown-length text remainder dropped/truncated — proxy re-iterated "
             f"the single-consumption upstream stream: got {len(body)} bytes "
             f"({body!r}), expected {len(expected)} ({expected!r})"
         )
+
+    def test_pii_token_after_size_threshold_is_still_restored(
+        self, client, install_upstream, monkeypatch
+    ):
+        monkeypatch.setattr(proxy, "RESTORE_MAX_BYTES", 16)
+
+        def handler(request):
+            sent = request.content.decode("utf-8", "replace")
+            match = re.search(r"<PII_email_[0-9a-f]{12}>", sent)
+            assert match, f"email not scrubbed before forward: {sent!r}"
+            token = match.group(0).encode()
+            return _resp(
+                200,
+                {"content-type": "text/event-stream"},
+                [b"data: " + b"x" * 20, b" ", token, b"\n\n"],
+            )
+
+        install_upstream(handler)
+        with client.stream(
+            "POST", "/v1/chat/completions", headers=AUTH,
+            json={"messages": [{"content": f"email {EMAIL}"}]},
+        ) as resp:
+            body = b"".join(resp.iter_bytes()).decode("utf-8", "replace")
+
+        assert EMAIL in body
+        assert "<PII_email_" not in body
+
+    def test_declared_oversized_text_stays_on_raw_path(
+        self, client, install_upstream, monkeypatch
+    ):
+        monkeypatch.setattr(proxy, "RESTORE_MAX_BYTES", 16)
+
+        def handler(request):
+            sent = request.content.decode("utf-8", "replace")
+            match = re.search(r"<PII_email_[0-9a-f]{12}>", sent)
+            assert match, f"email not scrubbed before forward: {sent!r}"
+            payload = b"x" * 20 + match.group(0).encode()
+            return _resp(
+                200,
+                {
+                    "content-type": "text/plain",
+                    "content-length": str(len(payload)),
+                },
+                [payload],
+            )
+
+        install_upstream(handler)
+        response = client.post(
+            "/v1/chat/completions", headers=AUTH,
+            json={"messages": [{"content": f"email {EMAIL}"}]},
+        )
+
+        assert response.status_code == 200
+        assert EMAIL not in response.text
+        assert "<PII_email_" in response.text
+        assert response.headers["content-length"] == str(len(response.content))
 
 
 # ── 2. PII token split across SSE chunk boundary round-trips ───────────────
