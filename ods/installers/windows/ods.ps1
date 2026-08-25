@@ -2443,9 +2443,25 @@ function Invoke-Update {
             Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 update (up --force-recreate)"
             exit 1
         }
-        Write-AISuccess "Update complete"
 
         Start-Sleep -Seconds 5
+        Write-AI "Verifying update..."
+        $activeServices = @(& docker compose @flags config --services |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($LASTEXITCODE -ne 0 -or $activeServices.Count -eq 0) {
+            Write-AIError "Update verification failed: could not read the active Compose stack"
+            Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 update (verification)"
+            exit 1
+        }
+        if (-not (Test-ODSComposeServicesStarted -ComposeFlags $flags -Services $activeServices)) {
+            Write-AIError "Update verification failed: one or more active services are not running or exited nonzero"
+            Write-AI "Run '.\ods.ps1 status' to inspect the active stack."
+            Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 update (verification)"
+            exit 1
+        }
+
+        Write-AISuccess "Update complete"
+
         Invoke-Status
     } finally {
         Pop-Location

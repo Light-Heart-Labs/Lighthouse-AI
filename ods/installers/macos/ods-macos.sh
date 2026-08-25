@@ -988,6 +988,67 @@ cmd_chat() {
     echo ""
 }
 
+macos_compose_service_completed_ok() {
+    local flags="$1" service="$2"
+    local ids state id
+    # shellcheck disable=SC2086
+    if ! ids=$(docker compose $flags ps --all -q "$service"); then
+        return 1
+    fi
+    [[ -n "$ids" ]] || return 1
+
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        if ! state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$id"); then
+            return 1
+        fi
+        case "$state" in
+            "running "*|"exited 0") ;;
+            *) return 1 ;;
+        esac
+    done <<< "$ids"
+}
+
+macos_verify_compose_update() {
+    local flags="$1"
+    local active_services running_services service
+    # shellcheck disable=SC2086
+    if ! active_services=$(docker compose $flags config --services); then
+        ai_err "Update verification failed: could not read the active Compose stack"
+        return 1
+    fi
+    if [[ -z "$active_services" ]]; then
+        ai_err "Update verification failed: active Compose stack has no services"
+        return 1
+    fi
+    # shellcheck disable=SC2086
+    if ! running_services=$(docker compose $flags ps --services --status running); then
+        ai_err "Update verification failed: could not inspect running Compose services"
+        return 1
+    fi
+
+    local total_services=0 failed_services=0
+    while IFS= read -r service; do
+        [[ -n "$service" ]] || continue
+        total_services=$((total_services + 1))
+        if grep -Fxq "$service" <<< "$running_services"; then
+            continue
+        fi
+        # One-shot jobs are successful when every container exited zero.
+        if macos_compose_service_completed_ok "$flags" "$service"; then
+            continue
+        fi
+        ai_warn "Service $service is not running"
+        failed_services=$((failed_services + 1))
+    done <<< "$active_services"
+
+    if [[ "$failed_services" -gt 0 ]]; then
+        ai_err "Update verification failed: $failed_services/$total_services services are not running"
+        ai "Run './ods-macos.sh status' to inspect the active stack."
+        return 1
+    fi
+}
+
 cmd_update() {
     test_install
     cd "$INSTALL_DIR"
@@ -1013,10 +1074,13 @@ cmd_update() {
     ai "Recreating containers..."
     # shellcheck disable=SC2086
     docker compose $flags up -d --force-recreate
-    ai_ok "Update complete"
-    macos_maybe_resume_bootstrap_upgrade || true
 
     sleep 5
+    ai "Verifying update..."
+    macos_verify_compose_update "$flags" || return 1
+
+    ai_ok "Update complete"
+    macos_maybe_resume_bootstrap_upgrade || true
     cmd_status
 }
 
