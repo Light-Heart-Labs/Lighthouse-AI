@@ -117,4 +117,34 @@ for value in $mode_cases; do
 done
 pass "mode values match cmd_mode"
 
+# Exercise the completion function at its public Bash boundary. ods-cli stores
+# each saved preset as a directory under INSTALL_DIR/presets; a stale
+# .presets lookup leaves load/delete/export/diff with no useful suggestions.
+completion_home="$(mktemp -d)"
+trap 'rm -rf -- "$completion_home"' EXIT
+mkdir -p "$completion_home/presets/gaming" "$completion_home/.presets/legacy"
+export ODS_HOME="$completion_home"
+
+completion_action=""
+_init_completion() {
+    words=(ods preset "$completion_action" "")
+    cword=3
+    prev="$completion_action"
+    cur=""
+}
+
+# Sourcing registers the completion and exposes _ods_completion just as an
+# interactive Bash session does.
+# shellcheck source=../completions/ods-cli.bash
+source "$COMPLETION"
+for completion_action in save load delete export diff; do
+    COMPREPLY=()
+    _ods_completion
+    [[ " ${COMPREPLY[*]} " == *" gaming "* ]] \
+        || fail "preset '$completion_action' does not complete saved preset 'gaming'"
+    [[ " ${COMPREPLY[*]} " != *" legacy "* ]] \
+        || fail "preset '$completion_action' still reads the obsolete .presets directory"
+done
+pass "preset actions complete names from the ods-cli presets directory"
+
 echo "[PASS] ods-cli completion parity"
