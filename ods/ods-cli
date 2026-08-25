@@ -6129,6 +6129,58 @@ cmd_repair() {
 
     local target="${1:-voice}"
     case "$target" in
+        hermes|hermes-recover)
+            local flags_str
+            flags_str=$(get_compose_flags)
+            local -a flags
+            read -ra flags <<< "$flags_str"
+
+            local services
+            services=$(docker compose "${flags[@]}" config --services)
+            local required_service
+            for required_service in hermes hermes-proxy; do
+                if ! grep -Fxq "$required_service" <<< "$services"; then
+                    log_error "Hermes recovery requires '$required_service' in the active Compose stack."
+                    return 1
+                fi
+            done
+
+            local hermes_container proxy_container
+            hermes_container=$(sr_container hermes)
+            proxy_container=$(sr_container hermes-proxy)
+            _compose_run_with_summary \
+                "Restoring pinned Hermes containers" \
+                "${flags[@]}" up -d --no-deps --force-recreate --pull never hermes hermes-proxy
+
+            local health_status="" _i
+            for _i in $(seq 1 60); do
+                if ! health_status=$(docker inspect --format \
+                    '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                    "$hermes_container"); then
+                    log_error "Could not inspect restored Hermes container '$hermes_container'."
+                    return 1
+                fi
+                if [[ "$health_status" == "healthy" ]]; then
+                    break
+                fi
+                if [[ "$health_status" == "unhealthy" ]]; then
+                    log_error "Restored Hermes container is unhealthy. Check: ods logs hermes"
+                    return 1
+                fi
+                sleep 2
+            done
+            if [[ "$health_status" != "healthy" ]]; then
+                log_error "Timed out waiting for restored Hermes. Check: ods logs hermes"
+                return 1
+            fi
+
+            if ! docker exec "$proxy_container" \
+                wget -qO- -T 5 http://ods-hermes:9119/api/status >/dev/null; then
+                log_error "Hermes is healthy, but its proxy cannot reach the restored runtime. Check: ods logs hermes-proxy"
+                return 1
+            fi
+            success "Hermes container recovery complete"
+            ;;
         hermes-workers|slash-workers)
             local script="$INSTALL_DIR/scripts/prune-hermes-slash-workers.sh"
             [[ -x "$script" ]] || error "Hermes slash worker repair script not found or not executable: $script"
@@ -6201,7 +6253,7 @@ cmd_repair() {
             success "Voice repair complete"
             ;;
         *)
-            log "Usage: ods repair [voice|hermes-workers|rootless-ownership]"
+            log "Usage: ods repair [voice|hermes|hermes-workers|rootless-ownership]"
             log_error "Unknown repair target: $target"
             return 1
             ;;
@@ -6440,8 +6492,8 @@ ${CYAN}Commands:${NC}
   chat "<message>"    Quick chat with the LLM
   benchmark           Run a quick performance test
   doctor [report|--json]   Run diagnostics (--json writes JSON to stdout)
-  repair|fix [voice|hermes-workers]
-                      Repair voice services or prune leaked Hermes slash workers
+  repair|fix [voice|hermes|hermes-workers]
+                      Repair voice, restore Hermes, or prune leaked slash workers
   template [action]   Apply pre-built service templates (list|preview|apply)
   audit [extensions]  Audit extension manifests and compose contracts
   agent [action]      Manage ods host agent (status|start|stop|restart|logs)
@@ -6550,6 +6602,7 @@ ${CYAN}Examples:${NC}
   ods agent status              # Check host agent health
   ods agent restart             # Restart host agent
   ods repair voice              # Start voice services and cache STT model
+  ods repair hermes             # Restore pinned Hermes containers and verify proxy path
   ods repair rootless-ownership # Repair active bind mounts for rootless Docker
   ods repair hermes-workers     # Prune leaked Hermes slash_worker children
 

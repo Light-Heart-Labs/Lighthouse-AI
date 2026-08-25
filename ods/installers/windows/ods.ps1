@@ -16,6 +16,7 @@
 #   .\ods.ps1 update              # Pull latest images and restart
 #   .\ods.ps1 doctor              # Diagnose runtime readiness
 #   .\ods.ps1 repair voice        # Repair voice/STT/TTS readiness
+#   .\ods.ps1 repair hermes       # Restore pinned Hermes containers
 #   .\ods.ps1 enable <service>    # Enable an extension service (+ its dependencies)
 #   .\ods.ps1 disable <service>   # Disable an extension service
 #   .\ods.ps1 disable <svc> -Force # Disable even when other extensions depend on it
@@ -2597,6 +2598,62 @@ function Invoke-RepairVoice {
     }
 }
 
+function Invoke-RepairHermes {
+    Test-Install
+    Push-Location $InstallDir
+    try {
+        $flags = Get-ComposeFlags
+        foreach ($service in @("hermes", "hermes-proxy")) {
+            if (-not (Test-ODSComposeServiceAvailable -ComposeFlags $flags -Service $service)) {
+                Write-AIError "Hermes recovery requires '$service' in the active Compose stack."
+                exit 1
+            }
+        }
+
+        Write-AI "Restoring pinned Hermes containers..."
+        # Recreate only the runtime and proxy. Compose retains all volumes,
+        # while --pull never restores the exact images pinned by this release.
+        $composeExit = Invoke-ODSDockerCompose -InstallDir $InstallDir -ComposeFlags $flags `
+            -ComposeArgs @("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", "hermes", "hermes-proxy")
+        if ($composeExit -ne 0) {
+            Write-AIError "Hermes container recovery failed (exit code: $composeExit)"
+            Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 repair hermes"
+            exit 1
+        }
+
+        $healthStatus = ""
+        for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            $inspectOutput = & docker inspect --format `
+                "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}" `
+                "ods-hermes"
+            if ($LASTEXITCODE -ne 0) {
+                Write-AIError "Could not inspect restored Hermes container 'ods-hermes'."
+                exit 1
+            }
+            $healthStatus = ([string]$inspectOutput).Trim()
+            if ($healthStatus -eq "healthy") { break }
+            if ($healthStatus -eq "unhealthy") {
+                Write-AIError "Restored Hermes container is unhealthy. Check: .\ods.ps1 logs hermes 100"
+                exit 1
+            }
+            Start-Sleep -Seconds 2
+        }
+        if ($healthStatus -ne "healthy") {
+            Write-AIError "Timed out waiting for restored Hermes. Check: .\ods.ps1 logs hermes 100"
+            exit 1
+        }
+
+        $null = & docker exec ods-hermes-proxy wget -qO- -T 5 http://ods-hermes:9119/api/status
+        if ($LASTEXITCODE -ne 0) {
+            Write-AIError "Hermes is healthy, but its proxy cannot reach the restored runtime. Check: .\ods.ps1 logs hermes-proxy 100"
+            exit 1
+        }
+        Write-AISuccess "Hermes container recovery complete"
+    } finally {
+        Pop-Location
+    }
+}
+
 function Invoke-Repair {
     param([string]$Target)
 
@@ -2608,8 +2665,10 @@ function Invoke-Repair {
         "voice" { Invoke-RepairVoice }
         "stt"   { Invoke-RepairVoice }
         "tts"   { Invoke-RepairVoice }
+        "hermes" { Invoke-RepairHermes }
+        "hermes-recover" { Invoke-RepairHermes }
         default {
-            Write-AI "Usage: .\ods.ps1 repair voice"
+            Write-AI "Usage: .\ods.ps1 repair [voice|hermes]"
             Write-AIWarn "Unknown repair target: $Target"
             exit 1
         }
@@ -3520,6 +3579,8 @@ function Show-Help {
     Write-Host "Diagnose runtime readiness" -ForegroundColor DarkGray
     Write-Host "    repair voice        " -ForegroundColor Cyan -NoNewline
     Write-Host "Start voice services and cache STT model" -ForegroundColor DarkGray
+    Write-Host "    repair hermes       " -ForegroundColor Cyan -NoNewline
+    Write-Host "Restore pinned Hermes containers and verify proxy path" -ForegroundColor DarkGray
     Write-Host "    enable <service>    " -ForegroundColor Cyan -NoNewline
     Write-Host "Enable an extension service and its dependencies" -ForegroundColor DarkGray
     Write-Host "    disable <service>   " -ForegroundColor Cyan -NoNewline
@@ -3540,6 +3601,7 @@ function Show-Help {
     Write-Host "    .\ods.ps1 logs llama-server 50" -ForegroundColor DarkGray
     Write-Host "    .\ods.ps1 restart open-webui" -ForegroundColor DarkGray
     Write-Host "    .\ods.ps1 repair voice" -ForegroundColor DarkGray
+    Write-Host "    .\ods.ps1 repair hermes" -ForegroundColor DarkGray
     Write-Host "    .\ods.ps1 enable comfyui" -ForegroundColor DarkGray
     Write-Host "    .\ods.ps1 disable langfuse" -ForegroundColor DarkGray
     Write-Host "    .\ods.ps1 disable hermes -Force" -ForegroundColor DarkGray
