@@ -1578,9 +1578,11 @@ cmd_restart() {
     fi
 
     if [[ -z "$resolved_service" ]]; then
-        _compose_run_with_summary "Restarting all services" "${flags[@]}" up -d
+        _compose_run_with_summary "Restarting all services" \
+            "${flags[@]}" up -d --force-recreate --no-build --pull never
     else
-        _compose_run_with_summary "Restarting $resolved_service" "${flags[@]}" up -d "$resolved_service"
+        _compose_run_with_summary "Restarting $resolved_service" \
+            "${flags[@]}" up -d --force-recreate --no-build --pull never "$resolved_service"
     fi
 
     # Refresh SOUL.md after compose has ensured Hermes is running, so the

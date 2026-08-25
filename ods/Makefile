@@ -88,6 +88,7 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== ods-cli pipefail tolerance ==="
 	@bash tests/test-ods-cli-pipefail-tolerance.sh
+	@bash tests/test-unix-restart-recreate-env.sh
 	@echo ""
 	@echo "=== offline model validation ==="
 	@python3 tests/test-offline-model-validation.py
