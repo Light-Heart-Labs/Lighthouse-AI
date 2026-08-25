@@ -24,7 +24,26 @@ while [[ -L "$_source" ]]; do
     [[ "$_source" != /* ]] && _source="$_dir/$_source"
 done
 SCRIPT_DIR="$(cd "$(dirname "$_source")" && pwd)"
-INSTALL_DIR="${ODS_HOME:-$HOME/ods}"
+
+_resolve_cli_install_dir() {
+    if [[ -n "${INSTALL_DIR:-}" ]]; then
+        printf '%s\n' "$INSTALL_DIR"
+    elif [[ -n "${ODS_HOME:-}" ]]; then
+        printf '%s\n' "$ODS_HOME"
+    elif [[ -n "${ODS_SCRIPT_HINT:-}" ]] && [[ -f "$ODS_SCRIPT_HINT/.env" ]]; then
+        printf '%s\n' "$ODS_SCRIPT_HINT"
+    elif [[ -n "${ODS_INSTALL_DIR:-}" ]]; then
+        printf '%s\n' "$ODS_INSTALL_DIR"
+    elif [[ -f "$SCRIPT_DIR/docker-compose.base.yml" || -f "$SCRIPT_DIR/docker-compose.yml" ]]; then
+        # Installed copies and symlink targets are self-locating. This keeps a
+        # custom-path CLI from silently operating on an unrelated $HOME/ods.
+        printf '%s\n' "$SCRIPT_DIR"
+    else
+        printf '%s\n' "$HOME/ods"
+    fi
+}
+
+INSTALL_DIR="$(_resolve_cli_install_dir)"
 VERSION="2.6.0"
 if [[ -f "$INSTALL_DIR/.env" ]]; then
     _v=$(awk -F= '/^ODS_VERSION=/{gsub(/^["'"'"']|["'"'"']$/,"",$2); print $2; exit}' "$INSTALL_DIR/.env" 2>/dev/null) || true
@@ -6554,7 +6573,13 @@ ${CYAN}Examples:${NC}
   ods repair hermes-workers     # Prune leaked Hermes slash_worker children
 
 ${CYAN}Environment:${NC}
-  ODS_HOME          Installation directory (default: ~/ods)
+  INSTALL_DIR       Installation directory (highest precedence)
+  ODS_HOME          Legacy installation directory override
+  ODS_SCRIPT_HINT   Populated install hint (must contain .env)
+  ODS_INSTALL_DIR   Legacy macOS installation directory override
+
+Without an override, ods-cli uses the install beside its resolved script or
+symlink target when compose metadata is present, then falls back to ~/ods.
 
 EOF
 }
