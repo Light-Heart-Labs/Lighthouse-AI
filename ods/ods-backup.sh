@@ -281,6 +281,12 @@ create_manifest() {
     [[ "$backup_type" == "full" || "$backup_type" == "config" ]] && has_config="true"
     [[ "$backup_type" == "full" ]] && has_cache="true"
 
+    local user_data_paths_json
+    user_data_paths_json=$(
+        printf '%s\n' "${ODS_USER_DATA_PATHS[@]}" \
+            | jq -R -s 'split("\n") | map(select(length > 0))'
+    )
+
     jq -n \
         --arg mv "1.0" \
         --arg bd "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
@@ -292,6 +298,7 @@ create_manifest() {
         --argjson ud "$has_user_data" \
         --argjson cfg "$has_config" \
         --argjson ca "$has_cache" \
+        --argjson udp "$user_data_paths_json" \
         '{
           manifest_version: $mv,
           backup_date: $bd,
@@ -301,15 +308,16 @@ create_manifest() {
           hostname: $hn,
           description: $desc,
           contents: { user_data: $ud, config: $cfg, cache: $ca },
-          paths: {
-            data_open_webui: "data/open-webui",
-            data_n8n: "data/n8n",
-            data_qdrant: "data/qdrant",
-            data_openclaw: "data/openclaw",
-            env: ".env",
-            compose: "docker-compose.yml",
-            config: "config"
-          }
+          paths: (
+            {
+              env: ".env",
+              compose: "docker-compose.yml",
+              config: "config"
+            }
+            + ($udp
+              | map({key: (gsub("[^A-Za-z0-9_]"; "_")), value: .})
+              | from_entries)
+          )
         }' > "$backup_dir/manifest.json"
     log_info "Created backup manifest"
 }

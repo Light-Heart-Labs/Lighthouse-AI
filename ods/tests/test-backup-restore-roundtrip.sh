@@ -25,13 +25,15 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Create source ODS directory with minimal data
 SRC="$TMP/src"
-mkdir -p "$SRC/data/open-webui"
+mkdir -p "$SRC/data/open-webui" "$SRC/data/hermes/sessions" "$SRC/data/persona"
 mkdir -p "$SRC/config"
 echo "1.0.0" > "$SRC/.version"
 echo "test-env-value" > "$SRC/.env"
 echo "compose-content" > "$SRC/docker-compose.yml"
 echo "config-data" > "$SRC/config/settings.json"
 echo "user-data-file" > "$SRC/data/open-webui/data.txt"
+echo "hermes-session" > "$SRC/data/hermes/sessions/session.jsonl"
+echo "persona-soul" > "$SRC/data/persona/SOUL.md"
 
 # Both scripts source lib/rsync.sh relative to ODS_DIR
 mkdir -p "$SRC/lib"
@@ -44,6 +46,16 @@ ODS_DIR="$SRC" bash "$ODS_BACKUP" --type full >/dev/null 2>&1 || fail "Backup fa
 BACKUP_ID=$(ls -1 "$SRC/.backups" | head -n 1)
 [[ -n "$BACKUP_ID" ]] || fail "No backup created"
 pass "Backup created: $BACKUP_ID"
+
+BACKUP_DIR="$SRC/.backups/$BACKUP_ID"
+[[ -f "$BACKUP_DIR/data/hermes/sessions/session.jsonl" ]] \
+    || fail "Backup omitted data/hermes"
+[[ -f "$BACKUP_DIR/data/persona/SOUL.md" ]] \
+    || fail "Backup omitted data/persona"
+jq -e '.paths.data_hermes == "data/hermes" and .paths.data_persona == "data/persona"' \
+    "$BACKUP_DIR/manifest.json" >/dev/null \
+    || fail "Manifest omitted Hermes or persona backup paths"
+pass "Hermes and persona data are present in the backup and manifest"
 
 # Create destination ODS directory (empty)
 DST="$TMP/dst"
@@ -70,6 +82,8 @@ info "Validating restored contents"
 [[ -f "$DST/config/settings.json" ]] || fail "Missing config/settings.json after restore"
 [[ -d "$DST/data/open-webui" ]] || fail "Missing data/open-webui after restore"
 [[ -f "$DST/data/open-webui/data.txt" ]] || fail "Missing data/open-webui/data.txt after restore"
+[[ -f "$DST/data/hermes/sessions/session.jsonl" ]] || fail "Missing Hermes session after restore"
+[[ -f "$DST/data/persona/SOUL.md" ]] || fail "Missing persona SOUL.md after restore"
 
 pass "All expected files/dirs present after restore"
 
@@ -79,6 +93,10 @@ pass "All expected files/dirs present after restore"
 [[ "$(cat "$DST/docker-compose.yml")" == "compose-content" ]] || fail "docker-compose.yml content mismatch"
 [[ "$(cat "$DST/config/settings.json")" == "config-data" ]] || fail "config/settings.json content mismatch"
 [[ "$(cat "$DST/data/open-webui/data.txt")" == "user-data-file" ]] || fail "data/open-webui/data.txt content mismatch"
+[[ "$(cat "$DST/data/hermes/sessions/session.jsonl")" == "hermes-session" ]] \
+    || fail "Hermes session content mismatch"
+[[ "$(cat "$DST/data/persona/SOUL.md")" == "persona-soul" ]] \
+    || fail "persona SOUL.md content mismatch"
 
 pass "All file contents match after restore"
 
