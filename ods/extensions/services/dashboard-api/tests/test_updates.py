@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import httpx
+import pytest
 
 from host_agent_client import AgentHTTPError, AgentUnavailable
 
@@ -79,6 +80,39 @@ def test_get_version_with_mock_github(test_client, monkeypatch):
     data = resp.json()
     assert data["latest"] == "2.0.0"
     assert data["changelog_url"] == "https://github.com/test"
+
+
+@pytest.mark.asyncio
+async def test_release_refresh_keeps_stale_cache_on_http_error(monkeypatch):
+    """A GitHub HTTP error must not replace useful stale release metadata."""
+    import routers.updates as updates_mod
+
+    stale = {
+        "latest": "2.7.0",
+        "changelog_url": "https://github.com/Osmantic/ODS/releases/tag/v2.7.0",
+        "checked_at": "2026-08-25T00:00:00+00:00",
+    }
+    monkeypatch.setattr(
+        updates_mod,
+        "_version_cache",
+        {"expires_at": 0.0, "payload": stale},
+    )
+
+    response = httpx.Response(
+        403,
+        request=httpx.Request("GET", updates_mod._GITHUB_RELEASES_API),
+        json={"message": "API rate limit exceeded"},
+    )
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.updates.httpx.AsyncClient", return_value=mock_client):
+        payload = await updates_mod._refresh_release_cache()
+
+    assert payload == stale
+    assert updates_mod._version_cache["payload"] == stale
 
 
 def test_build_version_result_strips_v_prefix_from_current():
@@ -272,6 +306,43 @@ def test_releases_manifest_github_error_fallback(test_client, tmp_path, monkeypa
     assert "error" in data
 
 
+def test_releases_manifest_rejects_non_success_http_payload(test_client, tmp_path, monkeypatch):
+    """A JSON-shaped error body must not be published as a release manifest."""
+    import routers.updates as updates_mod
+
+    install_dir = tmp_path / "ods"
+    install_dir.mkdir()
+    (install_dir / ".version").write_text("2.6.0", encoding="utf-8")
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(install_dir))
+
+    response = httpx.Response(
+        503,
+        request=httpx.Request("GET", updates_mod._GITHUB_RELEASES_API),
+        json=[
+            {
+                "tag_name": "v999.0.0",
+                "name": "proxy error body",
+                "body": "not a real GitHub release",
+            }
+        ],
+    )
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.updates.httpx.AsyncClient", return_value=mock_client):
+        resp = test_client.get(
+            "/api/releases/manifest",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["releases"][0]["version"] == "2.6.0"
+    assert data["error"] == "Could not fetch release information"
+
+
 def test_releases_manifest_github_error_fallback_reads_json_version(test_client, tmp_path, monkeypatch):
     """GET /api/releases/manifest reads JSON-formatted .version files."""
     import routers.updates as updates_mod
@@ -343,6 +414,38 @@ def test_update_dry_run_with_env_and_version(test_client, tmp_path, monkeypatch)
     assert "GPU_BACKEND" in data["env_keys"]
     assert "LLM_MODEL" in data["env_keys"]
     assert "SOME_OTHER_KEY" not in data["env_keys"]
+
+
+def test_update_dry_run_reports_github_http_error(test_client, tmp_path, monkeypatch):
+    """A rate-limit response is not a valid no-update result."""
+    import routers.updates as updates_mod
+
+    install_dir = tmp_path / "ods"
+    install_dir.mkdir()
+    (install_dir / ".env").write_text("ODS_VERSION=2.6.0\n", encoding="utf-8")
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(install_dir))
+
+    response = httpx.Response(
+        403,
+        request=httpx.Request("GET", updates_mod._GITHUB_RELEASES_API),
+        json={"message": "API rate limit exceeded"},
+    )
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.updates.httpx.AsyncClient", return_value=mock_client):
+        resp = test_client.get(
+            "/api/update/dry-run",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["latest_version"] is None
+    assert data["update_available"] is False
+    assert "403 Forbidden" in data["version_check_error"]
 
 
 def test_update_dry_run_parses_quoted_ods_version(test_client, tmp_path, monkeypatch):

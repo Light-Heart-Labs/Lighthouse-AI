@@ -179,6 +179,7 @@ async def _refresh_release_cache() -> Optional[dict]:
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
+        response.raise_for_status()
         data = response.json()
         payload = {
             "latest": data.get("tag_name", "").lstrip("v"),
@@ -232,6 +233,7 @@ async def get_release_manifest():
                 f"{_GITHUB_RELEASES_API}?per_page=5",
                 headers=_GITHUB_HEADERS,
             )
+        resp.raise_for_status()
         releases = resp.json()
         if not isinstance(releases, list):
             raise httpx.HTTPError(f"unexpected releases response: {type(releases).__name__}")
@@ -298,6 +300,7 @@ async def get_update_dry_run():
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
+        resp.raise_for_status()
         data = resp.json()
         latest = _normalize_version(data.get("tag_name")) or None
         changelog_url = data.get("html_url") or None
