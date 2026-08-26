@@ -613,16 +613,14 @@ cmd_backup() {
     log_info "Files backed up: ${files_backed_up}"
     
     # Cleanup old backups
-    local backup_dirs
-    backup_dirs=$(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | sort -r)
     local count=0
-    for dir in $backup_dirs; do
+    while IFS= read -r dir; do
         count=$((count + 1))
         if ((count > MAX_BACKUPS)); then
             log_info "Removing old backup: $(basename "$dir")"
             rm -rf "$dir"
         fi
-    done
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | sort -r)
 }
 
 #==============================================================================
