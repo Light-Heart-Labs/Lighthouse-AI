@@ -166,3 +166,19 @@ class TestReadOdsVersion:
         (tmp_path / ".env").write_text('ODS_VERSION="3.1.4"\n')
         monkeypatch.setattr(node_mod, "_install_root", lambda: tmp_path)
         assert node_mod._read_ods_version("fallback") == "3.1.4"
+
+    def test_malformed_json_version_file_falls_back(self, monkeypatch, tmp_path):
+        """A .version file that starts with '{' but isn't valid JSON must
+        degrade to the fallback, not raise json.JSONDecodeError."""
+        import routers.node as node_mod
+        (tmp_path / ".version").write_text('{"version": "8.0.0"')  # missing closing brace
+        monkeypatch.setattr(node_mod, "_install_root", lambda: tmp_path)
+        assert node_mod._read_ods_version("fallback") == "fallback"
+
+    def test_json_version_file_without_version_key_falls_back(self, monkeypatch, tmp_path):
+        """Valid JSON that lacks a "version" key must not be treated as a
+        version string -- it should fall through to the fallback."""
+        import routers.node as node_mod
+        (tmp_path / ".version").write_text('{"other_field": "8.0.0"}')
+        monkeypatch.setattr(node_mod, "_install_root", lambda: tmp_path)
+        assert node_mod._read_ods_version("fallback") == "fallback"
