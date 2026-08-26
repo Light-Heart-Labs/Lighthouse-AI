@@ -559,7 +559,7 @@ if ($dryRun) {
                 try {
                     $action = New-ODSLemonadeScheduledTaskAction `
                         -Contract $launchContract -EnvPath $_envPath -DiagnosticLogPath $diagnosticLog
-                    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn
                     $lemonadeSettings = New-ScheduledTaskSettingsSet `
                         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                         -ExecutionTimeLimit ([TimeSpan]::Zero)
@@ -769,7 +769,7 @@ if ($dryRun) {
                     -Execute $script:LLAMA_SERVER_EXE `
                     -Argument $nativeLlamaArgString `
                     -WorkingDirectory $script:LLAMA_SERVER_DIR
-                $nativeLlamaTrigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
+                $nativeLlamaTrigger = New-ScheduledTaskTrigger -AtLogOn
                 $nativeLlamaSettings = New-ScheduledTaskSettingsSet `
                     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                     -ExecutionTimeLimit ([TimeSpan]::Zero)

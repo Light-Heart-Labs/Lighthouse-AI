@@ -1554,7 +1554,7 @@ function Start-ODSLemonadeRuntime {
     try {
         $action = New-ODSLemonadeScheduledTaskAction `
             -Contract $launchContract -EnvPath $envPath -DiagnosticLogPath $diagnosticLog
-        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
         $lemonadeSettings = New-ScheduledTaskSettingsSet `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit ([TimeSpan]::Zero)
