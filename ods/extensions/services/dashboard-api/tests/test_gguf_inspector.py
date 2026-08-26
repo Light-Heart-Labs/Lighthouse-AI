@@ -327,3 +327,29 @@ def test_boolean_metadata_value_is_ignored_for_integer_fields(tmp_path):
 
     assert result["readable"] is True
     assert result["context_length"] is None
+
+
+def test_non_prefixed_metadata_keys_are_normalized(tmp_path):
+    kvs = [
+        ("architecture", STR, "qwen2"),
+        ("name", STR, "Qwen Model"),
+        ("context_length", U32, 8192),
+        ("block_count", U32, 28),
+    ]
+    path = _write(tmp_path, "root_keys.gguf", build_gguf(kvs))
+
+    result = inspect_gguf(path)
+
+    assert result["readable"] is True
+    assert result["context_length"] == 8192
+    assert result["block_count"] == 28
+
+
+def test_empty_or_too_small_file_returns_error(tmp_path):
+    path = _write(tmp_path, "empty.gguf", b"GGU")
+
+    result = inspect_gguf(path)
+
+    assert result["readable"] is False
+    assert result.get("error") == "not a GGUF file"
+
