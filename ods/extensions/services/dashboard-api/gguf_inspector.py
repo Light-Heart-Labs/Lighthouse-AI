@@ -163,16 +163,24 @@ def _read_array(reader: _Reader, depth: int = 0) -> Any:
     }
 
 
-def _first_int(metadata: dict[str, Any], suffixes: tuple[str, ...]) -> int | None:
+def _key_matches_target(key: str, targets: tuple[str, ...]) -> bool:
+    for target in targets:
+        clean_target = target.lstrip(".")
+        if key == clean_target or key.endswith("." + clean_target):
+            return True
+    return False
+
+
+def _first_int(metadata: dict[str, Any], targets: tuple[str, ...]) -> int | None:
     for key, value in metadata.items():
-        if key.endswith(suffixes) and isinstance(value, int) and not isinstance(value, bool):
+        if _key_matches_target(key, targets) and isinstance(value, int) and not isinstance(value, bool):
             return value
     return None
 
 
-def _first_value(metadata: dict[str, Any], suffixes: tuple[str, ...]) -> Any:
+def _first_value(metadata: dict[str, Any], targets: tuple[str, ...]) -> Any:
     for key, value in metadata.items():
-        if key.endswith(suffixes):
+        if _key_matches_target(key, targets):
             return value
     return None
 
@@ -193,7 +201,11 @@ def inspect_gguf(path: Path | str, max_metadata_bytes: int = 8 * 1024 * 1024) ->
         return result
 
     try:
-        result["size_bytes"] = p.stat().st_size
+        size = p.stat().st_size
+        result["size_bytes"] = size
+        if size < 4:
+            result["error"] = "not a GGUF file"
+            return result
         with p.open("rb") as f:
             data = f.read(max_metadata_bytes)
         reader = _Reader(data)
