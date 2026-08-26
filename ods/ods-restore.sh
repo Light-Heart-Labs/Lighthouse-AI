@@ -383,7 +383,7 @@ dry_run_preview() {
 stop_containers() {
     log_step "Stopping containers..."
 
-    if ! docker compose ls --quiet 2>/dev/null | grep -q "$(basename "$ODS_DIR")"; then
+    if ! docker compose ls --quiet 2>/dev/null | grep -qx "ods"; then
         log_info "No running containers found"
         return 0
     fi
