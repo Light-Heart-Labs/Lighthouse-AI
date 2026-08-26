@@ -120,6 +120,36 @@ CLOUD_MODE=false
 NO_BOOTSTRAP=false
 HERMES_CONTEXT_SIZE=65536
 
+usage() {
+    cat <<'USAGE'
+Usage: install-macos.sh [OPTIONS]
+
+Full ODS macOS installer (Apple Silicon: native Metal inference +
+Docker services).
+
+Options:
+  --dry-run           Simulate the install without making changes
+  --force             Overwrite an existing install
+  --non-interactive   Run without interactive prompts
+  --tier TIER         Force a specific hardware tier
+  --voice             Enable Whisper/Kokoro voice services
+  --workflows         Enable n8n workflows
+  --rag               Enable RAG (Qdrant + embeddings)
+  --recommended       Enable recommended feature set (default: on)
+  --no-recommended    Disable the recommended feature set
+  --hermes            Enable the Hermes agent (default: on)
+  --no-hermes         Disable the Hermes agent
+  --openclaw          Enable OpenClaw (deprecated, opt-in)
+  --no-openclaw       Disable OpenClaw
+  --langfuse          Enable Langfuse observability
+  --no-langfuse       Disable Langfuse
+  --all               Enable all optional features
+  --cloud             Enable cloud mode
+  --no-bootstrap      Skip the fast-start bootstrap path
+  -h, --help          Show this help message and exit
+USAGE
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)       DRY_RUN=true; shift ;;
@@ -140,6 +170,7 @@ while [[ $# -gt 0 ]]; do
         --all)           ALL_FEATURES=true; shift ;;
         --cloud)         CLOUD_MODE=true; shift ;;
         --no-bootstrap)  NO_BOOTSTRAP=true; shift ;;
+        -h|--help)       usage; exit 0 ;;
         *)               echo "Unknown option: $1"; exit 1 ;;
     esac
 done
