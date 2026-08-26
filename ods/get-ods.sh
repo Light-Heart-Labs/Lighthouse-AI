@@ -459,7 +459,7 @@ if [[ -d "$TEMP_DIR/repo/ods" ]]; then
             "$TEMP_DIR/repo/ods/" "$INSTALL_DIR/"
     else
         # Fallback to cp if rsync not available
-        cp -r "$TEMP_DIR/repo/ods" "$INSTALL_DIR"
+        cp -r "$TEMP_DIR/repo/ods/." "$INSTALL_DIR"
         # Remove dev-only files after copy
         rm -rf "$INSTALL_DIR/tests" "$INSTALL_DIR/docs" "$INSTALL_DIR/examples" "$INSTALL_DIR/.github" 2>/dev/null || true
         rm -f "$INSTALL_DIR"/*.md "$INSTALL_DIR/.shellcheckrc" "$INSTALL_DIR/PSScriptAnalyzerSettings.psd1" "$INSTALL_DIR/test-stack.sh" "$INSTALL_DIR/.gitignore" 2>/dev/null || true
