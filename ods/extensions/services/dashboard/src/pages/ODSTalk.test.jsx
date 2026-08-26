@@ -338,6 +338,7 @@ describe('ODSTalk', () => {
     // Stub URL.createObjectURL so the blob: URL the SPA generates for the
     // preview doesn't break jsdom (which has no blob support by default).
     const createdUrls = []
+    const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', {
       ...globalThis.URL,
       createObjectURL: (blob) => {
@@ -345,7 +346,7 @@ describe('ODSTalk', () => {
         createdUrls.push({ url, blob })
         return url
       },
-      revokeObjectURL: () => {},
+      revokeObjectURL,
     })
 
     let attachmentRequest = null
@@ -364,7 +365,7 @@ describe('ODSTalk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const { container } = render(<ODSTalk />)
+    const { container, unmount } = render(<ODSTalk />)
     expect(await screen.findByText('Ready')).toBeInTheDocument()
 
     // Pick a fake image file via the hidden file input.
@@ -394,6 +395,10 @@ describe('ODSTalk', () => {
     const userImg = container.querySelector('img[alt="Attached"]')
     expect(userImg).toBeTruthy()
     expect(userImg.getAttribute('src')).toMatch(/^blob:/)
+
+    const previewUrl = userImg.getAttribute('src')
+    unmount()
+    expect(revokeObjectURL).toHaveBeenCalledWith(previewUrl)
   })
 
   test('retry keeps image attachment context after an attachment stream error', async () => {
@@ -514,13 +519,19 @@ describe('ODSTalk', () => {
   })
 
   test('can request spoken replies without blocking text chat', async () => {
-    vi.stubGlobal('Audio', class {
-      addEventListener() {}
-      play() { return Promise.resolve() }
-    })
+    const audio = {
+      addEventListener: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      load: vi.fn(),
+      paused: false,
+    }
+    vi.stubGlobal('Audio', class { constructor() { return audio } })
+    const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', {
       createObjectURL: () => 'blob:audio',
-      revokeObjectURL: vi.fn(),
+      revokeObjectURL,
     })
     const fetchMock = vi.fn(async (url, options = {}) => {
       if (url === '/api/talk/status') {
@@ -540,6 +551,7 @@ describe('ODSTalk', () => {
         return {
           ok: true,
           status: 200,
+          body: {},
           blob: async () => new globalThis.Blob(['audio'], { type: 'audio/mpeg' }),
         }
       }
@@ -547,7 +559,7 @@ describe('ODSTalk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<ODSTalk />)
+    const { unmount } = render(<ODSTalk />)
     expect(await screen.findByText('Ready')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Turn spoken replies on' }))
     fireEvent.change(screen.getByPlaceholderText('Message ODS'), {
@@ -560,5 +572,12 @@ describe('ODSTalk', () => {
       '/api/talk/speak',
       expect.objectContaining({ method: 'POST' }),
     ))
+    await waitFor(() => expect(audio.play).toHaveBeenCalled())
+
+    unmount()
+    expect(audio.pause).toHaveBeenCalled()
+    expect(audio.removeAttribute).toHaveBeenCalledWith('src')
+    expect(audio.load).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:audio')
   })
 })
