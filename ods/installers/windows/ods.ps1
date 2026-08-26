@@ -2429,7 +2429,8 @@ function Invoke-Update {
 
         $flags = Get-ComposeFlags
         Write-AI "Pulling latest images..."
-        $pullExit = Invoke-ODSDockerCompose -InstallDir $InstallDir -ComposeFlags $flags -ComposeArgs @("pull")
+        $pullExit = Invoke-ODSDockerCompose -InstallDir $InstallDir -ComposeFlags $flags `
+            -ComposeArgs @("pull", "--ignore-buildable")
         if ($pullExit -ne 0) {
             Write-AIError "docker compose pull failed (exit code: $pullExit)"
             Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 update (pull)"
