@@ -888,10 +888,10 @@ function UsageByModelTable({ rows }) {
         <div className="mt-3 flex items-center justify-between text-xs text-theme-text-muted">
           <span>Showing {filtered.length ? safePage * pageSize + 1 : 0} to {Math.min((safePage + 1) * pageSize, filtered.length)} of {filtered.length} models</span>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setPage(Math.max(safePage - 1, 0))} className="rounded border border-white/10 px-2 py-1 hover:bg-white/5">&lt;</button>
+            <button type="button" onClick={() => setPage(Math.max(safePage - 1, 0))} aria-label="Previous page" className="rounded border border-white/10 px-2 py-1 hover:bg-white/5">&lt;</button>
             <span className="rounded border border-theme-accent/50 bg-theme-accent/15 px-3 py-1 text-theme-accent-light">{safePage + 1}</span>
             <span>{pageCount}</span>
-            <button type="button" onClick={() => setPage(Math.min(safePage + 1, pageCount - 1))} className="rounded border border-white/10 px-2 py-1 hover:bg-white/5">&gt;</button>
+            <button type="button" onClick={() => setPage(Math.min(safePage + 1, pageCount - 1))} aria-label="Next page" className="rounded border border-white/10 px-2 py-1 hover:bg-white/5">&gt;</button>
           </div>
         </div>
       </div>
