@@ -26,12 +26,16 @@ trap 'rm -rf "$TMP"' EXIT
 # Create source ODS directory with minimal data
 SRC="$TMP/src"
 mkdir -p "$SRC/data/open-webui"
+mkdir -p "$SRC/data/hermes"
+mkdir -p "$SRC/data/persona"
 mkdir -p "$SRC/config"
 echo "1.0.0" > "$SRC/.version"
 echo "test-env-value" > "$SRC/.env"
 echo "compose-content" > "$SRC/docker-compose.yml"
 echo "config-data" > "$SRC/config/settings.json"
 echo "user-data-file" > "$SRC/data/open-webui/data.txt"
+echo "hermes-session" > "$SRC/data/hermes/session.json"
+echo "You are a helpful ODS assistant." > "$SRC/data/persona/SOUL.md"
 
 # Both scripts source lib/rsync.sh relative to ODS_DIR
 mkdir -p "$SRC/lib"
@@ -70,6 +74,10 @@ info "Validating restored contents"
 [[ -f "$DST/config/settings.json" ]] || fail "Missing config/settings.json after restore"
 [[ -d "$DST/data/open-webui" ]] || fail "Missing data/open-webui after restore"
 [[ -f "$DST/data/open-webui/data.txt" ]] || fail "Missing data/open-webui/data.txt after restore"
+[[ -d "$DST/data/hermes" ]] || fail "Missing data/hermes after restore"
+[[ -f "$DST/data/hermes/session.json" ]] || fail "Missing data/hermes/session.json after restore"
+[[ -d "$DST/data/persona" ]] || fail "Missing data/persona after restore"
+[[ -f "$DST/data/persona/SOUL.md" ]] || fail "Missing data/persona/SOUL.md after restore"
 
 pass "All expected files/dirs present after restore"
 
@@ -79,6 +87,15 @@ pass "All expected files/dirs present after restore"
 [[ "$(cat "$DST/docker-compose.yml")" == "compose-content" ]] || fail "docker-compose.yml content mismatch"
 [[ "$(cat "$DST/config/settings.json")" == "config-data" ]] || fail "config/settings.json content mismatch"
 [[ "$(cat "$DST/data/open-webui/data.txt")" == "user-data-file" ]] || fail "data/open-webui/data.txt content mismatch"
+[[ "$(cat "$DST/data/hermes/session.json")" == "hermes-session" ]] || fail "data/hermes/session.json content mismatch"
+[[ "$(cat "$DST/data/persona/SOUL.md")" == "You are a helpful ODS assistant." ]] || fail "data/persona/SOUL.md content mismatch"
+
+# Manifest must advertise Hermes/persona paths for operators inspecting backups
+[[ -f "$SRC/.backups/$BACKUP_ID/manifest.json" ]] || fail "Missing backup manifest.json"
+jq -e '.paths.data_hermes == "data/hermes"' "$SRC/.backups/$BACKUP_ID/manifest.json" >/dev/null \
+    || fail "manifest.json missing paths.data_hermes"
+jq -e '.paths.data_persona == "data/persona"' "$SRC/.backups/$BACKUP_ID/manifest.json" >/dev/null \
+    || fail "manifest.json missing paths.data_persona"
 
 pass "All file contents match after restore"
 

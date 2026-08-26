@@ -25,8 +25,9 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $*"; }
 
-# Source shared rsync utilities
+# Source shared rsync utilities and canonical user-data path list
 . "$ODS_DIR/lib/rsync.sh"
+. "$SCRIPT_DIR/lib/backup-paths.sh"
 
 # Convert bytes to a human-friendly string (best-effort)
 fmt_bytes() {
@@ -311,18 +312,8 @@ validate_backup() {
 
     # Warn if backup looks partial / missing common paths.
     # (Informational only; older/minimal backups are still valid.)
-    local -a expected_data=(
-        "data/open-webui"
-        "data/n8n"
-        "data/qdrant"
-        "data/openclaw"
-        "data/litellm"
-        "data/livekit"
-        "data/ollama"
-    )
-
     local missing_any=false
-    for p in "${expected_data[@]}"; do
+    for p in "${ODS_USER_DATA_PATHS[@]}"; do
         if [[ ! -d "$backup_dir/$p" ]]; then
             missing_any=true
             break
@@ -350,8 +341,7 @@ dry_run_preview() {
     if [[ "$restore_data" == "true" ]]; then
         echo "User Data to Restore:"
         echo "───────────────────────────────────────────────────────────────────"
-        local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama")
-        for dir in "${data_dirs[@]}"; do
+        for dir in "${ODS_USER_DATA_PATHS[@]}"; do
             if [[ -d "$backup_dir/$dir" ]]; then
                 local size
                 size=$(du -sh "$backup_dir/$dir" 2>/dev/null | cut -f1)
@@ -401,10 +391,8 @@ restore_user_data() {
     local backup_dir="$1"
     log_step "Restoring user data..."
 
-    local data_dirs=("data/open-webui" "data/n8n" "data/qdrant" "data/openclaw" "data/litellm" "data/livekit" "data/ollama")
-
     local restored_any=false
-    for dir in "${data_dirs[@]}"; do
+    for dir in "${ODS_USER_DATA_PATHS[@]}"; do
         if [[ -d "$backup_dir/$dir" ]]; then
             restored_any=true
             mkdir -p "$ODS_DIR/$(dirname "$dir")"

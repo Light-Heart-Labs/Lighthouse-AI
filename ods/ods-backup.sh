@@ -28,8 +28,9 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
-# Source shared rsync utilities
+# Source shared rsync utilities and canonical user-data path list
 . "$ODS_DIR/lib/rsync.sh"
+. "$SCRIPT_DIR/lib/backup-paths.sh"
 
 # Convert bytes to a human-friendly string (best-effort)
 fmt_bytes() {
@@ -58,17 +59,7 @@ estimate_backup_bytes() {
 
     # user data volumes
     if [[ "$backup_type" == "full" || "$backup_type" == "user-data" ]]; then
-        local -a user_data_paths=(
-            "data/open-webui"
-            "data/n8n"
-            "data/qdrant"
-            "data/openclaw"
-            "data/litellm"
-            "data/livekit"
-            "data/ollama"
-        )
-
-        for p in "${user_data_paths[@]}"; do
+        for p in "${ODS_USER_DATA_PATHS[@]}"; do
             if [[ -d "$ODS_DIR/$p" ]]; then
                 local b
                 b=$(du -sk "$ODS_DIR/$p" 2>/dev/null | awk '{print $1 * 1024}')
@@ -313,6 +304,8 @@ create_manifest() {
             data_n8n: "data/n8n",
             data_qdrant: "data/qdrant",
             data_openclaw: "data/openclaw",
+            data_hermes: "data/hermes",
+            data_persona: "data/persona",
             env: ".env",
             compose: "docker-compose.yml",
             config: "config"
@@ -326,17 +319,7 @@ backup_user_data() {
     local backup_dir="$1"
     log_info "Backing up user data volumes..."
 
-    local user_data_paths=(
-        "data/open-webui"
-        "data/n8n"
-        "data/qdrant"
-        "data/openclaw"
-        "data/litellm"
-        "data/livekit"
-        "data/ollama"
-    )
-
-    for path in "${user_data_paths[@]}"; do
+    for path in "${ODS_USER_DATA_PATHS[@]}"; do
         local full_path="$ODS_DIR/$path"
         if [[ -d "$full_path" ]]; then
             local dest_dir="$backup_dir/$(dirname "$path")"
