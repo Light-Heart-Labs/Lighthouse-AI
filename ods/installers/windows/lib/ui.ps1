@@ -156,6 +156,19 @@ function Invoke-ODSNativeQuiet {
     return $exitCode
 }
 
+function Get-ODSRegexReplacementLiteral {
+    param(
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    # .NET regex replacements treat $ as a substitution token ($1, ${name}, $$).
+    # String.Replace does not, so double each '$' before feeding values into
+    # -replace / [regex]::Replace replacement strings.
+    if ($null -eq $Value) { return "" }
+    return $Value.Replace([string]'$', [string]'$$')
+}
+
 function Get-ODSPythonDownloadCommand {
     $candidates = @(
         @{ FilePath = "python3"; PrefixArgs = @() },

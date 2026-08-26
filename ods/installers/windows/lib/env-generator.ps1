@@ -394,7 +394,7 @@ function Set-WindowsODSLemonadeModelConfiguration {
     $envContent = [System.IO.File]::ReadAllText($envPath)
     $assignment = "LEMONADE_MODEL=$ModelId"
     if ($envContent -match '(?m)^LEMONADE_MODEL=') {
-        $replacement = $assignment.Replace('$', '$$')
+        $replacement = Get-ODSRegexReplacementLiteral -Value $assignment
         $envContent = [regex]::Replace($envContent, '(?m)^LEMONADE_MODEL=[^\r\n]*', $replacement)
     } else {
         $newline = $(if ($envContent.Contains("`r`n")) { "`r`n" } else { "`n" })
@@ -672,6 +672,10 @@ function New-ODSEnv {
     # Hermes otherwise rotates its dashboard token on every process start,
     # invalidating WebSocket URLs held by already-open browser tabs.
     $hermesDashboardSessionToken = Get-EnvOrNew "HERMES_DASHBOARD_SESSION_TOKEN" (New-SecureHex -Bytes 32)
+    $hermesDashboardBasicAuthUsername = Get-EnvOrNew "HERMES_DASHBOARD_BASIC_AUTH_USERNAME" "ods"
+    if ([string]::IsNullOrWhiteSpace($hermesDashboardBasicAuthUsername)) { $hermesDashboardBasicAuthUsername = "ods" }
+    $hermesDashboardBasicAuthPassword = Get-EnvOrNew "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD" (New-SecureHex -Bytes 16)
+    $hermesDashboardBasicAuthHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${hermesDashboardBasicAuthUsername}:${hermesDashboardBasicAuthPassword}"))
     $shieldApiKey    = Get-EnvOrNew "SHIELD_API_KEY"     (New-SecureHex -Bytes 32)
     $tokenSpyApiKeyDefault = Get-ExistingTokenSpyApiKey
     if ([string]::IsNullOrWhiteSpace($tokenSpyApiKeyDefault)) {
@@ -1015,6 +1019,9 @@ DASHBOARD_API_KEY=$dashboardApiKey
 ODS_AGENT_KEY=$odsAgentKey
 ODS_SESSION_SECRET=$odsSessionSecret
 HERMES_DASHBOARD_SESSION_TOKEN=$hermesDashboardSessionToken
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=$hermesDashboardBasicAuthUsername
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=$hermesDashboardBasicAuthPassword
+HERMES_DASHBOARD_BASIC_AUTH_HEADER=$hermesDashboardBasicAuthHeader
 SHIELD_API_KEY=$shieldApiKey
 N8N_USER=admin@ods.local
 N8N_PASS=$n8nPass
