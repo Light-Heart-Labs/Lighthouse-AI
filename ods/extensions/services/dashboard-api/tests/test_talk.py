@@ -1107,6 +1107,57 @@ def test_talk_attachment_image_uses_filename_when_mobile_uploads_octet_stream(ta
     assert any(f.get("type") == "complete" and f.get("text") == "Red." for f in frames)
 
 
+def test_talk_vision_stream_skips_metadata_and_malformed_choice_frames(monkeypatch):
+    """OpenAI-compatible streams may send usage frames with no choices.
+    Those frames must not abort a valid vision answer that follows."""
+    import asyncio
+    from routers.talk import _stream_vision_chat
+
+    class FakeResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"choices":[],"usage":{"prompt_tokens":12}}'
+            yield 'data: ["unexpected-root"]'
+            yield 'data: {"choices":[null]}'
+            yield 'data: {"choices":[{"delta":[]}]} '
+            yield 'data: {"choices":[{"delta":{"content":"Red."}}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("routers.talk.httpx.AsyncClient", FakeClient)
+
+    async def collect():
+        return b"".join([
+            frame async for frame in _stream_vision_chat(
+                b"fake-image", "image/png", "what color?"
+            )
+        ])
+
+    frames = _parse_sse_frames(asyncio.run(collect()))
+    assert [frame["type"] for frame in frames] == ["session", "delta", "complete", "done"]
+    assert frames[1]["text"] == "Red."
+    assert frames[2]["text"] == "Red."
+
+
 def test_talk_attachment_image_too_large_returns_413(talk_client):
     """Image size cap is enforced at the multipart boundary."""
     big = b"\x89PNG\r\n\x1a\n" + b"x" * (11 * 1024 * 1024)
