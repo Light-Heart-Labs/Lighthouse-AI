@@ -59,6 +59,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3b. Replacement strings must escape '$' so .NET group tokens cannot mangle
+#     model IDs / base URLs that contain '$' / '$1' / '${name}'.
+# ---------------------------------------------------------------------------
+if grep -q 'Get-ODSRegexReplacementLiteral -Value \$Model' "$PHASE" \
+   && grep -q 'Get-ODSRegexReplacementLiteral -Value \$BaseUrl' "$PHASE" \
+   && grep -q 'function Get-ODSRegexReplacementLiteral' "installers/windows/lib/ui.ps1" \
+   && grep -Fq ".Replace([string]'\$', [string]'\$\$')" "installers/windows/lib/ui.ps1"; then
+    pass "Hermes config patching escapes dollar signs in regex replacements"
+else
+    fail "Hermes config patching must escape '$' in model/base_url regex replacements"
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Windows phase 06 must create data/hermes/config.yaml before Hermes first
 #    start so the container cannot copy stale upstream defaults into /opt/data.
 # ---------------------------------------------------------------------------

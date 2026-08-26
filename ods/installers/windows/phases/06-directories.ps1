@@ -389,8 +389,10 @@ function Update-HermesConfigFile {
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $content = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
-    $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$Model`""
-    $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$BaseUrl`""
+    $modelReplacement = Get-ODSRegexReplacementLiteral -Value $Model
+    $baseUrlReplacement = Get-ODSRegexReplacementLiteral -Value $BaseUrl
+    $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$modelReplacement`""
+    $content = $content -replace '(?m)^  base_url: ".*"\r?$', "  base_url: `"$baseUrlReplacement`""
     $content = $content -replace '(?m)^  context_length: .+\r?$', "  context_length: $ContextLength"
     $content = $content -replace '(?m)^    context_length: .+\r?$', "    context_length: $ContextLength"
     if ($MaxTokens -lt 1) { $MaxTokens = 1024 }
