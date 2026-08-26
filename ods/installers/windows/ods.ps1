@@ -68,8 +68,9 @@ function Test-DockerRunning {
     .SYNOPSIS
         Quick check if Docker daemon is responsive. Shows friendly message if not.
     #>
-    $null = docker info 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    # Do not redirect docker stderr under Stop on PS 5.1 — warnings like
+    # "No memory limit support" become terminating NativeCommandError.
+    if ((Invoke-ODSNativeQuiet -FilePath "docker" -Arguments @("info")) -ne 0) {
         Write-AIError "Docker Desktop is not running."
         Write-AI "Start it from the Start Menu, then try again."
         return $false
@@ -183,12 +184,7 @@ function Test-ODSArgumentPresent {
 }
 
 function Test-ODSDockerRunningQuiet {
-    try {
-        $null = & docker info 2>$null
-        return ($LASTEXITCODE -eq 0)
-    } catch {
-        return $false
-    }
+    return ((Invoke-ODSNativeQuiet -FilePath "docker" -Arguments @("info")) -eq 0)
 }
 
 function Get-ODSDockerProjectResourceNames {
@@ -199,21 +195,16 @@ function Get-ODSDockerProjectResourceNames {
     )
 
     $filter = "label=com.docker.compose.project=ods"
-    try {
-        switch ($Kind) {
-            "container" {
-                return @(& docker ps -aq --filter $filter 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            }
-            "network" {
-                return @(& docker network ls -q --filter $filter 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            }
-            "volume" {
-                return @(& docker volume ls -q --filter $filter 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            }
-        }
-    } catch {
-        return @()
+    $dockerArgs = switch ($Kind) {
+        "container" { @("ps", "-aq", "--filter", $filter) }
+        "network"   { @("network", "ls", "-q", "--filter", $filter) }
+        "volume"    { @("volume", "ls", "-q", "--filter", $filter) }
     }
+    $result = Invoke-ODSNativeCapture -FilePath "docker" -Arguments $dockerArgs
+    if ($result.ExitCode -ne 0) { return @() }
+    return @($result.Output |
+        ForEach-Object { "$_" } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
 function Test-ODSComposeFlagsFilesAvailable {
@@ -598,10 +589,13 @@ function Invoke-HermesSoulRefresh {
     }
 
     if ($SyncContainer) {
-        $names = & docker ps --format "{{.Names}}" 2>$null
+        $namesResult = Invoke-ODSNativeCapture -FilePath "docker" -Arguments @("ps", "--format", "{{.Names}}")
+        $names = @($namesResult.Output | ForEach-Object { "$_" })
         if ($names -contains "ods-hermes") {
-            & docker exec ods-hermes cp /opt/hermes/docker/SOUL.md /opt/data/SOUL.md *>> $script:ODS_LOG_FILE
-            if ($LASTEXITCODE -eq 0) {
+            $syncExit = Invoke-ODSNativeQuiet -FilePath "docker" -Arguments @(
+                "exec", "ods-hermes", "cp", "/opt/hermes/docker/SOUL.md", "/opt/data/SOUL.md"
+            )
+            if ($syncExit -eq 0) {
                 Write-AISuccess "Synced Hermes SOUL.md"
             } else {
                 Write-AIWarn "Could not sync Hermes SOUL.md into running container"
@@ -667,8 +661,11 @@ function Invoke-ODSSttModelDownloadTrigger {
     # bounded so slow Hugging Face transfers do not wedge ods.ps1 or install.
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
     if ($curl) {
-        $curlOutput = & $curl.Source --fail --silent --show-error --max-time 30 -X POST $ModelUrl 2>&1
-        $curlExit = $LASTEXITCODE
+        $curlResult = Invoke-ODSNativeCapture -FilePath $curl.Source -Arguments @(
+            "--fail", "--silent", "--show-error", "--max-time", "30", "-X", "POST", $ModelUrl
+        )
+        $curlExit = $curlResult.ExitCode
+        $curlOutput = $curlResult.Output
         if ($curlExit -eq 0 -or $curlExit -eq 28) { return $true }
         Write-AIWarn "STT model download trigger returned curl exit $curlExit; verifying cache before failing."
         if ($curlOutput) {
@@ -757,36 +754,39 @@ function Test-ODSComposeServiceAvailable {
         [Parameter(Mandatory = $true)][string]$Service
     )
 
-    try {
-        $services = & docker compose @ComposeFlags config --services 2>$null
-        return ($services -contains $Service)
-    } catch {
-        return $false
-    }
+    $result = Invoke-ODSNativeCapture -FilePath "docker" -Arguments (
+        @("compose") + @($ComposeFlags) + @("config", "--services")
+    )
+    if ($result.ExitCode -ne 0) { return $false }
+    $services = @($result.Output | ForEach-Object { "$_" })
+    return ($services -contains $Service)
 }
 
 function Get-ODSRunningComposeServices {
     param([string[]]$ComposeFlags)
 
-    try {
-        $services = & docker compose @ComposeFlags ps --services --filter "status=running" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $services) {
-            return @($services |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Sort-Object -Unique)
-        }
-    } catch { }
+    $result = Invoke-ODSNativeCapture -FilePath "docker" -Arguments (
+        @("compose") + @($ComposeFlags) + @("ps", "--services", "--filter", "status=running")
+    )
+    if ($result.ExitCode -eq 0 -and $result.Output) {
+        $services = @($result.Output |
+            ForEach-Object { "$_" } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique)
+        if ($services.Count -gt 0) { return $services }
+    }
 
-    try {
-        $services = & docker ps `
-            --filter "label=com.docker.compose.project=ods" `
-            --format "{{.Label ""com.docker.compose.service""}}" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $services) {
-            return @($services |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Sort-Object -Unique)
-        }
-    } catch { }
+    $result = Invoke-ODSNativeCapture -FilePath "docker" -Arguments @(
+        "ps",
+        "--filter", "label=com.docker.compose.project=ods",
+        "--format", "{{.Label ""com.docker.compose.service""}}"
+    )
+    if ($result.ExitCode -eq 0 -and $result.Output) {
+        return @($result.Output |
+            ForEach-Object { "$_" } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique)
+    }
 
     return @()
 }
@@ -807,12 +807,15 @@ function Test-ODSComposeServicesStarted {
         }
 
         $ids = @()
-        try {
-            $ids = @(& docker compose @ComposeFlags ps --all -q $service 2>$null |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        } catch {
+        $idsResult = Invoke-ODSNativeCapture -FilePath "docker" -Arguments (
+            @("compose") + @($ComposeFlags) + @("ps", "--all", "-q", $service)
+        )
+        if ($idsResult.ExitCode -ne 0) {
             return $false
         }
+        $ids = @($idsResult.Output |
+            ForEach-Object { "$_" } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
         if (-not $ids -or $ids.Count -eq 0) {
             return $false
@@ -820,12 +823,14 @@ function Test-ODSComposeServicesStarted {
 
         foreach ($id in $ids) {
             $state = ""
-            try {
-                $state = & docker inspect --format "{{.State.Status}} {{.State.ExitCode}}" $id 2>$null
-            } catch {
+            $stateResult = Invoke-ODSNativeCapture -FilePath "docker" -Arguments @(
+                "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", $id
+            )
+            if ($stateResult.ExitCode -ne 0) {
                 return $false
             }
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($state)) {
+            $state = (@($stateResult.Output | ForEach-Object { "$_" }) -join "`n").Trim()
+            if ([string]::IsNullOrWhiteSpace($state)) {
                 return $false
             }
 
@@ -912,14 +917,14 @@ function Write-ODSMissingComposeServiceHint {
     }
 
     Write-AI "Active compose services:"
-    try {
-        $services = & docker compose @ComposeFlags config --services 2>$null
-        if ($services) {
-            $services | ForEach-Object { Write-AI "  $_" }
-        } else {
-            Write-AI "  (none returned by docker compose config --services)"
-        }
-    } catch {
+    $servicesResult = Invoke-ODSNativeCapture -FilePath "docker" -Arguments (
+        @("compose") + @($ComposeFlags) + @("config", "--services")
+    )
+    if ($servicesResult.ExitCode -eq 0 -and $servicesResult.Output) {
+        $servicesResult.Output | ForEach-Object { Write-AI "  $_" }
+    } elseif ($servicesResult.ExitCode -eq 0) {
+        Write-AI "  (none returned by docker compose config --services)"
+    } else {
         Write-AI "  Could not inspect compose services. Run the diagnostic command below manually."
     }
 
@@ -1975,7 +1980,9 @@ function Invoke-Status {
 
         # Docker services
         Write-Host ""
-        & docker compose @flags ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>$null
+        $null = Invoke-ODSNativeHost -FilePath "docker" -Arguments (
+            @("compose") + @($flags) + @("ps", "--format", "table {{.Name}}\t{{.Status}}\t{{.Ports}}")
+        )
 
         # Health checks
         Write-Host ""
@@ -2012,17 +2019,19 @@ function Invoke-Status {
         $gpuInfo = Get-GpuInfo
         if ($gpuInfo.Backend -eq "nvidia") {
             Write-Host "  GPU Status" -ForegroundColor Cyan
-            try {
-                $gpuStats = & nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>$null
-                if ($gpuStats) {
-                    $gpuStats -split "`n" | ForEach-Object {
-                        $parts = $_ -split ","
-                        if ($parts.Count -ge 5) {
-                            Write-Host "  $($parts[0].Trim()): $($parts[1].Trim())% GPU | $($parts[2].Trim())MB/$($parts[3].Trim())MB VRAM | $($parts[4].Trim())C" -ForegroundColor White
-                        }
+            $gpuResult = Invoke-ODSNativeCapture -FilePath "nvidia-smi" -Arguments @(
+                "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--format=csv,noheader,nounits"
+            )
+            $gpuStats = (@($gpuResult.Output | ForEach-Object { "$_" }) -join "`n").Trim()
+            if ($gpuResult.ExitCode -eq 0 -and $gpuStats) {
+                $gpuStats -split "`n" | ForEach-Object {
+                    $parts = $_ -split ","
+                    if ($parts.Count -ge 5) {
+                        Write-Host "  $($parts[0].Trim()): $($parts[1].Trim())% GPU | $($parts[2].Trim())MB/$($parts[3].Trim())MB VRAM | $($parts[4].Trim())C" -ForegroundColor White
                     }
                 }
-            } catch { }
+            }
         } elseif ($gpuInfo.Backend -eq "amd") {
             Write-Host "  GPU: $($gpuInfo.Name) ($($gpuInfo.MemoryType) memory)" -ForegroundColor White
         }
@@ -2629,17 +2638,8 @@ function Test-ODSHostAgentPythonCandidate {
         return $false
     }
 
-    try {
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
-        $version = & $FilePath @PrefixArgs --version 2>&1
-        $exitCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
-        return ($exitCode -eq 0 -and (($version | Out-String) -match 'Python 3\.'))
-    } catch {
-        $ErrorActionPreference = $prevEAP
-        return $false
-    }
+    $probe = Invoke-ODSNativeCapture -FilePath $FilePath -Arguments (@($PrefixArgs) + @("--version"))
+    return ($probe.ExitCode -eq 0 -and (($probe.Output | Out-String) -match 'Python 3\.'))
 }
 
 function New-ODSHostAgentPythonCandidate {
@@ -3362,15 +3362,13 @@ function Invoke-Disable {
 
     # Best-effort container stop -- skip gracefully when Docker Desktop is
     # offline so the rename + flags update always succeeds.
-    $dockerRunning = $false
-    try { $null = docker info 2>$null; $dockerRunning = ($LASTEXITCODE -eq 0) } catch { }
+    $dockerRunning = ((Invoke-ODSNativeQuiet -FilePath "docker" -Arguments @("info")) -eq 0)
     if ($dockerRunning) {
         $flags = Get-ComposeFlags
         Write-AI "Stopping $ServiceId..."
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = "SilentlyContinue"
-        & docker compose @flags stop $ServiceId 2>$null
-        $ErrorActionPreference = $prevEAP
+        $null = Invoke-ODSNativeQuiet -FilePath "docker" -Arguments (
+            @("compose") + @($flags) + @("stop", $ServiceId)
+        )
     } else {
         Write-AIWarn "Docker Desktop is not running -- skipping container stop. $ServiceId will be excluded from the next 'ods start'."
     }

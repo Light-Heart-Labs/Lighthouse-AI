@@ -4,7 +4,7 @@
 
 ODS is fully supported on Windows 10 2004+ and Windows 11 (NVIDIA and AMD). The installer detects your GPU, selects the right model, downloads it, starts all Docker services, and creates a Desktop shortcut.
 
-**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) with WSL2 backend enabled. NVIDIA GPU or AMD Strix Halo recommended (CPU-only works with smaller models). 4GB+ RAM minimum, 16GB+ recommended.
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) **4.20+** with WSL2 backend enabled (older Desktop builds such as 4.15 / Engine 20.10 can fail Hermes OCI image validation and emit memory-limit warnings that break `ods.ps1` on PowerShell 5.1). NVIDIA GPU or AMD Strix Halo recommended (CPU-only works with smaller models). 4GB+ RAM minimum, 16GB+ recommended.
 
 Open a normal **PowerShell** session and run:
 
@@ -138,6 +138,8 @@ select it; constrained machines can stay lower. No extra flags needed.
 |-------|-----|
 | "Docker not running" | Start Docker Desktop, wait for whale icon |
 | "WSL2 not found" | `wsl --install` then restart |
+| Hermes image unavailable / `unsupported manifest media type` | Upgrade Docker Desktop to **4.20+**, then re-run `.\install.ps1`. Pre-`4.20` clients often cannot resolve modern OCI tags such as `nousresearch/hermes-agent:v2026.6.5`. |
+| `ods.ps1` dies on `WARNING: No memory limit support` | Upgrade Docker Desktop to **4.20+** (preferred). On current ODS builds this is also hardened so PowerShell 5.1 no longer treats that Docker warning as a fatal error. |
 | "nvidia-smi fails" | Update NVIDIA drivers; restart Docker Desktop |
 | "Port in use" | Edit `.env`, change `WEBUI_PORT=3001` |
 | Out of memory | Lower tier: `.\install.ps1 -Tier 1` |

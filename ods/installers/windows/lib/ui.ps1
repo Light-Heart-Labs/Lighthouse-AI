@@ -134,7 +134,50 @@ function Get-ODSHuggingFaceDownloadHelper {
     return $null
 }
 
+function Invoke-ODSNativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $prevEAP = $ErrorActionPreference
+    $exitCode = 1
+    $output = @()
+    try {
+        # Windows PowerShell 5.1 promotes native stderr (via 2>&1) into
+        # ErrorRecords. Under Stop those terminate the script; under
+        # SilentlyContinue they are dropped from assignment. Use Continue so
+        # merged stderr stays in $output as non-terminating ErrorRecords.
+        $ErrorActionPreference = "Continue"
+        $output = @(& $FilePath @Arguments 2>&1)
+        if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
+    } catch {
+        $exitCode = 1
+        if ($_.Exception -and -not [string]::IsNullOrWhiteSpace($_.Exception.Message)) {
+            $output = @($_.Exception.Message)
+        }
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output   = $output
+    }
+}
+
 function Invoke-ODSNativeQuiet {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    # Expected failed native probes must return an exit code under
+    # Windows PowerShell 5.1 strict installer semantics.
+    return (Invoke-ODSNativeCapture -FilePath $FilePath -Arguments $Arguments).ExitCode
+}
+
+function Invoke-ODSNativeHost {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$Arguments = @()
@@ -143,10 +186,10 @@ function Invoke-ODSNativeQuiet {
     $prevEAP = $ErrorActionPreference
     $exitCode = 1
     try {
-        # Expected failed native probes must return an exit code under
-        # Windows PowerShell 5.1 strict installer semantics.
         $ErrorActionPreference = "SilentlyContinue"
-        & $FilePath @Arguments 2>&1 | Out-Null
+        # Keep stdout on the host; discard stderr noise that would otherwise
+        # become terminating ErrorRecords under Stop on Windows PowerShell 5.1.
+        & $FilePath @Arguments 2>$null
         if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
     } catch {
         $exitCode = 1
