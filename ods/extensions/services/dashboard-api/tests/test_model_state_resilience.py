@@ -16,7 +16,7 @@ class TestModelStateResilience(unittest.TestCase):
             path = Path(tmp.name)
             if path.exists():
                 path.unlink()
-            doc = sb.record_verified_route(
+            sb.record_verified_route(
                 path,
                 catalog_id="test-model",
                 runtime_model_id="test-model.gguf",
