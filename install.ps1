@@ -47,10 +47,10 @@ $global:LASTEXITCODE = 0
 & $ODSInstaller @PSBoundParameters
 $installerSucceeded = $?
 $installerExit = if ($null -ne $global:LASTEXITCODE) { [int]$global:LASTEXITCODE } else { 0 }
-if ($installerExit -ne 0) {
-    exit $installerExit
-}
 if ($installerSucceeded) {
     exit 0
+}
+if ($installerExit -ne 0) {
+    exit $installerExit
 }
 exit 1
