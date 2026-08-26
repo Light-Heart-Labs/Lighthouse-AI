@@ -80,7 +80,7 @@ function configurePayload(form) {
   }
 }
 
-function writesSummary(writes) {
+export function writesSummary(writes) {
   const plan = writes && typeof writes === 'object' ? writes : {}
   const labels = []
   if (plan.routingState) labels.push('routing state')
@@ -92,7 +92,7 @@ function writesSummary(writes) {
   return labels.length ? labels.join(', ') : 'None'
 }
 
-function routeSummary(result) {
+export function routeSummary(result) {
   const provider = result?.route?.provider || {}
   if (provider.model) return `${provider.model} via ${provider.transport || 'direct'}`
   if (result?.route?.enabled === false) return 'Disabled route'
