@@ -155,7 +155,7 @@ list_backups() {
             size=$(du -sh "$backup" 2>/dev/null | cut -f1)
             # Try to read manifest from tar
             if tar -tzf "$backup" 2>/dev/null | grep -q "manifest.json"; then
-                manifest=$(tar -xzf "$backup" -O */manifest.json 2>/dev/null || echo "")
+                manifest=$(tar -xzf "$backup" -O "$(tar -tzf "$backup" 2>/dev/null | grep -m1 'manifest\.json')" 2>/dev/null || echo "")
                 if [[ -n "$manifest" ]]; then
                     backup_type=$(echo "$manifest" | grep -o '"backup_type": "[^"]*"' | cut -d'"' -f4 || echo "unknown")
                     description=$(echo "$manifest" | grep -o '"description": "[^"]*"' | cut -d'"' -f4 || echo "")
