@@ -219,7 +219,7 @@ function normalizeMetricNumber(value) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
-function normalizeServiceKey(value) {
+export function normalizeServiceKey(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/\([^)]*\)/g, '')
@@ -227,7 +227,7 @@ function normalizeServiceKey(value) {
     .replace(/^-+|-+$/g, '')
 }
 
-function getServiceDescription(id, name) {
+export function getServiceDescription(id, name) {
   const key = normalizeServiceKey(id || name)
   return SERVICE_DESCRIPTIONS[id] || SERVICE_DESCRIPTIONS[key] || 'ODS service'
 }
