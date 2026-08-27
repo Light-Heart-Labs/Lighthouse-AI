@@ -3166,15 +3166,18 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
                     kill -9 "$_new_pid" 2>/dev/null || true
                 fi
                 if [[ -n "${_old_model_path:-}" && -f "$_old_model_path" ]]; then
+                    # Preserve the complete verified launch contract during
+                    # rollback; only the model path should change.
+                    _rollback_args=("${_llama_args[@]}")
+                    for ((_arg_i = 0; _arg_i < ${#_rollback_args[@]} - 1; _arg_i++)); do
+                        if [[ "${_rollback_args[$_arg_i]}" == "--model" ]]; then
+                            _rollback_args[$((_arg_i + 1))]="$_old_model_path"
+                            break
+                        fi
+                    done
                     (
                         cd "$INSTALL_DIR" || exit 1
-                        exec "$LLAMA_SERVER_BIN" \
-                            --host "$_bind" --port "$_native_port" \
-                            --model "$_old_model_path" \
-                            --ctx-size "$_ctx_size" \
-                            --n-gpu-layers "$_gpu_layers" \
-                            --reasoning-format "${_reasoning_fmt:-none}" \
-                            --metrics
+                        exec "$LLAMA_SERVER_BIN" "${_rollback_args[@]}"
                     ) > "$LLAMA_SERVER_LOG" 2>&1 &
                     _rollback_pid=$!
                     echo "$_rollback_pid" > "$LLAMA_SERVER_PID_FILE"

@@ -64,6 +64,15 @@ for target in "${bash_arg_array_targets[@]}"; do
     pass "$target honours LLAMA_PARALLEL"
 done
 
+bootstrap_upgrade="$ROOT_DIR/scripts/bootstrap-upgrade.sh"
+rollback_block=$(sed -n '/Attempting rollback/,/Could not rollback/p' "$bootstrap_upgrade")
+if [[ "$rollback_block" != *'_rollback_args=("${_llama_args[@]}")'* ]] \
+    || [[ "$rollback_block" != *'exec "$LLAMA_SERVER_BIN" "${_rollback_args[@]}"'* ]]; then
+    fail "scripts/bootstrap-upgrade.sh rollback does not preserve the full macOS llama-server argv"
+else
+    pass "scripts/bootstrap-upgrade.sh rollback preserves LLAMA_PARALLEL and the other native tunables"
+fi
+
 for target in "${compose_targets[@]}" "${native_targets[@]}"; do
     path="$ROOT_DIR/$target"
     if [[ ! -f "$path" ]]; then
