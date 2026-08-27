@@ -6,7 +6,7 @@ _BIN_DIR = Path(__file__).resolve().parents[4] / "bin"
 if str(_BIN_DIR) not in sys.path:
     sys.path.insert(0, str(_BIN_DIR))
 
-from model_switchboard import state as sb
+from model_switchboard import state as sb  # type: ignore
 
 
 class TestModelStateResilience(unittest.TestCase):
