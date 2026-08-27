@@ -3332,7 +3332,7 @@ META
             # Compare metadata
             echo -e "${BLUE}━━━ Metadata ━━━${NC}"
             if [[ -f "$dir1/meta.txt" ]] && [[ -f "$dir2/meta.txt" ]]; then
-                diff -u "$dir1/meta.txt" "$dir2/meta.txt" | tail -n +4 | sed "s/^-/$(printf "${RED}-${NC}")/" | sed "s/^+/$(printf "${GREEN}+${NC}")/" || true
+                diff -u "$dir1/meta.txt" "$dir2/meta.txt" | tail -n +4 | sed "s/^-/$(printf '%s' "${RED}-${NC}")/" | sed "s/^+/$(printf '%s' "${GREEN}+${NC}")/" || true
             fi
             echo ""
 
