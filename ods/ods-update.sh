@@ -398,6 +398,10 @@ _update_rollback() {
     local reason="$1"
     local snap_dir_arg="$2"
     local compose_flags_arg="${3:-}"
+    local -a compose_args=()
+    if [[ -n "${compose_flags_arg}" ]]; then
+        read -ra compose_args <<< "${compose_flags_arg}"
+    fi
 
     log_error "${reason}"
     log_warn "Auto-restoring rollback snapshot and restarting services..."
@@ -412,14 +416,14 @@ _update_rollback() {
     fi
 
     cd "$INSTALL_DIR"
-    if [[ -n "${compose_flags_arg}" ]]; then
-        if ! docker compose ${compose_flags_arg} down --remove-orphans; then
+    if [[ ${#compose_args[@]} -gt 0 ]]; then
+        if ! docker compose "${compose_args[@]}" down --remove-orphans; then
             log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose ${compose_flags_arg} down --remove-orphans
+            docker-compose "${compose_args[@]}" down --remove-orphans
         fi
-        if ! docker compose ${compose_flags_arg} up -d; then
+        if ! docker compose "${compose_args[@]}" up -d; then
             log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose ${compose_flags_arg} up -d
+            docker-compose "${compose_args[@]}" up -d
         fi
     else
         if ! docker compose down --remove-orphans; then
@@ -648,6 +652,10 @@ cmd_update() {
     # Resolve compose flags once — used in restart and rollback paths.
     local compose_flags=""
     compose_flags=$(resolve_compose_flags 2>/dev/null || true)
+    local -a compose_args=()
+    if [[ -n "$compose_flags" ]]; then
+        read -ra compose_args <<< "$compose_flags"
+    fi
 
     # ── Step 2: pull latest changes ───────────────────────────────────────────
     log_info "Pulling latest changes..."
@@ -677,14 +685,14 @@ cmd_update() {
     # ── Step 4: restart services ──────────────────────────────────────────────
     log_info "Restarting services..."
     cd "$INSTALL_DIR"
-    if [[ -n "${compose_flags}" ]]; then
-        if ! docker compose ${compose_flags} down --remove-orphans; then
+    if [[ ${#compose_args[@]} -gt 0 ]]; then
+        if ! docker compose "${compose_args[@]}" down --remove-orphans; then
             log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose ${compose_flags} down --remove-orphans
+            docker-compose "${compose_args[@]}" down --remove-orphans
         fi
-        if ! docker compose ${compose_flags} up -d; then
+        if ! docker compose "${compose_args[@]}" up -d; then
             log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose ${compose_flags} up -d
+            docker-compose "${compose_args[@]}" up -d
         fi
     elif [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
         if ! docker compose down --remove-orphans; then
