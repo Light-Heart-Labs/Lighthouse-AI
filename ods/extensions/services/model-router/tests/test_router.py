@@ -795,6 +795,42 @@ class TestEndpointsReload:
         assert still_ok.status_code == 200
         assert calls[-1]["url"].startswith("http://upstream:8080")
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            [],
+            {},
+            {"endpoints": None},
+            {"endpoints": {}},
+            {"endpoints": [None]},
+            {"endpoints": ["http://unexpected:8080"]},
+            {"endpoints": [{"id": ["not-a-string"], "baseUrl": "http://new"}]},
+            {"endpoints": [{"id": "new", "baseUrl": 8080}]},
+            {"endpoints": [{"id": "new", "baseUrl": "http://new", "apiKeyEnv": False}]},
+        ],
+    )
+    def test_wrong_shape_rewrite_retains_routable_last_good_allowlist(
+        self, router, tmp_path, payload
+    ):
+        mod, client, write_state, calls = router
+        write_state()
+        assert client.post("/v1/chat/completions", json={
+            "model": "ods/current",
+            "messages": [{"role": "user", "content": "warm cache"}],
+        }).status_code == 200
+
+        self._endpoints_path(tmp_path).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        still_ok = client.post("/v1/chat/completions", json={
+            "model": "ods/current",
+            "messages": [{"role": "user", "content": "after rewrite"}],
+        })
+
+        assert still_ok.status_code == 200
+        assert calls[-1]["url"].startswith("http://upstream:8080")
+
     def test_health_reports_allowlist_health(self, router, tmp_path):
         mod, client, write_state, calls = router
         healthy = client.get("/health")
