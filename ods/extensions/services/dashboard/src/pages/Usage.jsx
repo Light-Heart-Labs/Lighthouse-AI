@@ -955,7 +955,7 @@ function TopConsumers({ services }) {
   )
 }
 
-function serviceTokens(service) {
+export function serviceTokens(service) {
   return Number(service.input_tokens || 0) + Number(service.output_tokens || 0) + Number(service.cache_read_tokens || 0) + Number(service.cache_write_tokens || 0)
 }
 
