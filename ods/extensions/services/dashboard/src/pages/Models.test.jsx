@@ -19,6 +19,7 @@ function baseDownloadState(overrides = {}) {
     isDownloading: false,
     progress: null,
     completedDownload: null,
+    statusError: null,
     cancelError: null,
     isCancelling: false,
     refresh: vi.fn(),
@@ -765,6 +766,18 @@ test('shows terminal download failures with a retry action', async () => {
   expect(clearTerminal).toHaveBeenCalled()
   expect(downloadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
   await act(async () => {})
+})
+
+test('shows download status polling failures instead of an empty progress area', () => {
+  useModelsMock.mockReturnValue(baseState({ models: [model()] }))
+  useDownloadProgressMock.mockReturnValue(baseDownloadState({
+    statusError: 'Download status unavailable (HTTP 503).',
+  }))
+
+  renderModels()
+
+  expect(screen.getByText('Download Failed')).toBeInTheDocument()
+  expect(screen.getByText('Download status unavailable (HTTP 503).')).toBeInTheDocument()
 })
 
 test.each([

@@ -6,7 +6,7 @@ function isTerminalProgress(progress) {
   return TERMINAL_DOWNLOAD_STATUSES.has(progress?.status)
 }
 
-async function cancelErrorFromResponse(response) {
+async function errorFromResponse(response, fallback) {
   try {
     const payload = await response.json()
     const detail = payload?.detail
@@ -16,7 +16,7 @@ async function cancelErrorFromResponse(response) {
   } catch {
     // Fall through to the stable user-facing fallback.
   }
-  return 'Failed to cancel download.'
+  return fallback
 }
 
 /**
@@ -27,6 +27,7 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
   const [progress, setProgress] = useState(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [completedDownload, setCompletedDownload] = useState(null)
+  const [statusError, setStatusError] = useState(null)
   const [cancelError, setCancelError] = useState(null)
   const [isCancelling, setIsCancelling] = useState(false)
   const lastCompleteKeyRef = useRef(null)
@@ -38,11 +39,20 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     const requestId = ++progressRequestRef.current
     try {
       const response = await fetch('/api/models/download-status')
-      if (!response.ok) return
+      if (requestId < latestAppliedProgressRequestRef.current) return null
+      latestAppliedProgressRequestRef.current = requestId
+      if (!response.ok) {
+        const detail = await errorFromResponse(
+          response,
+          `Download status unavailable (HTTP ${response.status}).`,
+        )
+        if (requestId < latestAppliedProgressRequestRef.current) return null
+        setStatusError(detail)
+        return null
+      }
       
       const data = await response.json()
-      if (requestId < latestAppliedProgressRequestRef.current) return data
-      latestAppliedProgressRequestRef.current = requestId
+      setStatusError(null)
       
       if (data.status === 'downloading' || data.status === 'verifying') {
         const downloaded = data.bytesDownloaded || 0
@@ -90,8 +100,10 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
         })
       }
       return data
-    } catch {
-      // Silently fail - API might not be available
+    } catch (err) {
+      if (requestId < latestAppliedProgressRequestRef.current) return null
+      latestAppliedProgressRequestRef.current = requestId
+      setStatusError(`Download status unavailable: ${err?.message || 'network error'}`)
       return null
     }
   }, [])
@@ -151,7 +163,9 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     setCancelError(null)
     try {
       const response = await fetch('/api/models/download/cancel', { method: 'POST' })
-      if (!response.ok) throw new Error(await cancelErrorFromResponse(response))
+      if (!response.ok) {
+        throw new Error(await errorFromResponse(response, 'Failed to cancel download.'))
+      }
       return await fetchProgress()
     } catch (err) {
       setCancelError(err?.message || 'Failed to cancel download.')
@@ -171,6 +185,7 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     isDownloading,
     progress,
     completedDownload,
+    statusError,
     cancelError,
     isCancelling,
     formatBytes,
