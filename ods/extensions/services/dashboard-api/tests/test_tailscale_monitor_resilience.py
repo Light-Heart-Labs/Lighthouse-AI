@@ -1,6 +1,5 @@
 """Unit test suite for Tailscale network status monitor resilience."""
 
-from unittest.mock import patch, MagicMock
 import pytest
 
 
