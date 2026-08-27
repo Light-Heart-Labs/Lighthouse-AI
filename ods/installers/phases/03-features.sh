@@ -393,7 +393,7 @@ run_custom() {
   echo -e "  ${WHT}Assignment:${NC}"
   printf "  ${AMB}*${NC} %-16s ${BGRN}" "llama_server"
   for g in "${LLAMA_GPUS_CUSTOM[@]}"; do printf "GPU%s " "$g"; done
-  printf "${NC}\n"
+  printf '%s\n' "$NC"
   for svc in whisper comfyui embeddings; do
     printf "  ${AMB}*${NC} %-16s ${BGRN}GPU%s${NC}\n" "$svc" "${CUSTOM_ASSIGNMENT[$svc]}"
   done
