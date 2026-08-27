@@ -2874,6 +2874,39 @@ class TestHandleEnvUpdate:
         backup_files = list((data_dir / "config-backups").glob(".env.backup.*"))
         assert len(backup_files) == 1
 
+    def test_same_second_updates_create_distinct_backups(
+        self, env_update_env, monkeypatch,
+    ):
+        install_dir, data_dir = env_update_env
+        real_datetime = _mod.datetime
+
+        class FrozenDateTime:
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2026, 8, 27, 12, 34, 56, tzinfo=tz)
+
+        monkeypatch.setattr(_mod, "datetime", FrozenDateTime)
+
+        first = _FakeHandler(_make_body("ODS_AGENT_KEY=first\n"))
+        _mod.AgentHandler._handle_env_update(first)
+        second = _FakeHandler(_make_body("ODS_AGENT_KEY=second\n"))
+        _mod.AgentHandler._handle_env_update(second)
+
+        assert first.response_code == 200
+        assert second.response_code == 200
+        first_backup = first.parse_response()["backup_path"]
+        second_backup = second.parse_response()["backup_path"]
+        assert first_backup != second_backup
+        backup_files = list((data_dir / "config-backups").glob(".env.backup.*"))
+        assert len(backup_files) == 2
+        assert {path.read_text(encoding="utf-8") for path in backup_files} == {
+            "ODS_AGENT_KEY=existing\n",
+            "ODS_AGENT_KEY=first\n",
+        }
+        assert (install_dir / ".env").read_text(encoding="utf-8") == (
+            "ODS_AGENT_KEY=second\n"
+        )
+
     def test_proxy_enabled_forces_auth_and_reports_saved_value(self, env_update_env):
         install_dir, _ = env_update_env
         proxy_dir = _mod.EXTENSIONS_DIR / "ods-proxy"
