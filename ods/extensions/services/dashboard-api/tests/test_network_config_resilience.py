@@ -1,7 +1,6 @@
 """Unit test suite for network configuration resolver resilience."""
 
 import unittest
-from unittest.mock import patch, MagicMock
 
 
 class TestNetworkConfigResilience(unittest.TestCase):
