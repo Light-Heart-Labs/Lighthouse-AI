@@ -515,6 +515,35 @@ def test_workflow_enable_file_not_found(test_client, tmp_path, monkeypatch):
     assert "Workflow file not found" in resp.json()["detail"]
 
 
+def test_workflow_enable_malformed_workflow_file(test_client, tmp_path, monkeypatch):
+    """POST /api/workflows/{id}/enable -> 500 when the workflow's own JSON file
+    (as opposed to the catalog file) contains invalid JSON."""
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "broken-wf", "name": "Broken Workflow", "description": "bad json",
+             "file": "broken.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    workflow_dir = tmp_path / "workflows"
+    workflow_dir.mkdir()
+    (workflow_dir / "broken.json").write_text("{not valid json")
+    monkeypatch.setattr(wf_mod, "WORKFLOW_DIR", workflow_dir)
+
+    resp = test_client.post(
+        "/api/workflows/broken-wf/enable",
+        headers=test_client.auth_headers,
+    )
+    assert resp.status_code == 500
+    assert "Failed to read workflow" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # /api/workflows/{id}/disable POST endpoint
 # ---------------------------------------------------------------------------
