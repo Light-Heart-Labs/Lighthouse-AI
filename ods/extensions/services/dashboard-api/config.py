@@ -26,7 +26,7 @@ EXTENSIONS_DIR = Path(
 )
 
 DEFAULT_SERVICE_HOST = os.environ.get("SERVICE_HOST", "host.docker.internal")
-GPU_BACKEND = os.environ.get("GPU_BACKEND", "nvidia")
+GPU_BACKEND = os.environ.get("GPU_BACKEND", "").strip().lower() or "unknown"
 ODS_MODES = frozenset({"local", "cloud", "hybrid", "lemonade"})
 LOCAL_MODEL_MODES = frozenset({"local", "hybrid", "lemonade"})
 LLM_CONTRACT_ROUTES = frozenset({"gateway", "direct"})
@@ -361,7 +361,11 @@ def load_extension_manifests(
                     ):
                         continue  # Linux-only service, not available on macOS
                     # All docker services run on macOS regardless of gpu_backends declaration
-                elif gpu_backend not in supported and "all" not in supported:
+                elif (
+                    gpu_backend != "unknown"
+                    and gpu_backend not in supported
+                    and "all" not in supported
+                ):
                     continue
 
                 host_env = service.get("host_env")
@@ -408,7 +412,11 @@ def load_extension_manifests(
                     if not isinstance(feature, dict):
                         continue
                     supported = feature.get("gpu_backends", ["amd", "nvidia", "apple"])
-                    if gpu_backend != "apple" and gpu_backend not in supported and "all" not in supported:
+                    if (
+                        gpu_backend not in {"apple", "unknown"}
+                        and gpu_backend not in supported
+                        and "all" not in supported
+                    ):
                         continue
                     if feature.get("id") and feature.get("name"):
                         missing = [f for f in ("description", "icon", "category", "setup_time", "priority") if f not in feature]

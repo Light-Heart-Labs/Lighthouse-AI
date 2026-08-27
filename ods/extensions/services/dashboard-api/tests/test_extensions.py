@@ -168,6 +168,30 @@ class TestExtensionsCatalog:
         assert "compat" in ids
         assert "incompat" not in ids
 
+    def test_catalog_does_not_guess_compatibility_when_backend_is_unknown(
+        self, test_client, monkeypatch, tmp_path
+    ):
+        catalog = [
+            _make_catalog_ext("nvidia-only", "NVIDIA", gpu_backends=["nvidia"]),
+            _make_catalog_ext("portable", "Portable", gpu_backends=["all"]),
+        ]
+        _patch_extensions_config(
+            monkeypatch, catalog, gpu_backend="unknown", tmp_path=tmp_path
+        )
+
+        with patch("helpers.get_all_services", new_callable=AsyncMock, return_value=[]):
+            response = test_client.get(
+                "/api/extensions/catalog", headers=test_client.auth_headers
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        rows = {row["id"]: row for row in data["extensions"]}
+        assert data["gpu_backend"] == "unknown"
+        assert rows["nvidia-only"]["status"] == "backend_unknown"
+        assert rows["portable"]["status"] == "not_installed"
+        assert data["summary"]["backend_unknown"] == 1
+
     def test_catalog_summary_counts(self, test_client, monkeypatch, tmp_path):
         """Summary counts correctly reflect extension statuses."""
         catalog = [

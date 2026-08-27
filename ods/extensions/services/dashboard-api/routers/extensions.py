@@ -396,8 +396,11 @@ def _compute_extension_status(ext: dict, services_by_id: dict) -> str:
 
     # GPU incompatibility
     gpu_backends = ext.get("gpu_backends", [])
-    if gpu_backends and "all" not in gpu_backends and GPU_BACKEND not in gpu_backends:
-        return "incompatible"
+    if gpu_backends and "all" not in gpu_backends:
+        if GPU_BACKEND == "unknown":
+            return "backend_unknown"
+        if GPU_BACKEND not in gpu_backends:
+            return "incompatible"
 
     return "not_installed"
 
@@ -1197,7 +1200,7 @@ async def extensions_catalog(
         if category and ext.get("category") != category:
             continue
         if gpu_compatible is not None:
-            is_compatible = status != "incompatible"
+            is_compatible = status not in {"incompatible", "backend_unknown"}
             if gpu_compatible != is_compatible:
                 continue
 
@@ -1236,6 +1239,7 @@ async def extensions_catalog(
         "error": sum(1 for e in extensions if e["status"] == "error"),
         "not_installed": sum(1 for e in extensions if e["status"] == "not_installed"),
         "incompatible": sum(1 for e in extensions if e["status"] == "incompatible"),
+        "backend_unknown": sum(1 for e in extensions if e["status"] == "backend_unknown"),
         "updates_available": sum(1 for e in extensions if e["update_available"]),
     }
 
