@@ -222,6 +222,39 @@ def test_route_evidence_rejects_mismatched_probe(test_client, monkeypatch):
     assert resp.status_code == 502
 
 
+def test_route_evidence_returns_503_when_no_internal_key_is_configured(test_client, monkeypatch):
+    # _router_internal_key() falls back from ODS_ROUTER_INTERNAL_KEY to
+    # DASHBOARD_API_KEY; conftest.py always sets DASHBOARD_API_KEY globally, so
+    # this "not configured" branch is only reachable when both are absent.
+    probe_id = str(uuid.uuid4())
+    monkeypatch.delenv("ODS_ROUTER_INTERNAL_KEY", raising=False)
+    monkeypatch.delenv("DASHBOARD_API_KEY", raising=False)
+
+    resp = test_client.get(
+        f"/api/models/routes/{probe_id}",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Model router evidence key is not configured."
+
+
+def test_route_evidence_maps_router_auth_rejection_to_502(test_client, monkeypatch):
+    probe_id = str(uuid.uuid4())
+    monkeypatch.setenv("ODS_ROUTER_INTERNAL_KEY", "internal-secret")
+    calls = _patch_router_client(monkeypatch, httpx.Response(401, json={"error": "unauthorized"}))
+
+    resp = test_client.get(
+        f"/api/models/routes/{probe_id}",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Model router rejected the dashboard key."
+    # 401/403 are not in the retry-eligible status set, so the router is only hit once.
+    assert len([call for call in calls if call[0] == "get"]) == 1
+
+
 def test_route_evidence_passes_through_instance_id(test_client, monkeypatch):
     probe_id = str(uuid.uuid4())
     monkeypatch.setenv("ODS_ROUTER_INTERNAL_KEY", "internal-secret")
