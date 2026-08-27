@@ -58,6 +58,8 @@ pass "Backup created: $BACKUP_ID"
     || fail "Full backup lost model cache"
 [[ -f "$SRC/.backups/$BACKUP_ID/manifest.json" ]] \
     || fail "Full backup lost its manifest"
+[[ -f "$SRC/.backups/$BACKUP_ID/.env" ]] \
+    || fail "Full backup lost its environment config"
 
 # Create destination ODS directory (empty)
 DST="$TMP/dst"
