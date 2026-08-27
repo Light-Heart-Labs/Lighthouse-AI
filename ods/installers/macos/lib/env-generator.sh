@@ -944,7 +944,7 @@ configure_perplexica() {
     local perplexica_url="http://localhost:${perplexica_port}"
 
     case "$llm_base_url" in
-        */v1|*/api/v1) ;;
+        */v1) ;;
         *) llm_base_url="${llm_base_url%/}/v1" ;;
     esac
 
