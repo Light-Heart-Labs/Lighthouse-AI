@@ -16,7 +16,7 @@ if [[ "$_perplexica_switchboard_mode" == "enabled" ]]; then
     PERPLEXICA_API_KEY="${LITELLM_KEY:-${OPENAI_API_KEY:-no-key}}"
 fi
 case "$PERPLEXICA_LLM_BASE_URL" in
-    */v1|*/api/v1) ;;
+    */v1) ;;
     *) PERPLEXICA_LLM_BASE_URL="${PERPLEXICA_LLM_BASE_URL%/}/v1" ;;
 esac
 
