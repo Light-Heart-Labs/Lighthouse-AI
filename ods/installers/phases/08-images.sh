@@ -123,7 +123,7 @@ else
             fi
             if [[ "$_validated_llama_image" != "$_llama_image" ]]; then
                 LLAMA_SERVER_IMAGE="$_validated_llama_image"
-                PULL_LIST[$_llama_index]="${_validated_llama_image}|${_llama_label}"
+                PULL_LIST[_llama_index]="${_validated_llama_image}|${_llama_label}"
                 if [[ -f "$INSTALL_DIR/.env" ]]; then
                     if grep -q '^LLAMA_SERVER_IMAGE=' "$INSTALL_DIR/.env"; then
                         sed -i.bak "s|^LLAMA_SERVER_IMAGE=.*|LLAMA_SERVER_IMAGE=${_validated_llama_image}|" "$INSTALL_DIR/.env" && rm -f "$INSTALL_DIR/.env.bak"
@@ -167,7 +167,7 @@ else
             fi
             if [[ "$_validated_hermes_image" != "$_hermes_image" ]]; then
                 HERMES_AGENT_IMAGE="$_validated_hermes_image"
-                PULL_LIST[$_hermes_index]="${_validated_hermes_image}|${_hermes_label}"
+                PULL_LIST[_hermes_index]="${_validated_hermes_image}|${_hermes_label}"
                 if [[ -f "$INSTALL_DIR/.env" ]]; then
                     if grep -q '^HERMES_AGENT_IMAGE=' "$INSTALL_DIR/.env"; then
                         sed -i.bak "s|^HERMES_AGENT_IMAGE=.*|HERMES_AGENT_IMAGE=${_validated_hermes_image}|" "$INSTALL_DIR/.env" && rm -f "$INSTALL_DIR/.env.bak"
