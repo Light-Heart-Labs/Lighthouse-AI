@@ -1614,7 +1614,7 @@ function matchesSpeedFilter(model, filter, hermesMinimumContext) {
   return true
 }
 
-function buildModelInsights(models) {
+export function buildModelInsights(models) {
   const installedModels = models.filter(model => ['downloaded', 'loaded'].includes(model.status))
   const installedSize = installedModels.reduce((total, model) => total + Number(model.sizeGb || 0), 0)
   const catalogSize = models.reduce((total, model) => total + Number(model.sizeGb || 0), 0)
