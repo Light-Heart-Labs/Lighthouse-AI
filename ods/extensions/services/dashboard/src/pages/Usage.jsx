@@ -153,7 +153,7 @@ function formatCurrencyAxis(value) {
   return formatCurrency(number)
 }
 
-function formatCompact(value) {
+export function formatCompact(value) {
   const number = Number(value || 0)
   if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(1)}B`
   if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`
@@ -161,7 +161,7 @@ function formatCompact(value) {
   return `${Math.round(number)}`
 }
 
-function formatInteger(value) {
+export function formatInteger(value) {
   return new Intl.NumberFormat('en-US').format(Math.round(Number(value || 0)))
 }
 
