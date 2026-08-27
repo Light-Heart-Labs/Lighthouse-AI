@@ -100,7 +100,7 @@ const todayKey = () => {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
-const formatCompact = (value) => {
+export const formatCompact = (value) => {
   const number = Number(value || 0)
   if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(1)}B`
   if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(2).replace(/\.00$/, '')}M`
@@ -112,7 +112,7 @@ const titleCase = (value) => String(value || '')
   .replace(/[_-]+/g, ' ')
   .replace(/\b\w/g, char => char.toUpperCase())
 
-const matchesEnvSearch = (key, field, query) => {
+export const matchesEnvSearch = (key, field, query) => {
   if (!query) return true
   return [key, field?.label, field?.description].filter(Boolean).join(' ').toLowerCase().includes(query)
 }
@@ -149,7 +149,7 @@ const ROUTE_DESCRIPTIONS = {
   tts: 'Text-to-speech service',
 }
 
-const getServiceDescription = (service) => {
+export const getServiceDescription = (service) => {
   if (service?.description) return service.description
   const id = String(service?.id || '').toLowerCase()
   const name = String(service?.name || '').toLowerCase()
