@@ -2768,7 +2768,7 @@ cmd_enable() {
             # All Docker services run on macOS regardless of gpu_backends declaration
             :
         # Check if current backend is in the supported list
-        elif [[ ! " $gpu_backends " =~ " $current_backend " ]]; then
+        elif [[ ! " $gpu_backends " =~  $current_backend  ]]; then
             warn "$service_id may not work with GPU backend: $current_backend"
             warn "  Supported backends: $gpu_backends"
             warn "  Current backend: $current_backend"
