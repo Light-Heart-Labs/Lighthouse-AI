@@ -1,7 +1,6 @@
 """Unit test suite for Performance Oracle model advisor resilience."""
 
 import unittest
-from unittest.mock import patch, MagicMock
 
 
 from performance_oracle import evaluate_performance
