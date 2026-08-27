@@ -1,7 +1,6 @@
 """Unit test suite for remote provider status probe resilience."""
 
 import unittest
-from unittest.mock import patch, MagicMock
 
 
 class TestRemoteProviderStatusResilience(unittest.TestCase):
