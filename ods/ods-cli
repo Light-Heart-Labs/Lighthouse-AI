@@ -1291,7 +1291,7 @@ cmd_status() {
     # Create temp directory for health check results
     local tmpdir
     tmpdir=$(mktemp -d)
-    trap "rm -rf '$tmpdir'" RETURN
+    trap 'rm -rf "$tmpdir"' RETURN
 
     # Array to track background job PIDs
     local -a pids=()
@@ -5569,7 +5569,7 @@ _gpu_reassign() {
     # Write topology to tmpfile and run assignment
     local tmpdir
     tmpdir=$(mktemp -d)
-    trap "rm -rf '$tmpdir'" RETURN
+    trap 'rm -rf "$tmpdir"' RETURN
     echo "$topo_json" > "$tmpdir/topo.json"
     local env_backup="$tmpdir/env.before"
     cp "$INSTALL_DIR/.env" "$env_backup"
