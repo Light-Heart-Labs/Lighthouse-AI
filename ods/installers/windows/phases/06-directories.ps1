@@ -544,15 +544,13 @@ function Invoke-HermesSoulRefresh {
     }
 
     if (-not $_rendered) {
-        if (Test-Path -LiteralPath $_output -PathType Container) {
+        if (Test-Path -LiteralPath $_output) {
             Remove-Item -LiteralPath $_output -Recurse -Force
         }
-        if (-not (Test-Path -LiteralPath $_output -PathType Leaf)) {
-            $_content = Get-Content -LiteralPath $_template -Raw
-            $_content = $_content -replace "(?m)^\s*<!-- INSTALLATION_CONTEXT -->\s*\r?\n?", ""
-            Write-Utf8NoBom -Path $_output -Content $_content
-            Write-AIWarn "Generated fallback Hermes SOUL.md without dynamic installation context"
-        }
+        $_content = Get-Content -LiteralPath $_template -Raw
+        $_content = $_content -replace "(?m)^\s*<!-- INSTALLATION_CONTEXT -->\s*\r?\n?", ""
+        Write-Utf8NoBom -Path $_output -Content $_content
+        Write-AIWarn "Generated fallback Hermes SOUL.md without dynamic installation context"
     }
 
     if ($SyncContainer) {
