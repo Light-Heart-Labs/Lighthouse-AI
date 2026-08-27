@@ -761,10 +761,22 @@ cmd_rollback() {
         log_error "No backup or rollback snapshot found to restore from."
         echo ""
         echo "Pre-update rollback snapshots (${ROLLBACK_DIR}):"
-        ls -1 "${ROLLBACK_DIR}" 2>/dev/null | grep '^pre-update-' || echo "  (none)"
+        local _rb_found=0
+        for _entry in "${ROLLBACK_DIR}"/pre-update-*; do
+            [[ -e "$_entry" ]] || continue
+            echo "  $(basename "$_entry")"
+            _rb_found=1
+        done
+        [[ $_rb_found -eq 1 ]] || echo "  (none)"
         echo ""
         echo "General backups (${BACKUP_DIR}):"
-        ls -1 "${BACKUP_DIR}" 2>/dev/null | grep '^backup-' || echo "  (none)"
+        local _bk_found=0
+        for _entry in "${BACKUP_DIR}"/backup-*; do
+            [[ -e "$_entry" ]] || continue
+            echo "  $(basename "$_entry")"
+            _bk_found=1
+        done
+        [[ $_bk_found -eq 1 ]] || echo "  (none)"
         return 1
     fi
 
