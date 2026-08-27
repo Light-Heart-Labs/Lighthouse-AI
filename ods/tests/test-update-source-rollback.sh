@@ -105,4 +105,90 @@ snapshot_count_after="$(find "$CHECKOUT_DIR/ods/data/backups" -mindepth 1 -maxde
     || fail "dirty checkout advanced the source revision"
 pass "source update refuses tracked changes before any mutation"
 
+git -C "$CHECKOUT_DIR" restore ods/release.txt
+
+lock_dir="$CHECKOUT_DIR/ods/data/.update.lock"
+mkdir -p "$lock_dir"
+jq -n --argjson pid "$$" '{pid:$pid}' > "$lock_dir/owner.json"
+set +e
+PATH="$BIN_DIR:$PATH" bash "$CHECKOUT_DIR/ods/ods-update.sh" update \
+    > "$TMP_DIR/concurrent.log" 2>&1
+concurrent_exit=$?
+set -e
+[[ "$concurrent_exit" -ne 0 ]] || fail "concurrent update was not rejected"
+grep -q "Another ODS update is already running" "$TMP_DIR/concurrent.log" \
+    || { cat "$TMP_DIR/concurrent.log"; fail "concurrent update diagnosis is missing"; }
+rm -f "$lock_dir/owner.json"
+rmdir "$lock_dir"
+pass "update lock rejects a concurrent public command"
+
+# Publish a release that kills the parent updater from inside a migration. This
+# leaves both the pulled source and the on-disk transaction journal behind,
+# matching an uncatchable process death rather than a normal command failure.
+cat > "$AUTHOR_DIR/ods/migrations/migrate-v9.9.9.sh" <<'EOF'
+#!/usr/bin/env bash
+kill -KILL "$PPID"
+EOF
+chmod +x "$AUTHOR_DIR/ods/migrations/migrate-v9.9.9.sh"
+printf '%s\n' 'release=crash' > "$AUTHOR_DIR/ods/release.txt"
+git -C "$AUTHOR_DIR" add ods/release.txt ods/migrations/migrate-v9.9.9.sh
+git -C "$AUTHOR_DIR" commit -qm "publish updater-crashing release"
+git -C "$AUTHOR_DIR" push -q
+
+# Snapshot IDs have second precision. Keep this transaction independent from
+# the earlier rollback point without changing the production timestamp API.
+sleep 1
+set +e
+PATH="$BIN_DIR:$PATH" bash "$CHECKOUT_DIR/ods/ods-update.sh" update \
+    > "$TMP_DIR/crash.log" 2>&1
+crash_exit=$?
+set -e
+
+[[ "$crash_exit" -ne 0 ]] || fail "the crash fixture unexpectedly completed"
+[[ "$(git -C "$CHECKOUT_DIR" rev-parse HEAD)" != "$baseline_revision" ]] \
+    || fail "the crash fixture did not leave pulled source behind"
+journal="$CHECKOUT_DIR/ods/data/update-transaction.json"
+[[ "$(jq -r '.state' "$journal")" == "source_updated" ]] \
+    || { cat "$journal"; fail "crash journal did not retain the last durable phase"; }
+
+printf '%s\n' 'operator edit after crash' >> "$CHECKOUT_DIR/ods/release.txt"
+set +e
+PATH="$BIN_DIR:$PATH" bash "$CHECKOUT_DIR/ods/ods-update.sh" update \
+    > "$TMP_DIR/recovery-guard.log" 2>&1
+guard_exit=$?
+set -e
+[[ "$guard_exit" -ne 0 ]] || fail "recovery overwrote post-crash operator changes"
+grep -q 'operator edit after crash' "$CHECKOUT_DIR/ods/release.txt" \
+    || fail "recovery guard did not preserve the operator edit"
+[[ "$(jq -r '.state' "$journal")" == "recovery_required" ]] \
+    || { cat "$journal"; fail "guarded recovery did not publish an actionable state"; }
+grep -q "Reclaimed stale update lock" "$TMP_DIR/recovery-guard.log" \
+    || { cat "$TMP_DIR/recovery-guard.log"; fail "recovery did not reclaim the killed updater lock"; }
+grep -q "automatic reset refused" "$journal" \
+    || { cat "$journal"; fail "recovery receipt omitted the reset refusal"; }
+git -C "$CHECKOUT_DIR" restore ods/release.txt
+pass "recovery refuses to overwrite post-crash tracked changes"
+
+set +e
+PATH="$BIN_DIR:$PATH" bash "$CHECKOUT_DIR/ods/ods-update.sh" update \
+    > "$TMP_DIR/recover.log" 2>&1
+recover_exit=$?
+set -e
+
+[[ "$recover_exit" -ne 0 ]] \
+    || fail "recovery must stop before retrying the failed release"
+[[ "$(git -C "$CHECKOUT_DIR" rev-parse HEAD)" == "$baseline_revision" ]] \
+    || fail "interrupted update recovery left the pulled revision active"
+grep -qx 'release=stable' "$CHECKOUT_DIR/ods/release.txt" \
+    || fail "interrupted update recovery did not restore production files"
+[[ "$(jq -r '.state' "$journal")" == "recovered" ]] \
+    || { cat "$journal"; fail "recovery did not publish a terminal receipt"; }
+grep -q "Interrupted update recovered" "$TMP_DIR/recover.log" \
+    || { cat "$TMP_DIR/recover.log"; fail "recovery outcome was not reported"; }
+PATH="$BIN_DIR:$PATH" bash "$CHECKOUT_DIR/ods/ods-update.sh" status \
+    > "$TMP_DIR/status.log" 2>&1
+grep -q "Update transaction: recovered" "$TMP_DIR/status.log" \
+    || { cat "$TMP_DIR/status.log"; fail "public status omitted the recovery receipt"; }
+pass "process-death journal restores source and runtime before a retry"
+
 echo "All source update rollback tests passed."
