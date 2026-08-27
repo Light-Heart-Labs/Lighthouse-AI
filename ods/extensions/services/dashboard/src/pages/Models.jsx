@@ -1853,7 +1853,7 @@ function getModelTags(model, hermesMinimumContext) {
   return tags.slice(0, 3)
 }
 
-function getIconTone(model, compatibility) {
+export function getIconTone(model, compatibility) {
   if (!model?.fitsVram) return { border: 'border-orange-400/35', bg: 'bg-orange-500/10', text: 'text-orange-400' }
   if (compatibility.tone === 'amber') return { border: 'border-amber-400/35', bg: 'bg-amber-500/10', text: 'text-amber-300' }
   if (compatibility.detail === 'Best') return { border: 'border-theme-accent/35', bg: 'bg-theme-accent/10', text: 'text-theme-accent' }
