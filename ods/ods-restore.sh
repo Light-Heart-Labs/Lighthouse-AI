@@ -296,10 +296,7 @@ validate_backup() {
                         log_error "Use --skip-verify to restore anyway (NOT RECOMMENDED)"
                         return 1
                     fi
-                )
-                if [[ $? -ne 0 ]]; then
-                    return 1
-                fi
+                ) || return 1
             fi
         else
             log_warn "No checksums.sha256 found in backup (older backup format)"
