@@ -103,6 +103,34 @@ pass "All expected files/dirs present after restore"
 
 pass "All file contents match after restore"
 
+# Exercise the older macOS rsync branch, where `--info=progress2` is absent and
+# the helper falls back to `--progress`. The fallback must keep the same
+# additive contract instead of pruning files created after the snapshot.
+OLD_RSYNC_SRC="$TMP/old-rsync-src"
+OLD_RSYNC_DST="$TMP/old-rsync-dst"
+OLD_RSYNC_BIN="$TMP/old-rsync-bin"
+mkdir -p "$OLD_RSYNC_SRC" "$OLD_RSYNC_DST" "$OLD_RSYNC_BIN"
+echo "from-backup" > "$OLD_RSYNC_SRC/restored.txt"
+echo "created-after-backup" > "$OLD_RSYNC_DST/live-only.txt"
+export ODS_TEST_REAL_RSYNC="$(command -v rsync)"
+cat > "$OLD_RSYNC_BIN/rsync" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--help" ]]; then
+    echo "rsync 2.x compatibility fixture"
+    exit 0
+fi
+exec "$ODS_TEST_REAL_RSYNC" "$@"
+EOF
+chmod +x "$OLD_RSYNC_BIN/rsync"
+PATH="$OLD_RSYNC_BIN:$PATH" bash -c '
+    source "$1"
+    rsync_with_progress "$2/" "$3/" "Testing legacy rsync fallback"
+' _ "$SCRIPT_DIR/../lib/rsync.sh" "$OLD_RSYNC_SRC" "$OLD_RSYNC_DST" >/dev/null \
+    || fail "Legacy rsync fallback failed"
+[[ -f "$OLD_RSYNC_DST/restored.txt" ]] || fail "Legacy rsync fallback did not restore source data"
+[[ -f "$OLD_RSYNC_DST/live-only.txt" ]] || fail "Legacy rsync fallback deleted live data"
+pass "Legacy rsync fallback remains additive"
+
 # ── Compressed round-trip ─────────────────────────────────────────────
 # extract_backup's stdout is command-substituted into the backup path, so a
 # log line leaking to stdout garbles the path and fails every .tar.gz restore.
