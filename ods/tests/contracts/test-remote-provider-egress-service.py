@@ -496,7 +496,7 @@ def test_direct_http_client_cache_evicts_and_closes_least_recent_origin() -> Non
         active_cache = module.AsyncClientCache(FakeClient, 2)
         active_first = await active_cache.acquire("https://active-first.example:443")
         active_second = await active_cache.acquire("https://active-second.example:443")
-        active_third = await active_cache.acquire("https://active-third.example:443")
+        await active_cache.acquire("https://active-third.example:443")
         assert_true(
             len(active_cache) == 3,
             "simultaneous active origins may temporarily exceed the idle cache bound",
