@@ -1998,7 +1998,8 @@ cmd_update() {
     # Pre-update snapshot — safety net before any images are pulled.
     # Delegates to ods-update.sh (which writes to data/backups/ and includes
     # extension configs) when available; falls back to ods-backup.sh.
-    local _snap_label="pre-update-$(date +%Y%m%d-%H%M%S)"
+    local _snap_label
+    _snap_label="pre-update-$(date +%Y%m%d-%H%M%S)"
     if [[ -x "$INSTALL_DIR/ods-update.sh" ]]; then
         log "Creating pre-update snapshot (${_snap_label})..."
         if ! bash "$INSTALL_DIR/ods-update.sh" backup "$_snap_label"; then
@@ -2349,12 +2350,14 @@ cmd_benchmark() {
 
     log "Running quick benchmark..."
 
-    local start=$(date +%s)
+    local start
+    start=$(date +%s)
     local response
     if ! response=$(cmd_chat "Say exactly: Hello World" 2>&1); then
         error "Benchmark failed: LLM unreachable or error - see 'ods chat' for details"
     fi
-    local end=$(date +%s)
+    local end
+    end=$(date +%s)
 
     local duration=$(( end - start ))
 
@@ -3051,7 +3054,8 @@ PRESETS_DIR="${INSTALL_DIR}/presets"
 # Validate preset compatibility with current system
 validate_preset_compatibility() {
     local preset_dir="$1"
-    local preset_name="$(basename "$preset_dir")"
+    local preset_name
+    preset_name="$(basename "$preset_dir")"
 
     # Check required files
     [[ -f "$preset_dir/meta.txt" ]] || { error "Invalid preset: missing meta.txt"; return 1; }
@@ -3469,11 +3473,15 @@ cmd_mode() {
 
     if [[ -z "$mode" ]]; then
         # Show current mode
-        local current=$(grep "^ODS_MODE=" .env 2>/dev/null | cut -d= -f2 || true)
+        local current
+        current=$(grep "^ODS_MODE=" .env 2>/dev/null | cut -d= -f2 || true)
         current="${current:-local}"
-        local api_url=$(grep "^LLM_API_URL=" .env 2>/dev/null | cut -d= -f2 || true)
-        local model=$(grep "^LLM_MODEL=" .env 2>/dev/null | cut -d= -f2 || true)
-        local tier=$(grep "^TIER=" .env 2>/dev/null | cut -d= -f2 || true)
+        local api_url
+        api_url=$(grep "^LLM_API_URL=" .env 2>/dev/null | cut -d= -f2 || true)
+            local model
+            model=$(grep "^LLM_MODEL=" .env 2>/dev/null | cut -d= -f2 || true)
+            local tier
+            tier=$(grep "^TIER=" .env 2>/dev/null | cut -d= -f2 || true)
         echo -e "${BLUE}━━━ ODS Mode ━━━${NC}"
         echo ""
         echo -e "Current mode: ${GREEN}${current}${NC}"
@@ -3564,8 +3572,10 @@ cmd_model() {
 
     case "$subcmd" in
         current)
-            local model=$(grep "^LLM_MODEL=" .env 2>/dev/null | cut -d= -f2 || true)
-            local tier=$(grep "^TIER=" .env 2>/dev/null | cut -d= -f2 || true)
+        local model
+        model=$(grep "^LLM_MODEL=" .env 2>/dev/null | cut -d= -f2 || true)
+        local tier
+        tier=$(grep "^TIER=" .env 2>/dev/null | cut -d= -f2 || true)
             echo -e "Current model: ${GREEN}${model:-<not set>}${NC}"
             [[ -n "$tier" ]] && echo "Current tier: $tier"
             return 0
