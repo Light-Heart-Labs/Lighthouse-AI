@@ -1,6 +1,5 @@
 """Unit test suite for resource monitoring service resilience."""
 
-from unittest.mock import patch, MagicMock
 import pytest
 
 
