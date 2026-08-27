@@ -860,6 +860,7 @@ MINIMAX_API_KEY=$(Get-EnvOrNew "MINIMAX_API_KEY" "")
 
 #=== LLM Settings (llama-server) ===
 MODEL_PROFILE=$(Get-EnvOrNew "MODEL_PROFILE" "$(if ($TierConfig.ModelProfileRequested) { $TierConfig.ModelProfileRequested } else { "qwen" })")
+MODEL_PROFILE_EFFECTIVE=$(if ($TierConfig.ModelProfileEffective) { $TierConfig.ModelProfileEffective } else { "qwen" })
 LLM_MODEL=$($TierConfig.LlmModel)
 GGUF_FILE=$($TierConfig.GgufFile)
 LEMONADE_MODEL=$effectiveLemonadeModel

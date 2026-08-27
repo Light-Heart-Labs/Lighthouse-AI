@@ -228,6 +228,8 @@ source "$ENV_GENERATOR"
     litellm_key="$(grep '^LITELLM_KEY=' "$env_file" | cut -d= -f2-)"
     grep -Fqx 'ODS_MODEL_SWITCHBOARD=enabled' "$env_file" \
         || fail "macOS env did not persist enabled switchboard mode"
+    grep -Fqx 'MODEL_PROFILE_EFFECTIVE=qwen' "$env_file" \
+        || fail "macOS env did not persist the effective model profile receipt"
     grep -Fqx 'LLM_API_URL=http://host.docker.internal:8080' "$env_file" \
         || fail "macOS switchboard env must keep backend URL for model-router"
     grep -Fqx 'HERMES_LLM_BASE_URL=http://litellm:4000/v1' "$env_file" \

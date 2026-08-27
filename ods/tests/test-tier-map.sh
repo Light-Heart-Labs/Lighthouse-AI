@@ -239,6 +239,57 @@ assert_eq "GGUF_FILE"               "Qwen3.5-9B-Q4_K_M.gguf"   "$GGUF_FILE"
 unset MODEL_PROFILE
 echo ""
 
+echo "Catalog selector (auto uses tier profile on AMD):"
+_selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
+    --catalog "$SCRIPT_DIR/config/model-library.json" \
+    --backend amd \
+    --memory-type discrete \
+    --vram-mb 24564 \
+    --ram-gb 64 \
+    --profile auto \
+    --tier 2 \
+    --host-arch amd64 \
+    --installable-only \
+    --env)"
+LLM_MODEL="" GGUF_FILE=""
+load_selector_env "$_selector_env"
+assert_eq "SELECTOR_AUTO_AMD_MODEL" "gemma-4-26b-a4b-it" "$LLM_MODEL"
+assert_eq "SELECTOR_AUTO_AMD_GGUF" "gemma-4-26B-A4B-it-Q4_K_M.gguf" "$GGUF_FILE"
+echo ""
+
+echo "Catalog selector (auto keeps tier 0 in qwen lane):"
+_selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
+    --catalog "$SCRIPT_DIR/config/model-library.json" \
+    --backend nvidia \
+    --memory-type discrete \
+    --vram-mb 24564 \
+    --ram-gb 64 \
+    --profile auto \
+    --tier 0 \
+    --host-arch amd64 \
+    --installable-only \
+    --env)"
+LLM_MODEL="" GGUF_FILE=""
+load_selector_env "$_selector_env"
+assert_eq "SELECTOR_AUTO_TIER0_MODEL" "qwen3.5-27b" "$LLM_MODEL"
+assert_eq "SELECTOR_AUTO_TIER0_GGUF" "Qwen3.5-27B-Q4_K_M.gguf" "$GGUF_FILE"
+echo ""
+
+echo "Installer .env generators persist the effective profile receipt:"
+for _profile_generator in \
+    "installers/phases/06-directories.sh" \
+    "installers/macos/lib/env-generator.sh" \
+    "installers/windows/lib/env-generator.ps1"; do
+    if grep -q '^MODEL_PROFILE_EFFECTIVE=' "$_profile_generator"; then
+        echo "  PASS: $_profile_generator"
+        ((PASS++))
+    else
+        echo "  FAIL: $_profile_generator does not persist MODEL_PROFILE_EFFECTIVE"
+        ((FAIL++))
+    fi
+done
+echo ""
+
 echo "Catalog selector (amd64 NV_ULTRA keeps coder-next):"
 _selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
     --catalog "$SCRIPT_DIR/config/model-library.json" \

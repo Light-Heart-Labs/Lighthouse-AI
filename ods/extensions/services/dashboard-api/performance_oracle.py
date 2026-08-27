@@ -1116,7 +1116,12 @@ def _model_profile(install_dir: str | Path | None = None, explicit_profile: str 
     return "qwen"
 
 
-def _resolve_auto_profile(profile: str, gpu_info: Optional[GPUInfo], ods_mode: str = "") -> str:
+def _resolve_auto_profile(
+    profile: str,
+    gpu_info: Optional[GPUInfo],
+    ods_mode: str = "",
+    effective_profile: str = "",
+) -> str:
     """Resolve MODEL_PROFILE=auto the way the install that wrote it resolved it.
 
     Phase 06 persists the raw ``auto``, so the dashboard has to redo the
@@ -1124,19 +1129,15 @@ def _resolve_auto_profile(profile: str, gpu_info: Optional[GPUInfo], ods_mode: s
     ``auto`` falls into _family_allowed_for_profile's qwen lane and hides the
     Gemma family the installer actually chose.
 
-    The authoritative rule is tier-based, not backend-based —
-    installers/lib/tier-map.sh:effective_model_profile() and its PowerShell
-    twin send CLOUD and tier 0 to qwen and every other tier to gemma4,
-    including AMD. scripts/select-model.py:effective_profile() carries a
-    backend-based rule that looks like a second opinion, but phase 02 hands it
-    MODEL_PROFILE_EFFECTIVE — already resolved — so that arm only fires when
-    the selector is invoked directly, never on an install.
-
-    The tier is not persisted, so approximate its two qwen arms: cloud through
-    ODS_MODE, and tier 0 through the absence of a detected GPU backend.
+    Installers persist MODEL_PROFILE_EFFECTIVE as the receipt of the tier-based
+    decision. Older installs lack that key, so retain the previous cloud/GPU
+    approximation only as a compatibility path until their next update run.
     """
     if profile != "auto":
         return profile
+    resolved = normalize_key(effective_profile)
+    if resolved in {"qwen", "gemma4"}:
+        return resolved
     if normalize_key(ods_mode) == "cloud":
         return "qwen"
     backend = normalize_key(gpu_info.gpu_backend) if gpu_info else ""
@@ -1193,7 +1194,7 @@ def _recommendation_score(model: dict[str, Any], capacity_gb: float, profile: st
 def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[GPUInfo],
                              profile: str = "qwen", installable_only: bool = False,
                              limit: int = 3, system_ram_gb: int | None = None,
-                             ods_mode: str = "") -> list[dict[str, Any]]:
+                             ods_mode: str = "", effective_profile: str = "") -> list[dict[str, Any]]:
     """Rank catalog entries before any model is installed.
 
     The ranker uses only compatibility metadata from model-library.json and the
@@ -1204,7 +1205,7 @@ def rank_pre_download_models(catalog: list[dict[str, Any]], gpu_info: Optional[G
         return []
 
     normalized_profile = _resolve_auto_profile(
-        _model_profile(explicit_profile=profile), gpu_info, ods_mode
+        _model_profile(explicit_profile=profile), gpu_info, ods_mode, effective_profile
     )
     capacity_gb = _usable_model_memory_gb(gpu_info) if gpu_info else 4.0
 
@@ -1319,6 +1320,7 @@ def build_models_payload(gpu_info: Optional[GPUInfo], loaded_model: Optional[str
     ranked_recommendations = rank_pre_download_models(
         catalog, gpu_info, profile=profile, limit=3, system_ram_gb=install_ram_gb or None,
         ods_mode=read_env_value("ODS_MODE", install_dir),
+        effective_profile=read_env_value("MODEL_PROFILE_EFFECTIVE", install_dir),
     )
     recommended_entry = configured_entry or (ranked_recommendations[0] if ranked_recommendations else None)
     flags = collect_runtime_flags(install_dir)

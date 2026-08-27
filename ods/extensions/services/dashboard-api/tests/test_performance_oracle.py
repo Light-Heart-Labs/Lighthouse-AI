@@ -1361,6 +1361,21 @@ def test_auto_profile_forces_qwen_for_cloud_installs(data_dir):
     assert all(family != "gemma4" for _, family in offered), offered
 
 
+def test_auto_profile_prefers_the_installer_effective_profile_receipt(data_dir):
+    # The persisted receipt is authoritative even when backend heuristics would
+    # choose the other lane. This covers CPU tiers with enough RAM for Gemma and
+    # prevents a stale backend probe from changing the installed family.
+    qwen = _auto_profile_families(
+        _gpu(total_mb=24564, backend="nvidia"), effective_profile="qwen"
+    )
+    gemma = _auto_profile_families(
+        _gpu(total_mb=24564, backend=""), effective_profile="gemma4"
+    )
+
+    assert all(family != "gemma4" for _, family in qwen), qwen
+    assert gemma[0][1] == "gemma4", gemma
+
+
 def test_pre_download_ranker_falls_back_to_smallest_model_without_gpu_info(data_dir):
     catalog = [
         _model(),
