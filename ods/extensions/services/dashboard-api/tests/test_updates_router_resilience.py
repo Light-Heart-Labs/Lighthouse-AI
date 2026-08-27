@@ -1,6 +1,5 @@
 """Unit test suite for updates router resilience."""
 
-from unittest.mock import patch, MagicMock
 import pytest
 
 
