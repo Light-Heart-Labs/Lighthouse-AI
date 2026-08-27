@@ -165,12 +165,12 @@ function formatInteger(value) {
   return new Intl.NumberFormat('en-US').format(Math.round(Number(value || 0)))
 }
 
-function formatDateLabel(dateKey) {
+export function formatDateLabel(dateKey) {
   const date = new Date(`${dateKey}T00:00:00`)
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-function formatRangeLabel(range) {
+export function formatRangeLabel(range) {
   const start = new Date(`${range.start}T00:00:00`)
   const end = new Date(`${range.end}T00:00:00`)
   return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
