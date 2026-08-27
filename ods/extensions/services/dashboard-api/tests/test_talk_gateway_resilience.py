@@ -1,6 +1,5 @@
 """Unit test suite for Talk / Voice service gateway resilience."""
 
-from unittest.mock import patch, MagicMock
 import pytest
 
 
