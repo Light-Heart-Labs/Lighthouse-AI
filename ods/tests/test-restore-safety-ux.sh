@@ -21,7 +21,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 FAKE_ODS="$TMP/ods"
-mkdir -p "$FAKE_ODS/.backups"
+mkdir -p "$FAKE_ODS/.backups" "$FAKE_ODS/lib"
+cp "$SCRIPT_DIR/../lib/rsync.sh" "$FAKE_ODS/lib/rsync.sh"
 # minimal marker so 'is this a ODS dir' check passes
 mkdir -p "$FAKE_ODS/data"
 
