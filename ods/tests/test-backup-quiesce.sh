@@ -15,6 +15,11 @@ FAKE_ODS="$TMP_ROOT/ods"
 FAKE_BIN="$TMP_ROOT/bin"
 mkdir -p "$FAKE_ODS/data/open-webui" "$FAKE_ODS/lib" "$FAKE_BIN"
 cp "$SCRIPT_DIR/../lib/rsync.sh" "$FAKE_ODS/lib/"
+# PR #2190 centralizes the data path list in this optional sibling. Copy it
+# when present so this boundary test composes with that independent change.
+if [[ -f "$SCRIPT_DIR/../lib/backup-paths.sh" ]]; then
+    cp "$SCRIPT_DIR/../lib/backup-paths.sh" "$FAKE_ODS/lib/"
+fi
 printf '{"version":"test"}\n' > "$FAKE_ODS/.version"
 printf 'operator data\n' > "$FAKE_ODS/data/open-webui/value.txt"
 
