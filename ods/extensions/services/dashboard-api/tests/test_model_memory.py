@@ -78,6 +78,31 @@ class TestParamScaleSources:
         assert estimated_context_kv_gb(model) < estimated_context_kv_gb(without_filename)
 
 
+class TestArchitectureAwareKvCache:
+
+    def test_dense_qwen_metadata_matches_llama_allocation(self):
+        model = {
+            "block_count": 36,
+            "attention_head_count_kv": 8,
+            "embedding_length": 4096,
+            "attention_head_count": 32,
+        }
+        assert estimated_context_kv_gb(model, 32768) == 4.5
+        assert estimated_context_kv_gb(model, 262144) == 36.0
+
+    def test_explicit_head_dimension_supports_grouped_attention(self):
+        model = {
+            "block_count": 10,
+            "attention_head_count_kv": 4,
+            "rope_dimension_count": 64,
+        }
+        assert estimated_context_kv_gb(model, 32768) == 0.31
+
+    def test_incomplete_metadata_keeps_catalog_fallback(self):
+        model = {"params_b": 4, "block_count": 36}
+        assert estimated_context_kv_gb(model, 32768) == 0.48
+
+
 @pytest.mark.skipif(
     not CATALOG_PATH.exists() or not SELECT_MODEL_PATH.exists(),
     reason="repo checkout required",

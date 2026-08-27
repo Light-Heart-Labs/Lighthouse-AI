@@ -62,6 +62,31 @@ def estimated_context_kv_gb(
     except (TypeError, ValueError):
         context = 0
     context = max(context, 8192)
+    block_count = _positive_number(model.get("block_count"))
+    kv_heads = _positive_number(
+        model.get("attention_head_count_kv") or model.get("head_count_kv")
+    )
+    embedding_length = _positive_number(model.get("embedding_length"))
+    head_count = _positive_number(
+        model.get("attention_head_count") or model.get("head_count")
+    )
+    head_dimension = _positive_number(
+        model.get("attention_head_dimension")
+        or model.get("head_dimension")
+        or model.get("rope_dimension_count")
+    )
+    if not head_dimension and embedding_length and head_count:
+        head_dimension = embedding_length / head_count
+
+    if block_count and kv_heads and head_dimension:
+        # llama.cpp's default f16 KV cache stores one key and one value for
+        # every layer/head/token: 2 * layers * KV heads * head dimension *
+        # 2-byte elements. Architecture metadata is authoritative here;
+        # parameter count is especially misleading for MoE models.
+        element_bytes = _positive_number(model.get("kv_cache_element_bytes")) or 2.0
+        kv_bytes = 2.0 * block_count * kv_heads * head_dimension * element_bytes * context
+        return round(kv_bytes / (1024.0 ** 3), 2)
+
     params_b = estimated_param_billions(model)
     kv_per_32k_gb = min(max(params_b * 0.12, 0.35), 3.5)
     return round(kv_per_32k_gb * (context / 32768.0), 2)
