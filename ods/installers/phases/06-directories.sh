@@ -471,7 +471,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
             case "$LEMONADE_BASE_URL_VALUE" in
                 http://localhost:*) LEMONADE_CONTAINER_BASE_URL_VALUE="${LEMONADE_BASE_URL_VALUE/http:\/\/localhost:/http:\/\/host.docker.internal:}" ;;
                 http://127.0.0.1:*) LEMONADE_CONTAINER_BASE_URL_VALUE="${LEMONADE_BASE_URL_VALUE/http:\/\/127.0.0.1:/http:\/\/host.docker.internal:}" ;;
-                http://[::1]:*) LEMONADE_CONTAINER_BASE_URL_VALUE="${LEMONADE_BASE_URL_VALUE/http:\/\/[::1]:/http:\/\/host.docker.internal:}" ;;
+                http://\[::1]:*) LEMONADE_CONTAINER_BASE_URL_VALUE="${LEMONADE_BASE_URL_VALUE/http:\/\/[::1]:/http:\/\/host.docker.internal:}" ;;
                 *) LEMONADE_CONTAINER_BASE_URL_VALUE="$LEMONADE_BASE_URL_VALUE" ;;
             esac
         fi
