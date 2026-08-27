@@ -81,7 +81,7 @@ const formatCheckedAt = (value) => {
   return parsed.toLocaleString()
 }
 
-const formatUsageSource = (source) => {
+export const formatUsageSource = (source) => {
   const status = source?.status
   if (!status) return 'Usage source unavailable'
   if (status === 'ok') return 'Token Spy connected'
@@ -89,7 +89,7 @@ const formatUsageSource = (source) => {
   return titleCase(status)
 }
 
-const getErrorText = (err) => (
+export const getErrorText = (err) => (
   err?.name === 'AbortError' ? 'Request timed out' : (err?.details?.message || err?.message || 'Failed to load settings')
 )
 
@@ -108,7 +108,7 @@ const formatCompact = (value) => {
   return `${Math.round(number)}`
 }
 
-const titleCase = (value) => String(value || '')
+export const titleCase = (value) => String(value || '')
   .replace(/[_-]+/g, ' ')
   .replace(/\b\w/g, char => char.toUpperCase())
 
