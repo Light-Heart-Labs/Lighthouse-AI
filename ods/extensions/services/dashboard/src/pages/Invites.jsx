@@ -31,7 +31,7 @@ const EXPIRY_PRESETS = [
   { value: 86400, label: '24 hours' },
 ]
 
-function formatRelative(iso) {
+export function formatRelative(iso) {
   if (!iso) return null
   const t = new Date(iso).getTime()
   if (Number.isNaN(t)) return null
