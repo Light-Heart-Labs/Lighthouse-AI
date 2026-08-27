@@ -7,9 +7,7 @@ injects provider credentials from a private file at the final egress boundary.
 
 from __future__ import annotations
 
-import asyncio
 import os
-from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
@@ -18,6 +16,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .client_cache import AsyncClientCache
 from remote_provider.egress import (
     DEFAULT_MAX_BODY_BYTES,
     DEFAULT_SECRET_PATH,
@@ -105,29 +104,11 @@ def _load_route() -> dict[str, Any]:
 
 async def _http_client(connection_key: str = "") -> httpx.AsyncClient:
     if connection_key:
-        clients = getattr(app.state, "direct_http_clients", None)
-        if clients is None:
-            clients = OrderedDict()
-            app.state.direct_http_clients = clients
-        if getattr(app.state, "direct_http_client_users", None) is None:
-            app.state.direct_http_client_users = {}
-        lock = getattr(app.state, "direct_http_clients_lock", None)
-        if lock is None:
-            lock = asyncio.Lock()
-            app.state.direct_http_clients_lock = lock
-        async with lock:
-            client = clients.pop(connection_key, None)
-            if client is not None and not client.is_closed:
-                clients[connection_key] = client
-                users = app.state.direct_http_client_users
-                users[connection_key] = users.get(connection_key, 0) + 1
-                return client
-            client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-            clients[connection_key] = client
-            users = app.state.direct_http_client_users
-            users[connection_key] = users.get(connection_key, 0) + 1
-            await _trim_direct_http_clients_locked()
-            return client
+        cache = getattr(app.state, "direct_http_client_cache", None)
+        if cache is None:
+            cache = _new_direct_http_client_cache()
+            app.state.direct_http_client_cache = cache
+        return await cache.acquire(connection_key)
     client = getattr(app.state, "http", None)
     if client is None or client.is_closed:
         client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
@@ -135,30 +116,17 @@ async def _http_client(connection_key: str = "") -> httpx.AsyncClient:
     return client
 
 
-async def _trim_direct_http_clients_locked() -> None:
-    clients = app.state.direct_http_clients
-    users = app.state.direct_http_client_users
-    while len(clients) > DIRECT_HTTP_CLIENT_CACHE_SIZE:
-        idle_key = next((key for key in clients if users.get(key, 0) == 0), None)
-        if idle_key is None:
-            return
-        stale_client = clients.pop(idle_key)
-        users.pop(idle_key, None)
-        await stale_client.aclose()
+def _new_direct_http_client_cache() -> AsyncClientCache:
+    return AsyncClientCache(
+        lambda: httpx.AsyncClient(follow_redirects=False, trust_env=False),
+        DIRECT_HTTP_CLIENT_CACHE_SIZE,
+    )
 
 
 async def _release_http_client(connection_key: str) -> None:
     if not connection_key:
         return
-    lock = app.state.direct_http_clients_lock
-    async with lock:
-        users = app.state.direct_http_client_users
-        current = users.get(connection_key, 0)
-        if current <= 1:
-            users[connection_key] = 0
-        else:
-            users[connection_key] = current - 1
-        await _trim_direct_http_clients_locked()
+    await app.state.direct_http_client_cache.release(connection_key)
 
 
 def _error_response(exc: EgressError) -> JSONResponse:
@@ -476,16 +444,12 @@ async def forward(full_path: str, request: Request) -> Response:
 @app.on_event("startup")
 async def _startup() -> None:
     app.state.http = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-    app.state.direct_http_clients = OrderedDict()
-    app.state.direct_http_clients_lock = asyncio.Lock()
-    app.state.direct_http_client_users = {}
+    app.state.direct_http_client_cache = _new_direct_http_client_cache()
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     await app.state.http.aclose()
-    clients = getattr(app.state, "direct_http_clients", {})
-    for client in clients.values():
-        await client.aclose()
-    clients.clear()
-    app.state.direct_http_client_users.clear()
+    cache = getattr(app.state, "direct_http_client_cache", None)
+    if cache is not None:
+        await cache.close()
