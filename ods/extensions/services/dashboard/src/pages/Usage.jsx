@@ -176,7 +176,7 @@ function formatRangeLabel(range) {
   return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
 }
 
-function computeDelta(current, previous) {
+export function computeDelta(current, previous) {
   const prev = Number(previous || 0)
   if (prev <= 0) return null
   return ((Number(current || 0) - prev) / prev) * 100
