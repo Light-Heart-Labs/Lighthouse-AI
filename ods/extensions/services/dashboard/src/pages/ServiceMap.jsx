@@ -107,11 +107,11 @@ const STATUS = {
   unknown: { color: '#6b7280', text: 'text-zinc-500', dot: 'bg-zinc-500' },
 }
 
-function statusMeta(status) {
+export function statusMeta(status) {
   return STATUS[status] || STATUS.unknown
 }
 
-function normalizeStatus(status) {
+export function normalizeStatus(status) {
   return status || 'unknown'
 }
 
@@ -160,7 +160,7 @@ export function buildTopology(statusData) {
   return { nodes, edges }
 }
 
-function computeLayout(nodes) {
+export function computeLayout(nodes) {
   const rows = Object.fromEntries(LAYERS.map(layer => [layer, []]))
   for (const node of nodes) rows[node.category || 'other']?.push(node)
   for (const row of Object.values(rows)) row.sort((a, b) => a.name.localeCompare(b.name))
@@ -186,7 +186,7 @@ function computeLayout(nodes) {
   return { positions, layerY, svgWidth, svgHeight: Math.max(MIN_H, y + 40) }
 }
 
-function edgePath(source, target) {
+export function edgePath(source, target) {
   const sx = source.x + NODE_W / 2
   const sy = source.y + (source.y > target.y ? 0 : NODE_H)
   const tx = target.x + NODE_W / 2
