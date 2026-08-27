@@ -1370,6 +1370,39 @@ def test_valid_sample_repairs_a_polluted_existing_average(data_dir):
     assert repaired["sample_count"] == 1
 
 
+def test_performance_recorder_prunes_oldest_samples(data_dir, monkeypatch):
+    import helpers
+
+    monkeypatch.setattr(helpers, "MAX_MODEL_PERFORMANCE_SAMPLES", 4)
+    helpers._PERF_FILE.write_text(json.dumps({
+        "schema_version": "ods.model-performance.v1",
+        "samples": {
+            f"old-{index}": {"tokens_per_second": 10, "updated_at": index}
+            for index in range(5)
+        },
+    }))
+
+    record_model_performance(
+        "qwen3.5-2b",
+        "AMD Radeon RX 9070 XT",
+        "lemonade",
+        240.5,
+        context_length=8192,
+    )
+
+    samples = json.loads(helpers._PERF_FILE.read_text())["samples"]
+    exact_key = helpers._performance_key(
+        "lemonade", "AMD Radeon RX 9070 XT", "qwen3.5-2b", 8192,
+    )
+    generic_key = helpers._performance_key(
+        "lemonade", "AMD Radeon RX 9070 XT", "qwen3.5-2b",
+    )
+    assert len(samples) == 4
+    assert exact_key in samples
+    assert generic_key in samples
+    assert "old-0" not in samples
+
+
 class TestServiceHealthReconciliation:
 
     @pytest.mark.asyncio
