@@ -1,7 +1,6 @@
 """Unit test suite for extension dependency resolver resilience."""
 
 import unittest
-from unittest.mock import patch, MagicMock
 
 
 class TestExtensionsDepsResilience(unittest.TestCase):
