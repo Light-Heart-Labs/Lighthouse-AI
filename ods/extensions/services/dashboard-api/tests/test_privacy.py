@@ -291,3 +291,13 @@ def test_privacy_shield_stats_empty_shield_api_key(test_client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"error": "SHIELD_API_KEY not configured", "enabled": False}
     session_factory.assert_not_called()
+
+
+def test_privacy_shield_status_invalid_port_fallback(test_client, monkeypatch):
+    """GET /api/privacy-shield/status with invalid SHIELD_PORT does not crash with ValueError."""
+    monkeypatch.setenv("SHIELD_PORT", "invalid_port_123")
+    resp = test_client.get("/api/privacy-shield/status", headers=test_client.auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["port"] == 0
+
