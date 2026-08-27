@@ -678,7 +678,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
     # Network binding (--lan or exported BIND_ADDRESS wins over a stale .env;
     # otherwise preserve the existing .env value and default to localhost-only).
     if [[ "${BIND_ADDRESS_EXPLICIT:-false}" == "true" && -n "${BIND_ADDRESS:-}" ]]; then
-        BIND_ADDRESS="${BIND_ADDRESS}"
+        :
     else
         BIND_ADDRESS=$(_env_get BIND_ADDRESS "${BIND_ADDRESS:-127.0.0.1}")
     fi
