@@ -8,6 +8,8 @@ The security contract these tests enforce:
     ``state`` matches a live nonce issued by ``/api/oauth/init``.
   * Nonces are single-use and consumed before the callback payload is
     written, so replays and concurrent uses can't both succeed.
+  * The callback file is a one-slot mailbox: concurrent valid flows
+    cannot overwrite a pending result, and the losing nonce is restored.
   * The callback endpoint stays unauthenticated (it's a provider
     redirect target) but has zero side effects when validation fails.
   * ``skill_id`` and ``return_url`` are bound at init time; the callback
@@ -16,10 +18,12 @@ The security contract these tests enforce:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import stat
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -403,7 +407,7 @@ def test_callback_provider_error_without_state_still_400s(oauth_client):
 # ---------------------------------------------------------------------------
 
 
-def test_concurrent_flows_have_independent_nonces(oauth_client):
+def test_pending_callback_is_not_overwritten_by_another_flow(oauth_client):
     """Two skills being set up simultaneously must not interfere. Each
     gets its own nonce, each callback resolves to its own skill_id."""
     state_a = _init_flow(oauth_client, skill_id="google-workspace")
@@ -416,23 +420,96 @@ def test_concurrent_flows_have_independent_nonces(oauth_client):
     assert b_payload["state"] == "spotify"
     assert b_payload["code"] == "code-b"
 
-    # A's callback lands next — legitimate overwrite of the fixed
-    # callback file (agent consumes each in turn). A's nonce is still
-    # valid because B consumed only B's nonce.
-    oauth_client.get("/api/oauth/callback", params={"code": "code-a", "state": state_a})
+    # A cannot overwrite B while the one-slot mailbox is occupied. Its nonce
+    # remains valid so refreshing the provider redirect can retry delivery.
+    blocked = oauth_client.get(
+        "/api/oauth/callback", params={"code": "code-a", "state": state_a}
+    )
+    assert blocked.status_code == 409
+    assert json.loads((oauth_client.tmp / "oauth_callback.json").read_text()) == b_payload
+    nonce_a = oauth_client.tmp / "oauth-nonces" / f"{state_a}.json"
+    assert nonce_a.exists()
+
+    # Simulate Hermes consuming B, then retry A's unchanged redirect.
+    (oauth_client.tmp / "oauth_callback.json").unlink()
+    retried = oauth_client.get(
+        "/api/oauth/callback", params={"code": "code-a", "state": state_a}
+    )
+    assert retried.status_code == 200
     a_payload = json.loads((oauth_client.tmp / "oauth_callback.json").read_text())
     assert a_payload["state"] == "google-workspace"
     assert a_payload["code"] == "code-a"
+    assert not nonce_a.exists()
+
+
+def test_simultaneous_callbacks_publish_exactly_one_result(
+    oauth_client, monkeypatch,
+):
+    from routers import oauth_passthrough
+
+    state_a = _init_flow(oauth_client, skill_id="google-workspace")
+    state_b = _init_flow(oauth_client, skill_id="spotify")
+    real_create = oauth_passthrough._atomic_create_0600
+    writers_ready = threading.Barrier(2)
+
+    def synchronized_create(target, data):
+        writers_ready.wait(timeout=5)
+        return real_create(target, data)
+
+    monkeypatch.setattr(oauth_passthrough, "_atomic_create_0600", synchronized_create)
+    requests = {
+        state_a: {"code": "code-a", "state": state_a},
+        state_b: {"code": "code-b", "state": state_b},
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = {
+            state: executor.submit(
+                oauth_client.get, "/api/oauth/callback", params=params
+            )
+            for state, params in requests.items()
+        }
+        responses = {state: future.result() for state, future in responses.items()}
+
+    assert sorted(response.status_code for response in responses.values()) == [200, 409]
+    payload = json.loads((oauth_client.tmp / "oauth_callback.json").read_text())
+    winning_state = next(
+        state for state, response in responses.items() if response.status_code == 200
+    )
+    losing_state = next(
+        state for state, response in responses.items() if response.status_code == 409
+    )
+    assert payload["code"] == requests[winning_state]["code"]
+    assert not (oauth_client.tmp / "oauth-nonces" / f"{winning_state}.json").exists()
+    assert (oauth_client.tmp / "oauth-nonces" / f"{losing_state}.json").exists()
 
 
 def test_callback_atomic_write(oauth_client):
-    """The handler writes via a .tmp + rename so a concurrent read by the
-    agent never sees a half-written file."""
+    """The handler publishes a complete file and removes unique temp files."""
     state = _init_flow(oauth_client)
     resp = oauth_client.get("/api/oauth/callback", params={"code": "code1", "state": state})
     assert resp.status_code == 200
-    assert not (oauth_client.tmp / "oauth_callback.json.tmp").exists()
+    assert not list(oauth_client.tmp.glob(".oauth_callback.json.*.tmp"))
     assert (oauth_client.tmp / "oauth_callback.json").exists()
+
+
+def test_callback_write_failure_restores_nonce(oauth_client, monkeypatch):
+    from routers import oauth_passthrough
+
+    state = _init_flow(oauth_client)
+    nonce = oauth_client.tmp / "oauth-nonces" / f"{state}.json"
+    nonce_payload = json.loads(nonce.read_text())
+
+    def fail_create(_target, _data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(oauth_passthrough, "_atomic_create_0600", fail_create)
+    response = oauth_client.get(
+        "/api/oauth/callback", params={"code": "code1", "state": state}
+    )
+
+    assert response.status_code == 500
+    assert not (oauth_client.tmp / "oauth_callback.json").exists()
+    assert json.loads(nonce.read_text()) == nonce_payload
 
 
 # ---------------------------------------------------------------------------
