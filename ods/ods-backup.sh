@@ -339,7 +339,8 @@ backup_user_data() {
     for path in "${user_data_paths[@]}"; do
         local full_path="$ODS_DIR/$path"
         if [[ -d "$full_path" ]]; then
-            local dest_dir="$backup_dir/$(dirname "$path")"
+            local dest_dir
+            dest_dir="$backup_dir/$(dirname "$path")"
             mkdir -p "$dest_dir"
             rsync_with_progress "$full_path" "$dest_dir/" "Backing up $path"
             log_success "Backed up: $path"
@@ -422,7 +423,8 @@ backup_cache() {
 
     for path in "${cache_paths[@]}"; do
         if [[ -d "$ODS_DIR/$path" ]]; then
-            local dest_dir="$backup_dir/$(dirname "$path")"
+            local dest_dir
+            dest_dir="$backup_dir/$(dirname "$path")"
             mkdir -p "$dest_dir"
             rsync_with_progress "$ODS_DIR/$path" "$dest_dir/" "Backing up $path"
             log_success "Backed up: $path"
