@@ -59,13 +59,13 @@ const fetchPayload = async (url, ms = 8000, options = {}) => {
   return response.json()
 }
 
-const formatUptime = (secs = 0) => {
+export const formatUptime = (secs = 0) => {
   const hours = Math.floor(secs / 3600)
   const mins = Math.floor((secs % 3600) / 60)
   return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`
 }
 
-const formatInstallDate = (value) => {
+export const formatInstallDate = (value) => {
   if (!value) return 'Unknown'
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return value
@@ -74,7 +74,7 @@ const formatInstallDate = (value) => {
     + parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
-const formatCheckedAt = (value) => {
+export const formatCheckedAt = (value) => {
   if (!value) return null
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return null
