@@ -5397,17 +5397,17 @@ _gpu_validate() {
                 live_uuids=$(nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' || true)
             fi
             live_uuids="${live_uuids:-}"
-            local missing=0
+            local missing_count=0
             while IFS= read -r uuid; do
                 [[ -z "$uuid" ]] && continue
                 if ! echo "$live_uuids" | grep -qF "$uuid"; then
                     warn "UUID ${uuid} not found in current system"
                     echo "    Fix: run 'ods gpu reassign'"
-                    ((missing++)) || true
+                    ((missing_count++)) || true
                     ((fail++)) || true
                 fi
             done < <(echo "$assignment_json" | jq -r '.gpu_assignment.services[].gpus[]' 2>/dev/null)
-            if [[ "$missing" -eq 0 ]]; then
+            if [[ "$missing_count" -eq 0 ]]; then
                 success "All assigned GPU UUIDs are present in system"
                 ((pass++)) || true
             fi
