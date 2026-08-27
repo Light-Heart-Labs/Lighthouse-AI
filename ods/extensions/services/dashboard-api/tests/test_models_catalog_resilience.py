@@ -1,6 +1,5 @@
 """Unit test suite for model catalog resolver resilience."""
 
-from unittest.mock import patch, MagicMock
 import pytest
 
 
