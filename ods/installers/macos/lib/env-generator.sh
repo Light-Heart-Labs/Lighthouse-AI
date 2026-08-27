@@ -39,6 +39,11 @@ read_env_value() {
     grep -E "^${key}=" "$env_path" 2>/dev/null | sed -n '1p' | cut -d'=' -f2- | tr -d '\r' || true
 }
 
+# shellcheck source=../../../lib/dotenv-quote.sh
+_ODS_MACOS_ENV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+. "$_ODS_MACOS_ENV_ROOT/lib/dotenv-quote.sh"
+unset _ODS_MACOS_ENV_ROOT
+
 env_key_exists() {
     local env_path="$1"
     local key="$2"
@@ -535,13 +540,13 @@ CTX_SIZE=${MAX_CONTEXT}
 MODEL_RECOMMENDED_MODEL=${LLM_MODEL}
 MODEL_RECOMMENDED_GGUF=${GGUF_FILE}
 MODEL_RECOMMENDED_CONTEXT=${MAX_CONTEXT}
-MODEL_RECOMMENDATION_SOURCE=${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}
-MODEL_RECOMMENDATION_POLICY=${MODEL_RECOMMENDATION_POLICY:-tier-map}
-MODEL_RECOMMENDATION_CONFIDENCE=${MODEL_RECOMMENDATION_CONFIDENCE:-medium}
-MODEL_RECOMMENDATION_REASON=${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${tier} (${TIER_NAME}) for apple backend; benchmark locally after first launch.}
-MODEL_RECOMMENDED_ALTERNATIVES=${MODEL_RECOMMENDED_ALTERNATIVES:-}
+MODEL_RECOMMENDATION_SOURCE=$(dotenv_quote "${MODEL_RECOMMENDATION_SOURCE:-installer_tier_map}")
+MODEL_RECOMMENDATION_POLICY=$(dotenv_quote "${MODEL_RECOMMENDATION_POLICY:-tier-map}")
+MODEL_RECOMMENDATION_CONFIDENCE=$(dotenv_quote "${MODEL_RECOMMENDATION_CONFIDENCE:-medium}")
+MODEL_RECOMMENDATION_REASON=$(dotenv_quote "${MODEL_RECOMMENDATION_REASON:-Selected by installer tier ${tier} (${TIER_NAME}) for apple backend; benchmark locally after first launch.}")
+MODEL_RECOMMENDED_ALTERNATIVES=$(dotenv_quote "${MODEL_RECOMMENDED_ALTERNATIVES:-}")
 MODEL_PERFORMANCE_SOURCE=benchmark_required
-MODEL_PERFORMANCE_LABEL=Benchmark after first launch
+MODEL_PERFORMANCE_LABEL=$(dotenv_quote "Benchmark after first launch")
 GPU_BACKEND=apple
 HOST_RAM_GB=${SYSTEM_RAM_GB}
 N_GPU_LAYERS=${n_gpu_layers}

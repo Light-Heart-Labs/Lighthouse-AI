@@ -169,6 +169,9 @@ jobs:
       - name: Safe Env Loading Tests
         run: bash tests/test-safe-env.sh
 
+      - name: Dotenv Serializer Tests
+        run: bash tests/test-dotenv-serializer.sh
+
       - name: Mode Switch Tests
         run: bash tests/test-mode-switch-status.sh
 
