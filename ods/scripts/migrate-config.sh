@@ -101,9 +101,11 @@ cmd_backup() {
     
     local backup_name backup_path
     backup_name="config-$(date +%Y%m%d-%H%M%S)"
-    backup_path="${BACKUP_DIR}/${backup_name}"
-    
-    mkdir -p "$backup_path"
+    mkdir -p "$BACKUP_DIR"
+    if ! backup_path="$(umask 077; mktemp -d "${BACKUP_DIR}/${backup_name}.XXXXXX")"; then
+        log_error "Could not create a unique configuration backup directory"
+        return 1
+    fi
     
     # Backup key config files
     local cp_exit=0

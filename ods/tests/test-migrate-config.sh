@@ -238,6 +238,31 @@ else
 fi
 
 # ============================================================================
+# Test 13: same-second backups use distinct directories
+# ============================================================================
+rm -rf "$DATA_DIR/backups"
+mock_bin="$TEMP_DIR/mock-bin"
+mkdir -p "$mock_bin"
+cat > "$mock_bin/date" <<'EOF'
+#!/bin/bash
+printf '%s\n' '20260827-123456'
+EOF
+chmod +x "$mock_bin/date"
+
+first_backup_output=$(PATH="$mock_bin:$PATH" bash "$MIGRATE_CONFIG_SCRIPT" backup 2>&1)
+second_backup_output=$(PATH="$mock_bin:$PATH" bash "$MIGRATE_CONFIG_SCRIPT" backup 2>&1)
+first_backup_path=$(printf '%s\n' "$first_backup_output" | tail -n 1)
+second_backup_path=$(printf '%s\n' "$second_backup_output" | tail -n 1)
+
+if [[ "$first_backup_path" != "$second_backup_path" \
+    && -d "$first_backup_path" \
+    && -d "$second_backup_path" ]]; then
+    pass "Behavioral test: same-second backups use distinct directories"
+else
+    fail "Behavioral test: same-second backups collided ($first_backup_path, $second_backup_path)"
+fi
+
+# ============================================================================
 # Summary
 # ============================================================================
 echo ""
