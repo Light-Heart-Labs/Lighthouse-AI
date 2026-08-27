@@ -518,7 +518,7 @@ function buildServiceRows(statusServices, resourceServices) {
   return rows
 }
 
-function buildSignalPath(points) {
+export function buildSignalPath(points) {
   if (!points.length) return ''
   if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
 
@@ -537,7 +537,7 @@ function buildSignalPath(points) {
   return path
 }
 
-function reduceSamples(samples, maxPoints = 16) {
+export function reduceSamples(samples, maxPoints = 16) {
   if (samples.length <= maxPoints) return samples
   const step = (samples.length - 1) / (maxPoints - 1)
   return Array.from({ length: maxPoints }, (_, index) => samples[Math.round(index * step)])
@@ -552,7 +552,7 @@ function buildOverviewSeries(samples, range, field) {
   }
 }
 
-function formatClockLabel(timestamp, rangeKey) {
+export function formatClockLabel(timestamp, rangeKey) {
   const date = new Date(timestamp)
   if (rangeKey === '7D') {
     return date.toLocaleDateString(undefined, { weekday: 'short' })
@@ -563,7 +563,7 @@ function formatClockLabel(timestamp, rangeKey) {
   return `${hours}:${minutes}`
 }
 
-function buildTimeLabels(timestamps, rangeKey) {
+export function buildTimeLabels(timestamps, rangeKey) {
   if (!timestamps.length) return []
   const indexes = [0, 0.25, 0.5, 0.75, 1].map(progress =>
     Math.min(timestamps.length - 1, Math.round(progress * (timestamps.length - 1)))
@@ -587,7 +587,7 @@ function computeDeltaFromSamples(samples, range, field, currentValue) {
   return ((current - base) / Math.abs(base)) * 100
 }
 
-function buildChartPoints(values, maxValue) {
+export function buildChartPoints(values, maxValue) {
   const width = 460
   const height = 190
   const paddingLeft = 38
