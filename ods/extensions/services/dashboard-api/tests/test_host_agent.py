@@ -1,5 +1,6 @@
 """Tests for ods-host-agent.py — _parse_mem_value and _iso_now."""
 
+import builtins
 import hashlib
 import importlib.util
 import io
@@ -56,6 +57,35 @@ def can_create_symlinks(tmp_path: Path) -> bool:
     except (OSError, NotImplementedError):
         return False
     return link.is_symlink()
+
+
+def test_optional_component_import_failures_are_logged(monkeypatch, caplog):
+    real_import = builtins.__import__
+
+    def fail_optional_import(name, *args, **kwargs):
+        if name == "model_switchboard" or name.startswith("remote_provider"):
+            raise RuntimeError(f"broken optional component: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_optional_import)
+    module_name = "ods_host_agent_import_failure_test"
+    spec = importlib.util.spec_from_file_location(module_name, _agent_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        with caplog.at_level(logging.WARNING, logger="ods-host-agent"):
+            spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+
+    assert module._switchboard_state is None
+    assert module._switchboard_adapters is None
+    assert module._switchboard_reconciler is None
+    assert module._plan_remote_provider_lifecycle_operation is None
+    assert "Model switchboard state import failed" in caplog.text
+    assert "Model switchboard reconciler import failed" in caplog.text
+    assert "Remote-provider import failed" in caplog.text
+    assert "broken optional component" in caplog.text
 
 
 def test_host_agent_model_library_accepts_only_integrity_pinned_hub_imports(monkeypatch, tmp_path):
