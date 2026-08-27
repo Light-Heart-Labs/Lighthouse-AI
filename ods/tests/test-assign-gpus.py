@@ -19,6 +19,13 @@ def run(topology_path, model_size_mb, enabled_services=None):
         output = json.loads(result.stdout)["gpu_assignment"]
     return result.returncode, output, result.stderr
 
+
+def run_payload(tmp_path, topology, model_size_mb=1000):
+    path = tmp_path / "topology.json"
+    path.write_text(json.dumps(topology), encoding="utf-8")
+    return run(str(path), model_size_mb)
+
+
 def all_assigned_uuids(output):
     uuids = set()
     for svc in output["services"].values():
@@ -30,6 +37,70 @@ def llama(output):
 
 def parallelism(output):
     return llama(output)["parallelism"]
+
+
+# ── Input validation ──────────────────────────────────────────────────────────
+
+class TestTopologyValidation:
+
+    def test_non_finite_model_size_returns_clean_error(self):
+        rc, output, stderr = run(
+            fixture_path("nvidia_smi_topo_matrix_1gpu_pcie.json"),
+            float("nan"),
+        )
+
+        assert rc == 1
+        assert output is None
+        assert "model size must be finite" in stderr
+        assert "Traceback" not in stderr
+
+    def test_gpu_count_mismatch_returns_clean_error(self, tmp_path):
+        rc, output, stderr = run_payload(
+            tmp_path,
+            {"vendor": "nvidia", "gpu_count": 1, "gpus": [], "links": []},
+        )
+
+        assert rc == 1
+        assert output is None
+        assert "gpu_count (1) does not match gpus length (0)" in stderr
+        assert "Traceback" not in stderr
+
+    def test_missing_gpu_fields_return_clean_error(self, tmp_path):
+        rc, output, stderr = run_payload(
+            tmp_path,
+            {"vendor": "nvidia", "gpu_count": 1, "gpus": [{}], "links": []},
+        )
+
+        assert rc == 1
+        assert output is None
+        assert "gpus[0].index" in stderr
+        assert "Traceback" not in stderr
+
+    def test_link_must_reference_known_gpu(self, tmp_path):
+        topology = {
+            "vendor": "nvidia",
+            "gpu_count": 1,
+            "gpus": [{
+                "index": 0,
+                "uuid": "GPU-0",
+                "name": "Test GPU",
+                "memory_gb": 24,
+            }],
+            "links": [{
+                "gpu_a": 0,
+                "gpu_b": 9,
+                "link_type": "SYS",
+                "link_label": "CrossNUMA",
+                "rank": 10,
+            }],
+        }
+
+        rc, output, stderr = run_payload(tmp_path, topology)
+
+        assert rc == 1
+        assert output is None
+        assert "links[0].gpu_b must reference a known GPU index" in stderr
+        assert "Traceback" not in stderr
 
 
 # ── 1 GPU — single ────────────────────────────────────────────────────────────
