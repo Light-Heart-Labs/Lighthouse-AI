@@ -32,6 +32,7 @@ TOKEN_SPY_KEY_FILE = Path(os.environ.get("TOKEN_SPY_KEY_FILE", "/data/token-spy/
 # buckets in memory and on the wire. The dashboard presets top out well
 # below a year; one full year is a generous ceiling.
 MAX_REPORT_RANGE_DAYS = 366
+MAX_LOCAL_RUNTIME_REQUEST_STATES = 128
 LLAMA_CPP_PROMETHEUS_METRICS = {
     "input_tokens": "llamacpp:prompt_tokens_total",
     "output_tokens": "llamacpp:tokens_predicted_total",
@@ -470,16 +471,26 @@ def _extract_llama_cpp_prometheus_counters(metrics_text: str, url: str) -> dict[
     }
 
 
+def _store_runtime_request_state(key: str, state: dict[str, Any]) -> None:
+    """Store the most recently observed runtime states with an LRU size bound."""
+    if key in _LOCAL_RUNTIME_REQUEST_STATE:
+        _LOCAL_RUNTIME_REQUEST_STATE.pop(key)
+    elif len(_LOCAL_RUNTIME_REQUEST_STATE) >= MAX_LOCAL_RUNTIME_REQUEST_STATES:
+        oldest_key = next(iter(_LOCAL_RUNTIME_REQUEST_STATE))
+        _LOCAL_RUNTIME_REQUEST_STATE.pop(oldest_key)
+    _LOCAL_RUNTIME_REQUEST_STATE[key] = state
+
+
 def _observe_runtime_request_delta(key: str, input_tokens: int, output_tokens: int) -> dict[str, Any]:
     total_tokens = input_tokens + output_tokens
     state = _LOCAL_RUNTIME_REQUEST_STATE.get(key)
     if state is None:
-        _LOCAL_RUNTIME_REQUEST_STATE[key] = {
+        _store_runtime_request_state(key, {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
             "requests": 0,
-        }
+        })
         return {
             "requests": 0,
             "source": "unavailable",
@@ -495,12 +506,12 @@ def _observe_runtime_request_delta(key: str, input_tokens: int, output_tokens: i
     elif total_tokens > previous_total:
         observed_requests += 1
 
-    _LOCAL_RUNTIME_REQUEST_STATE[key] = {
+    _store_runtime_request_state(key, {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "requests": observed_requests,
-    }
+    })
     if observed_requests <= 0:
         return {
             "requests": 0,
