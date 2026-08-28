@@ -113,6 +113,19 @@ else
     fail "Pixel-to-Hermes installer rerun does not safely deactivate the managed host runtime"
 fi
 
+if logger_output="$(bash -c '
+    unset -f log_info log_error 2>/dev/null || true
+    source "$1"
+    ods_pixel_uninstall_managed relative-path /tmp
+' _ "$ROOT_DIR/lib/pixel-uninstall.sh" 2>&1)"; then
+    fail "Pixel uninstall unexpectedly accepted an invalid install directory"
+elif [[ "$logger_output" == *"Refusing Pixel cleanup for an invalid ODS install directory"* \
+    && "$logger_output" != *"command not found"* ]]; then
+    pass "Pixel uninstall supplies safe fallback logging for install-core callers"
+else
+    fail "Pixel uninstall fallback logging is unavailable"
+fi
+
 write_fixture() {
     rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR"
     : >"$SYSTEMCTL_LOG"

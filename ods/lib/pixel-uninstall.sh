@@ -2,6 +2,16 @@
 # Remove only a Pixel deployment whose private management marker binds it to
 # the ODS install being uninstalled. Importing this file has no side effects.
 
+# The standalone uninstaller provides these loggers, while install-core uses a
+# different logging API. Keep this library safe in either caller without
+# overriding a logger that the caller already supplied.
+if ! declare -F log_info >/dev/null 2>&1; then
+    log_info() { printf '[INFO] %s\n' "$*"; }
+fi
+if ! declare -F log_error >/dev/null 2>&1; then
+    log_error() { printf '[ERROR] %s\n' "$*" >&2; }
+fi
+
 ods_pixel_uninstall_managed() {
     local install_dir="$1" owner_home="$2"
     local marker="$owner_home/.config/ods/pixel-managed.json"
