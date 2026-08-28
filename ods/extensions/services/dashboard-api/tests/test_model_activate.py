@@ -779,6 +779,78 @@ class TestLemonadeCompletionReady:
         assert proof["contextVerified"] is True
         assert proof["verifiedAt"].endswith("+00:00")
 
+    def test_readiness_accepts_llama_context_alignment_padding(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = _llama_identity_response("runtime/new-model.gguf")
+            elif url.endswith("/props"):
+                body = json.dumps({
+                    "default_generation_settings": {"n_ctx": 20224}
+                })
+            else:
+                body = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=body, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_a, **_k: True)
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "nvidia",
+                "OLLAMA_PORT": "8080",
+                "CTX_SIZE": "20000",
+            },
+            model_id="new-model",
+            gguf_file="new-model.gguf",
+            llm_model_name="new-model",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+            require_exact_context=True,
+        )
+        assert proof["contextLength"] == 20224
+        assert proof["contextVerified"] is True
+
+    def test_readiness_rejects_material_llama_context_drift(self, monkeypatch):
+        completion_calls = []
+
+        def fake_run(cmd, **_kwargs):
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = _llama_identity_response("runtime/new-model.gguf")
+            elif url.endswith("/props"):
+                body = json.dumps({
+                    "default_generation_settings": {"n_ctx": 20256}
+                })
+            else:
+                body = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=body, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            _mod,
+            "_chat_completion_ready",
+            lambda *_a, **_k: completion_calls.append(True) or True,
+        )
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "nvidia",
+                "OLLAMA_PORT": "8080",
+                "CTX_SIZE": "20000",
+            },
+            model_id="new-model",
+            gguf_file="new-model.gguf",
+            llm_model_name="new-model",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+            require_exact_context=True,
+        )
+        assert proof == {}
+        assert completion_calls == []
+
     def test_readiness_rejects_runtime_context_below_requested(self, monkeypatch):
         completion_calls = []
 

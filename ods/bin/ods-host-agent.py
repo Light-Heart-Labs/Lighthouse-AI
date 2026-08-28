@@ -9435,6 +9435,30 @@ def _llama_runtime_context_length(host: str, port: str) -> int:
         return 0
 
 
+def _runtime_context_matches_request(
+    runtime_context: int,
+    expected_context: int,
+    *,
+    require_exact: bool,
+    allow_llama_alignment_padding: bool,
+) -> bool:
+    """Validate a runtime context without rejecting llama.cpp slot alignment.
+
+    llama.cpp may round a requested slot upward to its next 256-cell boundary
+    (for example, 20,000 becomes 20,224). That bounded increase preserves the
+    requested capacity. A shortage, a full boundary or more of drift, or any
+    non-exact Lemonade result remains a verification failure.
+    """
+    if runtime_context < expected_context:
+        return False
+    if not require_exact or runtime_context == expected_context:
+        return True
+    return (
+        allow_llama_alignment_padding
+        and runtime_context - expected_context < 256
+    )
+
+
 def _completion_text(data: object) -> str:
     """Extract bounded OpenAI-compatible assistant text from one response."""
     if not isinstance(data, dict):
@@ -9820,22 +9844,27 @@ def _wait_for_model_readiness(
                     runtime_context = _llama_runtime_context_length(host, port)
                     if (
                         expected_context
-                        and (
-                            runtime_context < expected_context
-                            or (
-                                require_exact_context
-                                and runtime_context != expected_context
-                            )
+                        and not _runtime_context_matches_request(
+                            runtime_context,
+                            expected_context,
+                            require_exact=require_exact_context,
+                            allow_llama_alignment_padding=True,
                         )
                     ):
                         runtime_identity = ""
             if (
                 runtime_identity
                 and expected_context
+                and is_lemonade
                 and require_exact_context
-                and runtime_context != expected_context
             ):
-                runtime_identity = ""
+                if not _runtime_context_matches_request(
+                    runtime_context,
+                    expected_context,
+                    require_exact=True,
+                    allow_llama_alignment_padding=False,
+                ):
+                    runtime_identity = ""
             completion_request_model = (
                 str(runtime_identity)
                 if is_lemonade and runtime_identity
