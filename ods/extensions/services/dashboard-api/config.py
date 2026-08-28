@@ -391,6 +391,7 @@ def load_extension_manifests(
                     "depends_on": service.get("depends_on", []),
                     "category": service.get("category", "optional"),
                     "host_network": bool(service.get("host_network", False)),
+                    "socket_only": bool(service.get("socket_only", False)),
                     "setup_hook": service.get("setup_hook", ""),
                     "hooks": service.get("hooks", {}),
                     "gpu_backends": service.get("gpu_backends", []),

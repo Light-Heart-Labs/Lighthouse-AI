@@ -17,6 +17,7 @@ service:
   # No external port or external_port_env: this is a Unix-domain-socket host
   # service with no network binding, so advertising a configurable TCP port
   # would be both inaccurate and unsafe.
+  socket_only: true
   port: 0
   health: /health
   health_timeout: 10

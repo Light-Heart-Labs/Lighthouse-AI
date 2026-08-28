@@ -31,13 +31,31 @@
       "allOf": [
         {
           "if": {
-            "properties": {
-              "host_network": { "const": true }
-            },
-            "required": ["host_network"]
+            "anyOf": [
+              {
+                "properties": { "host_network": { "const": true } },
+                "required": ["host_network"]
+              },
+              {
+                "properties": { "socket_only": { "const": true } },
+                "required": ["socket_only"]
+              }
+            ]
           },
           "then": {},
           "else": { "required": ["port", "health"] }
+        },
+        {
+          "if": {
+            "properties": { "socket_only": { "const": true } },
+            "required": ["socket_only"]
+          },
+          "then": {
+            "properties": {
+              "type": { "const": "host-systemd" },
+              "port": { "const": 0 }
+            }
+          }
         }
       ],
       "properties": {
@@ -69,6 +87,10 @@
         "host_network": {
           "type": "boolean",
           "description": "True for Docker network_mode: host services that do not declare Docker-mapped ports or HTTP health paths."
+        },
+        "socket_only": {
+          "type": "boolean",
+          "description": "True only for host-systemd services whose HTTP-compatible interface is exposed exclusively over a Unix-domain socket and therefore has no TCP port."
         },
         "health": {
           "type": "string",
