@@ -1,6 +1,5 @@
 """Tests for pixel_edge — upstream Unix socket + edge proxy routes."""
 
-import asyncio
 import io
 import json
 import os
@@ -28,7 +27,6 @@ TOKEN = "test-token-abc123-0123456789abcdef"
 
 async def _upstream_chat(request):
     data = await request.json()
-    model = data.get("model", "")
     stream = data.get("stream", False)
 
     if data.get("trigger_error"):
@@ -539,7 +537,6 @@ class TestSanitizedErrors(BaseEdgeTest):
 
     async def test_upstream_down_returns_502(self):
         # Point edge at a dead socket by overriding module global
-        import importlib
         import pixel_edge
         old = pixel_edge._SOCKET_PATH
         dead = tempfile.mktemp(suffix=".dead.sock")

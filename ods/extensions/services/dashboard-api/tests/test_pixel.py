@@ -8,7 +8,6 @@ import pathlib
 import sys
 from unittest.mock import patch
 
-import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
