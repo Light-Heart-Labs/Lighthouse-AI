@@ -58,9 +58,13 @@ services:
       OPENAI_API_KEYS: "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env};${OPEN_WEBUI_LLM_API_KEY:-}"
       DEFAULT_MODELS: "pixel/default"
       DEFAULT_PINNED_MODELS: "pixel/default"
-      # Keep Open WebUI's title/query/background tasks on the ordinary model;
-      # user conversations default to Pixel without recursively agent-routing.
-      TASK_MODEL_EXTERNAL: "${LLM_MODEL:-${GGUF_FILE:-default}}"
+      # Pixel owns the visible conversation. Keep any explicit query-generation
+      # task on the ordinary model without recursively agent-routing, but do
+      # not spend three extra local-model turns on cosmetic post-chat metadata.
+      TASK_MODEL_EXTERNAL: "${OPEN_WEBUI_TASK_MODEL:-${GGUF_FILE:-${LLM_MODEL:-default}}}"
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
   dashboard-api:
     depends_on:
       pixel-edge:

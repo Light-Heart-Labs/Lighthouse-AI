@@ -168,6 +168,43 @@ else
 fi
 check test ! -e "$ambient_active_home/.config/ods/pixel-managed.json"
 
+plugin_tree="$INSTALL_DIR/extensions/services/pixel-agent/plugin"
+mkdir -p "$plugin_tree/nested"
+printf '%s\n' '{"id":"pixel-ods"}' > "$plugin_tree/openclaw.plugin.json"
+printf '%s\n' 'export default {};' > "$plugin_tree/nested/index.js"
+chmod 0777 "$INSTALL_DIR" "$INSTALL_DIR/extensions" "$INSTALL_DIR/extensions/services" \
+    "$INSTALL_DIR/extensions/services/pixel-agent" "$plugin_tree" \
+    "$plugin_tree/nested" "$plugin_tree/openclaw.plugin.json" "$plugin_tree/nested/index.js"
+check _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_tree"
+check test -z "$(find -P "$plugin_tree" -perm /022 -print -quit)"
+check test "$(stat -c '%a' "$INSTALL_DIR")" = 755
+check test "$(stat -c '%a' "$plugin_tree")" = 755
+check test "$(stat -c '%a' "$plugin_tree/nested/index.js")" = 644
+ln -s "$plugin_tree/openclaw.plugin.json" "$plugin_tree/linked.json"
+if _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_tree" >/dev/null 2>&1; then
+    fail "symlink in ODS Pixel plugin tree rejected"
+else
+    pass "symlink in ODS Pixel plugin tree rejected"
+fi
+rm -f "$plugin_tree/linked.json"
+
+plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
+cat > "$plugin_list_bin" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded"}]}'
+SH
+chmod 0755 "$plugin_list_bin"
+check _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin"
+cat > "$plugin_list_bin" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked"}]}'
+SH
+if _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" >/dev/null 2>&1; then
+    fail "blocked ODS Pixel plugin rejected"
+else
+    pass "blocked ODS Pixel plugin rejected"
+fi
+
 source_fixture="$TEST_ROOT/pixel-source-fixture"
 mkdir -p "$source_fixture"
 git -C "$source_fixture" init -q
@@ -218,6 +255,7 @@ assert v["modelBaseUrl"] == "http://127.0.0.1:11434/v1"
 assert v["modelId"] == "qwen-test"
 assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
+assert v["modelReasoning"] is True
 assert v["frontierBudgetProfile"] == "starter"
 assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list"]}]
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
@@ -257,7 +295,11 @@ python3 - "$OPENCLAW_CONFIG_PATH" <<'PY'
 import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
+assert value["agents"]["list"][0]["thinkingDefault"] == "off"
 assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
+model = value["models"]["providers"]["ods-local"]["models"][0]
+assert model["reasoning"] is True
+assert model["compat"] == {"thinkingFormat": "qwen-chat-template"}
 assert value["diagnostics"]["stuckSessionAbortMs"] == 1860000
 assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 3600000}
 PY
@@ -265,7 +307,7 @@ SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["agents"]["list"][0]["thinkingDefault"] == "off"; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -455,6 +497,7 @@ plugin="$ROOT/extensions/services/pixel-agent/plugin"
 check node --check "$plugin/index.js"
 check node --check "$plugin/projection.mjs"
 check node --check "$plugin/prompt-contract.mjs"
+check node --check "$plugin/tool-content.mjs"
 check python3 -c '
 import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))

@@ -635,6 +635,18 @@ raise SystemExit(1)' 2>/dev/null && return 0
         OPEN_WEBUI_LLM_BASE_URL_VALUE=$(_env_get OPEN_WEBUI_LLM_BASE_URL "")
         OPEN_WEBUI_LLM_API_KEY_VALUE=$(_env_get OPEN_WEBUI_LLM_API_KEY "")
     fi
+    _default_open_webui_task_model=""
+    if [[ "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
+        _default_open_webui_task_model="ods/current"
+    elif [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
+        _default_open_webui_task_model="$EXTERNAL_SELECTED_MODEL"
+    elif [[ "$OPEN_WEBUI_LLM_BASE_URL_VALUE" == *"litellm:4000"* || "$LLM_API_URL_VALUE" == *"litellm:4000"* ]]; then
+        _default_open_webui_task_model="default"
+    fi
+    # Direct llama.cpp deliberately leaves this empty: the Pixel Compose
+    # overlay then follows GGUF_FILE, which is the exact /v1/models ID and
+    # changes with bootstrap promotion. LLM_MODEL is only a logical catalog ID.
+    OPEN_WEBUI_TASK_MODEL_VALUE=$(_env_get OPEN_WEBUI_TASK_MODEL "$_default_open_webui_task_model")
     if [[ "${ODS_MODE:-local}" == "cloud" ]]; then
         _default_hermes_base_url="http://litellm:4000/v1"
         _default_hermes_api_key="${LITELLM_KEY}"
@@ -868,6 +880,7 @@ ODS_MODEL_SWITCHBOARD=${ODS_MODEL_SWITCHBOARD_VALUE}
 LLM_API_URL=${LLM_API_URL_VALUE}
 OPEN_WEBUI_LLM_BASE_URL=${OPEN_WEBUI_LLM_BASE_URL_VALUE}
 OPEN_WEBUI_LLM_API_KEY=${OPEN_WEBUI_LLM_API_KEY_VALUE}
+OPEN_WEBUI_TASK_MODEL=${OPEN_WEBUI_TASK_MODEL_VALUE}
 LLM_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "external"; elif [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "lemonade"; else echo "llama-server"; fi)
 LLM_API_BASE_PATH=$(if [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "${LEMONADE_API_BASE_PATH_VALUE}"; else echo "/v1"; fi)
 EXTERNAL_LLM_URL=${EXTERNAL_LLM_URL_VALUE}

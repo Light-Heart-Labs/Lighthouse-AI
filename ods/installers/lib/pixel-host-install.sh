@@ -604,6 +604,46 @@ _ods_pixel_openclaw_bin() {
         'if [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then printf "%s\\n" "$HOME/.npm-global/bin/openclaw"; else command -v openclaw; fi'
 }
 
+_ods_pixel_secure_plugin_tree() {
+    local owner="$1" home="$2" plugin_root="$3" expected path
+    expected="${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin"
+    [[ "$plugin_root" == "$expected" ]] || return 1
+
+    # A source copied from a Windows mount can arrive as mode 0777 even when
+    # the Git blob is ordinary read-only code. OpenClaw correctly blocks any
+    # plugin below a group/world-writable ancestor, so normalize only this
+    # fixed ODS-owned path and fail closed on links, special files, or foreign
+    # ownership before calculating the approved extension digest.
+    for path in \
+        "$INSTALL_DIR" \
+        "$INSTALL_DIR/extensions" \
+        "$INSTALL_DIR/extensions/services" \
+        "$INSTALL_DIR/extensions/services/pixel-agent" \
+        "$plugin_root"; do
+        [[ -d "$path" && ! -L "$path" ]] || return 1
+        [[ "$(stat -c '%u' -- "$path")" == "$(id -u "$owner")" ]] || return 1
+        ods_pixel_run_as_owner "$owner" "$home" chmod 0755 -- "$path" || return 1
+    done
+    if find -P "$plugin_root" -mindepth 1 \( -type l -o ! -user "$owner" \) -print -quit | grep -q .; then
+        return 1
+    fi
+    if find -P "$plugin_root" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+        return 1
+    fi
+    ods_pixel_run_as_owner "$owner" "$home" find -P "$plugin_root" -type d -exec chmod 0755 -- '{}' + || return 1
+    ods_pixel_run_as_owner "$owner" "$home" find -P "$plugin_root" -type f -exec chmod 0644 -- '{}' + || return 1
+    if find -P "$plugin_root" -perm /022 -print -quit | grep -q .; then
+        return 1
+    fi
+}
+
+_ods_pixel_verify_plugin_loaded() {
+    local owner="$1" home="$2" openclaw_bin="$3"
+    ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
+        | jq -e '[.plugins[]? | select(.id == "pixel-ods" and .status == "loaded")] | length == 1' \
+            >/dev/null
+}
+
 _ods_pixel_apply_runtime_budget() {
     local owner="$1" home="$2" config="$3" openclaw_bin="$4" staged
     # ODS qualifies Pixel on CPU-only hosts. The first local 9B turn can spend
@@ -638,16 +678,19 @@ provider = providers["ods-local"]
 models = provider.get("models") if isinstance(provider, dict) else None
 defaults = agents.get("defaults") if isinstance(agents, dict) else None
 session = value.get("session")
+model_id = models[0].get("id") if isinstance(models, list) and len(models) == 1 and isinstance(models[0], dict) else None
 if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict)
         or not isinstance(defaults, dict) or not isinstance(session, dict)
         or provider.get("api") != "openai-completions"
         or provider.get("apiKey") != "local-no-auth"
-        or selected[0].get("model") != f"ods-local/{models[0].get('id')}"):
+        or selected[0].get("model") != f"ods-local/{model_id}"):
     raise SystemExit("OpenClaw configuration is outside the ODS Pixel runtime contract")
 
 updated = copy.deepcopy(value)
 updated_provider = updated["models"]["providers"]["ods-local"]
 updated_defaults = updated["agents"]["defaults"]
+updated_agent = next(item for item in updated["agents"]["list"] if isinstance(item, dict) and item.get("id") == "pixel")
+updated_model = updated_provider["models"][0]
 updated_session = updated["session"]
 updated_diagnostics = updated.setdefault("diagnostics", {})
 write_lock = updated_session.setdefault("writeLock", {})
@@ -657,9 +700,23 @@ if not isinstance(updated_diagnostics, dict):
     raise SystemExit("OpenClaw diagnostics configuration must be an object")
 updated_provider["timeoutSeconds"] = 1800
 updated_defaults["timeoutSeconds"] = 1800
+# The llama.cpp reasoning-output setting controls response parsing, not whether a
+# Qwen chat template generates a thinking-only continuation. Advertise the
+# Qwen capability to OpenClaw, select its supported template control, and keep
+# the ODS-managed Pixel route explicitly in no-think mode. OpenClaw then sends
+# chat_template_kwargs.enable_thinking=false on every model pass, including the
+# continuation after a tool result.
+model_label = "{} {}".format(updated_model.get("id", ""), updated_model.get("name", "")).casefold()
+if "qwen" in model_label:
+    model_compat = updated_model.setdefault("compat", {})
+    if not isinstance(model_compat, dict):
+        raise SystemExit("OpenClaw Qwen compatibility configuration must be an object")
+    updated_model["reasoning"] = True
+    model_compat["thinkingFormat"] = "qwen-chat-template"
+    updated_agent["thinkingDefault"] = "off"
 # A CPU-only model call can emit no progress while evaluating a long prompt.
 # Let the 30-minute provider own its terminal timeout, then retain one minute
-# for OpenClaw's stalled-session recovery before the 32-minute host ingress.
+# for the OpenClaw stalled-session recovery before the 32-minute host ingress.
 updated_diagnostics["stuckSessionAbortMs"] = 1860000
 write_lock["maxHoldMs"] = 1920000
 write_lock["staleMs"] = 3600000
@@ -967,7 +1024,12 @@ _ods_pixel_write_onboarding() {
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
     [[ "$context" =~ ^[0-9]+$ && "$context" -ge 4096 ]] || context=16384
     (( context < max_tokens )) && max_tokens="$context"
-    [[ "${LLAMA_REASONING:-off}" != off ]] && reasoning=true
+    # modelReasoning describes model capability to OpenClaw. Qwen needs that
+    # capability flag even when ODS defaults it to no-think so OpenClaw can
+    # send chat_template_kwargs.enable_thinking=false explicitly.
+    if [[ "${LLAMA_REASONING:-off}" != off || "${LLM_MODEL:-default}" == *[Qq][Ww][Ee][Nn]* ]]; then
+        reasoning=true
+    fi
 
     ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${answers%/*}" || return 1
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
@@ -1134,6 +1196,10 @@ ods_pixel_install_default_agent() {
     }
     plugin_root="${INSTALL_DIR:?}/extensions/services/pixel-agent"
     [[ -f "$plugin_root/plugin/openclaw.plugin.json" && -f "$plugin_root/host/pixel_ingress.mjs" ]] || return 1
+    if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then
+        ai_bad "The ODS Pixel plugin path is not a safe owner-controlled code tree."
+        return 1
+    fi
 
     ai "Starting the local model and search prerequisites for Pixel review..."
     $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-build --pull never llama-server searxng >>"$LOG_FILE" 2>&1
@@ -1255,6 +1321,10 @@ ods_pixel_install_default_agent() {
     # until the next login.
     if ! _ods_pixel_wait_ingress "$owner" "$home"; then
         ai_bad "Pixel ingress did not pass its authenticated loopback health check."
+        return 1
+    fi
+    if ! _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin"; then
+        ai_bad "The reviewed ODS Pixel plugin is not loaded by the active gateway."
         return 1
     fi
     if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then

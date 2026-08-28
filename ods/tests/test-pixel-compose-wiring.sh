@@ -21,11 +21,15 @@ assert "network_mode: host" not in edge
 assert "networks:\n      - default" in edge
 assert "http://pixel-edge:9595/v1;${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}" in text
 assert "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env};${OPEN_WEBUI_LLM_API_KEY:-}" in text
+assert 'TASK_MODEL_EXTERNAL: "${OPEN_WEBUI_TASK_MODEL:-${GGUF_FILE:-${LLM_MODEL:-default}}}"' in text
 for required in (
     'ENABLE_OPENAI_API: "true"',
     'DEFAULT_MODELS: "pixel/default"',
     'DEFAULT_PINNED_MODELS: "pixel/default"',
     "TASK_MODEL_EXTERNAL:",
+    'ENABLE_TITLE_GENERATION: "false"',
+    'ENABLE_TAGS_GENERATION: "false"',
+    'ENABLE_FOLLOW_UP_GENERATION: "false"',
     'PIXEL_EDGE_URL: "http://pixel-edge:9595"',
 ):
     assert required in text, required
@@ -48,6 +52,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     PIXEL_INGRESS_GID=1234 \
     PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
     WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
+    GGUF_FILE="Qwen-Test-Q4_K_M.gguf" \
+    LLM_MODEL="qwen-test" \
         docker compose -f "$BASE" -f "$EDGE" config --format json > "$runtime/config.json"
     python3 - "$runtime/config.json" <<'PY'
 import json, sys
@@ -60,8 +66,25 @@ webui = value["services"]["open-webui"]
 assert webui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
 assert webui["environment"]["OPENAI_API_BASE_URLS"].startswith("http://pixel-edge:9595/v1;")
 assert webui["environment"]["DEFAULT_MODELS"] == "pixel/default"
+assert webui["environment"]["TASK_MODEL_EXTERNAL"] == "Qwen-Test-Q4_K_M.gguf"
+assert webui["environment"]["ENABLE_TITLE_GENERATION"] == "false"
+assert webui["environment"]["ENABLE_TAGS_GENERATION"] == "false"
+assert webui["environment"]["ENABLE_FOLLOW_UP_GENERATION"] == "false"
 dashboard = value["services"]["dashboard-api"]
 assert dashboard["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+PY
+    PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
+    PIXEL_INGRESS_GID=1234 \
+    PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
+    GGUF_FILE="Qwen-Test-Q4_K_M.gguf" \
+    LLM_MODEL="qwen-test" \
+    OPEN_WEBUI_TASK_MODEL="ods/current" \
+        docker compose -f "$BASE" -f "$EDGE" config --format json > "$runtime/config-explicit.json"
+    python3 - "$runtime/config-explicit.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["services"]["open-webui"]["environment"]["TASK_MODEL_EXTERNAL"] == "ods/current"
 PY
 fi
 

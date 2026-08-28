@@ -14,6 +14,11 @@ import {
   statusPayload,
 } from "./projection.mjs";
 import { promptContractForAgent } from "./prompt-contract.mjs";
+import {
+  appsToolText,
+  statusToolText,
+  unavailableToolText,
+} from "./tool-content.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 
@@ -28,15 +33,15 @@ function registerTool(api, tool, opts) {
   api.registerTool(onlyPixel(() => tool), { names });
 }
 
-function toolResult(projection, details) {
+function toolResult(projection, details, text) {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(projection),
+        text,
       },
     ],
-    details,
+    details: { ...details, projection },
   };
 }
 
@@ -68,7 +73,7 @@ function errorResult() {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ error: "status projection unavailable" }),
+        text: unavailableToolText(),
       },
     ],
     details: { boundary: "status-only", evidence: "untrusted status projection" },
@@ -99,7 +104,8 @@ export default definePluginEntry({
         execute: async () => {
           try {
             const projection = await readProjection(statusFile);
-            return toolResult(statusPayload(projection), statusDetails(projection));
+            const payload = statusPayload(projection);
+            return toolResult(payload, statusDetails(projection), statusToolText(payload));
           } catch (err) {
             return errorResult();
           }
@@ -118,7 +124,8 @@ export default definePluginEntry({
         execute: async () => {
           try {
             const projection = await readProjection(statusFile);
-            return toolResult(appsPayload(projection), appsDetails(projection));
+            const payload = appsPayload(projection);
+            return toolResult(payload, appsDetails(projection), appsToolText(payload));
           } catch (err) {
             return errorResult();
           }

@@ -134,8 +134,14 @@ After a successful install:
 3. Hermes remains at its authenticated proxy URL shown by the installer.
 4. OpenCode remains an independent coding UI when enabled.
 
-Open WebUI background/title tasks use the ordinary local model, not Pixel, to
-avoid recursively creating agent turns.
+Open WebUI search-query generation uses the ordinary local model, not Pixel,
+to avoid recursive agent routing. Automatic title, tag, and follow-up
+generation is disabled while Pixel is active because those cosmetic jobs would
+otherwise compete with the agent for the same local inference slot.
+For Qwen models, the managed Pixel route tells OpenClaw to pass
+`chat_template_kwargs.enable_thinking=false` on every model request. That keeps
+tool continuations in the visible answer channel; it does not broaden the tool
+allowlist or make custom tools replay-safe.
 
 ## Bounded ODS tools
 
