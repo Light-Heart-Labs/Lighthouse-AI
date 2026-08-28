@@ -138,10 +138,11 @@ avoid recursively creating agent turns.
 
 The first slice exposes exactly two read-only tools to Pixel:
 
-- `pixel_ods_status` returns the sanitized overall ODS state and allowlisted
-  application states.
-- `pixel_ods_apps_list` returns the same allowlisted application inventory in
-  an app-oriented shape.
+- `pixel_ods_status` returns the sanitized overall ODS state, an explicit
+  application count, and allowlisted application states.
+- `pixel_ods_apps_list` returns the same explicit count and allowlisted
+  application inventory in an app-oriented shape. The count avoids asking
+  small local models to infer it from the array.
 
 The plugin reads only `/run/ods-pixel/ods-status.json`. It does not receive the
 Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS operator

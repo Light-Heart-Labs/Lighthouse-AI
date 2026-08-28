@@ -315,9 +315,37 @@ export async function readProjection(file, deps = defaultFs, nowMs = Date.now())
     ingress_ready: parsed.ingress_ready === true,
     gateway_reachable: parsed.gateway_reachable === true,
     docker: String(parsed.docker),
+    app_count: apps.length,
     apps,
     stale: false,
     boundary: "status-only",
+  };
+}
+
+// Convert an already validated projection into the exact public tool payloads.
+// Keeping these builders beside the validator makes the model-visible schema
+// directly unit-testable without loading the OpenClaw plugin runtime.
+export function statusPayload(projection) {
+  return {
+    status: "ok",
+    ingress_ready: projection.ingress_ready,
+    gateway_reachable: projection.gateway_reachable,
+    docker: projection.docker,
+    app_count: projection.app_count,
+    apps: projection.apps,
+    timestamp: projection.timestamp,
+    stale: projection.stale,
+    boundary: projection.boundary,
+  };
+}
+
+export function appsPayload(projection) {
+  return {
+    app_count: projection.app_count,
+    apps: projection.apps,
+    timestamp: projection.timestamp,
+    stale: projection.stale,
+    boundary: projection.boundary,
   };
 }
 

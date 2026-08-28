@@ -7,7 +7,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readProjection, statusFileFromEnv } from "../plugin/projection.mjs";
+import {
+  appsPayload,
+  readProjection,
+  statusFileFromEnv,
+  statusPayload,
+} from "../plugin/projection.mjs";
 
 const GOOD_TS = new Date(Date.now() - 1000).toISOString();
 
@@ -98,6 +103,7 @@ test("reads a good projection and returns a freshly constructed object", async (
   assert.equal(out.ingress_ready, true);
   assert.equal(out.gateway_reachable, true);
   assert.equal(out.docker, "ok");
+  assert.equal(out.app_count, 2);
   assert.equal(out.stale, false);
   assert.equal(out.boundary, "status-only");
   assert.equal(out.apps.length, 2);
@@ -108,6 +114,19 @@ test("reads a good projection and returns a freshly constructed object", async (
   // Must be a new object, not the parsed raw value.
   assert.notEqual(out, JSON.parse(raw));
   assert.notEqual(out.apps, JSON.parse(raw).apps);
+});
+
+test("tool payloads expose the validated application count explicitly", async () => {
+  const raw = JSON.stringify(goodProjection());
+  const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
+  const projection = await readProjection(FIXED, fsImpl, Date.now());
+  const status = statusPayload(projection);
+  const apps = appsPayload(projection);
+
+  assert.equal(status.app_count, 2);
+  assert.equal(status.apps.length, status.app_count);
+  assert.equal(apps.app_count, 2);
+  assert.equal(apps.apps.length, apps.app_count);
 });
 
 test("docker unavailable enum and starting status are accepted", async () => {
