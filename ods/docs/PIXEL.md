@@ -159,7 +159,13 @@ generic shell, HTTP, Docker, or filesystem tool.
 ODS writes `~/.config/ods/pixel-managed.json` with mode `0600`. The marker is
 created before Pixel is changed and moves from `installing` to `ready` only
 after Pixel verification, systemd activation, and private-ingress health pass.
-Reruns validate the marker and exact ODS install directory.
+The ready marker binds the exact Pixel source revision and a domain-separated
+SHA-256 of the deterministic ODS onboarding contract, including the approved
+ODS plugin tree digest, plus a canonical hash of the verified live OpenClaw
+configuration. A rerun skips Pixel's same-release apply transaction only when
+all of those bindings match exactly, and still runs Pixel's exact-source
+verification before reinstalling the ODS ingress. Any contract or live-config
+drift takes the ordinary configure/plan/apply path and remains fail closed.
 
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel

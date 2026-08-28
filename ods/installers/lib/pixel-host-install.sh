@@ -36,7 +36,7 @@ _ods_pixel_assert_managed_state() {
     local owner="$1" home="$2" marker
     marker="$home/.config/ods/pixel-managed.json"
     local gateway_unit="${ODS_PIXEL_GATEWAY_UNIT_PATH:-/etc/systemd/system/openclaw-gateway.service}"
-    if [[ -e "$marker" ]]; then
+    if [[ -e "$marker" || -L "$marker" ]]; then
         [[ -f "$marker" && ! -L "$marker" ]] || return 1
         [[ "$(stat -c '%u' -- "$marker")" == "$(id -u "$owner")" ]] || return 1
         (( (8#$(stat -c '%a' -- "$marker") & 0077) == 0 )) || return 1
@@ -63,34 +63,58 @@ PY
 
     ods_pixel_run_as_owner "$owner" "$home" mkdir -p -- "$home/.config/ods"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys, tempfile
 path = pathlib.Path(sys.argv[1])
-path.write_text(json.dumps({
+payload = json.dumps({
     "schema_version": 1,
     "manager": "ods",
     "state": "installing",
     "install_dir": sys.argv[2],
     "pixel_source_ref": sys.argv[3],
-}, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
-path.chmod(0o600)
+}, indent=2, sort_keys=True) + "\n"
+fd, temporary = tempfile.mkstemp(prefix=".pixel-managed.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 PY
 }
 
 _ods_pixel_mark_ready() {
-    local owner="$1" home="$2" marker
+    local owner="$1" home="$2" contract_sha256="$3" marker config
+    [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
     marker="$home/.config/ods/pixel-managed.json"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
-import json, os, pathlib, stat, sys, tempfile
+    config="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" "$contract_sha256" <<'PY'
+import hashlib, json, os, pathlib, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
 info = path.lstat()
 if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 65536:
     raise SystemExit("invalid Pixel management marker")
 value = json.loads(path.read_text(encoding="utf-8"))
-if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[2]:
+if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[3]:
     raise SystemExit("Pixel management marker does not match this ODS install")
+config_path = pathlib.Path(sys.argv[2])
+config_info = config_path.lstat()
+if (not stat.S_ISREG(config_info.st_mode) or stat.S_ISLNK(config_info.st_mode)
+        or config_info.st_uid != os.getuid() or config_info.st_mode & 0o077
+        or config_info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("invalid ODS-managed OpenClaw configuration")
+config = json.loads(config_path.read_text(encoding="utf-8"))
+if not isinstance(config, dict):
+    raise SystemExit("invalid ODS-managed OpenClaw configuration")
+canonical_config = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
 value["state"] = "ready"
-value["pixel_source_ref"] = sys.argv[3]
+value["pixel_source_ref"] = sys.argv[4]
+value["contract_sha256"] = sys.argv[5]
+value["configuration_sha256"] = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical_config).hexdigest()
 fd, temporary = tempfile.mkstemp(prefix=".pixel-managed.", dir=path.parent)
 try:
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -103,6 +127,60 @@ try:
 finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
+PY
+}
+
+_ods_pixel_contract_sha256() {
+    local owner="$1" home="$2" answers="$3"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" <<'PY'
+import hashlib, os, pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid()
+        or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("invalid ODS Pixel onboarding contract")
+payload = path.read_bytes()
+print(hashlib.sha256(b"ods-pixel-contract-v1\0" + payload).hexdigest())
+PY
+}
+
+_ods_pixel_managed_contract_matches() {
+    local owner="$1" home="$2" contract_sha256="$3" marker config
+    [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    marker="$home/.config/ods/pixel-managed.json"
+    config="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" "$contract_sha256" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid()
+        or info.st_size > 65536 or info.st_mode & 0o077):
+    raise SystemExit(1)
+value = json.loads(path.read_text(encoding="utf-8"))
+expected = {
+    "schema_version": 1,
+    "manager": "ods",
+    "install_dir": sys.argv[3],
+    "pixel_source_ref": sys.argv[4],
+    "contract_sha256": sys.argv[5],
+}
+if value.get("state") not in {"ready", "installing"} or any(value.get(key) != item for key, item in expected.items()):
+    raise SystemExit(1)
+config_path = pathlib.Path(sys.argv[2])
+config_info = config_path.lstat()
+if (not stat.S_ISREG(config_info.st_mode) or stat.S_ISLNK(config_info.st_mode)
+        or config_info.st_uid != os.getuid() or config_info.st_mode & 0o077
+        or config_info.st_size > 2 * 1024 * 1024):
+    raise SystemExit(1)
+config = json.loads(config_path.read_text(encoding="utf-8"))
+if not isinstance(config, dict):
+    raise SystemExit(1)
+canonical_config = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+observed = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical_config).hexdigest()
+if value.get("configuration_sha256") != observed:
+    raise SystemExit(1)
 PY
 }
 
@@ -248,7 +326,7 @@ _ods_pixel_write_onboarding() {
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
         "$openclaw_bin" "$home" "${LLM_MODEL:-default}" "$context" "$max_tokens" "$reasoning" \
         "${OLLAMA_PORT:-11434}" "${SEARXNG_PORT:-8888}" "$plugin_path" "$plugin_digest" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, stat, sys, tempfile
 
 (out, openclaw_bin, home, model, context, max_tokens, reasoning,
  model_port, search_port, plugin_path, plugin_digest) = sys.argv[1:]
@@ -307,8 +385,24 @@ payload = {
 }
 path = pathlib.Path(out)
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
-path.chmod(0o600)
+if path.is_symlink():
+    raise SystemExit("ODS Pixel onboarding contract cannot be a symlink")
+if path.exists():
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 2 * 1024 * 1024:
+        raise SystemExit("invalid existing ODS Pixel onboarding contract")
+content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+fd, temporary = tempfile.mkstemp(prefix=".pixel-onboarding.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 PY
 }
 
@@ -355,11 +449,11 @@ EOF
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest
+    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256
+    local reuse_active=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
     _ods_pixel_assert_managed_state "$owner" "$home" || return 1
-    _ods_pixel_mark_installing "$owner" "$home" || return 1
     source_root="${INSTALL_DIR:?}/data/pixel/source-${PIXEL_SOURCE_REF:?}"
     pixel_root="$(_ods_pixel_source_checkout "$owner" "$home" "$source_root")" || {
         ai_bad "Pixel source checkout is absent, changed, or not at the configured exact commit."
@@ -395,18 +489,35 @@ ods_pixel_install_default_agent() {
         ai_bad "Could not write the ODS-managed Pixel onboarding contract."
         return 1
     fi
+    contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || {
+        ai_bad "Could not hash the ODS-managed Pixel onboarding contract."
+        return 1
+    }
+    [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
+        reuse_active=true
+    fi
+    _ods_pixel_mark_installing "$owner" "$home" || return 1
     if ! _ods_pixel_enable_chat_endpoint "$owner" "$home"; then
         ai_bad "Could not enable Pixel's loopback chat endpoint."
         return 1
     fi
-    if ! {
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force &&
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan &&
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
-    } >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel configure, plan, apply, or verify failed. See $LOG_FILE for the exact Pixel error."
-        return 1
+    if [[ "$reuse_active" == true ]]; then
+        ai "The exact ODS-managed Pixel contract is already active; verifying it without reapplying the same release..."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
+            ai_bad "The existing ODS-managed Pixel contract failed exact-source verification. See $LOG_FILE."
+            return 1
+        fi
+    else
+        if ! {
+            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force &&
+            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan &&
+            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&
+            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
+        } >>"$LOG_FILE" 2>&1; then
+            ai_bad "Pixel configure, plan, apply, or verify failed. See $LOG_FILE for the exact Pixel error."
+            return 1
+        fi
     fi
     if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"; then
         ai_bad "Could not install and start the private Pixel ingress."
@@ -420,7 +531,7 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel ingress did not pass its authenticated loopback health check."
         return 1
     fi
-    if ! _ods_pixel_mark_ready "$owner" "$home"; then
+    if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"; then
         ai_bad "Could not record the verified Pixel runtime as ready."
         return 1
     fi
