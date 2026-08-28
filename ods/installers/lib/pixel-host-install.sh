@@ -33,7 +33,8 @@ ods_pixel_run_as_owner() {
 }
 
 _ods_pixel_assert_managed_state() {
-    local owner="$1" home="$2" marker="$home/.config/ods/pixel-managed.json"
+    local owner="$1" home="$2" marker
+    marker="$home/.config/ods/pixel-managed.json"
     local gateway_unit="${ODS_PIXEL_GATEWAY_UNIT_PATH:-/etc/systemd/system/openclaw-gateway.service}"
     if [[ -e "$marker" ]]; then
         [[ -f "$marker" && ! -L "$marker" ]] || return 1
@@ -76,7 +77,8 @@ PY
 }
 
 _ods_pixel_mark_ready() {
-    local owner="$1" home="$2" marker="$home/.config/ods/pixel-managed.json"
+    local owner="$1" home="$2" marker
+    marker="$home/.config/ods/pixel-managed.json"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
 import json, os, pathlib, stat, sys, tempfile
 
@@ -350,7 +352,11 @@ ods_pixel_install_default_agent() {
     ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm >>"$LOG_FILE" 2>&1
     ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1
     _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"
-    curl --fail --silent --show-error --max-time 10 --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null
+    # sudo -u starts a fresh owner session with the newly assigned ods-pixel
+    # supplementary group; the original installer shell may not see that group
+    # until the next login.
+    ods_pixel_run_as_owner "$owner" "$home" curl --fail --silent --show-error --max-time 10 \
+        --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null
     _ods_pixel_mark_ready "$owner" "$home"
     ai_ok "Pixel is installed, verified, and ready on the private ODS ingress"
 }

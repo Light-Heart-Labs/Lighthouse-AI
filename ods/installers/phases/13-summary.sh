@@ -9,6 +9,7 @@
 # Expects: DRY_RUN, INSTALL_DIR, SCRIPT_DIR, LOG_FILE, INTERACTIVE,
 #           TIER, TIER_NAME, VERSION, GPU_BACKEND, LLM_MODEL, OFFLINE_MODE,
 #           ENABLE_VOICE, ENABLE_WORKFLOWS, ENABLE_RAG, ENABLE_QDRANT, ENABLE_HERMES, ENABLE_OPENCLAW,
+#           ENABLE_PIXEL_RUNTIME, PIXEL_AGENT_MODE,
 #           COMPOSE_FLAGS, SUMMARY_JSON_FILE, PREFLIGHT_REPORT_FILE,
 #           BGRN, GRN, AMB, WHT, NC, DASHBOARD_PORT (:-3001),
 #           CAP_HARDWARE_CLASS_ID (:-unknown), CAP_HARDWARE_CLASS_LABEL (:-Unknown),
@@ -124,6 +125,7 @@ bootline
 echo "  • Chat UI:       http://localhost:${SERVICE_PORTS[open-webui]:-3000}"
 echo "  • Dashboard:     http://localhost:${SERVICE_PORTS[dashboard]:-3001}"
 echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-11434}/v1  (llama-server)"
+[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  • Pixel Agent:   http://localhost:${SERVICE_PORTS[dashboard]:-3001}/pixel  (also the default Open WebUI model)"
 [[ "${ENABLE_PERPLEXICA:-false}" == "true" ]] && echo "  • Perplexica:    http://localhost:${SERVICE_PORTS[perplexica]:-3004}"
 [[ "${ENABLE_COMFYUI:-false}" == "true" ]] && echo "  • ComfyUI:       http://localhost:${SERVICE_PORTS[comfyui]:-8188}"
 [[ "$ENABLE_HERMES" == "true" ]] && echo "  • Hermes (auth): http://localhost:${SERVICE_PORTS[hermes-proxy]:-9120}  (magic-link gated; not direct :9119)"
@@ -141,6 +143,11 @@ echo -e "${BGRN}YOUR CONFIGURATION${NC}"
 bootline
 echo "  • Tier: $TIER ($TIER_NAME)"
 echo "  • Model: $LLM_MODEL"
+if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then
+    echo "  • Default agent: Pixel (Open WebUI model: pixel/default)"
+elif [[ "${ENABLE_HERMES:-false}" == "true" ]]; then
+    echo "  • Default agent: Hermes (Pixel unavailable or disabled)"
+fi
 echo "  • Install dir: $INSTALL_DIR"
 echo ""
 
@@ -154,6 +161,7 @@ echo "  docker compose logs -f                     # View container logs"
 echo "  docker compose restart                     # Restart containers"
 echo "  systemctl --user list-timers               # Check maintenance timers"
 echo "  ods status                                 # Check service health"
+[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  bash install.sh --no-pixel --hermes         # Roll back the default agent to Hermes"
 echo ""
 
 if [[ -f "$LOG_FILE" ]]; then
@@ -409,6 +417,8 @@ echo -e "${GRN}─────────────────────�
 echo ""
 echo -e "  ${BGRN}Dashboard${NC}    ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
 echo -e "  ${BGRN}Chat${NC}         ${WHT}http://localhost:${WEBUI_PORT}${NC}"
+[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && \
+echo -e "  ${BGRN}Pixel${NC}        ${WHT}http://localhost:${DASHBOARD_PORT}/pixel${NC}  ${AMB}(default in Open WebUI too)${NC}"
 [[ "$ENABLE_HERMES" == "true" ]] && \
 echo -e "  ${BGRN}Hermes${NC}       ${WHT}http://localhost:${SERVICE_PORTS[hermes-proxy]:-9120}${NC}  ${AMB}(magic-link gated)${NC}"
 [[ "$ENABLE_OPENCLAW" == "true" ]] && \
@@ -441,7 +451,7 @@ if [[ -n "$SUMMARY_JSON_FILE" ]]; then
         PYTHON_CMD="python"
     fi
 
-    "$PYTHON_CMD" - "$SUMMARY_JSON_FILE" "$VERSION" "$INSTALL_DIR" "$TIER" "$TIER_NAME" "$GPU_BACKEND" "${BACKEND_SERVICE_NAME:-llama-server}" "$LLM_MODEL" "$COMPOSE_FLAGS" "$DRY_RUN" "$PREFLIGHT_REPORT_FILE" "${CAP_HARDWARE_CLASS_ID:-unknown}" "${CAP_HARDWARE_CLASS_LABEL:-Unknown}" <<'PY'
+    "$PYTHON_CMD" - "$SUMMARY_JSON_FILE" "$VERSION" "$INSTALL_DIR" "$TIER" "$TIER_NAME" "$GPU_BACKEND" "${BACKEND_SERVICE_NAME:-llama-server}" "$LLM_MODEL" "$COMPOSE_FLAGS" "$DRY_RUN" "$PREFLIGHT_REPORT_FILE" "${CAP_HARDWARE_CLASS_ID:-unknown}" "${CAP_HARDWARE_CLASS_LABEL:-Unknown}" "${PIXEL_AGENT_MODE:-hermes}" <<'PY'
 import json
 import os
 import pathlib
@@ -463,6 +473,7 @@ from datetime import datetime, timezone
     preflight_report,
     hw_class_id,
     hw_class_label,
+    default_agent,
 ) = sys.argv[1:]
 
 payload = {
@@ -475,6 +486,7 @@ payload = {
         "gpu_backend": gpu_backend,
         "backend_service": backend_service,
         "llm_model": llm_model,
+        "default_agent": default_agent,
         "compose_flags": compose_flags,
         "dry_run": dry_run == "true",
     },

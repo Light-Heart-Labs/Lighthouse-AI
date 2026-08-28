@@ -4,6 +4,8 @@ import asyncio
 import io
 import json
 import os
+from pathlib import Path
+import sys
 import tempfile
 import unittest
 import warnings
@@ -12,6 +14,10 @@ warnings.filterwarnings("ignore", message=".*Sending a large body.*")
 warnings.filterwarnings("ignore", message=".*ResourceWarning.*")
 
 from aiohttp import web, ClientSession, UnixConnector
+
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
 
 TOKEN = "test-token-abc123-0123456789abcdef"
 

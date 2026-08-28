@@ -38,6 +38,7 @@ if $DRY_RUN; then
     log "[DRY RUN]   - llama-server, Open WebUI, Perplexica, ComfyUI"
     log "[DRY RUN]   - Auto-configure Perplexica for ${LLM_MODEL:-default model}"
     [[ "$ENABLE_HERMES" == "true" ]] && log "[DRY RUN]   - Hermes Agent + hermes-proxy"
+    [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && log "[DRY RUN]   - Pixel gateway + private ingress + edge"
     [[ "$ENABLE_OPENCLAW" == "true" ]] && log "[DRY RUN]   - OpenClaw"
     [[ "$ENABLE_VOICE" == "true" ]] && log "[DRY RUN]   - Whisper (STT), Kokoro (TTS), pre-download STT model"
     [[ "$ENABLE_WORKFLOWS" == "true" ]] && log "[DRY RUN]   - n8n"
@@ -513,6 +514,23 @@ if [[ "$ENABLE_HERMES" == "true" ]]; then
 fi
 # hermes-proxy is the LAN-facing entry and has an anonymous /health endpoint.
 [[ "$ENABLE_HERMES" == "true" ]] && _check_health "Hermes Proxy" "http://127.0.0.1:${SERVICE_PORTS[hermes-proxy]:-9120}${SERVICE_HEALTH[hermes-proxy]:-/health}" 60 5 "$(sr_container hermes-proxy)"
+if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then
+    _pixel_owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner 2>/dev/null || true)}"
+    _pixel_home=""
+    [[ -n "$_pixel_owner" ]] && _pixel_home="$(ods_pixel_owner_home "$_pixel_owner" 2>/dev/null || true)"
+    if [[ -z "$_pixel_home" ]] \
+        || ! systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service \
+        || ! ods_pixel_run_as_owner "$_pixel_owner" "$_pixel_home" curl --fail --silent --show-error --max-time 10 \
+            --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null; then
+        ai_warn "Pixel gateway or private host ingress did not pass its health check."
+        HEALTH_FAILURES=$((HEALTH_FAILURES + 1))
+    else
+        printf "  ${BGRN}OK${NC} %-56s\n" "Pixel private ingress healthy"
+    fi
+    if ! _check_container_health "Pixel Edge" "$(sr_container pixel-edge)" 60; then
+        HEALTH_FAILURES=$((HEALTH_FAILURES + 1))
+    fi
+fi
 [[ "$ENABLE_OPENCLAW" == "true" ]] && _check_health "OpenClaw" "http://127.0.0.1:${SERVICE_PORTS[openclaw]:-7860}${SERVICE_HEALTH[openclaw]:-/}" 150 10 "$(sr_container openclaw)"
 systemctl --user is-active opencode-web &>/dev/null && _check_health "OpenCode Web" "http://127.0.0.1:3003/" 10 5
 # Whisper: 150 attempts * adaptive backoff = up to ~20 minutes (model download on first start)

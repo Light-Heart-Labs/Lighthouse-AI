@@ -95,6 +95,12 @@ assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
 assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status"]
 ' "$plugin/package.json" "$plugin/openclaw.plugin.json"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "ods_pixel_run_as_owner \"$owner\" \"$home\" curl" in text
+assert text.index("http://localhost/health >/dev/null") < text.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
+' "$ROOT/installers/lib/pixel-host-install.sh"
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
