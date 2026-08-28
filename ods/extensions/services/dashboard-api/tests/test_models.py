@@ -996,6 +996,30 @@ def test_agent_activation_conflict_preserves_target(monkeypatch):
     assert exc_info.value.detail == payload
 
 
+def test_agent_activation_preserves_preflight_validation_detail(monkeypatch):
+    import routers.models as models_router
+
+    payload = {
+        "error": "ODS-managed Pixel requires a model context of at least 16384 tokens",
+        "code": "pixel_context_too_small",
+    }
+
+    def invalid(*_args, **_kwargs):
+        raise models_router.AgentHTTPError(400, payload["error"], json.dumps(payload))
+
+    monkeypatch.setattr(models_router, "request_agent_json", invalid)
+
+    with pytest.raises(models_router.HTTPException) as exc_info:
+        models_router._call_agent_model(
+            "/v1/model/activate",
+            {"model_id": "ministral3-8b-instruct-2512-q4", "context_length": 8192},
+            timeout=600,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == payload
+
+
 def test_agent_activation_waits_for_download_lifecycle_teardown(monkeypatch):
     import routers.models as models_router
 

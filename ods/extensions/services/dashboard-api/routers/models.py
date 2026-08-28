@@ -1620,6 +1620,8 @@ def _call_agent_model(
     except AgentHTTPError as exc:
         if exc.status_code == 409:
             raise HTTPException(status_code=409, detail=_agent_http_detail(exc)) from exc
+        if exc.status_code == 400:
+            raise HTTPException(status_code=400, detail=_agent_http_detail(exc)) from exc
         raise HTTPException(status_code=502, detail=exc.detail) from exc
     except AgentUnavailable as exc:
         raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}") from exc
