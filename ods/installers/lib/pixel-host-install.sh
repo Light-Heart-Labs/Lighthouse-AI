@@ -508,6 +508,24 @@ EOF
     ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service
 }
 
+_ods_pixel_wait_ingress() {
+    local owner="$1" home="$2" attempts="${3:-60}" delay="${4:-1}" response
+    [[ "$attempts" =~ ^[0-9]+$ && "$attempts" -ge 1 && "$attempts" -le 300 ]] || return 1
+    [[ "$delay" =~ ^[0-9]+$ && "$delay" -le 5 ]] || return 1
+    local attempt
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if response="$(ods_pixel_run_as_owner "$owner" "$home" curl --fail --silent --show-error --max-time 10 \
+            --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health 2>/dev/null)" \
+            && jq -e '.status == "ok"' <<<"$response" >/dev/null 2>&1; then
+            return 0
+        fi
+        if (( attempt < attempts && delay > 0 )); then
+            sleep "$delay"
+        fi
+    done
+    return 1
+}
+
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
     local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256
@@ -610,8 +628,7 @@ ods_pixel_install_default_agent() {
     # sudo -u starts a fresh owner session with the newly assigned ods-pixel
     # supplementary group; the original installer shell may not see that group
     # until the next login.
-    if ! ods_pixel_run_as_owner "$owner" "$home" curl --fail --silent --show-error --max-time 10 \
-        --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null; then
+    if ! _ods_pixel_wait_ingress "$owner" "$home"; then
         ai_bad "Pixel ingress did not pass its authenticated loopback health check."
         return 1
     fi

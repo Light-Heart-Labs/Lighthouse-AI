@@ -161,6 +161,26 @@ else
 fi
 check test "$(cat "$TEST_ROOT/onboarding-link-target")" = sentinel
 
+original_run_as_owner="$(declare -f ods_pixel_run_as_owner)"
+mock_ingress_attempts="$TEST_ROOT/ingress-attempts"
+ods_pixel_run_as_owner() {
+    local count=0
+    [[ -f "$mock_ingress_attempts" ]] && read -r count < "$mock_ingress_attempts"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$mock_ingress_attempts"
+    (( count >= 3 )) || return 7
+    printf '%s\n' '{"status":"ok"}'
+}
+check _ods_pixel_wait_ingress "$owner" "$home" 3 0
+check test "$(cat "$mock_ingress_attempts")" = 3
+ods_pixel_run_as_owner() { printf '%s\n' '{"status":"starting"}'; }
+if _ods_pixel_wait_ingress "$owner" "$home" 2 0; then
+    fail "non-ready Pixel ingress status rejected"
+else
+    pass "non-ready Pixel ingress status rejected"
+fi
+eval "$original_run_as_owner"
+
 plugin="$ROOT/extensions/services/pixel-agent/plugin"
 check node --check "$plugin/index.js"
 check node --check "$plugin/projection.mjs"
@@ -178,7 +198,8 @@ import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 installer=text[text.index("ods_pixel_install_default_agent() {"):]
 assert "ods_pixel_run_as_owner \"$owner\" \"$home\" curl" in text
-assert text.index("http://localhost/health >/dev/null") < text.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
+assert "_ods_pixel_wait_ingress \"$owner\" \"$home\"" in installer
+assert installer.index("_ods_pixel_wait_ingress \"$owner\" \"$home\"") < installer.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
 assert "pixel\" configure --answers \"$answers\" --force" in text
 assert "pixel\" plan" in text
 assert "pixel\" apply --confirm &&" in text
