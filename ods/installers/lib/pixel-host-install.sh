@@ -596,6 +596,102 @@ finally:
 PY
 }
 
+_ods_pixel_openclaw_bin() {
+    local owner="$1" home="$2"
+    # Expansion is intentionally performed in the owner shell, not here.
+    # shellcheck disable=SC2016
+    ods_pixel_run_as_owner "$owner" "$home" bash -c \
+        'if [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then printf "%s\\n" "$HOME/.npm-global/bin/openclaw"; else command -v openclaw; fi'
+}
+
+_ods_pixel_apply_runtime_budget() {
+    local owner="$1" home="$2" config="$3" openclaw_bin="$4" staged
+    # ODS qualifies Pixel on CPU-only hosts. The first local 9B turn can spend
+    # more than five minutes loading and prefilling its managed context, while
+    # OpenClaw's default per-session write lock is five minutes. Keep the
+    # larger budget deterministic and confined to this ODS-owned Pixel route.
+    staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
+import copy, json, os, pathlib, stat, sys, tempfile
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+        or info.st_uid != os.getuid() or info.st_mode & 0o077
+        or info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("unsafe ODS-managed OpenClaw configuration")
+parent_info = path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o022):
+    raise SystemExit("unsafe ODS-managed OpenClaw configuration directory")
+value = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(value, dict):
+    raise SystemExit("ODS-managed OpenClaw configuration must be an object")
+
+providers = value.get("models", {}).get("providers", {})
+agents = value.get("agents", {})
+agent_list = agents.get("list", []) if isinstance(agents, dict) else []
+selected = [item for item in agent_list if isinstance(item, dict) and item.get("id") == "pixel"]
+if not isinstance(providers, dict) or set(providers) != {"ods-local"} or len(selected) != 1:
+    raise SystemExit("OpenClaw configuration is outside the ODS Pixel runtime boundary")
+provider = providers["ods-local"]
+models = provider.get("models") if isinstance(provider, dict) else None
+defaults = agents.get("defaults") if isinstance(agents, dict) else None
+session = value.get("session")
+if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict)
+        or not isinstance(defaults, dict) or not isinstance(session, dict)
+        or provider.get("api") != "openai-completions"
+        or provider.get("apiKey") != "local-no-auth"
+        or selected[0].get("model") != f"ods-local/{models[0].get('id')}"):
+    raise SystemExit("OpenClaw configuration is outside the ODS Pixel runtime contract")
+
+updated = copy.deepcopy(value)
+updated_provider = updated["models"]["providers"]["ods-local"]
+updated_defaults = updated["agents"]["defaults"]
+updated_session = updated["session"]
+write_lock = updated_session.setdefault("writeLock", {})
+if not isinstance(write_lock, dict):
+    raise SystemExit("OpenClaw session write-lock configuration must be an object")
+updated_provider["timeoutSeconds"] = 1800
+updated_defaults["timeoutSeconds"] = 1800
+write_lock["maxHoldMs"] = 1920000
+write_lock["staleMs"] = 3600000
+if updated == value:
+    print("unchanged")
+    raise SystemExit(0)
+
+fd, temporary = tempfile.mkstemp(prefix=".ods-pixel-runtime-budget.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(updated, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    print(temporary)
+except BaseException:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+    raise
+PY
+)" || return 1
+    if [[ "$staged" == unchanged ]]; then
+        printf '%s\n' unchanged
+        return 0
+    fi
+    [[ "$staged" == "${config%/*}/.ods-pixel-runtime-budget."* && -f "$staged" && ! -L "$staged" ]] || return 1
+    if ! ods_pixel_run_as_owner "$owner" "$home" env OPENCLAW_CONFIG_PATH="$staged" \
+        "$openclaw_bin" config validate >/dev/null 2>&1; then
+        ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$staged"
+        return 1
+    fi
+    if ! _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$staged" "$config"; then
+        ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$staged"
+        return 1
+    fi
+    ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$staged" || return 1
+    printf '%s\n' changed
+}
+
 _ods_pixel_restart_gateway_and_verify() {
     local owner="$1" home="$2" pixel_root="$3" attempt ready=false previous_pid current_pid
     ods_sudo_available || return 1
@@ -634,7 +730,7 @@ _ods_pixel_restore_model_reconciliation() {
 
 ods_pixel_reconcile_promoted_model() {
     local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
-    local source_ref source_root pixel_root answers candidate backup contract_sha256 failed=false
+    local source_ref source_root pixel_root answers candidate backup contract_sha256 openclaw_bin failed=false
     [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
     source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
     local PIXEL_SOURCE_REF="$source_ref"
@@ -644,12 +740,18 @@ ods_pixel_reconcile_promoted_model() {
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
     candidate="$pixel_root/dist/openclaw.json"
     backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$home" "$answers")" || return 1
+    openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
+    [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
 
     _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" || failed=true
     if [[ "$failed" == false ]] && {
         ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan;
     }; then
+        failed=true
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_apply_runtime_budget "$owner" "$home" "$candidate" "$openclaw_bin" >/dev/null; then
         failed=true
     fi
     if [[ "$failed" == false ]] \
@@ -1007,7 +1109,7 @@ _ods_pixel_wait_ingress() {
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256
+    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256 runtime_budget_status
     local reuse_active=false same_verified_source=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -1035,9 +1137,7 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel bootstrap failed. See $LOG_FILE for the exact Pixel error."
         return 1
     fi
-    # Expansion is intentionally performed in the owner shell, not here.
-    # shellcheck disable=SC2016
-    openclaw_bin="$(ods_pixel_run_as_owner "$owner" "$home" bash -c 'if [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then printf "%s\\n" "$HOME/.npm-global/bin/openclaw"; else command -v openclaw; fi')"
+    openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")"
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
     plugin_digest="$(ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" extension-hash "$plugin_root/plugin")"
     [[ "$plugin_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
@@ -1099,10 +1199,36 @@ ods_pixel_install_default_agent() {
             return 1
         fi
     fi
-    # Bind the exact verified contract and canonical live config while the
-    # marker remains non-ready. If ingress setup is interrupted, a rerun can
-    # verify and reuse this same active Pixel release instead of attempting an
-    # unsafe same-version reapply.
+    # Record the verified Pixel release before applying the ODS-owned runtime
+    # overlay. If power is lost between the atomic config update and gateway
+    # verification, the next installer run can safely enter the exact-source
+    # reconciliation path instead of attempting to reapply an active release.
+    if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
+        ai_bad "Could not bind the verified Pixel release before local-runtime configuration."
+        return 1
+    fi
+    runtime_budget_status="$(_ods_pixel_apply_runtime_budget "$owner" "$home" \
+        "$home/.openclaw/openclaw.json" "$openclaw_bin")" || {
+        ai_bad "Could not validate and apply Pixel's ODS local-runtime budget."
+        return 1
+    }
+    case "$runtime_budget_status" in
+        changed)
+            ai "Applying Pixel's bounded ODS local-runtime budget..."
+            if ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" >>"$LOG_FILE" 2>&1; then
+                ai_bad "Pixel failed verification after applying the ODS local-runtime budget. See $LOG_FILE."
+                return 1
+            fi
+            ;;
+        unchanged) ;;
+        *)
+            ai_bad "Pixel returned an invalid ODS local-runtime budget result."
+            return 1
+            ;;
+    esac
+    # Rebind the exact verified contract and overlaid canonical live config
+    # while the marker remains non-ready. If ingress setup is interrupted, a
+    # rerun can verify and reuse this same active Pixel release.
     if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
         ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
         return 1

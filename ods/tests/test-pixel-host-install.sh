@@ -224,6 +224,88 @@ assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
 
+runtime_home="$TEST_ROOT/runtime-home"
+runtime_config="$runtime_home/.openclaw/openclaw.json"
+runtime_validator="$TEST_ROOT/openclaw-validator"
+mkdir -p "$runtime_home/.openclaw"
+chmod 0700 "$runtime_home/.openclaw"
+cat > "$runtime_config" <<'JSON'
+{
+  "agents": {
+    "defaults": {"bootstrapMaxChars": 32000},
+    "list": [{"id": "pixel", "model": "ods-local/qwen-test"}]
+  },
+  "models": {
+    "providers": {
+      "ods-local": {
+        "api": "openai-completions",
+        "apiKey": "local-no-auth",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "models": [{"id": "qwen-test", "name": "ODS Local qwen-test"}]
+      }
+    }
+  },
+  "session": {"dmScope": "per-account-channel-peer"}
+}
+JSON
+chmod 0600 "$runtime_config"
+cat > "$runtime_validator" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2" == "config validate" ]]
+python3 - "$OPENCLAW_CONFIG_PATH" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
+assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
+assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 3600000}
+PY
+SH
+chmod 0755 "$runtime_validator"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
+runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
+check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
+check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
+
+runtime_target="$TEST_ROOT/runtime-target.json"
+runtime_link="$TEST_ROOT/runtime-link.json"
+cp "$runtime_config" "$runtime_target"
+ln -s "$runtime_target" "$runtime_link"
+if _ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_link" "$runtime_validator" >/dev/null 2>&1; then
+    fail "symlink ODS Pixel runtime config rejected"
+else
+    pass "symlink ODS Pixel runtime config rejected"
+fi
+chmod 0644 "$runtime_config"
+if _ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator" >/dev/null 2>&1; then
+    fail "unsafe ODS Pixel runtime config mode rejected"
+else
+    pass "unsafe ODS Pixel runtime config mode rejected"
+fi
+chmod 0600 "$runtime_config"
+
+runtime_unvalidated="$runtime_home/.openclaw/unvalidated.json"
+python3 - "$runtime_config" "$runtime_unvalidated" <<'PY'
+import json, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+value = json.loads(source.read_text())
+value["agents"]["defaults"].pop("timeoutSeconds")
+value["models"]["providers"]["ods-local"].pop("timeoutSeconds")
+value["session"].pop("writeLock")
+target.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$runtime_unvalidated"
+runtime_unvalidated_sha256="$(sha256sum "$runtime_unvalidated" | awk '{print $1}')"
+if _ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_unvalidated" /bin/false >/dev/null 2>&1; then
+    fail "invalid OpenClaw runtime budget candidate rejected"
+else
+    pass "invalid OpenClaw runtime budget candidate rejected"
+fi
+check test "$(sha256sum "$runtime_unvalidated" | awk '{print $1}')" = "$runtime_unvalidated_sha256"
+check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
+
 reconcile_home="$TEST_ROOT/reconcile-home"
 reconcile_answers="$TEST_ROOT/reconcile-onboarding.json"
 reconcile_candidate="$TEST_ROOT/reconcile-candidate.json"
@@ -244,7 +326,10 @@ answers["modelId"] = "qwen-old"
 answers["modelName"] = "ODS Local qwen-old"
 answers_path.write_text(json.dumps(answers, indent=2, sort_keys=True) + "\n")
 base = {
-    "agents": {"list": [{"id": "pixel", "model": "ods-local/qwen-old", "preserve": 7}]},
+    "agents": {
+        "defaults": {"bootstrapMaxChars": 32000},
+        "list": [{"id": "pixel", "model": "ods-local/qwen-old", "preserve": 7}],
+    },
     "gateway": {"bind": "loopback"},
     "models": {"providers": {"ods-local": {
         "api": "openai-completions",
@@ -259,6 +344,7 @@ base = {
             "input": ["text"],
         }],
     }}},
+    "session": {"dmScope": "per-account-channel-peer"},
 }
 candidate = copy.deepcopy(base)
 candidate["agents"]["list"][0]["model"] = "ods-local/qwen-new"
@@ -269,6 +355,7 @@ live_path.write_text(json.dumps(base, indent=2, sort_keys=True) + "\n")
 candidate_path.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
 PY
 chmod 0600 "$reconcile_answers" "$reconcile_config" "$reconcile_candidate"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_config" "$runtime_validator")" = changed
 printf '%s\n' '{"kind":"pixel-runtime-attestation"}' > "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 chmod 0600 "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 python3 - "$reconcile_marker" "$reconcile_config" "$INSTALL_DIR" "$reconcile_ref" <<'PY'
@@ -300,6 +387,7 @@ reconcile_backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$reconcil
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-old" and v["modelName"] == "ODS Local qwen-old"' "$reconcile_backup/rollback-onboarding.json"
 _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" qwen-new
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new"' "$reconcile_answers"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_is_model_only_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
 python3 - "$reconcile_candidate" <<'PY'
 import json, pathlib, sys
@@ -386,6 +474,7 @@ assert "pixel\" apply --confirm &&" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
+assert "_ods_pixel_apply_runtime_budget" in text
 assert "ods_pixel_reconcile_promoted_model" in text
 assert installer.index("if _ods_pixel_verified_source_matches") < installer.index("_ods_pixel_mark_installing")
 assert "The exact ODS-managed Pixel contract is already active" in text
