@@ -65,11 +65,11 @@ fi
 check test ! -e "$ambient_home/.config/ods/pixel-managed.json"
 
 answers="$TEST_ROOT/onboarding.json"
-MAX_CONTEXT=32768
-LLM_MODEL=qwen-test
-LLAMA_REASONING=off
-OLLAMA_PORT=11434
-SEARXNG_PORT=8888
+export MAX_CONTEXT=32768
+export LLM_MODEL=qwen-test
+export LLAMA_REASONING=off
+export OLLAMA_PORT=11434
+export SEARXNG_PORT=8888
 digest="$(printf 'a%.0s' {1..64})"
 _ods_pixel_write_onboarding "$owner" "$home" "$answers" /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
 check python3 -c '
