@@ -3468,6 +3468,26 @@ class TestModelActivationModeAndMacosBridge:
         monkeypatch.setattr(_mod, "_configure_macos_llm_bridge", record_bridge)
         monkeypatch.setattr(_mod, "_launch_native_llama_server", record_launch)
         monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            _mod,
+            "_capture_container_state",
+            lambda name: {"exists": name == "ods-dashboard-api", "running": name == "ods-dashboard-api"},
+        )
+
+        def record_dependent_restart(container, expected_state=None, *, recreate=False):
+            if container == "ods-dashboard-api":
+                assert expected_state == {"exists": True, "running": True}
+                assert recreate is True
+                events.append(("recreate-dashboard", container))
+                return True
+            return False
+
+        monkeypatch.setattr(_mod, "_restart_existing_container", record_dependent_restart)
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_container_health",
+            lambda container: events.append(("wait-container-health", container)),
+        )
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         handler = _FakeHandler(b"")
 
@@ -3480,7 +3500,9 @@ class TestModelActivationModeAndMacosBridge:
         assert receipt["llm_model"] == "new-model"
         assert receipt["gguf_file"] == "new-model.gguf"
         assert receipt["context_length"] == 4096
-        assert receipt["consumers"]["dashboard"] == "live_env"
+        assert receipt["consumers"]["dashboard"] == "recreated"
+        assert ("recreate-dashboard", "ods-dashboard-api") in events
+        assert ("wait-container-health", "ods-dashboard-api") in events
         assert events[:5] == [
             ("bridge-preflight", "127.0.0.1"),
             ("stop-old-direct-listener", ".llama-server.pid"),

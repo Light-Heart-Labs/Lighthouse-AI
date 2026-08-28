@@ -7784,6 +7784,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         runtime_restart_strategy: str | None = None
         opencode_restarted = False
         opencode_config_mutated = False
+        dashboard_recreate_attempted = False
+        dashboard_recreated = False
         litellm_restart_attempted = False
         hermes_config_mutated = False
         hermes_restart_attempted = False
@@ -7865,6 +7867,14 @@ class AgentHandler(BaseHTTPRequestHandler):
                 restore_backups()
                 restore_previous_runtime()
                 rollback_env = load_env(env_path)
+                if dashboard_recreate_attempted:
+                    dashboard_restored = _restore_container_state(
+                        "ods-dashboard-api",
+                        container_states["ods-dashboard-api"],
+                        recreate=True,
+                    )
+                    if dashboard_restored:
+                        _wait_for_container_health("ods-dashboard-api")
                 litellm_restarted = False
                 if litellm_restart_attempted:
                     litellm_restarted = _restore_container_state(
@@ -8125,6 +8135,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             container_states = {
                 name: _capture_container_state(name)
                 for name in (
+                    "ods-dashboard-api",
                     "ods-litellm",
                     "ods-hermes",
                     "ods-openclaw",
@@ -8589,9 +8600,26 @@ class AgentHandler(BaseHTTPRequestHandler):
                 )
                 if pixel_status == "not_installed":
                     pixel_reconcile_attempted = False
+                # .env is atomically replaced during activation. Recreate the
+                # Dashboard API so its file bind mount follows the new inode;
+                # docker restart alone would leave the UI on stale model data.
+                dashboard_recreate_attempted = container_states["ods-dashboard-api"]["running"]
+                dashboard_recreated = _restart_existing_container(
+                    "ods-dashboard-api",
+                    container_states["ods-dashboard-api"],
+                    recreate=True,
+                )
+                if dashboard_recreated:
+                    _wait_for_container_health("ods-dashboard-api")
                 consumers = {
                     "open-webui": "dynamic_route",
-                    "dashboard": "live_env",
+                    "dashboard": (
+                        "recreated"
+                        if dashboard_recreated
+                        else "stopped"
+                        if container_states["ods-dashboard-api"]["exists"]
+                        else "not_installed"
+                    ),
                     "litellm": (
                         "restarted"
                         if litellm_restarted
