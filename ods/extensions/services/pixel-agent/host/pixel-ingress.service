@@ -17,7 +17,7 @@ TimeoutStartSec=30
 TimeoutStopSec=20
 
 # Nonsecret configuration only. The gateway token is never placed here; it is
-# read solely from the restricted PIXEL_GATEWAY_ENV_FILE at runtime.
+# read solely from the restricted PIXEL_GATEWAY_TOKEN_FILE at runtime.
 EnvironmentFile=/etc/ods/pixel-agent.env
 Environment=NODE_ENV=production
 
@@ -43,8 +43,8 @@ RestrictRealtime=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
 # ProtectHome hides every home directory; expose only the exact owner-private
-# Pixel gateway env selected and validated by the installer.
-BindReadOnlyPaths=__PIXEL_GATEWAY_ENV_FILE__
+# Pixel gateway token file selected and validated by the installer.
+BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_FILE__
 ReadOnlyPaths=/etc/ods/pixel-agent.env
 ReadWritePaths=/run/ods-pixel
 # Docker socket is NOT mounted into the service; the status projection probes

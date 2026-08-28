@@ -115,7 +115,7 @@ test("configFromEnv applies defaults and overrides", () => {
   const d = configFromEnv({});
   assert.equal(d.socketPath, "/run/ods-pixel/pixel-ingress.sock");
   assert.equal(d.gatewayPort, 18789);
-  assert.equal(d.gatewayEnvFile, "/etc/pixel/gateway.env");
+  assert.equal(d.gatewayTokenFile, "/etc/pixel/openclaw.json");
   assert.equal(d.statusIntervalMs, 30000);
   assert.equal(d.ingressGid, null);
   const o = configFromEnv({
@@ -123,7 +123,7 @@ test("configFromEnv applies defaults and overrides", () => {
     PIXEL_GATEWAY_PORT: "19000",
     PIXEL_INGRESS_GID: "1234",
     PIXEL_STATUS_INTERVAL_MS: "5000",
-    PIXEL_GATEWAY_ENV_FILE: "/custom.env",
+    PIXEL_GATEWAY_TOKEN_FILE: "/custom.json",
   });
   assert.equal(o.socketPath, "/x.sock");
   assert.equal(o.gatewayPort, 19000);
@@ -191,6 +191,14 @@ test("readGatewayToken parses only PIXEL_GATEWAY_TOKEN, rejects empty", () => {
   const empty = path.join(DIR, "empty.env");
   fs.writeFileSync(empty, "PIXEL_GATEWAY_TOKEN=\n", { mode: 0o600 });
   assert.throws(() => readGatewayToken(empty, EUID), /missing or empty/);
+});
+
+test("readGatewayToken reads the owner-private OpenClaw gateway token", () => {
+  const config = path.join(DIR, "openclaw.json");
+  fs.writeFileSync(config, `${JSON.stringify({ gateway: { auth: { token: TOKEN } } })}\n`, { mode: 0o600 });
+  assert.equal(readGatewayToken(config, EUID), TOKEN);
+  fs.writeFileSync(config, `${JSON.stringify({ gateway: { auth: {} } })}\n`, { mode: 0o600 });
+  assert.throws(() => readGatewayToken(config, EUID), /missing or empty/);
 });
 
 // ---------------------------------------------------------------------------
@@ -460,7 +468,7 @@ test("start creates a 0660 socket with the requested gid and closes without exit
   };
   const handle = await start({
     socketPath,
-    gatewayEnvFile: tokenFile,
+    gatewayTokenFile: tokenFile,
     gatewayPort: 18999,
     statusFile,
     statusIntervalMs: 60000,
@@ -514,7 +522,7 @@ test("start writes a safe status projection when docker is unavailable", async (
   };
   const h = await start({
     socketPath: sock,
-    gatewayEnvFile: fakeEnvFile,
+    gatewayTokenFile: fakeEnvFile,
     gatewayPort: 18999,
     statusFile,
     statusIntervalMs: 60000,

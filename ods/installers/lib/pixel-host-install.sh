@@ -106,6 +106,36 @@ finally:
 PY
 }
 
+_ods_pixel_mark_installing() {
+    local owner="$1" home="$2" marker
+    marker="$home/.config/ods/pixel-managed.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
+import json, os, pathlib, stat, sys, tempfile
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 65536:
+    raise SystemExit("invalid Pixel management marker")
+value = json.loads(path.read_text(encoding="utf-8"))
+if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[2]:
+    raise SystemExit("Pixel management marker does not match this ODS install")
+value["state"] = "installing"
+value["pixel_source_ref"] = sys.argv[3]
+fd, temporary = tempfile.mkstemp(prefix=".pixel-managed.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(value, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 ods_pixel_prepare_runtime_identity() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
     ods_sudo_available || {
@@ -284,21 +314,21 @@ PY
 
 _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3"
-    local env_file="$home/.config/pixel-agent/gateway.env"
-    [[ -f "$env_file" && ! -L "$env_file" ]] || return 1
-    [[ "$(stat -c '%u' -- "$env_file")" == "$(id -u "$owner")" ]] || return 1
-    (( (8#$(stat -c '%a' -- "$env_file") & 0077) == 0 )) || return 1
+    local token_file="$home/.openclaw/openclaw.json"
+    [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
+    [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
+    (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
 
     local stage
     stage="$(mktemp -d)" || return 1
-    python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$env_file" <<'PY'
+    python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$token_file" <<'PY'
 import pathlib, sys
 
-source, target, owner, env_file = sys.argv[1:5]
+source, target, owner, token_file = sys.argv[1:5]
 text = pathlib.Path(source).read_text(encoding="utf-8")
-if any(c in owner + env_file for c in "\n\r\0"):
+if any(c in owner + token_file for c in "\n\r\0"):
     raise SystemExit("unsafe systemd substitution")
-text = text.replace("__PIXEL_SERVICE_USER__", owner).replace("__PIXEL_GATEWAY_ENV_FILE__", env_file)
+text = text.replace("__PIXEL_SERVICE_USER__", owner).replace("__PIXEL_GATEWAY_TOKEN_FILE__", token_file)
 if "__PIXEL_" in text:
     raise SystemExit("unresolved Pixel systemd placeholder")
 pathlib.Path(target).write_text(text, encoding="utf-8", newline="\n")
@@ -306,7 +336,7 @@ PY
     cat > "$stage/pixel-agent.env" <<EOF
 PIXEL_INGRESS_SOCKET=/run/ods-pixel/pixel-ingress.sock
 PIXEL_INGRESS_GID=${PIXEL_INGRESS_GID:?}
-PIXEL_GATEWAY_ENV_FILE=$env_file
+PIXEL_GATEWAY_TOKEN_FILE=$token_file
 PIXEL_GATEWAY_PORT=18789
 PIXEL_STATUS_FILE=/run/ods-pixel/ods-status.json
 PIXEL_STATUS_INTERVAL_MS=30000
@@ -329,6 +359,7 @@ ods_pixel_install_default_agent() {
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
     _ods_pixel_assert_managed_state "$owner" "$home" || return 1
+    _ods_pixel_mark_installing "$owner" "$home" || return 1
     source_root="${INSTALL_DIR:?}/data/pixel/source-${PIXEL_SOURCE_REF:?}"
     pixel_root="$(_ods_pixel_source_checkout "$owner" "$home" "$source_root")" || {
         ai_bad "Pixel source checkout is absent, changed, or not at the configured exact commit."

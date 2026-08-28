@@ -53,6 +53,9 @@ check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {
 _ods_pixel_mark_ready "$owner" "$home"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "ready" and v["pixel_source_ref"] == sys.argv[2]' "$marker" "$PIXEL_SOURCE_REF"
 check _ods_pixel_assert_managed_state "$owner" "$home"
+_ods_pixel_mark_installing "$owner" "$home"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2]' "$marker" "$PIXEL_SOURCE_REF"
+_ods_pixel_mark_ready "$owner" "$home"
 
 ambient_home="$TEST_ROOT/ambient-home"
 mkdir -p "$ambient_home/.openclaw"

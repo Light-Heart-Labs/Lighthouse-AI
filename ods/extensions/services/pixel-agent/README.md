@@ -10,8 +10,8 @@ as a hard boundary between Open WebUI and the operator's Pixel gateway.
 **Pixel is a single-owner, operator-trusted agent.** This service is the
 intentional choke point that decides exactly what reaches the Pixel gateway:
 
-- The gateway token is read **only** from `PIXEL_GATEWAY_ENV_FILE` (default
-  `/etc/pixel/gateway.env`), a file that must be owned by the process euid,
+- The gateway token is read **only** from `PIXEL_GATEWAY_TOKEN_FILE` (default
+  `/etc/pixel/openclaw.json`), a file that must be owned by the process euid,
   be a regular file (never a symlink), and not be group/world-readable. The
   token is never logged, never written to the status projection, and never
   echoed to any caller.
@@ -72,21 +72,21 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
 |----------|---------|-------------|
 | `PIXEL_INGRESS_SOCKET` | `/run/ods-pixel/pixel-ingress.sock` | Unix socket path (UDS only) |
 | `PIXEL_INGRESS_GID` | unset | Numeric GID allowed to connect to the socket |
-| `PIXEL_GATEWAY_ENV_FILE` | `/etc/pixel/gateway.env` | Restricted file containing `PIXEL_GATEWAY_TOKEN` |
+| `PIXEL_GATEWAY_TOKEN_FILE` | `/etc/pixel/openclaw.json` | Restricted owner-private OpenClaw config containing the gateway token |
 | `PIXEL_GATEWAY_PORT` | `18789` | Fixed loopback gateway port |
 | `PIXEL_STATUS_FILE` | `/run/ods-pixel/ods-status.json` | Status projection path |
 | `PIXEL_STATUS_INTERVAL_MS` | `30000` | Status write interval |
 
 Secrets are never configured here. The token lives only in
-`PIXEL_GATEWAY_ENV_FILE`.
+`PIXEL_GATEWAY_TOKEN_FILE`.
 
 ## systemd unit
 
 `host/pixel-ingress.service` runs as the same unprivileged owner as the Pixel
 gateway and is hardened with `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=true`,
 `PrivateTmp`, `PrivateDevices`, `RestrictAddressFamilies=AF_UNIX AF_INET
-AF_INET6`, an explicit `ReadOnlyPaths` for the gateway env, and a `UMask=0007`.
-It creates `/run/ods-pixel` (`RuntimeDirectory` mode `0750`) and restarts on
+AF_INET6`, an explicit read-only bind for the gateway token file, and a `UMask=0007`.
+It creates `/run/ods-pixel` (`RuntimeDirectory` mode `0710`) and restarts on
 failure. It contains no credential.
 
 ## Rollback

@@ -165,7 +165,7 @@ export function validateConfig(cfg) {
   }
   for (const [label, value] of [
     ["socket path", cfg.socketPath],
-    ["gateway env file", cfg.gatewayEnvFile],
+    ["gateway token file", cfg.gatewayTokenFile],
     ["status file", cfg.statusFile],
   ]) {
     if (typeof value !== "string" || !path.isAbsolute(value) || value.includes("\0")) {
@@ -178,8 +178,8 @@ export function validateConfig(cfg) {
 export function configFromEnv(env = process.env) {
   const cfg = {
     socketPath: env.PIXEL_INGRESS_SOCKET || "/run/ods-pixel/pixel-ingress.sock",
-    gatewayEnvFile:
-      env.PIXEL_GATEWAY_ENV_FILE || "/etc/pixel/gateway.env",
+    gatewayTokenFile:
+      env.PIXEL_GATEWAY_TOKEN_FILE || "/etc/pixel/openclaw.json",
     gatewayPort: Number(env.PIXEL_GATEWAY_PORT || "18789"),
     statusFile: env.PIXEL_STATUS_FILE || "/run/ods-pixel/ods-status.json",
     statusIntervalMs: Number(env.PIXEL_STATUS_INTERVAL_MS || "30000"),
@@ -189,10 +189,12 @@ export function configFromEnv(env = process.env) {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway token: read only from the explicit PIXEL_GATEWAY_ENV_FILE, parse
-// only PIXEL_GATEWAY_TOKEN. Refuse symlinks, non-regular files, group/world
-// readable modes, or an owner other than the process euid. The token value
-// itself must be whitespace-free, control-free, and bounded in length.
+// Gateway token: read only from the explicit PIXEL_GATEWAY_TOKEN_FILE. ODS
+// points this at Pixel's owner-private OpenClaw JSON; the env-file form remains
+// accepted for isolated tests and controlled migrations. Refuse symlinks,
+// non-regular files, group/world-readable modes, or an owner other than the
+// process euid. The token itself must be whitespace-free, control-free, and
+// bounded in length.
 // ---------------------------------------------------------------------------
 
 export function readGatewayToken(
@@ -217,25 +219,35 @@ export function readGatewayToken(
     throw new Error("token file is group/world readable");
   }
   const raw = fs.readFileSync(file, "utf8");
-  const tokenLines = raw.split(/\r?\n/);
-  for (const line of tokenLines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("PIXEL_GATEWAY_TOKEN=")) continue;
-    const rawValue = line.slice(line.indexOf("=") + 1);
-    const value = rawValue.trim();
-    if (value !== rawValue) {
-      throw new Error("token has surrounding whitespace");
+  let value = "";
+  if (raw.trimStart().startsWith("{")) {
+    let config;
+    try {
+      config = JSON.parse(raw);
+    } catch {
+      throw new Error("gateway token file contains invalid JSON");
     }
-    if (value.length === 0) continue;
-    if (/[\x00-\x1f\x7f]/.test(value)) {
-      throw new Error("token contains control characters");
+    value = config?.gateway?.auth?.token ?? config?.gateway?.token ?? "";
+  } else {
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim().startsWith("PIXEL_GATEWAY_TOKEN=")) continue;
+      value = line.slice(line.indexOf("=") + 1);
+      break;
     }
-    if (value.length > MAX_TOKEN_LEN) {
-      throw new Error("token too long");
-    }
-    return value;
   }
-  throw new Error("PIXEL_GATEWAY_TOKEN missing or empty");
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("gateway token missing or empty");
+  }
+  if (value.trim() !== value) {
+    throw new Error("token has surrounding whitespace");
+  }
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    throw new Error("token contains control characters");
+  }
+  if (value.length > MAX_TOKEN_LEN) {
+    throw new Error("token too long");
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +749,7 @@ function listenUnix(server, socketPath) {
 export async function start(cfg = configFromEnv(), opts = {}) {
   validateConfig(cfg);
   const deps = { ...defaultDeps, ...(opts.deps || {}) };
-  const token = readGatewayToken(cfg.gatewayEnvFile, opts.euid);
+  const token = readGatewayToken(cfg.gatewayTokenFile, opts.euid);
   prepareSocketPath(cfg.socketPath);
   const server = createIngressServer({ token, gatewayPort: cfg.gatewayPort, deps });
   await listenUnix(server, cfg.socketPath);
