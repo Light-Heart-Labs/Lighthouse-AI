@@ -72,7 +72,7 @@ service:
   external_port_default: 8080
   health: /health
   type: docker
-  gpu_backends: [amd, nvidia]
+  gpu_backends: [cpu, amd, nvidia]
   category: core
   depends_on: []
 EOF
