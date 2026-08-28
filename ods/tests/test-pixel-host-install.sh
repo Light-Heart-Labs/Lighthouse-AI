@@ -49,15 +49,43 @@ export INSTALL_DIR PIXEL_SOURCE_REF ODS_PIXEL_GATEWAY_UNIT_PATH
 _ods_pixel_assert_managed_state "$owner" "$home"
 marker="$home/.config/ods/pixel-managed.json"
 check test "$(stat -c '%a' "$marker")" = 600
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {"install_dir":sys.argv[2],"manager":"ods","pixel_source_ref":sys.argv[3],"schema_version":1,"state":"installing"}' "$marker" "$INSTALL_DIR" "$PIXEL_SOURCE_REF"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {"initial_active_state":"absent","install_dir":sys.argv[2],"manager":"ods","pixel_source_ref":sys.argv[3],"schema_version":2,"state":"installing"}' "$marker" "$INSTALL_DIR" "$PIXEL_SOURCE_REF"
 printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}' > "$home/.openclaw/openclaw.json"
 chmod 0600 "$home/.openclaw/openclaw.json"
 contract_sha256="$(printf 'c%.0s' {1..64})"
-_ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
+pixel_root="$TEST_ROOT/pixel-root"
+release="$home/.local/share/pixel/releases/4.3.14"
+mkdir -p "$pixel_root" "$release"
+printf '%s\n' '{"sandboxImage":"openclaw-sandbox:test"}' > "$pixel_root/RELEASE-MANIFEST.json"
+cat > "$release/release-identity.json" <<JSON
+{"kind":"pixel-release-source-identity","pixel":"4.3.14","source":{"state":"git-clean","commit":"$PIXEL_SOURCE_REF","tree":"$(printf 'a%.0s' {1..40})"}}
+JSON
+printf '%s  %s\n' "$(sha256sum "$release/release-identity.json" | awk '{print $1}')" release-identity.json > "$release/install-manifest.sha256"
+identity_sha256="$(sha256sum "$release/release-identity.json" | awk '{print $1}')"
+manifest_sha256="$(sha256sum "$release/install-manifest.sha256" | awk '{print $1}')"
+cat > "$home/.local/share/pixel/runtime-attestation.json" <<JSON
+{"kind":"pixel-runtime-attestation","status":"verified","pixel":"4.3.14","source":{"state":"git-clean","commit":"$PIXEL_SOURCE_REF","tree":"$(printf 'a%.0s' {1..40})"},"release":{"sourceIdentitySha256":"$identity_sha256","installManifestSha256":"$manifest_sha256"}}
+JSON
+chmod 0600 "$home/.local/share/pixel/runtime-attestation.json"
+ln -s "$release" "$home/.local/share/pixel/current"
+mock_bin="$TEST_ROOT/mock-bin"
+mkdir -p "$mock_bin"
+cat > "$mock_bin/docker" <<SH
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "image inspect" ]]; then
+    printf '%s\n' 'sha256:$(printf 'd%.0s' {1..64})'
+    exit 0
+fi
+exit 1
+SH
+chmod +x "$mock_bin/docker"
+PATH="$mock_bin:$PATH"
+export PATH
+_ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64 and v["active_release_version"] == "4.3.14" and len(v["release_identity_sha256"]) == 64 and len(v["install_manifest_sha256"]) == 64 and v["sandbox_image"] == "openclaw-sandbox:test" and v["sandbox_image_id"].startswith("sha256:")' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
 check _ods_pixel_verified_source_matches "$owner" "$home"
-_ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"
+_ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "ready" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
 if _ods_pixel_managed_contract_matches "$owner" "$home" "$(printf 'd%.0s' {1..64})"; then
@@ -77,6 +105,8 @@ if _ods_pixel_verified_source_matches "$owner" "$home"; then
 else
     pass "mismatched verified Pixel source rejected for extension refresh"
 fi
+_ods_pixel_mark_installing "$owner" "$home"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["pixel_source_ref"] == sys.argv[2] and v["requested_source_ref"] == sys.argv[3] and v["state"] == "installing"' "$marker" "$original_source_ref" "$PIXEL_SOURCE_REF"
 PIXEL_SOURCE_REF="$original_source_ref"
 chmod 0644 "$marker"
 if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
@@ -115,7 +145,7 @@ check _ods_pixel_assert_managed_state "$owner" "$home"
 _ods_pixel_mark_installing "$owner" "$home"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3]' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
-_ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"
+_ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"
 
 ambient_home="$TEST_ROOT/ambient-home"
 mkdir -p "$ambient_home/.openclaw"
@@ -126,6 +156,47 @@ else
     pass "ambient OpenClaw deployment rejected"
 fi
 check test ! -e "$ambient_home/.config/ods/pixel-managed.json"
+
+ambient_active_home="$TEST_ROOT/ambient-active-home"
+mkdir -p "$ambient_active_home/.local/share/pixel/releases/4.3.14"
+ln -s "$ambient_active_home/.local/share/pixel/releases/4.3.14" "$ambient_active_home/.local/share/pixel/current"
+if _ods_pixel_assert_managed_state "$owner" "$ambient_active_home" >/dev/null 2>&1; then
+    fail "ambient active Pixel release rejected before marker creation"
+else
+    pass "ambient active Pixel release rejected before marker creation"
+fi
+check test ! -e "$ambient_active_home/.config/ods/pixel-managed.json"
+
+source_fixture="$TEST_ROOT/pixel-source-fixture"
+mkdir -p "$source_fixture"
+git -C "$source_fixture" init -q
+printf '%s\n' fixture > "$source_fixture/pixel"
+git -C "$source_fixture" add pixel
+git -C "$source_fixture" -c user.name=test -c user.email=test@example.invalid commit -qm fixture
+PIXEL_SOURCE_URL="$source_fixture"
+PIXEL_SOURCE_REF="$(git -C "$source_fixture" rev-parse HEAD)"
+source_checkout="$TEST_ROOT/pixel-checkouts/source-$PIXEL_SOURCE_REF"
+check test "$(_ods_pixel_source_checkout "$owner" "$home" "$source_checkout")" = "$source_checkout"
+check test "$(git -C "$source_checkout" rev-parse HEAD)" = "$PIXEL_SOURCE_REF"
+check test -z "$(git -C "$source_checkout" status --porcelain)"
+
+cat > "$mock_bin/git" <<'SH'
+#!/usr/bin/env bash
+sleep 10
+SH
+chmod +x "$mock_bin/git"
+PIXEL_SOURCE_URL="https://github.com/Osmantic/Pixel.git"
+PIXEL_SOURCE_REF="$(printf 'f%.0s' {1..40})"
+timed_checkout="$TEST_ROOT/timed-checkouts/source-$PIXEL_SOURCE_REF"
+if PATH="$mock_bin:$PATH" ODS_PIXEL_SOURCE_TIMEOUT_SECONDS=1 \
+    _ods_pixel_source_checkout "$owner" "$home" "$timed_checkout" >/dev/null 2>&1; then
+    fail "hung Pixel source clone is bounded and rejected"
+elif [[ ! -e "$timed_checkout" ]] \
+    && ! find "${timed_checkout%/*}" -mindepth 1 -print -quit | grep -q .; then
+    pass "hung Pixel source clone is bounded and leaves no partial checkout"
+else
+    fail "failed Pixel source clone left a partial checkout"
+fi
 
 answers="$TEST_ROOT/onboarding.json"
 export MAX_CONTEXT=32768
@@ -218,6 +289,16 @@ assert "ods_linux_node_tools_available" in text
 assert "runtime_token_file=\"/run/ods-pixel/openclaw.json\"" in text
 assert "PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file" in text
 ' "$ROOT/installers/lib/pixel-host-install.sh"
+check python3 -c '
+import pathlib,sys
+phase=pathlib.Path(sys.argv[1]).read_text()
+handoff = (
+    "ods_pixel_activate_source_contract \\\n"
+    "            \"$PIXEL_SOURCE_URL_VALUE\" \"$PIXEL_SOURCE_REF_VALUE\" \"$PIXEL_SOURCE_DIR_VALUE\""
+)
+assert handoff in phase
+assert phase.index(handoff) < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
+' "$ROOT/installers/phases/06-directories.sh"
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()

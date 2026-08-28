@@ -181,6 +181,21 @@ ods_pixel_validate_source() {
     [[ -d "$resolved_source/.git" && ! -L "$resolved_source/.git" ]] || return 1
 }
 
+# Validate and retain the resolved immutable Pixel source for later installer
+# phases. `NAME=value function` assignments are temporary in Bash, so Phase 06
+# must deliberately export this contract before Phase 11 installs Pixel.
+ods_pixel_activate_source_contract() {
+    local source="${1:-}" ref="${2:-}" owner_root="${3:-}"
+    PIXEL_SOURCE_URL="$source"
+    PIXEL_SOURCE_REF="$ref"
+    PIXEL_SOURCE_DIR="$owner_root"
+    if ! ods_pixel_validate_source; then
+        unset PIXEL_SOURCE_URL PIXEL_SOURCE_REF PIXEL_SOURCE_DIR
+        return 1
+    fi
+    export PIXEL_SOURCE_URL PIXEL_SOURCE_REF PIXEL_SOURCE_DIR
+}
+
 ods_pixel_generate_key() {
     local key=""
     if command -v openssl >/dev/null 2>&1; then

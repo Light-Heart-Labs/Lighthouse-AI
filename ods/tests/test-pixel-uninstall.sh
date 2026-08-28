@@ -22,6 +22,8 @@ LIBEXEC_DIR="$TEST_ROOT/libexec"
 HOME_DIR="$TEST_ROOT/home"
 INSTALL_DIR="$TEST_ROOT/install"
 SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
+DOCKER_LOG="$TEST_ROOT/docker.log"
+DOCKER_STATE="$TEST_ROOT/docker-live-state"
 mkdir -p "$MOCK_BIN" "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR"
 
 cat >"$MOCK_BIN/sudo" <<'SH'
@@ -39,8 +41,38 @@ case " $* " in
 esac
 exit 0
 SH
-chmod +x "$MOCK_BIN/sudo" "$MOCK_BIN/systemctl"
-export PATH="$MOCK_BIN:$PATH" SYSTEMCTL_LOG
+cat >"$MOCK_BIN/docker" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$DOCKER_LOG"
+image_id="sha256:$(printf 'd%.0s' {1..64})"
+container_id="$(printf 'e%.0s' {1..64})"
+case "${1:-} ${2:-}" in
+    "image inspect")
+        reference="${*: -1}"
+        if [[ "$reference" == openclaw-sandbox:test && ! -e "$DOCKER_STATE" ]]; then
+            exit 1
+        fi
+        if [[ " $* " == *" --format "* ]]; then
+            printf '%s|4.3.14|%s|sandbox\n' "$image_id" "$(id -u)"
+        else
+            printf '%s\n' '[]'
+        fi
+        ;;
+    "image rm")
+        rm -f -- "$DOCKER_STATE"
+        ;;
+    "ps -aq")
+        printf '%s\n' "$container_id"
+        ;;
+    "inspect --format")
+        printf '/pixel-sbx-agent-pixel-test|1|agent:pixel|%s\n' "$image_id"
+        ;;
+    "rm -f") ;;
+    *) exit 1 ;;
+esac
+SH
+chmod +x "$MOCK_BIN/sudo" "$MOCK_BIN/systemctl" "$MOCK_BIN/docker"
+export PATH="$MOCK_BIN:$PATH" SYSTEMCTL_LOG DOCKER_LOG DOCKER_STATE
 export ODS_PIXEL_UNINSTALL_SYSTEMD_DIR="$SYSTEMD_DIR"
 export ODS_PIXEL_UNINSTALL_ETC_DIR="$ETC_DIR"
 export ODS_PIXEL_UNINSTALL_LIBEXEC_DIR="$LIBEXEC_DIR"
@@ -66,6 +98,8 @@ fi
 write_fixture() {
     rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR"
     : >"$SYSTEMCTL_LOG"
+    : >"$DOCKER_LOG"
+    rm -f -- "$DOCKER_STATE"
     mkdir -p \
         "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" \
         "$HOME_DIR/.config/ods" "$HOME_DIR/.config/pixel-agent" \
@@ -118,6 +152,50 @@ ENV
     chmod 0640 "$ETC_DIR/pixel-agent.env"
 }
 
+write_active_fixture() {
+    write_fixture
+    local pixel_install="$HOME_DIR/.local/share/pixel"
+    local release="$pixel_install/releases/4.3.14"
+    local source_ref="d2a2b6be552126f294fb30ee5fb46872acf82c89"
+    local source_tree image_id
+    source_tree="$(printf 'a%.0s' {1..40})"
+    image_id="sha256:$(printf 'd%.0s' {1..64})"
+    mkdir -p "$release"
+    cat >"$release/release-identity.json" <<JSON
+{"kind":"pixel-release-source-identity","pixel":"4.3.14","source":{"state":"git-clean","commit":"$source_ref","tree":"$source_tree"}}
+JSON
+    printf '%s  %s\n' "$(sha256sum "$release/release-identity.json" | awk '{print $1}')" release-identity.json \
+        >"$release/install-manifest.sha256"
+    local identity_sha256 manifest_sha256 config_sha256 contract_sha256
+    identity_sha256="$(sha256sum "$release/release-identity.json" | awk '{print $1}')"
+    manifest_sha256="$(sha256sum "$release/install-manifest.sha256" | awk '{print $1}')"
+    cat >"$pixel_install/runtime-attestation.json" <<JSON
+{"kind":"pixel-runtime-attestation","status":"verified","pixel":"4.3.14","source":{"state":"git-clean","commit":"$source_ref","tree":"$source_tree"},"release":{"sourceIdentitySha256":"$identity_sha256","installManifestSha256":"$manifest_sha256"}}
+JSON
+    chmod 0600 "$pixel_install/runtime-attestation.json"
+    : >"$pixel_install/.deployment.lock"
+    chmod 0600 "$pixel_install/.deployment.lock"
+    ln -s "$release" "$pixel_install/current"
+    config_sha256="$(python3 - "$HOME_DIR/.openclaw/openclaw.json" <<'PY'
+import hashlib, json, pathlib, sys
+value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+print(hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical).hexdigest())
+PY
+)"
+    contract_sha256="$(python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(b"ods-pixel-contract-v1\0" + pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+    cat >"$HOME_DIR/.config/ods/pixel-managed.json" <<JSON
+{"schema_version":2,"manager":"ods","state":"ready","initial_active_state":"absent","install_dir":"$INSTALL_DIR","pixel_source_ref":"$source_ref","contract_sha256":"$contract_sha256","configuration_sha256":"$config_sha256","active_release_version":"4.3.14","release_identity_sha256":"$identity_sha256","install_manifest_sha256":"$manifest_sha256","sandbox_image":"openclaw-sandbox:test","sandbox_image_id":"$image_id"}
+JSON
+    chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
+    : >"$DOCKER_STATE"
+    : >"$DOCKER_LOG"
+}
+
 write_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     [[ ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
@@ -137,6 +215,95 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     fi
 else
     fail "valid managed Pixel cleanup failed"
+fi
+
+write_active_fixture
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    pixel_install="$HOME_DIR/.local/share/pixel"
+    [[ ! -e "$pixel_install/current" && ! -L "$pixel_install/current" \
+        && ! -e "$pixel_install/runtime-attestation.json" \
+        && ! -e "$pixel_install/.ods-uninstall-current" \
+        && ! -e "$pixel_install/.ods-uninstall-runtime-attestation" \
+        && -d "$pixel_install/releases/4.3.14" \
+        && -f "$pixel_install/.deployment.lock" \
+        && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && ! -e "$DOCKER_STATE" ]] \
+        && pass "fully bound ODS Pixel is deactivated while its release, caches, and lock are preserved" \
+        || fail "fully bound ODS Pixel active-state cleanup was incomplete or over-broad"
+    grep -Fq 'rm -f' "$DOCKER_LOG" \
+        && grep -Fq 'image rm -- openclaw-sandbox:test' "$DOCKER_LOG" \
+        && pass "managed sandbox containers and exact live tag are retired" \
+        || fail "managed Pixel Docker state was not retired exactly"
+else
+    fail "fully bound ODS Pixel active state was not safely deactivated"
+fi
+
+write_active_fixture
+printf '%s\n' '{"tampered":true}' >"$HOME_DIR/.local/share/pixel/runtime-attestation.json"
+chmod 0600 "$HOME_DIR/.local/share/pixel/runtime-attestation.json"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "tampered active Pixel attestation was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "tampered active Pixel attestation fails before service or Docker mutation" \
+        || fail "tampered active Pixel attestation caused partial cleanup"
+fi
+
+write_active_fixture
+mv -T "$HOME_DIR/.local/share/pixel/runtime-attestation.json" \
+    "$HOME_DIR/.local/share/pixel/.ods-uninstall-runtime-attestation"
+mv -T "$HOME_DIR/.local/share/pixel/current" \
+    "$HOME_DIR/.local/share/pixel/.ods-uninstall-current"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    [[ ! -e "$HOME_DIR/.local/share/pixel/.ods-uninstall-current" \
+        && ! -e "$HOME_DIR/.local/share/pixel/.ods-uninstall-runtime-attestation" \
+        && ! -e "$DOCKER_STATE" ]] \
+        && pass "interrupted staged Pixel deactivation resumes to a clean inactive state" \
+        || fail "staged Pixel deactivation did not reconcile exactly"
+else
+    fail "staged Pixel deactivation could not resume safely"
+fi
+
+for interrupted_step in attestation link; do
+    write_active_fixture
+    if [[ "$interrupted_step" == attestation ]]; then
+        mv -T "$HOME_DIR/.local/share/pixel/runtime-attestation.json" \
+            "$HOME_DIR/.local/share/pixel/.ods-uninstall-runtime-attestation"
+    else
+        mv -T "$HOME_DIR/.local/share/pixel/current" \
+            "$HOME_DIR/.local/share/pixel/.ods-uninstall-current"
+    fi
+    if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR" \
+        && [[ ! -e "$HOME_DIR/.local/share/pixel/current" \
+            && ! -e "$HOME_DIR/.local/share/pixel/runtime-attestation.json" \
+            && ! -e "$HOME_DIR/.local/share/pixel/.ods-uninstall-current" \
+            && ! -e "$HOME_DIR/.local/share/pixel/.ods-uninstall-runtime-attestation" \
+            && ! -e "$DOCKER_STATE" ]]; then
+        pass "deactivation resumes after only the $interrupted_step move completed"
+    else
+        fail "deactivation could not resume after the $interrupted_step move"
+    fi
+done
+
+write_active_fixture
+python3 - "$HOME_DIR/.config/ods/pixel-managed.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["schema_version"] = 1
+value.pop("initial_active_state", None)
+path.write_text(json.dumps(value) + "\n")
+PY
+chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "legacy marker without a pre-install absence proof deactivated Pixel"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" && -e "$DOCKER_STATE" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "legacy marker cannot claim or deactivate an active Pixel release" \
+        || fail "legacy marker active-state refusal caused mutation"
 fi
 
 write_fixture

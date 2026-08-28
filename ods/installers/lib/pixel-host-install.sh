@@ -33,8 +33,9 @@ ods_pixel_run_as_owner() {
 }
 
 _ods_pixel_assert_managed_state() {
-    local owner="$1" home="$2" marker
+    local owner="$1" home="$2" marker pixel_install
     marker="$home/.config/ods/pixel-managed.json"
+    pixel_install="$home/.local/share/pixel"
     local gateway_unit="${ODS_PIXEL_GATEWAY_UNIT_PATH:-/etc/systemd/system/openclaw-gateway.service}"
     if [[ -e "$marker" || -L "$marker" ]]; then
         [[ -f "$marker" && ! -L "$marker" ]] || return 1
@@ -43,8 +44,11 @@ _ods_pixel_assert_managed_state() {
         ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" <<'PY'
 import json, pathlib, sys
 value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[2]:
+if (value.get("schema_version") not in {1, 2} or value.get("manager") != "ods"
+        or value.get("install_dir") != sys.argv[2]):
     raise SystemExit("Pixel management marker does not match this ODS install")
+if value.get("schema_version") == 2 and value.get("initial_active_state") != "absent":
+    raise SystemExit("Pixel management marker has no safe pre-install state")
 PY
         return
     fi
@@ -54,6 +58,8 @@ PY
         "$home/.openclaw/openclaw.json" \
         "$home/.config/pixel-agent/gateway.env" \
         "$home/.config/pixel-deployment/onboarding.json" \
+        "$pixel_install/current" \
+        "$pixel_install/runtime-attestation.json" \
         "$gateway_unit"; do
         if [[ -e "$existing" || -L "$existing" ]]; then
             ai_bad "An existing non-ODS Pixel/OpenClaw deployment was found. ODS will not overwrite it."
@@ -66,9 +72,10 @@ PY
 import json, os, pathlib, sys, tempfile
 path = pathlib.Path(sys.argv[1])
 payload = json.dumps({
-    "schema_version": 1,
+    "schema_version": 2,
     "manager": "ods",
     "state": "installing",
+    "initial_active_state": "absent",
     "install_dir": sys.argv[2],
     "pixel_source_ref": sys.argv[3],
 }, indent=2, sort_keys=True) + "\n"
@@ -87,21 +94,43 @@ PY
 }
 
 _ods_pixel_record_verified_state() {
-    local owner="$1" home="$2" contract_sha256="$3" state="$4" marker config
+    local owner="$1" home="$2" contract_sha256="$3" state="$4" pixel_root="$5"
+    local marker config manifest sandbox_image sandbox_image_id
     [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
     [[ "$state" == installing || "$state" == ready ]] || return 1
     marker="$home/.config/ods/pixel-managed.json"
     config="$home/.openclaw/openclaw.json"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" "$contract_sha256" "$state" <<'PY'
+    manifest="$pixel_root/RELEASE-MANIFEST.json"
+    sandbox_image="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$manifest" <<'PY'
+import json, pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+image = value.get("sandboxImage") if isinstance(value, dict) else None
+if not isinstance(image, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}", image):
+    raise SystemExit("invalid Pixel sandbox image reference")
+print(image)
+PY
+)" || return 1
+    sandbox_image_id="$(ods_pixel_run_as_owner "$owner" "$home" timeout 30s docker image inspect \
+        --format '{{.Id}}' "$sandbox_image")" || return 1
+    [[ "$sandbox_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" \
+        "$contract_sha256" "$state" "$home" "$sandbox_image" "$sandbox_image_id" <<'PY'
 import hashlib, json, os, pathlib, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
 info = path.lstat()
-if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 65536:
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+        or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536):
     raise SystemExit("invalid Pixel management marker")
 value = json.loads(path.read_text(encoding="utf-8"))
-if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[3]:
+if (value.get("schema_version") != 2 or value.get("manager") != "ods"
+        or value.get("install_dir") != sys.argv[3]
+        or value.get("initial_active_state") != "absent"):
     raise SystemExit("Pixel management marker does not match this ODS install")
+if value.get("requested_source_ref") not in {None, sys.argv[4]}:
+    raise SystemExit("Pixel management marker requested source does not match the verified source")
 config_path = pathlib.Path(sys.argv[2])
 config_info = config_path.lstat()
 if (not stat.S_ISREG(config_info.st_mode) or stat.S_ISLNK(config_info.st_mode)
@@ -114,10 +143,66 @@ if not isinstance(config, dict):
 canonical_config = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
 if sys.argv[6] not in {"installing", "ready"}:
     raise SystemExit("invalid Pixel management state")
+
+home = pathlib.Path(sys.argv[7])
+install_root = home / ".local/share/pixel"
+releases_root = install_root / "releases"
+current = install_root / "current"
+current_info = current.lstat()
+if not stat.S_ISLNK(current_info.st_mode) or current_info.st_uid != os.getuid():
+    raise SystemExit("invalid active Pixel release link")
+release = current.resolve(strict=True)
+releases_info = releases_root.lstat()
+release_info = release.lstat()
+if (not stat.S_ISDIR(releases_info.st_mode) or stat.S_ISLNK(releases_info.st_mode)
+        or releases_info.st_uid != os.getuid() or releases_info.st_mode & 0o022
+        or not stat.S_ISDIR(release_info.st_mode) or stat.S_ISLNK(release_info.st_mode)
+        or release_info.st_uid != os.getuid() or release_info.st_mode & 0o022
+        or release.parent.resolve(strict=True) != releases_root.resolve(strict=True)):
+    raise SystemExit("active Pixel release is outside its release root")
+
+def regular_file(item: pathlib.Path, maximum: int, private: bool = False) -> bytes:
+    details = item.lstat()
+    if (not stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode)
+            or details.st_uid != os.getuid() or details.st_nlink != 1
+            or details.st_size > maximum or details.st_mode & 0o022
+            or (private and details.st_mode & 0o077)):
+        raise SystemExit(f"unsafe verified Pixel artifact: {item}")
+    return item.read_bytes()
+
+identity_bytes = regular_file(release / "release-identity.json", 65536)
+manifest_bytes = regular_file(release / "install-manifest.sha256", 2 * 1024 * 1024)
+attestation_bytes = regular_file(install_root / "runtime-attestation.json", 2 * 1024 * 1024, private=True)
+identity = json.loads(identity_bytes)
+attestation = json.loads(attestation_bytes)
+version = identity.get("pixel") if isinstance(identity, dict) else None
+source = identity.get("source") if isinstance(identity, dict) else None
+if (not isinstance(version, str) or release.name != version
+        or not isinstance(source, dict) or source.get("state") != "git-clean"
+        or source.get("commit") != sys.argv[4]):
+    raise SystemExit("active Pixel release is not bound to the configured source")
+identity_sha256 = hashlib.sha256(identity_bytes).hexdigest()
+manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+if (not isinstance(attestation, dict) or attestation.get("kind") != "pixel-runtime-attestation"
+        or attestation.get("status") not in {"verified", "limited"}
+        or attestation.get("pixel") != version or attestation.get("source") != source
+        or not isinstance(attestation.get("release"), dict)
+        or attestation["release"].get("sourceIdentitySha256") != identity_sha256
+        or attestation["release"].get("installManifestSha256") != manifest_sha256):
+    raise SystemExit("Pixel runtime attestation does not bind the active release")
+if not isinstance(sys.argv[8], str) or not isinstance(sys.argv[9], str):
+    raise SystemExit("invalid Pixel sandbox binding")
+
 value["state"] = sys.argv[6]
 value["pixel_source_ref"] = sys.argv[4]
+value.pop("requested_source_ref", None)
 value["contract_sha256"] = sys.argv[5]
 value["configuration_sha256"] = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical_config).hexdigest()
+value["active_release_version"] = version
+value["release_identity_sha256"] = identity_sha256
+value["install_manifest_sha256"] = manifest_sha256
+value["sandbox_image"] = sys.argv[8]
+value["sandbox_image_id"] = sys.argv[9]
 fd, temporary = tempfile.mkstemp(prefix=".pixel-managed.", dir=path.parent)
 try:
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -134,11 +219,11 @@ PY
 }
 
 _ods_pixel_mark_verified_installing() {
-    _ods_pixel_record_verified_state "$1" "$2" "$3" installing
+    _ods_pixel_record_verified_state "$1" "$2" "$3" installing "$4"
 }
 
 _ods_pixel_mark_ready() {
-    _ods_pixel_record_verified_state "$1" "$2" "$3" ready
+    _ods_pixel_record_verified_state "$1" "$2" "$3" ready "$4"
 }
 
 _ods_pixel_contract_sha256() {
@@ -171,8 +256,9 @@ if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid 
     raise SystemExit(1)
 value = json.loads(path.read_text(encoding="utf-8"))
 expected = {
-    "schema_version": 1,
+    "schema_version": 2,
     "manager": "ods",
+    "initial_active_state": "absent",
     "install_dir": sys.argv[3],
     "pixel_source_ref": sys.argv[4],
     "contract_sha256": sys.argv[5],
@@ -192,6 +278,16 @@ canonical_config = json.dumps(config, sort_keys=True, separators=(",", ":")).enc
 observed = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical_config).hexdigest()
 if value.get("configuration_sha256") != observed:
     raise SystemExit(1)
+for key in ("release_identity_sha256", "install_manifest_sha256"):
+    item = value.get(key)
+    if not isinstance(item, str) or len(item) != 64 or any(ch not in "0123456789abcdef" for ch in item):
+        raise SystemExit(1)
+if (not isinstance(value.get("active_release_version"), str)
+        or not isinstance(value.get("sandbox_image"), str)
+        or not isinstance(value.get("sandbox_image_id"), str)
+        or len(value["sandbox_image_id"]) != 71 or not value["sandbox_image_id"].startswith("sha256:")
+        or any(ch not in "0123456789abcdef" for ch in value["sandbox_image_id"][7:])):
+    raise SystemExit(1)
 PY
 }
 
@@ -207,12 +303,13 @@ if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
         or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536):
     raise SystemExit(1)
 value = json.loads(path.read_text(encoding="utf-8"))
-if (value.get("schema_version") != 1 or value.get("manager") != "ods"
+if (value.get("schema_version") != 2 or value.get("manager") != "ods"
+        or value.get("initial_active_state") != "absent"
         or value.get("install_dir") != sys.argv[2]
         or value.get("pixel_source_ref") != sys.argv[3]
         or value.get("state") not in {"ready", "installing"}):
     raise SystemExit(1)
-for key in ("contract_sha256", "configuration_sha256"):
+for key in ("contract_sha256", "configuration_sha256", "release_identity_sha256", "install_manifest_sha256"):
     item = value.get(key)
     if not isinstance(item, str) or len(item) != 64 or any(ch not in "0123456789abcdef" for ch in item):
         raise SystemExit(1)
@@ -250,13 +347,20 @@ import json, os, pathlib, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
 info = path.lstat()
-if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 65536:
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+        or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536):
     raise SystemExit("invalid Pixel management marker")
 value = json.loads(path.read_text(encoding="utf-8"))
-if value.get("schema_version") != 1 or value.get("manager") != "ods" or value.get("install_dir") != sys.argv[2]:
+if (value.get("schema_version") != 2 or value.get("manager") != "ods"
+        or value.get("initial_active_state") != "absent" or value.get("install_dir") != sys.argv[2]):
     raise SystemExit("Pixel management marker does not match this ODS install")
 value["state"] = "installing"
-value["pixel_source_ref"] = sys.argv[3]
+if all(key in value for key in (
+        "active_release_version", "release_identity_sha256", "install_manifest_sha256",
+        "sandbox_image", "sandbox_image_id")):
+    value["requested_source_ref"] = sys.argv[3]
+else:
+    value["pixel_source_ref"] = sys.argv[3]
 fd, temporary = tempfile.mkstemp(prefix=".pixel-managed.", dir=path.parent)
 try:
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -302,17 +406,38 @@ ods_pixel_prepare_runtime_identity() {
 _ods_pixel_source_checkout() {
     local owner="$1" home="$2" source_root="$3"
     local source="${PIXEL_SOURCE_URL:?}" ref="${PIXEL_SOURCE_REF:?}"
+    local source_timeout="${ODS_PIXEL_SOURCE_TIMEOUT_SECONDS:-180}"
     [[ "$source_root" == /* && "$source_root" != / && ! -L "$source_root" ]] || return 1
+    [[ "$source_timeout" =~ ^[0-9]+$ && "$source_timeout" -ge 1 && "$source_timeout" -le 900 ]] || return 1
 
     if [[ ! -e "$source_root" ]]; then
-        local parent="${source_root%/*}"
+        local parent="${source_root%/*}" stage checkout
         ods_pixel_run_as_owner "$owner" "$home" mkdir -p -- "$parent"
+        stage="$(ods_pixel_run_as_owner "$owner" "$home" mktemp -d "$parent/.pixel-source.XXXXXX")" || return 1
+        checkout="$stage/checkout"
         if [[ "$source" == https://github.com/Osmantic/Pixel.git ]]; then
-            ods_pixel_run_as_owner "$owner" "$home" git clone --filter=blob:none --no-checkout -- "$source" "$source_root" >/dev/null
+            if ! ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+                env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
+                clone --filter=blob:none --no-checkout -- "$source" "$checkout" >/dev/null; then
+                ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
+                printf '%s\n' 'error: Pixel source clone failed or timed out; configure authorized Git access or use the documented local checkout' >&2
+                return 1
+            fi
         else
-            ods_pixel_run_as_owner "$owner" "$home" git clone --no-local --no-checkout -- "$source" "$source_root" >/dev/null
+            if ! ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+                env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
+                clone --no-local --no-checkout -- "$source" "$checkout" >/dev/null; then
+                ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
+                return 1
+            fi
         fi
-        ods_pixel_run_as_owner "$owner" "$home" git -C "$source_root" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null
+        if ! ods_pixel_run_as_owner "$owner" "$home" timeout 60s \
+            env GIT_TERMINAL_PROMPT=0 git -C "$checkout" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null \
+            || ! ods_pixel_run_as_owner "$owner" "$home" mv -T -- "$checkout" "$source_root"; then
+            ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
+            return 1
+        fi
+        ods_pixel_run_as_owner "$owner" "$home" rmdir -- "$stage" || return 1
     fi
 
     [[ -d "$source_root/.git" && ! -L "$source_root/.git" ]] || return 1
@@ -617,7 +742,7 @@ ods_pixel_install_default_agent() {
     # marker remains non-ready. If ingress setup is interrupted, a rerun can
     # verify and reuse this same active Pixel release instead of attempting an
     # unsafe same-version reapply.
-    if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256"; then
+    if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
         ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
         return 1
     fi
@@ -632,7 +757,7 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel ingress did not pass its authenticated loopback health check."
         return 1
     fi
-    if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"; then
+    if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then
         ai_bad "Could not record the verified Pixel runtime as ready."
         return 1
     fi

@@ -20,6 +20,7 @@
 #           OPENCODE_SERVER_PASSWORD,
 #           OPENCLAW_TOKEN, OPENCLAW_PROVIDER_NAME, OPENCLAW_PROVIDER_URL,
 #           OPENCLAW_MODEL, OPENCLAW_CONTEXT, GPU_ASSIGNMENT_JSON_B64 (in .env)
+#           PIXEL_SOURCE_URL, PIXEL_SOURCE_REF, PIXEL_SOURCE_DIR when Pixel is enabled
 #
 # Modder notes:
 #   This is the largest phase. Modify .env generation, add new config files,
@@ -555,8 +556,11 @@ raise SystemExit(1)' 2>/dev/null && return 0
         PIXEL_SOURCE_URL_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_URL "https://github.com/Osmantic/Pixel.git")"
         PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "d2a2b6be552126f294fb30ee5fb46872acf82c89")"
         PIXEL_SOURCE_DIR_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_DIR "")"
-        PIXEL_SOURCE_URL="$PIXEL_SOURCE_URL_VALUE" PIXEL_SOURCE_REF="$PIXEL_SOURCE_REF_VALUE" \
-            PIXEL_SOURCE_DIR="$PIXEL_SOURCE_DIR_VALUE" ods_pixel_validate_source || \
+        # Phase 11 installs Pixel in this same installer shell. Preserve the
+        # resolved immutable source contract in that shell as well as in .env;
+        # transient environment prefixes used for validation do not persist.
+        ods_pixel_activate_source_contract \
+            "$PIXEL_SOURCE_URL_VALUE" "$PIXEL_SOURCE_REF_VALUE" "$PIXEL_SOURCE_DIR_VALUE" || \
             error "Pixel source URL/ref failed the immutable-source policy"
     fi
 

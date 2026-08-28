@@ -118,7 +118,10 @@ PIXEL_SOURCE_REF=<40-character-commit> \
 
 The canonical remote URL is the only remote source accepted. A local source
 must be a clean Git checkout below `PIXEL_SOURCE_DIR`; the owner directories
-must not be group- or world-writable.
+must not be group- or world-writable. Remote Git credential prompts are
+disabled and source operations are bounded, so an inaccessible private source
+fails instead of hanging the installer. Authorized users without configured
+non-interactive Git access should use the local-checkout form above.
 
 ## User experience
 
@@ -161,13 +164,16 @@ generic shell, HTTP, Docker, or filesystem tool.
 ODS writes `~/.config/ods/pixel-managed.json` with mode `0600`. The marker is
 created before Pixel is changed and moves from `installing` to `ready` only
 after Pixel verification, systemd activation, and private-ingress health pass.
-After Pixel verification it binds the verified contract and live config while
-remaining `installing`, so an interrupted ingress setup can safely verify and
-reuse the active release on retry without claiming readiness.
-The ready marker binds the exact Pixel source revision and a domain-separated
-SHA-256 of the deterministic ODS onboarding contract, including the approved
-ODS plugin tree digest, plus a canonical hash of the verified live OpenClaw
-configuration. When all bindings match exactly, a rerun skips Pixel's
+The marker records that no active Pixel release or runtime attestation existed
+before ODS created it. After Pixel verification it binds the verified contract,
+live config, exact active release identity and install-manifest hashes, release
+version, and validated live sandbox image ID while remaining `installing`, so
+an interrupted ingress setup can safely verify and reuse the active release on
+retry without claiming readiness. The ready marker also binds the exact Pixel
+source revision and a domain-separated SHA-256 of the deterministic ODS
+onboarding contract, including the approved ODS plugin tree digest, plus a
+canonical hash of the verified live OpenClaw configuration. When all bindings
+match exactly, a rerun skips Pixel's
 same-release apply transaction, verifies the exact source, and reinstalls the
 ODS ingress. If only the ODS extension contract changed while the exact
 verified Pixel source and newly planned canonical runtime configuration still
@@ -177,8 +183,9 @@ takes the ordinary configure/plan/apply path and remains fail closed.
 
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel
-onboarding record, or gateway systemd unit without its management marker, the
-installer stops and leaves that deployment untouched.
+onboarding record, active release, runtime attestation, or gateway systemd unit
+without its management marker, the installer stops and leaves that deployment
+untouched.
 
 ## Configuration reference
 
@@ -244,9 +251,18 @@ PIXEL_LICENSE_ACCEPTED=true ./install.sh --pixel
 A full `ods-uninstall.sh` removes the Pixel host deployment only when the
 private ODS management marker securely binds it to that exact install. It
 stops the ingress before the gateway, validates every user and root deletion
-target before mutation, and leaves an ambient or drifted Pixel/OpenClaw
-deployment untouched. This cleanup prevents a retired ODS install from
-blocking a later fresh install at a different path.
+target before mutation, and leaves an ambient, legacy, incompletely bound, or
+drifted Pixel/OpenClaw deployment untouched. For a fully bound ODS-created
+deployment, uninstall holds Pixel's deployment lock, verifies the installed
+release manifest, retires only Pixel's validated sandbox containers, and
+removes the exact live sandbox tag, active-release link, and runtime
+attestation. The immutable release tree, candidate image tag, deployment lock,
+browser/bootstrap caches, workspace, and user backups remain available for
+exact re-adoption or recovery. An interrupted deactivation resumes from its
+private staged state. This behavior is the same with `--keep-data`; that flag
+additionally preserves the ODS `data/` tree. The bounded deactivation prevents
+a retired ODS install from blocking a later fresh install at a different path
+without treating ambient Pixel state as ODS-owned.
 
 ## Qualification gate
 

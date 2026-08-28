@@ -565,6 +565,34 @@ else
     fail "Path traversal outside PIXEL_SOURCE_DIR should be rejected"
 fi
 
+# ---- ods_pixel_activate_source_contract tests -------------------------------
+
+section "ods_pixel_activate_source_contract"
+
+if (
+    unset PIXEL_SOURCE_URL PIXEL_SOURCE_REF PIXEL_SOURCE_DIR
+    ods_pixel_activate_source_contract \
+        "https://github.com/Osmantic/Pixel.git" \
+        "abcdef0123456789abcdef0123456789abcdef01" ""
+    python3 -c 'import os
+assert os.environ["PIXEL_SOURCE_URL"] == "https://github.com/Osmantic/Pixel.git"
+assert os.environ["PIXEL_SOURCE_REF"] == "abcdef0123456789abcdef0123456789abcdef01"
+assert os.environ["PIXEL_SOURCE_DIR"] == ""'
+); then
+    pass "Validated Pixel source contract persists across installer phases"
+else
+    fail "Validated Pixel source contract was not exported for Phase 11"
+fi
+
+if ! (
+    ods_pixel_activate_source_contract \
+        "https://github.com/Osmantic/Pixel.git" "main" ""
+); then
+    pass "Invalid Pixel source contract is not activated"
+else
+    fail "Invalid Pixel source contract should fail before Phase 11"
+fi
+
 # ---- ods_pixel_generate_key tests --------------------------------------------
 
 section "ods_pixel_generate_key"
