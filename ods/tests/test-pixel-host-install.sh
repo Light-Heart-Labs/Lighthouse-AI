@@ -102,6 +102,7 @@ import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "ods_pixel_run_as_owner \"$owner\" \"$home\" curl" in text
 assert text.index("http://localhost/health >/dev/null") < text.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
+assert "ods_linux_node_tools_available" in text
 ' "$ROOT/installers/lib/pixel-host-install.sh"
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"

@@ -15,6 +15,8 @@
 # ============================================================================
 
 ods_progress 42 "devtools" "Installing developer tools"
+# shellcheck source=../lib/node-runtime.sh
+. "$SCRIPT_DIR/installers/lib/node-runtime.sh"
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
     log "[DRY RUN] Would configure OpenCode for local llama-server (user-level systemd service on port 3003)"
@@ -24,7 +26,7 @@ else
     ai "Installing AI developer tools..."
 
     # Ensure Node.js/npm is available (needed for Claude Code and Codex)
-    if ! command -v npm &> /dev/null; then
+    if ! ods_linux_node_tools_available; then
         # Node.js install needs root. When sudo isn't usable (rootless box, or
         # non-interactive without cached/passwordless sudo), skip it with a clear
         # warning instead of failing the install. The optional AI dev-tool CLIs
@@ -62,7 +64,7 @@ else
         fi
     fi
 
-    if command -v npm &> /dev/null; then
+    if ods_linux_node_tools_available; then
         # Set up user-level npm global prefix (no sudo needed)
         NPM_GLOBAL_DIR="$HOME/.npm-global"
         if [[ ! -d "$NPM_GLOBAL_DIR" ]]; then
@@ -96,8 +98,8 @@ else
             ai "Added ~/.npm-global/bin to PATH in ~/.bashrc"
         fi
     else
-        ai_warn "npm not available — skipping Claude Code and Codex CLI install"
-        ai "  Install later: npm i -g @anthropic-ai/claude-code @openai/codex"
+        ai_warn "Linux Node.js 20+ and npm are not available — skipping Claude Code and Codex CLI install"
+        ai "  Install Linux Node.js 22+ and re-run to add Claude Code / Codex / OpenCode."
     fi
 
     _opencode_candidate_is_file() {

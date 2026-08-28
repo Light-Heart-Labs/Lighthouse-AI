@@ -339,6 +339,11 @@ ods_pixel_install_default_agent() {
     _ods_pixel_wait_http "ODS local search" "http://127.0.0.1:${SEARXNG_PORT:-8888}/search?q=pixel-preflight&format=json" 90 '.results | type == "array"'
 
     ai "Bootstrapping the exact Pixel source and pinned runtime..."
+    if ! declare -f ods_linux_node_tools_available >/dev/null 2>&1 \
+        || ! ods_linux_node_tools_available; then
+        ai_bad "Pixel requires Linux Node.js 20+ and Linux npm; Windows-mounted WSL tools are not accepted."
+        return 1
+    fi
     ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$LOG_FILE" 2>&1
     # Expansion is intentionally performed in the owner shell, not here.
     # shellcheck disable=SC2016
