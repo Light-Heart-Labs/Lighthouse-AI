@@ -454,17 +454,21 @@ eval "$original_run_as_owner"
 plugin="$ROOT/extensions/services/pixel-agent/plugin"
 check node --check "$plugin/index.js"
 check node --check "$plugin/projection.mjs"
+check node --check "$plugin/prompt-contract.mjs"
 check python3 -c '
 import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
 assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status"]
-assert m["toolMetadata"] == {
-    "pixel_ods_status": {"replaySafe": True},
-    "pixel_ods_apps_list": {"replaySafe": True},
-}
+assert "toolMetadata" not in m
 ' "$plugin/package.json" "$plugin/openclaw.plugin.json"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "api.on(\"before_prompt_build\"" in text
+assert "promptContractForAgent(context, AGENT_ID)" in text
+' "$plugin/index.js"
 # Dollar expressions below are literal source-code assertions.
 # shellcheck disable=SC2016
 check python3 -c '

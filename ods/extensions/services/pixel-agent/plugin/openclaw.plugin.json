@@ -6,14 +6,6 @@
   "contracts": {
     "tools": ["pixel_ods_status", "pixel_ods_apps_list"]
   },
-  "toolMetadata": {
-    "pixel_ods_status": {
-      "replaySafe": true
-    },
-    "pixel_ods_apps_list": {
-      "replaySafe": true
-    }
-  },
   "activation": {
     "onStartup": true
   },

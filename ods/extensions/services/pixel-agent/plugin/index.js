@@ -13,6 +13,7 @@ import {
   statusFileFromEnv,
   statusPayload,
 } from "./projection.mjs";
+import { promptContractForAgent } from "./prompt-contract.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 
@@ -80,6 +81,13 @@ export default definePluginEntry({
   description: "Read-only, sanitized ODS service status for the Pixel agent.",
   register(api) {
     const statusFile = statusFileFromEnv();
+
+    // OpenClaw does not replay arbitrary plugin tools after an empty model
+    // continuation. Give the Pixel agent an explicit, trusted prompt contract
+    // so every ODS lookup is followed by a user-visible answer.
+    api.on("before_prompt_build", (_event, context) =>
+      promptContractForAgent(context, AGENT_ID)
+    );
 
     registerTool(
       api,

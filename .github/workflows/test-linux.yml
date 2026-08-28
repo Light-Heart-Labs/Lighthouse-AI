@@ -221,6 +221,14 @@ jobs:
           python3 tests/contracts/test-remote-provider-egress-policy.py
           python3 tests/contracts/test-remote-provider-egress-service.py
 
+      - name: Pixel Default Agent Contract Tests
+        run: |
+          bash tests/test-pixel-integration.sh
+          bash tests/test-pixel-host-install.sh
+          bash tests/test-pixel-compose-wiring.sh
+          python3 tests/test_pixel_timeout_contract.py
+          node --test extensions/services/pixel-agent/tests/*.test.mjs
+
       - name: Linux install preflight tests
         run: |
           bash tests/test-linux-install-preflight.sh

@@ -71,9 +71,9 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   secrets, image labels, IDs, and mounts are never surfaced. If docker is
   unavailable, the projection carries an empty `apps` array and a generic
   `unavailable` state.
-- **Safe post-tool recovery.** The plugin manifest marks both projection tools
-  replay-safe. Because they only read the fixed status file, OpenClaw may retry
-  an empty post-tool model turn without duplicating a side effect.
+- **Visible post-tool replies.** The plugin adds a Pixel-only system prompt
+  contract requiring a visible final response after either projection tool.
+  The status remains untrusted evidence and never becomes action authority.
 
 ## Configuration (nonsecret)
 
@@ -112,7 +112,7 @@ The implementation is importable and does **not** start a server when imported;
 it only starts when run as the main module. Run the test suite with:
 
 ```bash
-node --test ods/extensions/services/pixel-agent/tests/pixel_ingress.test.mjs
+node --test ods/extensions/services/pixel-agent/tests/*.test.mjs
 ```
 
 Requires Node 20+ and uses built-ins only (no npm dependencies).
