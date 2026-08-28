@@ -215,18 +215,33 @@ class TestResolveAgentBindAddr:
         assert _resolve_agent_bind_addr({}, "Darwin") == "127.0.0.1"
 
     def test_linux_prefers_ods_network_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_running_under_wsl", lambda *_args, **_kwargs: False)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "172.18.0.1")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "172.17.0.1")
 
         assert _resolve_agent_bind_addr({}, "Linux") == "172.18.0.1"
 
+    def test_wsl_uses_loopback_instead_of_unbindable_compose_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_running_under_wsl", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            _mod,
+            "_detect_docker_network_gateway",
+            lambda _network: (_ for _ in ()).throw(
+                AssertionError("WSL must not select Docker Desktop's compose gateway")
+            ),
+        )
+
+        assert _resolve_agent_bind_addr({}, "Linux") == "127.0.0.1"
+
     def test_linux_falls_back_to_bridge_gateway(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_running_under_wsl", lambda *_args, **_kwargs: False)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "172.17.0.1")
 
         assert _resolve_agent_bind_addr({}, "Linux") == "172.17.0.1"
 
     def test_linux_falls_back_to_loopback(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_running_under_wsl", lambda *_args, **_kwargs: False)
         monkeypatch.setattr(_mod, "_detect_docker_network_gateway", lambda network: "")
         monkeypatch.setattr(_mod, "_detect_docker_bridge_gateway", lambda: "")
 

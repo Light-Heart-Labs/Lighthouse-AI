@@ -131,14 +131,16 @@ reconcile_ods_managed_pixel_model() {
         return 1
     fi
     target_max_tokens=4096
-    (( target_context < target_max_tokens )) && target_max_tokens="$target_context"
+    (( target_context / 2 < target_max_tokens )) \
+        && target_max_tokens="$((target_context / 2))"
     target_reasoning=false
     reasoning_mode="$(read_env_value LLAMA_REASONING | tr '[:upper:]' '[:lower:]')"
     [[ -n "$reasoning_mode" ]] || reasoning_mode=off
     if [[ ! "$reasoning_mode" =~ ^(off|none|false|0)$ \
         || "$target_model" == *[Qq][Ww][Ee][Nn]* \
         || "${target_model,,}" == *reasoning* \
-        || "${target_model,,}" == *deepseek-r1* ]]; then
+        || "${target_model,,}" == *deepseek-r1* \
+        || "${target_model,,}" == *nemotron* ]]; then
         target_reasoning=true
     fi
 

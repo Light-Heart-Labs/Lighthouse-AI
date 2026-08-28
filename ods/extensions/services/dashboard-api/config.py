@@ -584,6 +584,15 @@ def _running_inside_container() -> bool:
     return any(marker in cgroup for marker in ("docker", "containerd", "kubepods", "podman"))
 
 
+def _running_under_wsl(release_path: str = "/proc/sys/kernel/osrelease") -> bool:
+    """Return whether the dashboard container shares a WSL Linux kernel."""
+    try:
+        release = Path(release_path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "microsoft" in release.casefold()
+
+
 def _detect_container_default_gateway(route_path: str = "/proc/net/route") -> str:
     """Return this container's default-gateway IP, or empty on failure.
 
@@ -628,9 +637,10 @@ def _resolve_agent_host() -> str:
 
     Priority:
       1. ODS_AGENT_HOST env (explicit operator override)
-      2. The container's own default-gateway IP (works regardless of which
-         Docker network the container is on)
-      3. host.docker.internal (legacy fallback — broken on custom networks
+      2. host.docker.internal under WSL/Docker Desktop, whose compose gateway
+         belongs to Docker Desktop and is not an address the WSL host can bind
+      3. The container's own default-gateway IP on native Linux
+      4. host.docker.internal (legacy fallback — broken on custom networks
          under default Docker iptables, but kept so explicit operator setups
          relying on it don't silently change)
     """
@@ -638,6 +648,9 @@ def _resolve_agent_host() -> str:
     if explicit:
         return explicit
     if _running_inside_container():
+        if _running_under_wsl():
+            logger.info("Resolved ODS_AGENT_HOST=host.docker.internal for WSL")
+            return "host.docker.internal"
         gw = _detect_container_default_gateway()
         if gw:
             logger.info("Resolved ODS_AGENT_HOST=%s via /proc/net/route", gw)

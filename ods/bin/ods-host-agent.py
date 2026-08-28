@@ -2236,7 +2236,10 @@ def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
     if configured not in {"", "off", "none", "false", "0"}:
         return True
     label = str(model or "").casefold()
-    return any(marker in label for marker in ("qwen", "reasoning", "deepseek-r1"))
+    return any(
+        marker in label
+        for marker in ("qwen", "reasoning", "deepseek-r1", "nemotron")
+    )
 
 
 def _reconcile_ods_managed_pixel_model(
@@ -2982,6 +2985,17 @@ def _detect_docker_bridge_gateway() -> str:
     return _detect_docker_network_gateway("bridge")
 
 
+def _running_under_wsl(
+    system_name: str | None = None,
+    kernel_release: str | None = None,
+) -> bool:
+    """Return whether this process is running in a WSL Linux kernel."""
+    if (system_name or platform.system()) != "Linux":
+        return False
+    release = kernel_release if kernel_release is not None else platform.release()
+    return "microsoft" in str(release).casefold()
+
+
 def _resolve_agent_bind_addr(env: dict, system_name: str | None = None) -> str:
     """Resolve the host-agent bind address without exposing LAN by default."""
     system_name = system_name or platform.system()
@@ -2991,7 +3005,7 @@ def _resolve_agent_bind_addr(env: dict, system_name: str | None = None) -> str:
             return "0.0.0.0"
         return explicit
 
-    if system_name in ("Darwin", "Windows"):
+    if system_name in ("Darwin", "Windows") or _running_under_wsl(system_name):
         return "127.0.0.1"
 
     if system_name == "Linux":
@@ -7774,6 +7788,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         switchboard_run: dict | None = None
         final_runtime_proof: dict[str, object] | None = None
         gpu_assignment_plan: dict | None = None
+        previous_pixel_context: int | None = None
 
         def restore_backups():
             if env_snapshot is not None:
@@ -7918,22 +7933,21 @@ class AgentHandler(BaseHTTPRequestHandler):
                     _verify_openclaw_model_env(previous_hermes_model)
                     _wait_for_container_health("ods-openclaw")
                 if pixel_reconcile_attempted:
-                    try:
-                        previous_context = int(
-                            rollback_env.get("MAX_CONTEXT")
-                            or rollback_env.get("CTX_SIZE")
-                            or 0
+                    if previous_pixel_context is None:
+                        raise RuntimeError(
+                            "the previous managed Pixel context was not captured"
                         )
-                    except (TypeError, ValueError):
-                        previous_context = 0
                     previous_reasoning = _pixel_model_reasoning_capable(
                         previous_model,
                         rollback_env,
                     )
                     restored_pixel = _reconcile_ods_managed_pixel_model(
                         previous_model,
-                        previous_context,
-                        max_tokens=min(4096, previous_context),
+                        previous_pixel_context,
+                        max_tokens=min(
+                            4096,
+                            max(1, previous_pixel_context // 2),
+                        ),
                         reasoning=previous_reasoning,
                     )
                     if restored_pixel != "reconciled":
@@ -7948,6 +7962,24 @@ class AgentHandler(BaseHTTPRequestHandler):
         try:
             # Read current env BEFORE modification — needed for gpu_backend guard
             env_pre = load_env(env_path)
+            try:
+                captured_pixel_context = int(
+                    env_pre.get("MAX_CONTEXT")
+                    or env_pre.get("CTX_SIZE")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                captured_pixel_context = 0
+            if captured_pixel_context >= 4096:
+                previous_pixel_context = captured_pixel_context
+            if (
+                _ods_managed_pixel_identity() is not None
+                and previous_pixel_context is None
+            ):
+                raise RuntimeError(
+                    "The current ODS-managed Pixel route requires a valid "
+                    "MAX_CONTEXT or CTX_SIZE of at least 4096 before model activation"
+                )
             gpu_backend = env_pre.get("GPU_BACKEND", "nvidia")
             windows_host_lemonade = _is_windows_host_lemonade(env_pre)
             windows_lemonade_managed = _windows_lemonade_is_managed(env_pre)
@@ -8523,7 +8555,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 pixel_status = _reconcile_ods_managed_pixel_model(
                     str(llm_model_name),
                     int(context_length),
-                    max_tokens=min(4096, int(context_length)),
+                    max_tokens=min(4096, max(1, int(context_length) // 2)),
                     reasoning=_pixel_model_reasoning_capable(
                         str(llm_model_name),
                         env,
@@ -12750,10 +12782,12 @@ def main():
         atexit.register(lambda: pid_path.unlink(missing_ok=True))
 
     # Determine bind address: explicit env override, or a platform-aware safe
-    # default. Linux prefers the ods-network gateway so dashboard-api
-    # containers can reach the agent without exposing it to the LAN. The bridge
-    # gateway fallback keeps partial/older installs reachable until phase 11 can
-    # restart the service after ods-network exists.
+    # default. Native Linux prefers the ods-network gateway so dashboard-api
+    # containers can reach the agent without exposing it to the LAN. WSL uses
+    # loopback because Docker Desktop forwards host.docker.internal there; its
+    # compose gateway belongs to Docker Desktop and is not locally bindable.
+    # The bridge gateway fallback keeps partial/older native-Linux installs
+    # reachable until phase 11 can restart the service after ods-network exists.
     bind_addr = _resolve_agent_bind_addr(env)
 
     server = _create_host_agent_server(env, bind_addr, port)

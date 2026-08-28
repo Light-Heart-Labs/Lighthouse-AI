@@ -262,6 +262,15 @@ assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
 
+MAX_CONTEXT=4096
+LLM_MODEL=NVIDIA-Nemotron3-Nano-4B
+_ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/nemotron-onboarding.json" \
+    /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelContextWindow"] == 4096 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' \
+    "$TEST_ROOT/nemotron-onboarding.json"
+MAX_CONTEXT=32768
+LLM_MODEL=qwen-test
+
 runtime_home="$TEST_ROOT/runtime-home"
 runtime_config="$runtime_home/.openclaw/openclaw.json"
 runtime_validator="$TEST_ROOT/openclaw-validator"

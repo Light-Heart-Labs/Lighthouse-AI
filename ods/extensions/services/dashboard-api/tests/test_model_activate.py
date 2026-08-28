@@ -3445,6 +3445,7 @@ def test_managed_pixel_reconcile_rejects_context_below_pixel_contract(monkeypatc
         ("qwen3.5-9b", "off", True),
         ("jamba-reasoning-3b", "none", True),
         ("deepseek-r1-7b", "false", True),
+        ("NVIDIA-Nemotron3-Nano-4B", "off", True),
         ("phi-4-mini", "off", False),
         ("phi-4-mini", "deepseek", True),
     ],
@@ -3538,6 +3539,34 @@ class TestModelActivateRollback:
         )
         assert receipt["consumers"]["pixel"] == "reconciled"
 
+    def test_managed_pixel_requires_valid_previous_context_before_mutation(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, env_text, models_ini, ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_ods_managed_pixel_identity",
+            lambda: ("pixel-owner", tmp_path / "pixel-owner"),
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda _env: pytest.fail("invalid prior Pixel context must fail before restart"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert "at least 4096" in handler.parse_response()["error"]
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert models_ini.read_text(encoding="utf-8") == ini_text
+
     def test_pixel_reconcile_failure_rolls_back_and_rebinds_previous_pixel_model(
         self,
         tmp_path,
@@ -3576,8 +3605,8 @@ class TestModelActivateRollback:
         assert "simulated Pixel reconciliation failure" in response["error"]
         assert runtime_restarts == ["new-model", "old-model"]
         assert reconciliations == [
-            ("new-model", 4096, {"max_tokens": 4096, "reasoning": False}),
-            ("old-model", 4096, {"max_tokens": 4096, "reasoning": False}),
+            ("new-model", 4096, {"max_tokens": 2048, "reasoning": False}),
+            ("old-model", 4096, {"max_tokens": 2048, "reasoning": False}),
         ]
         assert _mod.load_env(env_path)["LLM_MODEL"] == "old-model"
 

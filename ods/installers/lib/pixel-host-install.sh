@@ -1103,13 +1103,19 @@ PY
 
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
-    local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
+    local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false model_label
     [[ "$context" =~ ^[0-9]+$ && "$context" -ge 4096 ]] || context=16384
-    (( context < max_tokens )) && max_tokens="$context"
+    (( context / 2 < max_tokens )) && max_tokens="$((context / 2))"
     # modelReasoning describes model capability to OpenClaw. Qwen needs that
     # capability flag even when ODS defaults it to no-think so OpenClaw can
     # send chat_template_kwargs.enable_thinking=false explicitly.
-    if [[ "${LLAMA_REASONING:-off}" != off || "${LLM_MODEL:-default}" == *[Qq][Ww][Ee][Nn]* ]]; then
+    model_label="${LLM_MODEL:-default}"
+    model_label="${model_label,,}"
+    if [[ ! "${LLAMA_REASONING:-off}" =~ ^(off|none|false|0)$ \
+        || "$model_label" == *qwen* \
+        || "$model_label" == *reasoning* \
+        || "$model_label" == *deepseek-r1* \
+        || "$model_label" == *nemotron* ]]; then
         reasoning=true
     fi
 
