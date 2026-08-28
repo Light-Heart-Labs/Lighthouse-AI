@@ -267,7 +267,11 @@ payload = {
     "operationsLimbEnabled": False,
     "frontierLimbEnabled": False,
     "frontierAuthMode": "api-key",
-    "frontierBudgetProfile": "custom",
+    # Pixel still validates the managed Frontier policy while the limb is
+    # disabled. Use its smallest built-in budget rather than "custom", which
+    # is reserved for a separate private policy and otherwise renders an empty
+    # budget object during configure.
+    "frontierBudgetProfile": "starter",
     "frontierTaskPacks": [],
     "operationsActionPacks": [],
 }
@@ -344,7 +348,10 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel requires Linux Node.js 20+ and Linux npm; Windows-mounted WSL tools are not accepted."
         return 1
     fi
-    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$LOG_FILE" 2>&1
+    if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel bootstrap failed. See $LOG_FILE for the exact Pixel error."
+        return 1
+    fi
     # Expansion is intentionally performed in the owner shell, not here.
     # shellcheck disable=SC2016
     openclaw_bin="$(ods_pixel_run_as_owner "$owner" "$home" bash -c 'if [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then printf "%s\\n" "$HOME/.npm-global/bin/openclaw"; else command -v openclaw; fi')"
@@ -353,20 +360,38 @@ ods_pixel_install_default_agent() {
     [[ "$plugin_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
 
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
-    _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"
-    _ods_pixel_enable_chat_endpoint "$owner" "$home"
-    {
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm
+    if ! _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"; then
+        ai_bad "Could not write the ODS-managed Pixel onboarding contract."
+        return 1
+    fi
+    if ! _ods_pixel_enable_chat_endpoint "$owner" "$home"; then
+        ai_bad "Could not enable Pixel's loopback chat endpoint."
+        return 1
+    fi
+    if ! {
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force &&
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan &&
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&
         ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
-    } >>"$LOG_FILE" 2>&1
-    _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"
+    } >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel configure, plan, apply, or verify failed. See $LOG_FILE for the exact Pixel error."
+        return 1
+    fi
+    if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"; then
+        ai_bad "Could not install and start the private Pixel ingress."
+        return 1
+    fi
     # sudo -u starts a fresh owner session with the newly assigned ods-pixel
     # supplementary group; the original installer shell may not see that group
     # until the next login.
-    ods_pixel_run_as_owner "$owner" "$home" curl --fail --silent --show-error --max-time 10 \
-        --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null
-    _ods_pixel_mark_ready "$owner" "$home"
+    if ! ods_pixel_run_as_owner "$owner" "$home" curl --fail --silent --show-error --max-time 10 \
+        --unix-socket /run/ods-pixel/pixel-ingress.sock http://localhost/health >/dev/null; then
+        ai_bad "Pixel ingress did not pass its authenticated loopback health check."
+        return 1
+    fi
+    if ! _ods_pixel_mark_ready "$owner" "$home"; then
+        ai_bad "Could not record the verified Pixel runtime as ready."
+        return 1
+    fi
     ai_ok "Pixel is installed, verified, and ready on the private ODS ingress"
 }

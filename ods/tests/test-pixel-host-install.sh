@@ -80,6 +80,7 @@ assert v["modelBaseUrl"] == "http://127.0.0.1:11434/v1"
 assert v["modelId"] == "qwen-test"
 assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
+assert v["frontierBudgetProfile"] == "starter"
 assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list"]}]
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
 ' "$answers"
@@ -102,6 +103,11 @@ import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "ods_pixel_run_as_owner \"$owner\" \"$home\" curl" in text
 assert text.index("http://localhost/health >/dev/null") < text.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
+assert "pixel\" configure --answers \"$answers\" --force &&" in text
+assert "pixel\" plan &&" in text
+assert "pixel\" apply --confirm &&" in text
+assert "if ! _ods_pixel_install_ingress" in text
+assert "if ! _ods_pixel_mark_ready" in text
 assert "ods_linux_node_tools_available" in text
 ' "$ROOT/installers/lib/pixel-host-install.sh"
 
