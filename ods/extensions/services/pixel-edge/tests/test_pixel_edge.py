@@ -139,6 +139,16 @@ class BaseEdgeTest(unittest.IsolatedAsyncioTestCase):
 # ---------------------------------------------------------------------------
 
 class TestConfigValidation(unittest.TestCase):
+    def setUp(self):
+        # Pytest preserves source order and reaches this class before any
+        # BaseEdgeTest has imported pixel_edge. Load one known-good module
+        # first so each case exercises the intended reload boundary rather
+        # than raising outside assertRaises during an initial import.
+        _set_env("/tmp/pixel-edge-config-test.sock")
+        import importlib
+        import pixel_edge
+        self.pixel_edge = importlib.reload(pixel_edge)
+
     def _reload_with_env(self, env):
         old = {k: os.environ.get(k) for k in
                ("PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_SOCKET")}
@@ -160,9 +170,8 @@ class TestConfigValidation(unittest.TestCase):
         old = self._reload_with_env({"PIXEL_OPENWEBUI_KEY": ""})
         try:
             import importlib
-            import pixel_edge
             with self.assertRaises(SystemExit):
-                importlib.reload(pixel_edge)
+                importlib.reload(self.pixel_edge)
         finally:
             self._restore(old)
 
@@ -171,9 +180,8 @@ class TestConfigValidation(unittest.TestCase):
         os.environ.pop("PIXEL_OPENWEBUI_KEY", None)
         try:
             import importlib
-            import pixel_edge
             with self.assertRaises(SystemExit):
-                importlib.reload(pixel_edge)
+                importlib.reload(self.pixel_edge)
         finally:
             self._restore(old)
 
@@ -181,9 +189,8 @@ class TestConfigValidation(unittest.TestCase):
         old = self._reload_with_env({"PIXEL_OPENWEBUI_KEY": "x" * 4097})
         try:
             import importlib
-            import pixel_edge
             with self.assertRaises(SystemExit):
-                importlib.reload(pixel_edge)
+                importlib.reload(self.pixel_edge)
         finally:
             self._restore(old)
 
@@ -192,9 +199,8 @@ class TestConfigValidation(unittest.TestCase):
             old = self._reload_with_env({"PIXEL_OPENWEBUI_KEY": value})
             try:
                 import importlib
-                import pixel_edge
                 with self.assertRaises(SystemExit):
-                    importlib.reload(pixel_edge)
+                    importlib.reload(self.pixel_edge)
             finally:
                 self._restore(old)
 
