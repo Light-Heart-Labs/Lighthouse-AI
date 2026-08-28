@@ -8,6 +8,34 @@ on:
       - master
 
 jobs:
+  service-python-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ods
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install service test dependencies
+        run: |
+          python -m pip install "pytest>=8,<9" "pytest-asyncio>=0.21,<2"
+          python -m pip install -r extensions/services/ape/requirements.txt
+          python -m pip install -r extensions/services/model-router/requirements.txt
+          python -m pip install -r extensions/services/privacy-shield/requirements.txt
+
+      - name: Test service Python boundaries
+        run: |
+          python -m pytest extensions/services/ape/tests -v
+          python -m pytest extensions/services/litellm/tests -v
+          python -m pytest extensions/services/model-router/tests -v
+          python -m pytest extensions/services/privacy-shield/tests -v
+
   token-spy-postgres:
     runs-on: ubuntu-latest
     services:
