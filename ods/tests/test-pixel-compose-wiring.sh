@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EDGE="$ROOT/extensions/services/pixel-edge/compose.yaml"
+BASE="$ROOT/docker-compose.base.yml"
+
+python3 - "$EDGE" <<'PY'
+import pathlib, re, sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+assert "PIXEL_GATEWAY_TOKEN" not in text and "PIXEL_OPERATOR_TOKEN" not in text
+edge = text.split("\n  open-webui:", 1)[0]
+assert not re.search(r"(?m)^    ports:", edge)
+assert "network_mode: host" not in edge
+assert "networks:\n      - default" in edge
+assert "http://pixel-edge:9595/v1;${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}" in text
+assert "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env};${OPEN_WEBUI_LLM_API_KEY:-}" in text
+for required in (
+    'ENABLE_OPENAI_API: "true"',
+    'DEFAULT_MODELS: "pixel/default"',
+    'DEFAULT_PINNED_MODELS: "pixel/default"',
+    "TASK_MODEL_EXTERNAL:",
+    'PIXEL_EDGE_URL: "http://pixel-edge:9595"',
+):
+    assert required in text, required
+for service in ("open-webui", "dashboard-api"):
+    block = text.split(f"\n  {service}:", 1)[1]
+    block = re.split(r"\n  [a-zA-Z0-9_-]+:", block, maxsplit=1)[0]
+    assert re.search(r"depends_on:\s+pixel-edge:\s+condition: service_healthy", block)
+PY
+
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    runtime="$(mktemp -d)"
+    cleanup() { case "$runtime" in /tmp/*|/var/tmp/*) rm -rf -- "$runtime" ;; esac; }
+    trap cleanup EXIT
+    PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
+    PIXEL_INGRESS_GID=1234 \
+    PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
+        docker compose -f "$BASE" -f "$EDGE" config --quiet
+    PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
+    PIXEL_INGRESS_GID=1234 \
+    PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
+        docker compose -f "$BASE" -f "$EDGE" config --format json > "$runtime/config.json"
+    python3 - "$runtime/config.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+edge = value["services"]["pixel-edge"]
+assert not edge.get("ports")
+assert edge.get("network_mode") != "host"
+assert set(edge["networks"]) == {"default"}
+webui = value["services"]["open-webui"]
+assert webui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+assert webui["environment"]["OPENAI_API_BASE_URLS"].startswith("http://pixel-edge:9595/v1;")
+assert webui["environment"]["DEFAULT_MODELS"] == "pixel/default"
+dashboard = value["services"]["dashboard-api"]
+assert dashboard["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+PY
+fi
+
+echo "Pixel Compose wiring checks passed"

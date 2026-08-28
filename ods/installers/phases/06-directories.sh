@@ -520,6 +520,32 @@ raise SystemExit(1)' 2>/dev/null && return 0
     OPENCODE_SERVER_PASSWORD=$(_env_get OPENCODE_SERVER_PASSWORD "$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)")
     SEARXNG_SECRET=$(_env_get SEARXNG_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
 
+    PIXEL_OPENWEBUI_KEY_VALUE=""
+    PIXEL_INGRESS_GID_VALUE=""
+    PIXEL_SOURCE_URL_VALUE=""
+    PIXEL_SOURCE_REF_VALUE=""
+    PIXEL_SOURCE_DIR_VALUE=""
+    if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then
+        PIXEL_OPENWEBUI_KEY_VALUE="$(_env_get PIXEL_OPENWEBUI_KEY "")"
+        if [[ -z "$PIXEL_OPENWEBUI_KEY_VALUE" ]]; then
+            PIXEL_OPENWEBUI_KEY_VALUE="$(ods_pixel_generate_key)" || error "Could not generate Pixel edge key"
+        fi
+        [[ "$PIXEL_OPENWEBUI_KEY_VALUE" =~ ^[0-9a-f]{64}$ ]] || error "Existing PIXEL_OPENWEBUI_KEY is invalid"
+
+        # Phase 11 creates/resolves ods-pixel immediately before Compose
+        # validation, then atomically fills this initially empty numeric GID.
+        PIXEL_INGRESS_GID_VALUE="$(_env_get_preserve_empty PIXEL_INGRESS_GID "")"
+        [[ -z "$PIXEL_INGRESS_GID_VALUE" || "$PIXEL_INGRESS_GID_VALUE" =~ ^[1-9][0-9]*$ ]] || \
+            error "Existing PIXEL_INGRESS_GID is invalid"
+
+        PIXEL_SOURCE_URL_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_URL "https://github.com/Osmantic/Pixel.git")"
+        PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "d2a2b6be552126f294fb30ee5fb46872acf82c89")"
+        PIXEL_SOURCE_DIR_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_DIR "")"
+        PIXEL_SOURCE_URL="$PIXEL_SOURCE_URL_VALUE" PIXEL_SOURCE_REF="$PIXEL_SOURCE_REF_VALUE" \
+            PIXEL_SOURCE_DIR="$PIXEL_SOURCE_DIR_VALUE" ods_pixel_validate_source || \
+            error "Pixel source URL/ref failed the immutable-source policy"
+    fi
+
     # Langfuse (LLM Observability). LANGFUSE_ENABLED mirrors the install-time
     # ENABLE_LANGFUSE toggle, falling back to whatever the user had in .env on
     # re-install so manual post-install `ods enable langfuse` edits survive.
@@ -999,6 +1025,19 @@ DASHBOARD_API_KEY=${DASHBOARD_API_KEY}
 ODS_AGENT_KEY=${ODS_AGENT_KEY}
 ODS_SESSION_SECRET=${ODS_SESSION_SECRET}
 HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
+$(if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then cat << PIXEL_ENV
+
+#=== Pixel default agent (separate written license required) ===
+PIXEL_AGENT_MODE=pixel
+PIXEL_LICENSE_ACCEPTED=true
+PIXEL_SOURCE_URL=$(dotenv_quote "$PIXEL_SOURCE_URL_VALUE")
+PIXEL_SOURCE_REF=${PIXEL_SOURCE_REF_VALUE}
+PIXEL_SOURCE_DIR=$(dotenv_quote "$PIXEL_SOURCE_DIR_VALUE")
+PIXEL_OPENWEBUI_KEY=${PIXEL_OPENWEBUI_KEY_VALUE}
+PIXEL_INGRESS_RUNTIME_DIR=/run/ods-pixel
+PIXEL_INGRESS_GID=${PIXEL_INGRESS_GID_VALUE}
+PIXEL_ENV
+fi)
 SHIELD_API_KEY=${SHIELD_API_KEY}
 N8N_USER=admin@ods.local
 N8N_PASS=${N8N_PASS}

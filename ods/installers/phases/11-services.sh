@@ -1139,6 +1139,12 @@ MODELS_INI_EOF
         ai_ok "All service dependencies satisfied"
     fi
 
+    # Pixel's edge compose fragment requires the exact numeric GID of the
+    # private ingress group. Resolve it before Compose interpolation/validation.
+    if ! ods_pixel_prepare_runtime_identity; then
+        exit 1
+    fi
+
     # ── Compose syntax validation ──────────────────────────────
     ai "Validating compose stack configuration..."
     if ! $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --quiet 1>/dev/null 2>"$LOG_FILE.compose-check"; then
@@ -1163,7 +1169,7 @@ MODELS_INI_EOF
     compose_ok=false
     # Build local images individually so every failure is reported before the
     # installer refuses to launch any potentially stale image.
-    _candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
+    _candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search pixel-edge)
     [[ "$ENABLE_COMFYUI" == "true" ]] && _candidate_build_services+=(comfyui)
     [[ "$GPU_BACKEND" == "amd" ]] && _candidate_build_services+=(llama-server)
     if ! _enabled_compose_services="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --services 2>>"$LOG_FILE")"; then
@@ -1195,6 +1201,13 @@ MODELS_INI_EOF
     # Up to 3 attempts with increasing wait between retries — on AMD/Lemonade,
     # the first boot builds a cached llama-server binary which can take 3-5 min.
     if ! _phase11_pre_pull_compose_images; then
+        exit 1
+    fi
+    # Install and verify the host Pixel gateway/ingress before Open WebUI is
+    # launched with Pixel as its default provider. This fails closed: users
+    # never receive a selectable but nonfunctional default agent.
+    if ! ods_pixel_install_default_agent; then
+        ai_bad "Pixel default-agent setup failed before the ODS stack launch."
         exit 1
     fi
     _phase11_write_compose_launch_record

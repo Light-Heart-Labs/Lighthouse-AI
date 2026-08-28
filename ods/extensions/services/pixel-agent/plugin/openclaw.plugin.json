@@ -1,0 +1,16 @@
+{
+  "id": "pixel-ods",
+  "name": "Pixel ODS Status",
+  "description": "Read-only, sanitized ODS service status for the Pixel agent.",
+  "version": "1.0.0",
+  "contracts": {
+    "tools": ["pixel_ods_status", "pixel_ods_apps_list"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

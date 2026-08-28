@@ -88,6 +88,8 @@ source "$SCRIPT_DIR/installers/lib/python-runtime.sh"
 source "$SCRIPT_DIR/installers/lib/progress.sh"
 source "$SCRIPT_DIR/installers/lib/model-lifecycle-lock.sh"
 source "$SCRIPT_DIR/installers/lib/external-services.sh"
+source "$SCRIPT_DIR/installers/lib/pixel-integration.sh"
+source "$SCRIPT_DIR/installers/lib/pixel-host-install.sh"
 if [[ -f "$SCRIPT_DIR/lib/service-registry.sh" ]]; then 
     source "$SCRIPT_DIR/lib/service-registry.sh" 
 fi
@@ -109,6 +111,8 @@ ENABLE_RECOMMENDED=true
 # --openclaw or upgrade an existing install with OpenClaw enabled keep
 # it working until the removal release. See docs/MIGRATION-OPENCLAW-TO-HERMES.md.
 ENABLE_HERMES=true
+ENABLE_PIXEL="${ENABLE_PIXEL:-auto}"
+PIXEL_EXPLICIT=false
 ENABLE_OPENCLAW=false
 OPENCLAW_EXPLICIT=false
 ENABLE_COMFYUI=true
@@ -178,6 +182,8 @@ Options:
     --no-recommended  Disable recommended support services
     --hermes          Enable Hermes Agent (default; new default agent as of 2026-05-12)
     --no-hermes       Disable Hermes Agent
+    --pixel           Require Pixel as the default agent (qualified Linux host and separate license required)
+    --no-pixel        Disable Pixel and use the configured fallback agent
     --openclaw        Enable OpenClaw (DEPRECATED — see docs/MIGRATION-OPENCLAW-TO-HERMES.md)
     --no-openclaw     Disable OpenClaw
     --comfyui         Enable ComfyUI image generation
@@ -242,6 +248,8 @@ while [[ $# -gt 0 ]]; do
         --no-recommended) ENABLE_RECOMMENDED=false; shift ;;
         --hermes) ENABLE_HERMES=true; shift ;;
         --no-hermes) ENABLE_HERMES=false; shift ;;
+        --pixel) ENABLE_PIXEL=true; PIXEL_EXPLICIT=true; shift ;;
+        --no-pixel) ENABLE_PIXEL=false; PIXEL_EXPLICIT=true; shift ;;
         --openclaw) ENABLE_OPENCLAW=true; OPENCLAW_EXPLICIT=true; shift ;;
         --no-openclaw) ENABLE_OPENCLAW=false; OPENCLAW_EXPLICIT=true; shift ;;
         --comfyui) ENABLE_COMFYUI=true; shift ;;

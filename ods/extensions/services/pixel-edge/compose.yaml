@@ -1,0 +1,68 @@
+services:
+  pixel-edge:
+    build:
+      context: ./extensions/services/pixel-edge
+      dockerfile: Dockerfile
+    image: ods-pixel-edge:local
+    container_name: ods-pixel-edge
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - default
+    environment:
+      - PIXEL_OPENWEBUI_KEY=${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env}
+      - PIXEL_EDGE_PORT_INTERNAL=9595
+      - PIXEL_INGRESS_SOCKET=/pixel-runtime/pixel-ingress.sock
+    group_add:
+      - "${PIXEL_INGRESS_GID:?Set PIXEL_INGRESS_GID in .env}"
+    volumes:
+      - "${PIXEL_INGRESS_RUNTIME_DIR:?Set PIXEL_INGRESS_RUNTIME_DIR in .env}:/pixel-runtime:ro"
+    tmpfs:
+      - /tmp:size=1M,noexec,nosuid,nodev,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9595/health')"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+  open-webui:
+    depends_on:
+      pixel-edge:
+        condition: service_healthy
+    environment:
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URLS: "http://pixel-edge:9595/v1;${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}"
+      OPENAI_API_KEYS: "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env};${OPEN_WEBUI_LLM_API_KEY:-}"
+      DEFAULT_MODELS: "pixel/default"
+      DEFAULT_PINNED_MODELS: "pixel/default"
+      # Keep Open WebUI's title/query/background tasks on the ordinary model;
+      # user conversations default to Pixel without recursively agent-routing.
+      TASK_MODEL_EXTERNAL: "${LLM_MODEL:-${GGUF_FILE:-default}}"
+  dashboard-api:
+    depends_on:
+      pixel-edge:
+        condition: service_healthy
+    environment:
+      PIXEL_EDGE_URL: "http://pixel-edge:9595"
+      PIXEL_OPENWEBUI_KEY: "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env}"
