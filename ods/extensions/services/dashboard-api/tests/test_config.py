@@ -33,6 +33,14 @@ features:
 """
 
 
+def test_bundled_llama_server_is_discoverable_on_cpu_fallback():
+    manifest_path = Path(__file__).resolve().parents[2] / "llama-server" / "manifest.yaml"
+    manifest = config.yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+    assert "cpu" in manifest["service"]["gpu_backends"]
+    assert all("cpu" in feature["gpu_backends"] for feature in manifest["features"])
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
