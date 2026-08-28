@@ -241,6 +241,13 @@ still valid:
 PIXEL_LICENSE_ACCEPTED=true ./install.sh --pixel
 ```
 
+A full `ods-uninstall.sh` removes the Pixel host deployment only when the
+private ODS management marker securely binds it to that exact install. It
+stops the ingress before the gateway, validates every user and root deletion
+target before mutation, and leaves an ambient or drifted Pixel/OpenClaw
+deployment untouched. This cleanup prevents a retired ODS install from
+blocking a later fresh install at a different path.
+
 ## Qualification gate
 
 A candidate is not fresh-install ready until all of these pass on the exact PR
