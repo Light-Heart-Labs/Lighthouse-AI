@@ -766,7 +766,7 @@ if (type(context_window) is not int or type(model_max_tokens) is not int
         or context_window < 4096 or not 1 <= model_max_tokens <= context_window):
     raise SystemExit("OpenClaw model limits are outside the ODS Pixel runtime contract")
 # OpenClaw otherwise reserves 16K tokens even for a small local context. Bind
-# compaction headroom to the model's real output ceiling so the fixed Pixel
+# compaction headroom to the real model output ceiling so the fixed Pixel
 # system/tool prompt remains usable, and disable the larger embedded-run floor.
 updated_compaction["reserveTokens"] = model_max_tokens
 updated_compaction["reserveTokensFloor"] = 0
@@ -1122,10 +1122,12 @@ PY
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false model_label
-    [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]] || {
+    if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]]; then
+        :
+    else
         ai_bad "Pixel requires a model context of at least 16384 tokens."
         return 1
-    }
+    fi
     (( context < 32768 )) && max_tokens="$((context / 8))"
     # modelReasoning describes model capability to OpenClaw. Qwen needs that
     # capability flag even when ODS defaults it to no-think so OpenClaw can
