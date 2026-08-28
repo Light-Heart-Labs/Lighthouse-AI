@@ -567,13 +567,20 @@ class TestModelsAndEvidence:
             [b'data: {"model":"Concrete.gguf"}\n\n'],
             model_error=httpx.ReadError("truncated stream"),
         )
-        with pytest.raises(httpx.ReadError, match="truncated stream"):
+        with pytest.raises((httpx.ReadError, BaseExceptionGroup)) as exc_info:
             client.post("/v1/chat/completions", json={
                 "model": "ods/current", "stream": True,
                 "messages": [
                     {"role": "user", "content": _signed_marker(probe_id)}
                 ],
             })
+        stream_error = exc_info.value
+        if isinstance(stream_error, BaseExceptionGroup):
+            read_errors = stream_error.subgroup(httpx.ReadError)
+            assert read_errors is not None
+            assert "truncated stream" in str(read_errors)
+        else:
+            assert "truncated stream" in str(stream_error)
         ev = client.get(
             f"/internal/route-evidence/{probe_id}",
             headers={"Authorization": "Bearer internal-secret"},
