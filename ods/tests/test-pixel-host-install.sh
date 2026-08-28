@@ -258,13 +258,14 @@ import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
 assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
+assert value["diagnostics"]["stuckSessionAbortMs"] == 1860000
 assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 3600000}
 PY
 SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -293,6 +294,7 @@ source, target = map(pathlib.Path, sys.argv[1:])
 value = json.loads(source.read_text())
 value["agents"]["defaults"].pop("timeoutSeconds")
 value["models"]["providers"]["ods-local"].pop("timeoutSeconds")
+value.pop("diagnostics")
 value["session"].pop("writeLock")
 target.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY

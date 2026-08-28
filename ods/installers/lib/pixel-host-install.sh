@@ -608,8 +608,9 @@ _ods_pixel_apply_runtime_budget() {
     local owner="$1" home="$2" config="$3" openclaw_bin="$4" staged
     # ODS qualifies Pixel on CPU-only hosts. The first local 9B turn can spend
     # more than five minutes loading and prefilling its managed context, while
-    # OpenClaw's default per-session write lock is five minutes. Keep the
-    # larger budget deterministic and confined to this ODS-owned Pixel route.
+    # OpenClaw's default session watchdogs assume a responsive remote model.
+    # Keep the larger CPU-only budgets deterministic and confined to this
+    # ODS-owned Pixel route.
     staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
 import copy, json, os, pathlib, stat, sys, tempfile
 
@@ -648,11 +649,18 @@ updated = copy.deepcopy(value)
 updated_provider = updated["models"]["providers"]["ods-local"]
 updated_defaults = updated["agents"]["defaults"]
 updated_session = updated["session"]
+updated_diagnostics = updated.setdefault("diagnostics", {})
 write_lock = updated_session.setdefault("writeLock", {})
 if not isinstance(write_lock, dict):
     raise SystemExit("OpenClaw session write-lock configuration must be an object")
+if not isinstance(updated_diagnostics, dict):
+    raise SystemExit("OpenClaw diagnostics configuration must be an object")
 updated_provider["timeoutSeconds"] = 1800
 updated_defaults["timeoutSeconds"] = 1800
+# A CPU-only model call can emit no progress while evaluating a long prompt.
+# Let the 30-minute provider own its terminal timeout, then retain one minute
+# for OpenClaw's stalled-session recovery before the 32-minute host ingress.
+updated_diagnostics["stuckSessionAbortMs"] = 1860000
 write_lock["maxHoldMs"] = 1920000
 write_lock["staleMs"] = 3600000
 if updated == value:

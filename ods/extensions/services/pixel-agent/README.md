@@ -54,10 +54,11 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   and `Accept` matching the stream mode. Connect/header/body/stream behavior is
   bounded by `AbortController`/timeouts; the total request budget is 32 minutes
   so CPU-only first-turn prefill can finish inside OpenClaw's 30-minute model
-  budget. The fixed loopback hop uses Node's core HTTP client instead of the
-  built-in `fetch`, avoiding Undici's implicit five-minute response-body idle
-  cutoff; only the explicit connect and total budgets can end the request. The
-  non-stream response is capped at 2 MiB and each stream line at 1 MiB.
+  budget and 31-minute stalled-session recovery budget. The fixed loopback hop
+  uses Node's core HTTP client instead of the built-in `fetch`, avoiding
+  Undici's implicit five-minute response-body idle cutoff; only the explicit
+  connect and total budgets can end the request. The non-stream response is
+  capped at 2 MiB and each stream line at 1 MiB.
   Upstream bodies are never reflected to the caller; failures produce generic
   errors.
 - **Status projection.** On startup and every `PIXEL_STATUS_INTERVAL_MS`

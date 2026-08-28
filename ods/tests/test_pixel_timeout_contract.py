@@ -32,6 +32,9 @@ def test_pixel_timeout_chain_has_ordered_bounded_headroom() -> None:
     agent_seconds = _integer(
         r'updated_defaults\["timeoutSeconds"\]\s*=\s*(\d+)', installer
     )
+    diagnostic_seconds = _integer(
+        r'updated_diagnostics\["stuckSessionAbortMs"\]\s*=\s*(\d+)', installer
+    ) // 1000
     lock_seconds = _integer(
         r'write_lock\["maxHoldMs"\]\s*=\s*(\d+)', installer
     ) // 1000
@@ -51,10 +54,12 @@ def test_pixel_timeout_chain_has_ordered_bounded_headroom() -> None:
     )
 
     assert provider_seconds == agent_seconds == 1800
+    assert diagnostic_seconds == 1860
     assert lock_seconds == ingress_seconds == 1920
     assert edge_total_seconds == edge_idle_seconds == 1980
     assert dashboard_seconds == 2040
     assert nginx_read_seconds == nginx_send_seconds == 2100
+    assert provider_seconds < diagnostic_seconds < ingress_seconds
     assert provider_seconds < lock_seconds < edge_total_seconds < dashboard_seconds < nginx_read_seconds
 
 
