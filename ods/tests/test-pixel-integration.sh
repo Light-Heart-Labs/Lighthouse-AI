@@ -611,6 +611,29 @@ else
     fail "Key uniqueness: $unique unique, $duplicates duplicates (expected 20/0)"
 fi
 
+section "Pixel .env schema contract"
+if python3 - "$ROOT/.env.schema.json" <<'PY'
+import json, sys
+
+properties = json.load(open(sys.argv[1], encoding="utf-8"))["properties"]
+expected = {
+    "ENABLE_PIXEL", "PIXEL_AGENT_MODE", "PIXEL_LICENSE_ACCEPTED",
+    "PIXEL_SOURCE_URL", "PIXEL_SOURCE_REF", "PIXEL_SOURCE_DIR",
+    "PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_RUNTIME_DIR", "PIXEL_INGRESS_GID",
+}
+assert expected <= properties.keys()
+assert properties["PIXEL_SOURCE_REF"]["pattern"] == "^[0-9a-f]{40}$"
+assert properties["PIXEL_OPENWEBUI_KEY"]["minLength"] == 64
+assert properties["PIXEL_OPENWEBUI_KEY"]["maxLength"] == 64
+assert properties["PIXEL_INGRESS_GID"]["minimum"] == 1
+assert properties["PIXEL_LICENSE_ACCEPTED"]["type"] == "boolean"
+PY
+then
+    pass "Pixel generated environment keys are defined by the strict schema"
+else
+    fail "Pixel generated environment keys must be defined by the strict schema"
+fi
+
 # ---- Summary -----------------------------------------------------------------
 
 echo ""
