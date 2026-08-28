@@ -7859,7 +7859,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                 litellm_restarted = False
                 if litellm_restart_attempted:
                     litellm_restarted = _restore_container_state(
-                        "ods-litellm", container_states["ods-litellm"]
+                        "ods-litellm",
+                        container_states["ods-litellm"],
+                        recreate=True,
                     )
                 hermes_restarted = False
                 if hermes_restart_attempted or hermes_config_mutated:
@@ -8496,10 +8498,13 @@ class AgentHandler(BaseHTTPRequestHandler):
                         display_name=llm_model_name,
                     )
 
-                # Restart dependent services so they pick up the new model
+                # Recreate bind-configured dependents so Docker Desktop cannot
+                # retain stale inodes after the atomic config replacements.
                 litellm_restart_attempted = container_states["ods-litellm"]["running"]
                 litellm_restarted = _restart_existing_container(
-                    "ods-litellm", container_states["ods-litellm"]
+                    "ods-litellm",
+                    container_states["ods-litellm"],
+                    recreate=True,
                 )
                 if litellm_restarted:
                     _verify_litellm_route(env)

@@ -4121,6 +4121,8 @@ class TestModelActivateRollback:
             record_restart(_mod.load_env(path))
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"litellm"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", list)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(
             _mod,
@@ -4153,7 +4155,10 @@ class TestModelActivateRollback:
                     else _llama_identity_response("new-model.gguf")
                 )
                 return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
-            if cmd == ["docker", "restart", "ods-litellm"]:
+            if cmd == [
+                "docker", "compose", "up", "-d", "--no-deps",
+                "--force-recreate", "litellm",
+            ]:
                 raise subprocess.TimeoutExpired(cmd, 60)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -4833,6 +4838,8 @@ class TestModelActivateRollback:
             raise AssertionError("native Lemonade restart should be skipped")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"litellm"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", list)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.delenv("LITELLM_LEMONADE_API_KEY", raising=False)
@@ -4852,7 +4859,10 @@ class TestModelActivateRollback:
         assert handler.response_code == 200
         content = lemonade_yaml.read_text(encoding="utf-8")
         assert "model: openai/extra.new-model.gguf" in content
-        assert ["docker", "restart", "ods-litellm"] in calls
+        assert [
+            "docker", "compose", "up", "-d", "--no-deps",
+            "--force-recreate", "litellm",
+        ] in calls
 
     def test_windows_lemonade_runtime_ensure_persists_config_without_dependents(
         self, tmp_path, monkeypatch,
@@ -5044,8 +5054,8 @@ class TestModelActivateRollback:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
-        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"hermes"})
-        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: [])
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"hermes", "litellm"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", list)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
@@ -5077,7 +5087,10 @@ class TestModelActivateRollback:
         content = local_yaml.read_text(encoding="utf-8")
         assert "model: openai/new-model.gguf" in content
         assert "api_base: http://host.docker.internal:9090/v1" in content
-        assert ["docker", "restart", "ods-litellm"] in calls
+        assert [
+            "docker", "compose", "up", "-d", "--no-deps",
+            "--force-recreate", "litellm",
+        ] in calls
         assert [
             "docker", "compose", "up", "-d", "--no-deps",
             "--force-recreate", "hermes",
@@ -5175,11 +5188,16 @@ class TestModelActivateRollback:
                     stdout=_llama_identity_response("new-model.gguf"),
                     stderr="",
                 )
-            if cmd == ["docker", "restart", "ods-litellm"]:
+            if cmd == [
+                "docker", "compose", "up", "-d", "--no-deps",
+                "--force-recreate", "litellm",
+            ]:
                 raise subprocess.TimeoutExpired(cmd, 60)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"litellm"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", list)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
@@ -5842,9 +5860,9 @@ class TestModelActivateRollback:
                 return kwargs["gguf_file"]
             return True
 
-        def restart_dependent(container, _state=None, **_kwargs):
+        def restart_dependent(container, _state=None, **kwargs):
             nonlocal litellm_restarts
-            events.append(f"dependent:{container}")
+            events.append(f"dependent:{container}:{kwargs.get('recreate')}")
             if container == "ods-litellm":
                 litellm_restarts += 1
                 if litellm_restarts == 1:
@@ -5852,10 +5870,22 @@ class TestModelActivateRollback:
                 return True
             return False
 
+        def restore_dependent(container, _state, **kwargs):
+            events.append(f"restore:{container}:{kwargs.get('recreate')}")
+            return True
+
+        states = {
+            "ods-litellm": {"exists": True, "running": True},
+            "ods-hermes": {"exists": False, "running": False},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", restart_runtime)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
         monkeypatch.setattr(_mod, "_restart_existing_container", restart_dependent)
+        monkeypatch.setattr(_mod, "_restore_container_state", restore_dependent)
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -5865,8 +5895,9 @@ class TestModelActivateRollback:
         assert events == [
             "runtime:new-model.gguf",
             "ready:new-model.gguf",
-            "dependent:ods-litellm",
+            "dependent:ods-litellm:True",
             "runtime:old-model.gguf",
+            "restore:ods-litellm:True",
             "ready:old-model.gguf",
         ]
 
@@ -6802,7 +6833,9 @@ class TestModelActivateRollback:
         monkeypatch.setattr(
             _mod,
             "_restart_existing_container",
-            lambda name, _state=None, **_kwargs: events.append(f"restart:{name}") or name == "ods-litellm",
+            lambda name, _state=None, **kwargs: events.append(
+                f"restart:{name}:{kwargs.get('recreate')}"
+            ) or name == "ods-litellm",
         )
         monkeypatch.setattr(_mod, "_verify_litellm_route", lambda _env: events.append("litellm-ready"))
         monkeypatch.setattr(
@@ -6815,6 +6848,7 @@ class TestModelActivateRollback:
         _mod.AgentHandler._do_model_activate(handler, "target-model")
 
         assert handler.response_code == 200
+        assert "restart:ods-litellm:True" in events
         assert events.index("litellm-ready") < events.index("opencode-restart")
 
 
