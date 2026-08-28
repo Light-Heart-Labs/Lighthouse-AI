@@ -89,6 +89,50 @@ MODELS_INI="$INSTALL_DIR/config/llama-server/models.ini"
 STATUS_FILE="$INSTALL_DIR/data/bootstrap-status.json"
 UPGRADE_LOCK_DIR=""
 
+reconcile_ods_managed_pixel_model() {
+    [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]] || return 0
+
+    local owner home marker sudo_helper pixel_helper
+    if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+        owner="${SUDO_USER:-}"
+    else
+        owner="$(id -un)"
+    fi
+    [[ -n "$owner" && "$owner" != root ]] || return 0
+    home="$(getent passwd "$owner" 2>/dev/null | awk -F: 'NR == 1 { print $6 }')"
+    [[ "$home" == /* && "$home" != / && -d "$home" && ! -L "$home" ]] || return 1
+    marker="$home/.config/ods/pixel-managed.json"
+    [[ -e "$marker" || -L "$marker" ]] || return 0
+
+    sudo_helper="$INSTALL_DIR/installers/lib/sudo.sh"
+    pixel_helper="$INSTALL_DIR/installers/lib/pixel-host-install.sh"
+    [[ -f "$sudo_helper" && ! -L "$sudo_helper" && -f "$pixel_helper" && ! -L "$pixel_helper" ]] || {
+        log "ERROR: ODS-managed Pixel exists, but its reconciliation helpers are unavailable."
+        return 1
+    }
+    INTERACTIVE=false
+    if [[ ${EUID:-$(id -u)} -eq 0 ]] || sudo -n true >/dev/null 2>&1; then
+        ODS_SUDO_AVAILABLE=true
+    else
+        ODS_SUDO_AVAILABLE=false
+        log "ERROR: ODS-managed Pixel cannot be restarted non-interactively after model promotion."
+        return 1
+    fi
+    export INTERACTIVE ODS_SUDO_AVAILABLE
+    # shellcheck source=installers/lib/sudo.sh
+    . "$sudo_helper"
+    # shellcheck source=installers/lib/pixel-host-install.sh
+    . "$pixel_helper"
+
+    log "Reconciling the ODS-managed Pixel route to ${FULL_LLM_MODEL}..."
+    if ods_pixel_reconcile_promoted_model "$owner" "$home" "$FULL_LLM_MODEL" ready; then
+        log "ODS-managed Pixel now targets ${FULL_LLM_MODEL}."
+        return 0
+    fi
+    log "ERROR: ODS-managed Pixel model reconciliation failed."
+    return 1
+}
+
 # Cross-platform file size (GNU stat on Linux/WSL2, BSD stat on macOS)
 # IMPORTANT: Try GNU stat -c %s FIRST (Linux). stat -f on Linux returns filesystem
 # block count (not file size). BSD stat -f %z is the macOS fallback.
@@ -2438,6 +2482,19 @@ if [[ "$_windows_lemonade_swap_applies" == "true" ]]; then
 
     if activate_windows_lemonade_full_model; then
         HOT_SWAP_VERIFIED=true
+        # Pixel is a host-side OpenClaw deployment rather than the legacy
+        # ods-openclaw container. Reconcile its reviewed configuration while
+        # the bootstrap model and the active-config snapshot are still intact,
+        # so a failure can restore both the agent route and inference runtime.
+        if ! reconcile_ods_managed_pixel_model; then
+            _rollback_status="Previous active model config restore was attempted; inspect the logs before retrying."
+            if restore_docker_llama_server_after_swap_failure "$_health_url"; then
+                _rollback_status="Previous active model config and Pixel route restored; re-run to retry the full-model swap."
+            fi
+            write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 \
+                "Full model served, but ODS could not reconcile the managed Pixel route. ${_rollback_status}"
+            exit 1
+        fi
         discard_active_model_config_snapshot
         discard_bootstrap_model_backup_after_windows_swap
     else

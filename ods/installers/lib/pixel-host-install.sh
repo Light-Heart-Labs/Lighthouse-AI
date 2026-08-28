@@ -33,10 +33,18 @@ ods_pixel_run_as_owner() {
 }
 
 _ods_pixel_assert_managed_state() {
-    local owner="$1" home="$2" marker pixel_install
+    local owner="$1" home="$2" marker marker_dir pixel_install
     marker="$home/.config/ods/pixel-managed.json"
+    marker_dir="${marker%/*}"
     pixel_install="$home/.local/share/pixel"
     local gateway_unit="${ODS_PIXEL_GATEWAY_UNIT_PATH:-/etc/systemd/system/openclaw-gateway.service}"
+    if [[ -e "$marker_dir" || -L "$marker_dir" ]]; then
+        [[ -d "$marker_dir" && ! -L "$marker_dir" ]] || return 1
+        [[ "$(stat -c '%u' -- "$marker_dir")" == "$(id -u "$owner")" ]] || return 1
+        ods_pixel_run_as_owner "$owner" "$home" chmod 0700 -- "$marker_dir" || return 1
+    else
+        ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "$marker_dir" || return 1
+    fi
     if [[ -e "$marker" || -L "$marker" ]]; then
         [[ -f "$marker" && ! -L "$marker" ]] || return 1
         [[ "$(stat -c '%u' -- "$marker")" == "$(id -u "$owner")" ]] || return 1
@@ -67,7 +75,6 @@ PY
         fi
     done
 
-    ods_pixel_run_as_owner "$owner" "$home" mkdir -p -- "$home/.config/ods"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
 import json, os, pathlib, sys, tempfile
 path = pathlib.Path(sys.argv[1])
@@ -339,6 +346,349 @@ if values[0] != values[1]:
 PY
 }
 
+_ods_pixel_managed_source_ref() {
+    local owner="$1" home="$2" marker config
+    marker="$home/.config/ods/pixel-managed.json"
+    config="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" <<'PY'
+import hashlib, json, os, pathlib, re, stat, sys
+
+marker_path = pathlib.Path(sys.argv[1])
+config_path = pathlib.Path(sys.argv[2])
+for path, maximum in ((marker_path, 65536), (config_path, 2 * 1024 * 1024)):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > maximum):
+        raise SystemExit("unsafe ODS-managed Pixel state")
+marker = json.loads(marker_path.read_text(encoding="utf-8"))
+source_ref = marker.get("pixel_source_ref")
+if (marker.get("schema_version") != 2 or marker.get("manager") != "ods"
+        or marker.get("initial_active_state") != "absent"
+        or marker.get("install_dir") != sys.argv[3]
+        or marker.get("state") not in {"ready", "installing"}
+        or not isinstance(source_ref, str) or not re.fullmatch(r"[0-9a-f]{40}", source_ref)
+        or marker.get("requested_source_ref") not in {None, source_ref}):
+    raise SystemExit("ODS-managed Pixel marker is not eligible for reconciliation")
+config = json.loads(config_path.read_text(encoding="utf-8"))
+if not isinstance(config, dict):
+    raise SystemExit("invalid ODS-managed OpenClaw configuration")
+canonical = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+observed = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical).hexdigest()
+if marker.get("configuration_sha256") != observed:
+    raise SystemExit("ODS-managed OpenClaw configuration drifted")
+print(source_ref)
+PY
+}
+
+_ods_pixel_model_reconciliation_snapshot() {
+    local owner="$1" home="$2" answers="$3" marker config attestation backup_root
+    marker="$home/.config/ods/pixel-managed.json"
+    config="$home/.openclaw/openclaw.json"
+    attestation="$home/.local/share/pixel/runtime-attestation.json"
+    backup_root="$home/.openclaw/backups"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$marker" "$config" "$answers" "$attestation" "$backup_root" <<'PY'
+import json, os, pathlib, shutil, stat, sys, tempfile
+
+marker, config, answers, attestation, backup_root = map(pathlib.Path, sys.argv[1:])
+sources = (
+    (marker, 65536),
+    (config, 2 * 1024 * 1024),
+    (answers, 2 * 1024 * 1024),
+    (attestation, 2 * 1024 * 1024),
+)
+for path, maximum in sources:
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > maximum):
+        raise SystemExit(f"unsafe Pixel reconciliation source: {path}")
+backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+root_info = backup_root.lstat()
+if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != os.getuid() or root_info.st_mode & 0o077):
+    raise SystemExit("unsafe Pixel backup root")
+backup = pathlib.Path(tempfile.mkdtemp(prefix="ods-model-reconcile-", dir=backup_root))
+os.chmod(backup, 0o700)
+for source, name in (
+    (marker, "pixel-managed.json"),
+    (config, "openclaw.json"),
+    (answers, "onboarding.json"),
+    (attestation, "runtime-attestation.json"),
+):
+    target = backup / name
+    with source.open("rb") as source_handle, target.open("xb") as target_handle:
+        shutil.copyfileobj(source_handle, target_handle)
+        target_handle.flush()
+        os.fsync(target_handle.fileno())
+    os.chmod(target, 0o600)
+
+live = json.loads(config.read_text(encoding="utf-8"))
+contract = json.loads(answers.read_text(encoding="utf-8"))
+provider = contract.get("modelProvider")
+agent_id = contract.get("agentId")
+providers = live.get("models", {}).get("providers", {})
+models = providers.get(provider, {}).get("models", []) if isinstance(providers, dict) else []
+agents = live.get("agents", {}).get("list", [])
+agent = [item for item in agents if isinstance(item, dict) and item.get("id") == agent_id]
+if (provider != "ods-local" or agent_id != "pixel" or len(models) != 1 or len(agent) != 1
+        or not isinstance(models[0].get("id"), str) or not isinstance(models[0].get("name"), str)
+        or agent[0].get("model") != f"{provider}/{models[0]['id']}"):
+    raise SystemExit("live Pixel configuration is outside the ODS model-only contract")
+contract["modelId"] = models[0]["id"]
+contract["modelName"] = models[0]["name"]
+rollback = backup / "rollback-onboarding.json"
+payload = json.dumps(contract, indent=2, sort_keys=True) + "\n"
+with rollback.open("x", encoding="utf-8", newline="\n") as handle:
+    handle.write(payload)
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(rollback, 0o600)
+print(backup)
+PY
+}
+
+_ods_pixel_update_onboarding_model() {
+    local owner="$1" home="$2" answers="$3" model="$4"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$model" <<'PY'
+import json, os, pathlib, re, stat, sys, tempfile
+
+path = pathlib.Path(sys.argv[1])
+model = sys.argv[2]
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+    raise SystemExit("invalid promoted Pixel model id")
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+        or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("unsafe ODS Pixel onboarding contract")
+parent_info = path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o022):
+    raise SystemExit("unsafe ODS Pixel onboarding directory")
+value = json.loads(path.read_text(encoding="utf-8"))
+extensions = value.get("gatewayExtensions")
+if (value.get("deploymentName") != "ods-default" or value.get("agentId") != "pixel"
+        or value.get("modelProvider") != "ods-local" or value.get("modelApiKey") != "local-no-auth"
+        or value.get("modelBaseUrl") != "http://127.0.0.1:11434/v1"
+        or not isinstance(extensions, list) or len(extensions) != 1
+        or extensions[0].get("id") != "pixel-ods"):
+    raise SystemExit("onboarding contract is outside the ODS-managed Pixel boundary")
+value["modelId"] = model
+value["modelName"] = f"ODS Local {model}"
+payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
+fd, temporary = tempfile.mkstemp(prefix=".pixel-onboarding.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+_ods_pixel_candidate_is_model_only_update() {
+    local owner="$1" home="$2" candidate="$3" answers="$4" live
+    live="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$live" "$candidate" "$answers" <<'PY'
+import copy, json, os, pathlib, stat, sys
+
+values = []
+for raw in sys.argv[1:]:
+    path = pathlib.Path(raw)
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit("unsafe Pixel model-reconciliation input")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit("Pixel model-reconciliation input is not an object")
+    values.append(value)
+live, candidate, contract = values
+provider = contract.get("modelProvider")
+model_id = contract.get("modelId")
+model_name = contract.get("modelName")
+agent_id = contract.get("agentId")
+if provider != "ods-local" or agent_id != "pixel" or model_name != f"ODS Local {model_id}":
+    raise SystemExit("candidate is outside the ODS model contract")
+
+def binding(document):
+    providers = document.get("models", {}).get("providers", {})
+    if not isinstance(providers, dict) or set(providers) != {provider}:
+        raise SystemExit("unexpected Pixel model providers")
+    provider_value = providers[provider]
+    models = provider_value.get("models") if isinstance(provider_value, dict) else None
+    agents = document.get("agents", {}).get("list", [])
+    selected = [item for item in agents if isinstance(item, dict) and item.get("id") == agent_id]
+    if not isinstance(models, list) or len(models) != 1 or len(selected) != 1:
+        raise SystemExit("unexpected Pixel model or agent cardinality")
+    return provider_value, models[0], selected[0]
+
+live_provider, live_model, live_agent = binding(live)
+candidate_provider, candidate_model, candidate_agent = binding(candidate)
+expected_model = {
+    "id": model_id,
+    "name": model_name,
+    "contextWindow": contract.get("modelContextWindow"),
+    "maxTokens": contract.get("modelMaxTokens"),
+    "reasoning": contract.get("modelReasoning"),
+}
+for key, expected in expected_model.items():
+    if candidate_model.get(key) != expected:
+        raise SystemExit(f"candidate model field does not match onboarding: {key}")
+if (candidate_provider.get("api") != "openai-completions"
+        or candidate_provider.get("apiKey") != contract.get("modelApiKey")
+        or candidate_provider.get("baseUrl") != contract.get("modelBaseUrl")
+        or candidate_agent.get("model") != f"{provider}/{model_id}"):
+    raise SystemExit("candidate provider route does not match onboarding")
+old_id = live_model.get("id")
+if (not isinstance(old_id, str) or live_model.get("name") != f"ODS Local {old_id}"
+        or live_agent.get("model") != f"{provider}/{old_id}"):
+    raise SystemExit("live provider route is outside the ODS model contract")
+normalized = copy.deepcopy(live)
+normalized_provider, normalized_model, normalized_agent = binding(normalized)
+normalized_model["id"] = model_id
+normalized_model["name"] = model_name
+normalized_agent["model"] = f"{provider}/{model_id}"
+if normalized != candidate:
+    raise SystemExit("candidate changes more than the ODS model-only fields")
+PY
+}
+
+_ods_pixel_atomic_replace_managed_file() {
+    local owner="$1" home="$2" source="$3" target="$4"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$source" "$target" <<'PY'
+import os, pathlib, stat, sys, tempfile
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+for path in (source,):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit(f"unsafe managed file: {path}")
+if target.exists() or target.is_symlink():
+    info = target.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit(f"unsafe managed file: {target}")
+parent_info = target.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o022):
+    raise SystemExit(f"unsafe managed directory: {target.parent}")
+payload = source.read_bytes()
+fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+try:
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+_ods_pixel_restart_gateway_and_verify() {
+    local owner="$1" home="$2" pixel_root="$3" attempt ready=false previous_pid current_pid
+    ods_sudo_available || return 1
+    previous_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
+    ods_sudo systemctl restart openclaw-gateway.service || return 1
+    current_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
+    [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] || return 1
+    for attempt in {1..60}; do
+        if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18789/health 2>/dev/null \
+            | jq -e '.ok == true and .status == "live"' >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        (( attempt < 60 )) && sleep 2
+    done
+    [[ "$ready" == true ]] || return 1
+    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
+}
+
+_ods_pixel_restore_model_reconciliation() {
+    local owner="$1" home="$2" pixel_root="$3" answers="$4" backup="$5"
+    local old_contract
+    _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/openclaw.json" "$home/.openclaw/openclaw.json" || return 1
+    _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/rollback-onboarding.json" "$answers" || return 1
+    _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/pixel-managed.json" "$home/.config/ods/pixel-managed.json" || return 1
+    if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
+        || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan \
+        || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
+        _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/runtime-attestation.json" \
+            "$home/.local/share/pixel/runtime-attestation.json" || true
+        return 1
+    fi
+    old_contract="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1
+    _ods_pixel_mark_ready "$owner" "$home" "$old_contract" "$pixel_root"
+}
+
+ods_pixel_reconcile_promoted_model() {
+    local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
+    local source_ref source_root pixel_root answers candidate backup contract_sha256 failed=false
+    [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
+    source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
+    local PIXEL_SOURCE_REF="$source_ref"
+    local PIXEL_SOURCE_URL="${PIXEL_SOURCE_URL:-https://github.com/Osmantic/Pixel.git}"
+    source_root="${INSTALL_DIR:?}/data/pixel/source-$source_ref"
+    pixel_root="$(_ods_pixel_source_checkout "$owner" "$home" "$source_root")" || return 1
+    answers="$INSTALL_DIR/data/pixel/onboarding.json"
+    candidate="$pixel_root/dist/openclaw.json"
+    backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$home" "$answers")" || return 1
+
+    _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" || failed=true
+    if [[ "$failed" == false ]] && {
+        ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
+        || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan;
+    }; then
+        failed=true
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_candidate_is_model_only_update "$owner" "$home" "$candidate" "$answers"; then
+        failed=true
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate" \
+        && ! _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$candidate" "$home/.openclaw/openclaw.json"; then
+        failed=true
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
+        failed=true
+    fi
+    if [[ "$failed" == false ]]; then
+        contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || failed=true
+    fi
+    if [[ "$failed" == false ]]; then
+        if [[ "$final_state" == ready ]]; then
+            _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || failed=true
+        else
+            _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || failed=true
+        fi
+    fi
+    if [[ "$failed" == false ]]; then
+        printf '%s\n' "Pixel model route reconciled to $promoted_model"
+        return 0
+    fi
+
+    printf '%s\n' 'warning: Pixel model reconciliation failed; restoring the previous verified route' >&2
+    if _ods_pixel_restore_model_reconciliation "$owner" "$home" "$pixel_root" "$answers" "$backup"; then
+        printf '%s\n' 'warning: previous Pixel model route restored and verified' >&2
+    else
+        printf '%s\n' "error: Pixel model reconciliation and verified rollback both failed; evidence retained at $backup" >&2
+    fi
+    return 1
+}
+
 _ods_pixel_mark_installing() {
     local owner="$1" home="$2" marker
     marker="$home/.config/ods/pixel-managed.json"
@@ -509,6 +859,7 @@ _ods_pixel_write_onboarding() {
     (( context < max_tokens )) && max_tokens="$context"
     [[ "${LLAMA_REASONING:-off}" != off ]] && reasoning=true
 
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${answers%/*}" || return 1
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
         "$openclaw_bin" "$home" "${LLM_MODEL:-default}" "$context" "$max_tokens" "$reasoning" \
         "${OLLAMA_PORT:-11434}" "${SEARXNG_PORT:-8888}" "$plugin_path" "$plugin_digest" <<'PY'
@@ -724,14 +1075,21 @@ ods_pixel_install_default_agent() {
             ai_bad "Pixel configure or plan failed. See $LOG_FILE for the exact Pixel error."
             return 1
         fi
-        if [[ "$same_verified_source" == true ]] \
-            && _ods_pixel_candidate_config_matches_live "$owner" "$home" "$pixel_root/dist/openclaw.json"; then
-            ai "The exact Pixel release and runtime configuration are unchanged; refreshing the verified ODS extension without reapplying the release..."
-            if ! ods_sudo systemctl restart openclaw-gateway.service \
-                || ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" 60 '.ok == true and .status == "live"' \
-                || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
-                ai_bad "The ODS-managed Pixel extension refresh failed verification. See $LOG_FILE."
-                return 1
+        if [[ "$same_verified_source" == true ]]; then
+            if _ods_pixel_candidate_config_matches_live "$owner" "$home" "$pixel_root/dist/openclaw.json"; then
+                ai "The exact Pixel release and runtime configuration are unchanged; refreshing the verified ODS extension without reapplying the release..."
+                if ! ods_sudo systemctl restart openclaw-gateway.service \
+                    || ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" 60 '.ok == true and .status == "live"' \
+                    || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
+                    ai_bad "The ODS-managed Pixel extension refresh failed verification. See $LOG_FILE."
+                    return 1
+                fi
+            else
+                ai "The exact Pixel release is active with an older ODS model route; reconciling the reviewed model-only change..."
+                if ! ods_pixel_reconcile_promoted_model "$owner" "$home" "${LLM_MODEL:-default}" installing >>"$LOG_FILE" 2>&1; then
+                    ai_bad "The ODS-managed Pixel model route could not be reconciled safely. See $LOG_FILE."
+                    return 1
+                fi
             fi
         elif ! {
             ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&

@@ -49,6 +49,7 @@ export INSTALL_DIR PIXEL_SOURCE_REF ODS_PIXEL_GATEWAY_UNIT_PATH
 _ods_pixel_assert_managed_state "$owner" "$home"
 marker="$home/.config/ods/pixel-managed.json"
 check test "$(stat -c '%a' "$marker")" = 600
+check test "$(stat -c '%a' "${marker%/*}")" = 700
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {"initial_active_state":"absent","install_dir":sys.argv[2],"manager":"ods","pixel_source_ref":sys.argv[3],"schema_version":2,"state":"installing"}' "$marker" "$INSTALL_DIR" "$PIXEL_SOURCE_REF"
 printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}' > "$home/.openclaw/openclaw.json"
 chmod 0600 "$home/.openclaw/openclaw.json"
@@ -222,6 +223,114 @@ assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugi
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
+
+reconcile_home="$TEST_ROOT/reconcile-home"
+reconcile_answers="$TEST_ROOT/reconcile-onboarding.json"
+reconcile_candidate="$TEST_ROOT/reconcile-candidate.json"
+reconcile_marker="$reconcile_home/.config/ods/pixel-managed.json"
+reconcile_config="$reconcile_home/.openclaw/openclaw.json"
+reconcile_ref="$(printf '9%.0s' {1..40})"
+mkdir -p "$reconcile_home/.config/ods" "$reconcile_home/.openclaw/backups" \
+    "$reconcile_home/.local/share/pixel"
+chmod 0700 "$reconcile_home/.openclaw" "$reconcile_home/.openclaw/backups"
+chmod 0700 "$reconcile_home/.config/ods"
+cp "$answers" "$reconcile_answers"
+python3 - "$reconcile_answers" "$reconcile_config" "$reconcile_candidate" <<'PY'
+import copy, json, pathlib, sys
+
+answers_path, live_path, candidate_path = map(pathlib.Path, sys.argv[1:])
+answers = json.loads(answers_path.read_text())
+answers["modelId"] = "qwen-old"
+answers["modelName"] = "ODS Local qwen-old"
+answers_path.write_text(json.dumps(answers, indent=2, sort_keys=True) + "\n")
+base = {
+    "agents": {"list": [{"id": "pixel", "model": "ods-local/qwen-old", "preserve": 7}]},
+    "gateway": {"bind": "loopback"},
+    "models": {"providers": {"ods-local": {
+        "api": "openai-completions",
+        "apiKey": "local-no-auth",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "models": [{
+            "id": "qwen-old",
+            "name": "ODS Local qwen-old",
+            "contextWindow": answers["modelContextWindow"],
+            "maxTokens": answers["modelMaxTokens"],
+            "reasoning": answers["modelReasoning"],
+            "input": ["text"],
+        }],
+    }}},
+}
+candidate = copy.deepcopy(base)
+candidate["agents"]["list"][0]["model"] = "ods-local/qwen-new"
+candidate_model = candidate["models"]["providers"]["ods-local"]["models"][0]
+candidate_model["id"] = "qwen-new"
+candidate_model["name"] = "ODS Local qwen-new"
+live_path.write_text(json.dumps(base, indent=2, sort_keys=True) + "\n")
+candidate_path.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$reconcile_answers" "$reconcile_config" "$reconcile_candidate"
+printf '%s\n' '{"kind":"pixel-runtime-attestation"}' > "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+chmod 0600 "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+python3 - "$reconcile_marker" "$reconcile_config" "$INSTALL_DIR" "$reconcile_ref" <<'PY'
+import hashlib, json, pathlib, sys
+
+marker, config, install_dir, source_ref = sys.argv[1:]
+value = json.loads(pathlib.Path(config).read_text())
+canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+payload = {
+    "schema_version": 2,
+    "manager": "ods",
+    "state": "ready",
+    "initial_active_state": "absent",
+    "install_dir": install_dir,
+    "pixel_source_ref": source_ref,
+    "contract_sha256": "a" * 64,
+    "configuration_sha256": hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical).hexdigest(),
+    "active_release_version": "4.3.14",
+    "release_identity_sha256": "b" * 64,
+    "install_manifest_sha256": "c" * 64,
+    "sandbox_image": "openclaw-sandbox:test",
+    "sandbox_image_id": "sha256:" + "d" * 64,
+}
+pathlib.Path(marker).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$reconcile_marker"
+check test "$(_ods_pixel_managed_source_ref "$owner" "$reconcile_home")" = "$reconcile_ref"
+reconcile_backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$reconcile_home" "$reconcile_answers")"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-old" and v["modelName"] == "ODS Local qwen-old"' "$reconcile_backup/rollback-onboarding.json"
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" qwen-new
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new"' "$reconcile_answers"
+check _ods_pixel_candidate_is_model_only_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
+python3 - "$reconcile_candidate" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["gateway"]["bind"] = "lan"
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+if _ods_pixel_candidate_is_model_only_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers" >/dev/null 2>&1; then
+    fail "non-model Pixel candidate change rejected"
+else
+    pass "non-model Pixel candidate change rejected"
+fi
+python3 - "$reconcile_candidate" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["gateway"]["bind"] = "loopback"
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$reconcile_candidate"
+check _ods_pixel_atomic_replace_managed_file "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_config"
+check _ods_pixel_candidate_config_matches_live "$owner" "$reconcile_home" "$reconcile_candidate"
+linked_reconcile_candidate="$TEST_ROOT/reconcile-candidate-link.json"
+ln -s "$reconcile_candidate" "$linked_reconcile_candidate"
+if _ods_pixel_atomic_replace_managed_file "$owner" "$reconcile_home" "$linked_reconcile_candidate" "$reconcile_config" >/dev/null 2>&1; then
+    fail "symlink model reconciliation source rejected"
+else
+    pass "symlink model reconciliation source rejected"
+fi
+
 linked_answers="$TEST_ROOT/onboarding-linked.json"
 printf '%s\n' 'sentinel' > "$TEST_ROOT/onboarding-link-target"
 ln -s "$TEST_ROOT/onboarding-link-target" "$linked_answers"
@@ -277,6 +386,7 @@ assert "pixel\" apply --confirm &&" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
+assert "ods_pixel_reconcile_promoted_model" in text
 assert installer.index("if _ods_pixel_verified_source_matches") < installer.index("_ods_pixel_mark_installing")
 assert "The exact ODS-managed Pixel contract is already active" in text
 assert "refreshing the verified ODS extension without reapplying the release" in text
@@ -306,6 +416,14 @@ assert "ProtectHome=true" in text
 assert "RestrictNamespaces=true" in text
 assert "BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_SOURCE__:__PIXEL_GATEWAY_TOKEN_FILE__" in text
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-ingress.service"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+reconcile=text.index("if ! reconcile_ods_managed_pixel_model")
+discard=text.index("discard_active_model_config_snapshot", reconcile)
+cleanup=text.index("# ── Phase 5b: Remove bootstrap model", reconcile)
+assert reconcile < discard < cleanup
+' "$ROOT/scripts/bootstrap-upgrade.sh"
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
