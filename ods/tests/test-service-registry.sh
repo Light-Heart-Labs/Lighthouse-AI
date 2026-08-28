@@ -140,7 +140,7 @@ else:
         errors.append(f'invalid category: {s[\"category\"]}')
     if 'gpu_backends' in s:
         for gb in s['gpu_backends']:
-            if gb not in ('amd', 'nvidia', 'apple', 'all'):
+            if gb not in ('amd', 'nvidia', 'apple', 'cpu', 'none', 'all'):
                 errors.append(f'invalid gpu_backend: {gb}')
     if 'aliases' in s and not isinstance(s['aliases'], list):
         errors.append('aliases must be a list')
