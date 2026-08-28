@@ -118,6 +118,44 @@ describe('Pixel', () => {
     expect(call[1].headers.Authorization).toBeUndefined()
   })
 
+  it('sends only role and content on later turns', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'First answer' } }] }),
+      '[DONE]',
+    ]))
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Second answer' } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText('Message Pixel...')
+    fireEvent.change(textarea, { target: { value: 'first turn' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByText('First answer')).toBeInTheDocument())
+
+    fireEvent.change(textarea, { target: { value: 'second turn' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByText('Second answer')).toBeInTheDocument())
+
+    const chatCalls = globalThis.fetch.mock.calls.filter(
+      call => call[0] === '/api/pixel/chat/stream'
+    )
+    expect(chatCalls).toHaveLength(2)
+    const body = JSON.parse(chatCalls[1][1].body)
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'first turn' },
+      { role: 'assistant', content: 'First answer' },
+      { role: 'user', content: 'second turn' },
+    ])
+    expect(body.messages.every(message => Object.keys(message).sort().join(',') === 'content,role')).toBe(true)
+  })
+
   it('parses SSE chunks and displays content', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })

@@ -86,7 +86,13 @@ export default function Pixel() {
     if (!trimmed || sending || status !== 'available' || trimmed.length > MAX_INPUT_LEN) return
 
     const userMessage = { role: 'user', content: trimmed }
-    const conversation = [...messages, userMessage]
+    // Local assistant messages carry UI-only status metadata. Keep the API
+    // boundary exact so a completed or failed first turn cannot make the next
+    // request fail the dashboard API's extra="forbid" contract.
+    const conversation = [
+      ...messages.map(({ role, content }) => ({ role, content })),
+      userMessage,
+    ]
     setMessages([...conversation, { role: 'assistant', content: '', status: 'streaming' }])
     setInput('')
     setSending(true)
