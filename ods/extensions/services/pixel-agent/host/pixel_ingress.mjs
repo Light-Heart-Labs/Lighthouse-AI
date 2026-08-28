@@ -747,23 +747,32 @@ function listenUnix(server, socketPath) {
 }
 
 export async function start(cfg = configFromEnv(), opts = {}) {
-  validateConfig(cfg);
   const deps = { ...defaultDeps, ...(opts.deps || {}) };
-  const token = readGatewayToken(cfg.gatewayTokenFile, opts.euid);
-  prepareSocketPath(cfg.socketPath);
-  const server = createIngressServer({ token, gatewayPort: cfg.gatewayPort, deps });
-  await listenUnix(server, cfg.socketPath);
+  let startupStage = "configuration";
+  let server;
   try {
+    validateConfig(cfg);
+    startupStage = "token-read";
+    const token = readGatewayToken(cfg.gatewayTokenFile, opts.euid);
+    startupStage = "socket-prepare";
+    prepareSocketPath(cfg.socketPath);
+    server = createIngressServer({ token, gatewayPort: cfg.gatewayPort, deps });
+    startupStage = "socket-listen";
+    await listenUnix(server, cfg.socketPath);
+    startupStage = "runtime-state";
     fs.chmodSync(cfg.socketPath, 0o660);
     if (cfg.ingressGid !== null) fs.chownSync(cfg.socketPath, -1, cfg.ingressGid);
     await writeStatus(true, cfg.gatewayPort, cfg.statusFile, deps);
   } catch (error) {
-    await new Promise((resolve) => server.close(resolve));
-    try {
-      fs.unlinkSync(cfg.socketPath);
-    } catch {
-      /* socket already absent */
+    if (server?.listening) {
+      await new Promise((resolve) => server.close(resolve));
+      try {
+        fs.unlinkSync(cfg.socketPath);
+      } catch {
+        /* socket already absent */
+      }
     }
+    if (error && typeof error === "object") error.pixelStartupStage = startupStage;
     throw error;
   }
 
@@ -807,8 +816,12 @@ if (isMain) {
       process.once("SIGTERM", shutdown);
       process.once("SIGINT", shutdown);
     })
-    .catch(() => {
-      console.error("pixel-ingress failed to start");
+    .catch((error) => {
+      const allowedStages = new Set([
+        "configuration", "token-read", "socket-prepare", "socket-listen", "runtime-state",
+      ]);
+      const stage = allowedStages.has(error?.pixelStartupStage) ? error.pixelStartupStage : "internal";
+      console.error(`pixel-ingress failed to start (${stage})`);
       process.exit(1);
     });
 }

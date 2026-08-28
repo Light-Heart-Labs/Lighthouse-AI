@@ -53,6 +53,9 @@ check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {
 printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}' > "$home/.openclaw/openclaw.json"
 chmod 0600 "$home/.openclaw/openclaw.json"
 contract_sha256="$(printf 'c%.0s' {1..64})"
+_ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
+check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
 _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "ready" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
@@ -158,9 +161,20 @@ assert "_ods_pixel_managed_contract_matches" in text
 assert "The exact ODS-managed Pixel contract is already active" in text
 assert "pixel\" verify >>\"$LOG_FILE\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
+assert "if ! _ods_pixel_mark_verified_installing" in text
+assert text.index("_ods_pixel_mark_verified_installing \"$owner\"") < text.index("_ods_pixel_install_ingress \"$owner\"")
 assert "if ! _ods_pixel_mark_ready" in text
 assert "ods_linux_node_tools_available" in text
+assert "runtime_token_file=\"/run/ods-pixel/openclaw.json\"" in text
+assert "PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file" in text
 ' "$ROOT/installers/lib/pixel-host-install.sh"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "ProtectHome=true" in text
+assert "RestrictNamespaces=true" in text
+assert "BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_SOURCE__:__PIXEL_GATEWAY_TOKEN_FILE__" in text
+' "$ROOT/extensions/services/pixel-agent/host/pixel-ingress.service"
 
 printf '\nResults: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

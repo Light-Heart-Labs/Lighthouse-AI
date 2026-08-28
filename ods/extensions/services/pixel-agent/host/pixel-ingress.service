@@ -34,6 +34,7 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
+RestrictNamespaces=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -42,9 +43,10 @@ LockPersonality=true
 RestrictRealtime=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
-# ProtectHome hides every home directory; expose only the exact owner-private
-# Pixel gateway token file selected and validated by the installer.
-BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_FILE__
+# ProtectHome hides every home directory. Bind only the exact owner-private
+# source file into the service's private runtime directory; the process never
+# receives access to the source home path or any neighboring owner state.
+BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_SOURCE__:__PIXEL_GATEWAY_TOKEN_FILE__
 ReadOnlyPaths=/etc/ods/pixel-agent.env
 ReadWritePaths=/run/ods-pixel
 # Docker socket is NOT mounted into the service; the status projection probes

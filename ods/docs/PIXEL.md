@@ -80,10 +80,11 @@ Browser
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
 receives either the edge key or Pixel's operator/gateway token. The edge key
-cannot call the loopback gateway directly. The host ingress reads the
-owner-private gateway environment, injects its token only on the final
-loopback hop, strips inbound headers, forces `openclaw/default`, and bounds
-request, response, stream, and timeout sizes.
+cannot call the loopback gateway directly. With the rest of the owner's home
+hidden, the host ingress bind-mounts only Pixel's exact owner-private gateway
+config read-only into its private runtime namespace, injects its token only on
+the final loopback hop, strips inbound headers, forces `openclaw/default`, and
+bounds request, response, stream, and timeout sizes.
 
 The edge and host ingress health checks fail closed unless the next hop is
 actually ready. Open WebUI is not allowed to advertise `pixel/default` while
@@ -159,6 +160,9 @@ generic shell, HTTP, Docker, or filesystem tool.
 ODS writes `~/.config/ods/pixel-managed.json` with mode `0600`. The marker is
 created before Pixel is changed and moves from `installing` to `ready` only
 after Pixel verification, systemd activation, and private-ingress health pass.
+After Pixel verification it binds the verified contract and live config while
+remaining `installing`, so an interrupted ingress setup can safely verify and
+reuse the active release on retry without claiming readiness.
 The ready marker binds the exact Pixel source revision and a domain-separated
 SHA-256 of the deterministic ODS onboarding contract, including the approved
 ODS plugin tree digest, plus a canonical hash of the verified live OpenClaw

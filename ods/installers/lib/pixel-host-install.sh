@@ -86,12 +86,13 @@ finally:
 PY
 }
 
-_ods_pixel_mark_ready() {
-    local owner="$1" home="$2" contract_sha256="$3" marker config
+_ods_pixel_record_verified_state() {
+    local owner="$1" home="$2" contract_sha256="$3" state="$4" marker config
     [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$state" == installing || "$state" == ready ]] || return 1
     marker="$home/.config/ods/pixel-managed.json"
     config="$home/.openclaw/openclaw.json"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" "$contract_sha256" <<'PY'
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "$config" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" "$contract_sha256" "$state" <<'PY'
 import hashlib, json, os, pathlib, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
@@ -111,7 +112,9 @@ config = json.loads(config_path.read_text(encoding="utf-8"))
 if not isinstance(config, dict):
     raise SystemExit("invalid ODS-managed OpenClaw configuration")
 canonical_config = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
-value["state"] = "ready"
+if sys.argv[6] not in {"installing", "ready"}:
+    raise SystemExit("invalid Pixel management state")
+value["state"] = sys.argv[6]
 value["pixel_source_ref"] = sys.argv[4]
 value["contract_sha256"] = sys.argv[5]
 value["configuration_sha256"] = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical_config).hexdigest()
@@ -128,6 +131,14 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
+}
+
+_ods_pixel_mark_verified_installing() {
+    _ods_pixel_record_verified_state "$1" "$2" "$3" installing
+}
+
+_ods_pixel_mark_ready() {
+    _ods_pixel_record_verified_state "$1" "$2" "$3" ready
 }
 
 _ods_pixel_contract_sha256() {
@@ -409,20 +420,23 @@ PY
 _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3"
     local token_file="$home/.openclaw/openclaw.json"
+    local runtime_token_file="/run/ods-pixel/openclaw.json"
     [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
     [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
     (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
 
     local stage
     stage="$(mktemp -d)" || return 1
-    python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$token_file" <<'PY'
+    python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$token_file" "$runtime_token_file" <<'PY'
 import pathlib, sys
 
-source, target, owner, token_file = sys.argv[1:5]
+source, target, owner, token_source, token_file = sys.argv[1:6]
 text = pathlib.Path(source).read_text(encoding="utf-8")
-if any(c in owner + token_file for c in "\n\r\0"):
+if any(c in owner + token_source + token_file for c in "\n\r\0"):
     raise SystemExit("unsafe systemd substitution")
-text = text.replace("__PIXEL_SERVICE_USER__", owner).replace("__PIXEL_GATEWAY_TOKEN_FILE__", token_file)
+text = (text.replace("__PIXEL_SERVICE_USER__", owner)
+            .replace("__PIXEL_GATEWAY_TOKEN_SOURCE__", token_source)
+            .replace("__PIXEL_GATEWAY_TOKEN_FILE__", token_file))
 if "__PIXEL_" in text:
     raise SystemExit("unresolved Pixel systemd placeholder")
 pathlib.Path(target).write_text(text, encoding="utf-8", newline="\n")
@@ -430,7 +444,7 @@ PY
     cat > "$stage/pixel-agent.env" <<EOF
 PIXEL_INGRESS_SOCKET=/run/ods-pixel/pixel-ingress.sock
 PIXEL_INGRESS_GID=${PIXEL_INGRESS_GID:?}
-PIXEL_GATEWAY_TOKEN_FILE=$token_file
+PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file
 PIXEL_GATEWAY_PORT=18789
 PIXEL_STATUS_FILE=/run/ods-pixel/ods-status.json
 PIXEL_STATUS_INTERVAL_MS=30000
@@ -518,6 +532,14 @@ ods_pixel_install_default_agent() {
             ai_bad "Pixel configure, plan, apply, or verify failed. See $LOG_FILE for the exact Pixel error."
             return 1
         fi
+    fi
+    # Bind the exact verified contract and canonical live config while the
+    # marker remains non-ready. If ingress setup is interrupted, a rerun can
+    # verify and reuse this same active Pixel release instead of attempting an
+    # unsafe same-version reapply.
+    if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256"; then
+        ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
+        return 1
     fi
     if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"; then
         ai_bad "Could not install and start the private Pixel ingress."
