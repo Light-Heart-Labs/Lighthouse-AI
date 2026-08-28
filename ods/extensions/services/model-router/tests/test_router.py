@@ -585,7 +585,7 @@ class TestModelsAndEvidence:
         ):
             read_errors = stream_error.subgroup(httpx.ReadError)
             assert read_errors is not None
-            assert "truncated stream" in str(read_errors)
+            assert "truncated stream" in repr(read_errors)
         else:
             assert "truncated stream" in str(stream_error)
         ev = client.get(
