@@ -91,6 +91,11 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== offline model validation ==="
 	@python3 tests/test-offline-model-validation.py
+	@echo "=== model catalog release contracts ==="
+	@python3 tests/test-model-library-coverage.py
+	@python3 tests/test-model-library-verdicts.py
+	@python3 tests/test-gemma4-artifact-pins.py
+	@python3 tests/test-gpu-layer-contract.py
 	@echo ""
 	@echo "=== Bash 3.2 guard contracts ==="
 	@bash tests/test-bash32-guards.sh

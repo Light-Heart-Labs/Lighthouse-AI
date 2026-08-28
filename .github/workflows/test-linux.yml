@@ -188,7 +188,12 @@ jobs:
         run: python3 tests/test-dependency-pins.py
 
       - name: Offline Model Validation Tests
-        run: python3 tests/test-offline-model-validation.py
+        run: |
+          python3 tests/test-offline-model-validation.py
+          python3 tests/test-model-library-coverage.py
+          python3 tests/test-model-library-verdicts.py
+          python3 tests/test-gemma4-artifact-pins.py
+          python3 tests/test-gpu-layer-contract.py
 
       - name: Runtime Config Renderer Tests
         run: python3 tests/test-render-runtime-configs.py
