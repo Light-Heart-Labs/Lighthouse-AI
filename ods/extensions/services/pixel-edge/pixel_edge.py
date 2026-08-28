@@ -152,7 +152,10 @@ async def handle_health(_request: web.Request):
 
 async def handle_models(request: web.Request):
     fail = _check_auth(request)
-    if fail:
+    # aiohttp Response objects may be falsey, including an intentional 401.
+    # Check the sentinel explicitly or an unauthenticated request can fall
+    # through to the protected handler.
+    if fail is not None:
         return fail
     if not await _ingress_ready():
         return web.json_response({"error": "service unavailable"}, status=503)
@@ -163,7 +166,7 @@ async def handle_models(request: web.Request):
 
 async def handle_chat_completions(request: web.Request):
     fail = _check_auth(request)
-    if fail:
+    if fail is not None:
         return fail
 
     if request.content_type != "application/json":
