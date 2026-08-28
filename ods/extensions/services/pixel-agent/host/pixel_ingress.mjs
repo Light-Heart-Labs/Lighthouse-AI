@@ -14,6 +14,7 @@ import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
@@ -140,9 +141,44 @@ class HttpError extends Error {
 // a `deps` object with fakes for deterministic behavior.
 // ---------------------------------------------------------------------------
 
+// Node's built-in fetch is backed by Undici, whose implicit response-body idle
+// timeout is five minutes. A CPU-only OpenClaw turn can legitimately produce no
+// bytes for longer than that while evaluating its first prompt. Use the core
+// HTTP client for this fixed loopback hop so the explicit connect and total
+// AbortController budgets below are the only transport deadlines.
+export function gatewayFetch(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      url,
+      {
+        method: options.method,
+        headers: options.headers,
+        signal: options.signal,
+        agent: false,
+      },
+      (response) => {
+        const headers = {
+          get(name) {
+            const value = response.headers[String(name).toLowerCase()];
+            if (Array.isArray(value)) return value.join(", ");
+            return typeof value === "string" ? value : null;
+          },
+        };
+        resolve({
+          status: response.statusCode || 0,
+          headers,
+          body: Readable.toWeb(response),
+        });
+      }
+    );
+    request.once("error", reject);
+    request.end(options.body);
+  });
+}
+
 const defaultDeps = {
   execFile,
-  fetch: globalThis.fetch,
+  fetch: gatewayFetch,
   setTimeout,
   clearTimeout,
 };

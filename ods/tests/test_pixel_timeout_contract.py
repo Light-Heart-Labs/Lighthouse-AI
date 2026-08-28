@@ -57,3 +57,14 @@ def test_pixel_timeout_chain_has_ordered_bounded_headroom() -> None:
     assert nginx_read_seconds == nginx_send_seconds == 2100
     assert provider_seconds < lock_seconds < edge_total_seconds < dashboard_seconds < nginx_read_seconds
 
+
+def test_ingress_does_not_inherit_fetch_body_idle_timeout() -> None:
+    ingress = _read("extensions/services/pixel-agent/host/pixel_ingress.mjs")
+
+    assert 'import http from "node:http"' in ingress
+    assert 'import { Readable } from "node:stream"' in ingress
+    assert "export function gatewayFetch" in ingress
+    assert "http.request(" in ingress
+    assert "body: Readable.toWeb(response)" in ingress
+    assert "fetch: gatewayFetch" in ingress
+    assert "fetch: globalThis.fetch" not in ingress

@@ -33,6 +33,7 @@ import {
   dockerApps,
   writeStatus,
   start,
+  gatewayFetch,
 } from "../host/pixel_ingress.mjs";
 
 const DIR = path.join(os.tmpdir(), `pixel-ingress-test-${process.pid}-${Date.now()}`);
@@ -423,6 +424,39 @@ test("streaming request forwards accept and returns SSE", async () => {
     }
   } finally {
     await new Promise((r) => gw.server.close(r));
+  }
+});
+
+test("core gateway transport preserves a delayed response body", async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.flushHeaders();
+    res.write('data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n');
+    setTimeout(() => res.end("data: [DONE]\n\n"), 250);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await gatewayFetch(
+        `http://127.0.0.1:${server.address().port}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+          signal: controller.signal,
+        }
+      );
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), "text/event-stream");
+      const body = await new Response(response.body).text();
+      assert.ok(body.includes("[DONE]"));
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });
 
