@@ -659,18 +659,28 @@ def test_ministral3_8b_is_recommended_after_six_host_validation():
     assert model["size_bytes"] == 5198911904
     assert model["vram_required_gb"] == 7
     assert model["context_length"] == 262144
-    profile = {
-        item["id"]: item for item in model["runtime_profiles"]
-    }["nvidia-8gb-64k-q4-kv"]
-    assert profile["backend"] == "nvidia"
-    assert profile["host_arch"] == ["amd64"]
-    assert profile["memory_type"] == "discrete"
-    assert profile["vram_min_gb"] == 7.5
-    assert profile["vram_max_gb"] == 8.5
-    assert profile["system_ram_min_gb"] == 31
-    assert profile["context_length"] == 65536
-    assert profile["estimated_required_gb"] == 7.4
-    assert profile["env"] == {
+    profiles = {item["id"]: item for item in model["runtime_profiles"]}
+    cpu_profile = profiles["cpu-16k-q4-kv"]
+    assert cpu_profile["backend"] == "cpu"
+    assert cpu_profile["system_ram_min_gb"] == 12
+    assert cpu_profile["context_length"] == 16384
+    assert cpu_profile["estimated_required_gb"] == 5.7
+    assert cpu_profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+        "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+    }
+    nvidia_profile = profiles["nvidia-8gb-64k-q4-kv"]
+    assert nvidia_profile["backend"] == "nvidia"
+    assert nvidia_profile["host_arch"] == ["amd64"]
+    assert nvidia_profile["memory_type"] == "discrete"
+    assert nvidia_profile["vram_min_gb"] == 7.5
+    assert nvidia_profile["vram_max_gb"] == 8.5
+    assert nvidia_profile["system_ram_min_gb"] == 31
+    assert nvidia_profile["context_length"] == 65536
+    assert nvidia_profile["estimated_required_gb"] == 7.4
+    assert nvidia_profile["env"] == {
         "LLAMA_PARALLEL": "1",
         "LLAMA_ARG_FLASH_ATTN": "on",
         "LLAMA_ARG_CACHE_TYPE_K": "q4_0",

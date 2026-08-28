@@ -901,6 +901,21 @@
       "llama_server_image": null,
       "runtime_profiles": [
         {
+          "id": "cpu-16k-q4-kv",
+          "label": "CPU 16K context with Q4 KV cache",
+          "backend": "cpu",
+          "system_ram_min_gb": 12,
+          "context_length": 16384,
+          "estimated_required_gb": 5.7,
+          "fit_label": "16K CPU Q4 KV profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+          }
+        },
+        {
           "id": "nvidia-8gb-64k-q4-kv",
           "label": "NVIDIA 8GB 64K context with Q4 KV cache",
           "backend": "nvidia",
