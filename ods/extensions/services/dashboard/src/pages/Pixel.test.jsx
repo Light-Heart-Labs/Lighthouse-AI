@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { render } from '../test/test-utils'
 
+// The repository's base ESLint profile does not mark JSX identifiers as uses.
+// eslint-disable-next-line no-unused-vars
 import Pixel from './Pixel'
 
 const response = (body, status = 200) => ({

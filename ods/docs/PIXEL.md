@@ -260,4 +260,3 @@ alone is not proof of live usability.
 | Generated secrets and pinned source | `installers/phases/06-directories.sh` |
 | Health and operator handoff | `installers/phases/12-health.sh`, `installers/phases/13-summary.sh` |
 | Focused integration tests | `tests/test-pixel-*.sh` and each service's `tests/` directory |
-

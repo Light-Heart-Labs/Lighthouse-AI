@@ -289,7 +289,7 @@ fi
 section "ods_pixel_license_accepted"
 
 # Exactly "true"
-PIXEL_LICENSE_ACCEPTED="true"
+export PIXEL_LICENSE_ACCEPTED="true"
 if ods_pixel_license_accepted; then
     pass 'PIXEL_LICENSE_ACCEPTED="true" is accepted'
 else
@@ -554,9 +554,9 @@ fi
 F_FIXTURE_REAL="$TMPDIR_TEST/traversal-target"
 mkdir -p "$F_FIXTURE_REAL/.git"
 chmod 0755 "$F_FIXTURE_REAL" "$F_FIXTURE_REAL/.git"
-PIXEL_SOURCE_URL="$F_FIXTURE_REAL"
-PIXEL_SOURCE_REF="abcdef0123456789abcdef0123456789abcdef01"
-PIXEL_SOURCE_DIR="$TMPDIR_TEST/unrelated-dir"
+export PIXEL_SOURCE_URL="$F_FIXTURE_REAL"
+export PIXEL_SOURCE_REF="abcdef0123456789abcdef0123456789abcdef01"
+export PIXEL_SOURCE_DIR="$TMPDIR_TEST/unrelated-dir"
 mkdir -p "$TMPDIR_TEST/unrelated-dir"
 chmod 0755 "$TMPDIR_TEST/unrelated-dir"
 if ! ods_pixel_validate_source 2>/dev/null; then
@@ -596,7 +596,7 @@ fi
 declare -A key_set
 unique=0
 duplicates=0
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
     k="$(ods_pixel_generate_key)"
     if [[ -n "${key_set[$k]+x}" ]]; then
         duplicates=$((duplicates + 1))

@@ -95,6 +95,8 @@ assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
 assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status"]
 ' "$plugin/package.json" "$plugin/openclaw.plugin.json"
+# Dollar expressions below are literal source-code assertions.
+# shellcheck disable=SC2016
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()

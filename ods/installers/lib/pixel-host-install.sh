@@ -172,7 +172,8 @@ _ods_pixel_wait_http() {
 }
 
 _ods_pixel_enable_chat_endpoint() {
-    local owner="$1" home="$2" config="$home/.openclaw/openclaw.json"
+    local owner="$1" home="$2" config
+    config="$home/.openclaw/openclaw.json"
     ods_pixel_run_as_owner "$owner" "$home" mkdir -p -- "$home/.openclaw"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
 import json, os, pathlib, stat, sys, tempfile
@@ -339,6 +340,8 @@ ods_pixel_install_default_agent() {
 
     ai "Bootstrapping the exact Pixel source and pinned runtime..."
     ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$LOG_FILE" 2>&1
+    # Expansion is intentionally performed in the owner shell, not here.
+    # shellcheck disable=SC2016
     openclaw_bin="$(ods_pixel_run_as_owner "$owner" "$home" bash -c 'if [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then printf "%s\\n" "$HOME/.npm-global/bin/openclaw"; else command -v openclaw; fi')"
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
     plugin_digest="$(ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" extension-hash "$plugin_root/plugin")"
@@ -347,10 +350,12 @@ ods_pixel_install_default_agent() {
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
     _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"
     _ods_pixel_enable_chat_endpoint "$owner" "$home"
-    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force >>"$LOG_FILE" 2>&1
-    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan >>"$LOG_FILE" 2>&1
-    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm >>"$LOG_FILE" 2>&1
-    ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1
+    {
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
+    } >>"$LOG_FILE" 2>&1
     _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"
     # sudo -u starts a fresh owner session with the newly assigned ods-pixel
     # supplementary group; the original installer shell may not see that group
