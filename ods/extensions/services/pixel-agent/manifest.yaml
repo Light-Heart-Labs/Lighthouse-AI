@@ -14,12 +14,10 @@ service:
   aliases: []
   container_name: ""
   default_host: localhost
-  # No external port: this is a Unix-domain-socket host service with no
-  # network binding. external_port_default 0 prevents any fallback that would
-  # advertise a non-existent host port (mirrors hermes/openclaw practice).
+  # No external port or external_port_env: this is a Unix-domain-socket host
+  # service with no network binding, so advertising a configurable TCP port
+  # would be both inaccurate and unsafe.
   port: 0
-  external_port_env: PIXEL_INGRESS_SOCKET
-  external_port_default: 0
   health: /health
   health_timeout: 10
   type: host-systemd
@@ -31,7 +29,7 @@ service:
   description: >
     Host ingress for the Pixel gateway. Serves GET /health and
     POST /v1/chat/completions over a Unix-domain socket only (never TCP),
-    reads the Pixel gateway token from a restricted PIXEL_GATEWAY_ENV_FILE,
+    reads the Pixel gateway token from a restricted PIXEL_GATEWAY_TOKEN_FILE,
     and forwards a sanitized, allowlisted OpenAI-compatible request to the
     fixed loopback gateway. No inbound headers are forwarded, unknown fields
     are dropped, and only type-valid fields reach the gateway. The systemd
@@ -46,9 +44,9 @@ service:
     - key: PIXEL_INGRESS_GID
       default: ""
       description: Numeric ods-pixel group GID allowed to connect to the mode-0660 ingress socket.
-    - key: PIXEL_GATEWAY_ENV_FILE
-      default: ""
-      description: Exact owner-private Pixel gateway.env selected by the ODS installer.
+    - key: PIXEL_GATEWAY_TOKEN_FILE
+      default: "/etc/pixel/openclaw.json"
+      description: Restricted owner-private OpenClaw config containing the gateway token.
     - key: PIXEL_GATEWAY_PORT
       default: "18789"
       description: Fixed loopback port of the Pixel gateway (127.0.0.1 only).
