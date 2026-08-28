@@ -71,6 +71,9 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   secrets, image labels, IDs, and mounts are never surfaced. If docker is
   unavailable, the projection carries an empty `apps` array and a generic
   `unavailable` state.
+- **Safe post-tool recovery.** The plugin manifest marks both projection tools
+  replay-safe. Because they only read the fixed status file, OpenClaw may retry
+  an empty post-tool model turn without duplicating a side effect.
 
 ## Configuration (nonsecret)
 

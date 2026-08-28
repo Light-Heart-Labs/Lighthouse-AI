@@ -460,6 +460,10 @@ p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
 assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status"]
+assert m["toolMetadata"] == {
+    "pixel_ods_status": {"replaySafe": True},
+    "pixel_ods_apps_list": {"replaySafe": True},
+}
 ' "$plugin/package.json" "$plugin/openclaw.plugin.json"
 # Dollar expressions below are literal source-code assertions.
 # shellcheck disable=SC2016
