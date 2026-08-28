@@ -60,6 +60,25 @@ else
     # shellcheck source=../../lib/dotenv-quote.sh
     source "$SCRIPT_DIR/lib/dotenv-quote.sh"
 
+    # A Pixel-to-Hermes rerun must retire the exact ODS-managed host runtime,
+    # not merely remove the Compose edge from the next launch. Do this before
+    # copying new source over an existing install so the fail-closed cleanup can
+    # still compare root-owned artifacts with the source that installed them.
+    _phase06_pixel_marker="$HOME/.config/ods/pixel-managed.json"
+    if [[ "${ENABLE_PIXEL_RUNTIME:-false}" != "true" \
+        && ( -e "$_phase06_pixel_marker" || -L "$_phase06_pixel_marker" ) ]]; then
+        if ! declare -F ods_pixel_uninstall_managed >/dev/null 2>&1; then
+            # shellcheck source=../../lib/pixel-uninstall.sh
+            source "$SCRIPT_DIR/lib/pixel-uninstall.sh"
+        fi
+        _phase06_step "deactivate-pixel"
+        if ! ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME"; then
+            error "Could not safely deactivate the ODS-managed Pixel host runtime."
+            return 1
+        fi
+    fi
+    unset _phase06_pixel_marker
+
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
         # shellcheck source=../../lib/rootless-ownership.sh

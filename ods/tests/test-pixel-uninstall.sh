@@ -95,6 +95,24 @@ else
     fail "ODS uninstaller does not safely integrate managed Pixel cleanup"
 fi
 
+if python3 - "$ROOT_DIR/install-core.sh" "$ROOT_DIR/installers/phases/06-directories.sh" <<'PY'
+import pathlib
+import sys
+
+core = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+phase = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+hook = 'ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME"'
+assert 'source "$SCRIPT_DIR/lib/pixel-uninstall.sh"' in core
+assert '"${ENABLE_PIXEL_RUNTIME:-false}" != "true"' in phase
+assert hook in phase
+assert phase.index(hook) < phase.index('_phase06_step "copy-source"')
+PY
+then
+    pass "Pixel-to-Hermes installer rerun deactivates the managed host runtime before source replacement"
+else
+    fail "Pixel-to-Hermes installer rerun does not safely deactivate the managed host runtime"
+fi
+
 write_fixture() {
     rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR"
     : >"$SYSTEMCTL_LOG"

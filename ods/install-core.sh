@@ -90,6 +90,7 @@ source "$SCRIPT_DIR/installers/lib/model-lifecycle-lock.sh"
 source "$SCRIPT_DIR/installers/lib/external-services.sh"
 source "$SCRIPT_DIR/installers/lib/pixel-integration.sh"
 source "$SCRIPT_DIR/installers/lib/pixel-host-install.sh"
+source "$SCRIPT_DIR/lib/pixel-uninstall.sh"
 if [[ -f "$SCRIPT_DIR/lib/service-registry.sh" ]]; then 
     source "$SCRIPT_DIR/lib/service-registry.sh" 
 fi
