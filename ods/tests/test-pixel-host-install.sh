@@ -400,6 +400,17 @@ candidate_path.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n"
 PY
 chmod 0600 "$reconcile_answers" "$reconcile_config" "$reconcile_candidate"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_config" "$runtime_validator")" = changed
+python3 - "$reconcile_config" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+agent = value["agents"]["list"][0]
+model = value["models"]["providers"]["ods-local"]["models"][0]
+agent.pop("thinkingDefault")
+model.pop("compat")
+model["reasoning"] = False
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
 printf '%s\n' '{"kind":"pixel-runtime-attestation"}' > "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 chmod 0600 "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 python3 - "$reconcile_marker" "$reconcile_config" "$INSTALL_DIR" "$reconcile_ref" <<'PY'
@@ -432,7 +443,7 @@ check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["mod
 _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" qwen-new
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new"' "$reconcile_answers"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_candidate" "$runtime_validator")" = changed
-check _ods_pixel_candidate_is_model_only_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
+check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
 python3 - "$reconcile_candidate" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -440,10 +451,10 @@ value = json.loads(path.read_text())
 value["gateway"]["bind"] = "lan"
 path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY
-if _ods_pixel_candidate_is_model_only_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers" >/dev/null 2>&1; then
-    fail "non-model Pixel candidate change rejected"
+if _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers" >/dev/null 2>&1; then
+    fail "unmanaged Pixel candidate change rejected"
 else
-    pass "non-model Pixel candidate change rejected"
+    pass "unmanaged Pixel candidate change rejected"
 fi
 python3 - "$reconcile_candidate" <<'PY'
 import json, pathlib, sys

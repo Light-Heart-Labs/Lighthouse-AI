@@ -489,7 +489,7 @@ finally:
 PY
 }
 
-_ods_pixel_candidate_is_model_only_update() {
+_ods_pixel_candidate_is_managed_runtime_update() {
     local owner="$1" home="$2" candidate="$3" answers="$4" live
     live="$home/.openclaw/openclaw.json"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$live" "$candidate" "$answers" <<'PY'
@@ -553,8 +553,34 @@ normalized_provider, normalized_model, normalized_agent = binding(normalized)
 normalized_model["id"] = model_id
 normalized_model["name"] = model_name
 normalized_agent["model"] = f"{provider}/{model_id}"
+normalized_agents = normalized.get("agents")
+normalized_defaults = normalized_agents.get("defaults") if isinstance(normalized_agents, dict) else None
+normalized_session = normalized.get("session")
+if not isinstance(normalized_defaults, dict) or not isinstance(normalized_session, dict):
+    raise SystemExit("live Pixel runtime policy is outside the ODS contract")
+
+# A promoted route may also carry the current deterministic ODS runtime policy.
+# Normalize only those exact fields before the whole-document comparison; any
+# other candidate change still fails closed below.
+normalized_provider["timeoutSeconds"] = 1800
+normalized_defaults["timeoutSeconds"] = 1800
+normalized_diagnostics = normalized.setdefault("diagnostics", {})
+normalized_write_lock = normalized_session.setdefault("writeLock", {})
+if not isinstance(normalized_diagnostics, dict) or not isinstance(normalized_write_lock, dict):
+    raise SystemExit("live Pixel runtime policy is outside the ODS contract")
+normalized_diagnostics["stuckSessionAbortMs"] = 1860000
+normalized_write_lock["maxHoldMs"] = 1920000
+normalized_write_lock["staleMs"] = 3600000
+model_label = f"{model_id} {model_name}".casefold()
+if "qwen" in model_label:
+    normalized_model["reasoning"] = True
+    normalized_compat = normalized_model.setdefault("compat", {})
+    if not isinstance(normalized_compat, dict):
+        raise SystemExit("live Pixel Qwen policy is outside the ODS contract")
+    normalized_compat["thinkingFormat"] = "qwen-chat-template"
+    normalized_agent["thinkingDefault"] = "off"
 if normalized != candidate:
-    raise SystemExit("candidate changes more than the ODS model-only fields")
+    raise SystemExit("candidate changes more than the ODS managed model/runtime fields")
 PY
 }
 
@@ -820,7 +846,7 @@ ods_pixel_reconcile_promoted_model() {
         failed=true
     fi
     if [[ "$failed" == false ]] \
-        && ! _ods_pixel_candidate_is_model_only_update "$owner" "$home" "$candidate" "$answers"; then
+        && ! _ods_pixel_candidate_is_managed_runtime_update "$owner" "$home" "$candidate" "$answers"; then
         failed=true
     fi
     if [[ "$failed" == false ]] \
@@ -1264,7 +1290,7 @@ ods_pixel_install_default_agent() {
                     return 1
                 fi
             else
-                ai "The exact Pixel release is active with an older ODS model route; reconciling the reviewed model-only change..."
+                ai "The exact Pixel release is active with an older ODS route; reconciling the reviewed model/runtime policy..."
                 if ! ods_pixel_reconcile_promoted_model "$owner" "$home" "${LLM_MODEL:-default}" installing >>"$LOG_FILE" 2>&1; then
                     ai_bad "The ODS-managed Pixel model route could not be reconciled safely. See $LOG_FILE."
                     return 1
