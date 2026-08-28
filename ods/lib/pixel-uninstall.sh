@@ -227,7 +227,31 @@ for path in (openclaw_config, gateway_env, onboarding):
 
 if openclaw_config.exists():
     config = json.loads(openclaw_config.read_text(encoding="utf-8"))
-    if str(install_dir) not in json.dumps(config, sort_keys=True, separators=(",", ":")):
+    serialized_config = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    bootstrap_config = {
+        "gateway": {
+            "http": {
+                "endpoints": {
+                    "chatCompletions": {"enabled": True},
+                },
+            },
+        },
+    }
+    bootstrap_marker = {
+        "schema_version": 2,
+        "manager": "ods",
+        "state": "installing",
+        "initial_active_state": "absent",
+        "install_dir": str(install_dir),
+        "pixel_source_ref": source_ref,
+    }
+    # ODS enables the loopback chat endpoint immediately before Pixel apply.
+    # A fail-closed apply can therefore leave this exact bootstrap-only config
+    # with no active release. Accept only that byte-semantic shape and the
+    # original minimal marker; arbitrary ambient OpenClaw config still fails.
+    if str(install_dir) not in serialized_config and not (
+        cleanup[0] == "none" and config == bootstrap_config and value == bootstrap_marker
+    ):
         raise SystemExit("OpenClaw configuration is not bound to this ODS install")
     if cleanup[0] != "none":
         canonical = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()

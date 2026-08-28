@@ -229,6 +229,48 @@ JSON
 }
 
 write_fixture
+rm -f -- "$SYSTEMD_DIR/openclaw-gateway.service" "$SYSTEMD_DIR/pixel-ingress.service" \
+    "$ETC_DIR/pixel-agent.env" "$LIBEXEC_DIR/ods-pixel-ingress.mjs" \
+    "$HOME_DIR/.config/pixel-agent/gateway.env"
+cat >"$HOME_DIR/.config/ods/pixel-managed.json" <<JSON
+{"schema_version":2,"manager":"ods","state":"installing","initial_active_state":"absent","install_dir":"$INSTALL_DIR","pixel_source_ref":"d2a2b6be552126f294fb30ee5fb46872acf82c89"}
+JSON
+cat >"$HOME_DIR/.openclaw/openclaw.json" <<'JSON'
+{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}
+JSON
+chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json" "$HOME_DIR/.openclaw/openclaw.json"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    [[ ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && ! -e "$HOME_DIR/.openclaw/openclaw.json" \
+        && ! -e "$HOME_DIR/.config/pixel-deployment/onboarding.json" \
+        && ! -s "$SYSTEMCTL_LOG" ]] \
+        && pass "failed pre-apply Pixel bootstrap state is removed without claiming an ambient config" \
+        || fail "failed pre-apply Pixel cleanup left managed state or touched system services"
+else
+    fail "failed pre-apply Pixel bootstrap state could not be cleaned"
+fi
+
+write_fixture
+rm -f -- "$SYSTEMD_DIR/openclaw-gateway.service" "$SYSTEMD_DIR/pixel-ingress.service" \
+    "$ETC_DIR/pixel-agent.env" "$LIBEXEC_DIR/ods-pixel-ingress.mjs" \
+    "$HOME_DIR/.config/pixel-agent/gateway.env"
+cat >"$HOME_DIR/.config/ods/pixel-managed.json" <<JSON
+{"schema_version":2,"manager":"ods","state":"installing","initial_active_state":"absent","install_dir":"$INSTALL_DIR","pixel_source_ref":"d2a2b6be552126f294fb30ee5fb46872acf82c89"}
+JSON
+cat >"$HOME_DIR/.openclaw/openclaw.json" <<'JSON'
+{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"ambient":true}
+JSON
+chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json" "$HOME_DIR/.openclaw/openclaw.json"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "modified pre-apply OpenClaw config was claimed by ODS cleanup"
+else
+    [[ -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && -e "$HOME_DIR/.openclaw/openclaw.json" && ! -s "$SYSTEMCTL_LOG" ]] \
+        && pass "modified pre-apply OpenClaw config remains fail-closed" \
+        || fail "modified pre-apply cleanup refusal caused mutation"
+fi
+
+write_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     [[ ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
         && ! -e "$HOME_DIR/.openclaw/openclaw.json" \
