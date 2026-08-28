@@ -8,7 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SERVICES = ROOT / "extensions" / "services"
 POLICY = ROOT / "config" / "network-exposure-policy.json"
@@ -92,6 +91,18 @@ def test_hermes_is_internal_only_and_proxy_gated() -> None:
     assert_true("forward_auth" in proxy_caddyfile, "hermes-proxy must verify sessions with forward_auth")
     assert_true("/api/auth/verify-session" in proxy_caddyfile, "hermes-proxy must call dashboard auth verification")
     assert_true("reverse_proxy {$HERMES_PROXY_UPSTREAM:ods-hermes:9119}" in proxy_caddyfile, "hermes-proxy must forward to internal Hermes")
+
+
+def test_pixel_edge_is_internal_only_and_token_gated() -> None:
+    compose = read(SERVICES / "pixel-edge" / "compose.yaml.disabled")
+    manifest = read(SERVICES / "pixel-edge" / "manifest.yaml")
+    policy = json.loads(read(POLICY))["services"]["pixel-edge"]
+
+    assert_true(not re.search(r"(?m)^\s{4}ports:\s*$", compose), "pixel-edge must not bind a host port")
+    assert_true(manifest_value(manifest, "external_port_default") == "0", "pixel-edge external port must be 0")
+    assert_true("PIXEL_OPENWEBUI_KEY=${PIXEL_OPENWEBUI_KEY:?" in compose, "pixel-edge must require scoped bearer auth")
+    assert_true(policy["lan_exposure"] == "none", "pixel-edge policy must mark no LAN exposure")
+    assert_true(policy["auth_required"] is True, "pixel-edge policy must require auth")
 
 
 def test_hermes_whatsapp_bridge_avoids_open_webui_port() -> None:
@@ -233,6 +244,7 @@ def main() -> int:
     tests = [
         test_exposed_services_are_policy_labeled,
         test_hermes_is_internal_only_and_proxy_gated,
+        test_pixel_edge_is_internal_only_and_token_gated,
         test_hermes_whatsapp_bridge_avoids_open_webui_port,
         test_hermes_local_provider_has_generous_timeouts,
         test_ods_proxy_routes_talk_portal,

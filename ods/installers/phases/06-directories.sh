@@ -44,6 +44,15 @@ if $DRY_RUN; then
     [[ "$ENABLE_OPENCLAW" == "true" ]] && log "[DRY RUN] Would configure OpenClaw (model: $LLM_MODEL, config: ${OPENCLAW_CONFIG:-default})"
     log "[DRY RUN] Would validate .env against schema"
 else
+    # install-core.sh normally imports these helpers before the phase runs.
+    # Source them defensively so isolated phase reuse has the same contract.
+    if ! declare -F ods_pixel_reconcile_installed_compose >/dev/null 2>&1; then
+        # shellcheck source=../lib/pixel-integration.sh
+        _phase06_source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        source "$_phase06_source_dir/../lib/pixel-integration.sh"
+        unset _phase06_source_dir
+    fi
+
     # shellcheck source=../lib/llama-memory-budget.sh
     source "$SCRIPT_DIR/installers/lib/llama-memory-budget.sh"
 

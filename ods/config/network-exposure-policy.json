@@ -104,6 +104,12 @@
       "auth_required": false,
       "notes": "Deep research UI backed by search and local inference."
     },
+    "pixel-edge": {
+      "risk": "autonomous-agent-internal-gateway",
+      "lan_exposure": "none",
+      "auth_required": true,
+      "notes": "Internal-only authenticated OpenAI-compatible bridge to the host Pixel ingress Unix socket; it must not publish a host port."
+    },
     "privacy-shield": {
       "risk": "privacy-proxy",
       "lan_exposure": "operator-controlled",

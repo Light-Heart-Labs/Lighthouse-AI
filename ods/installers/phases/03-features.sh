@@ -29,6 +29,16 @@ if (( BASH_VERSINFO[0] < 4 )); then
     return 1 2>/dev/null || exit 1
 fi
 
+# Keep this phase independently sourceable by contract tests and maintenance
+# callers. install-core.sh normally imports the Pixel helpers first, but the
+# phase owns the dependency it invokes.
+if ! declare -F ods_pixel_resolve_enablement >/dev/null 2>&1; then
+    # shellcheck source=../lib/pixel-integration.sh
+    _phase03_source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "$_phase03_source_dir/../lib/pixel-integration.sh"
+    unset _phase03_source_dir
+fi
+
 ods_progress 18 "features" "Selecting features"
 if $INTERACTIVE && ! $DRY_RUN; then
     show_phase 2 6 "Feature Selection" "~1 minute"
