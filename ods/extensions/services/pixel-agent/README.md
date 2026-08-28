@@ -52,9 +52,11 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   `http://127.0.0.1:${PIXEL_GATEWAY_PORT:-18789}/v1/chat/completions` with
   `Authorization: Bearer <gateway token>`, `Content-Type: application/json`,
   and `Accept` matching the stream mode. Connect/header/body/stream behavior is
-  bounded by `AbortController`/timeouts; the non-stream response is capped at
-  2 MiB and each stream line at 1 MiB. Upstream bodies are never reflected to
-  the caller; failures produce generic errors.
+  bounded by `AbortController`/timeouts; the total request budget is 32 minutes
+  so CPU-only first-turn prefill can finish inside OpenClaw's 30-minute model
+  budget. The non-stream response is capped at 2 MiB and each stream line at
+  1 MiB. Upstream bodies are never reflected to the caller; failures produce
+  generic errors.
 - **Status projection.** On startup and every `PIXEL_STATUS_INTERVAL_MS`
   (default 30000) the service atomically writes a sanitized projection to
   `PIXEL_STATUS_FILE` (default `/run/ods-pixel/ods-status.json`). It reports a

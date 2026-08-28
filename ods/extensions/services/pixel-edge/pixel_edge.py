@@ -47,8 +47,11 @@ _MAX_BODY = 2 * 1024 * 1024          # 2 MiB request body
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MiB non-stream response cap
 
 _CONNECT_TIMEOUT = 5
-_TOTAL_TIMEOUT = 600
-_SOCK_READ_TIMEOUT = 300
+# The host ingress is capped at 32 minutes. Pixel Edge sits outside that
+# trusted boundary, so both its total and no-first-byte budgets allow one
+# additional minute before failing closed.
+_TOTAL_TIMEOUT = 1980
+_SOCK_READ_TIMEOUT = 1980
 _MAX_SSE_LINE = 1024 * 1024
 
 _UPSTREAM_REWRITE = "openclaw/default"

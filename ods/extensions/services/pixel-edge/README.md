@@ -12,6 +12,11 @@ Pixel is a single-owner agent runtime. The default route is therefore intended f
 
 The socket directory is mounted read-only and has no TCP publication. `PIXEL_INGRESS_GID` grants the non-root container process access to the socket without making it world-readable.
 
+Chat requests keep bounded 33-minute total and no-first-byte budgets. This is
+one minute longer than the private host ingress and three minutes longer than
+OpenClaw's ODS-managed provider timeout, allowing CPU-only first-turn prefill
+without making any intermediate proxy the first timeout authority.
+
 Run the focused offline tests from this directory:
 
 ```bash

@@ -24,7 +24,10 @@ const MAX_BODY = 2 * 1024 * 1024; // 2 MiB request body cap
 const MAX_NONSTREAM_RESPONSE = 2 * 1024 * 1024; // 2 MiB non-stream response cap
 const MAX_SSE_LINE = 1024 * 1024; // 1 MiB stream line cap
 const CONNECT_TIMEOUT_MS = 5000;
-const TOTAL_TIMEOUT_MS = 600000;
+// OpenClaw's ODS-owned provider is capped at 30 minutes. Keep the private
+// ingress one bounded step outside that ceiling so CPU-only prefill can finish
+// and the gateway, rather than an intermediate proxy, owns terminal timeout.
+const TOTAL_TIMEOUT_MS = 1920000;
 const GATEWAY_PROBE_TIMEOUT_MS = 2000;
 const DOCKER_TIMEOUT_MS = 10000;
 const MAX_TOKEN_LEN = 4096;

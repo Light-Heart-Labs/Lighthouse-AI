@@ -139,6 +139,10 @@ def test_request_aggregate_is_bounded_in_utf8_bytes():
         )
 
 
+def test_stream_timeout_budget_outlives_pixel_edge():
+    assert pixel._CHAT_STREAM_TIMEOUT_SECONDS == 2040.0
+
+
 def test_routes_require_dashboard_auth():
     app = FastAPI()
     app.include_router(pixel.router)

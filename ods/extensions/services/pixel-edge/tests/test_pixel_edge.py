@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Sending a large body.*")
 warnings.filterwarnings("ignore", message=".*ResourceWarning.*")
 
-from aiohttp import web, ClientSession, UnixConnector
+from aiohttp import web, ClientSession, UnixConnector  # noqa: E402
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
@@ -201,6 +201,10 @@ class TestConfigValidation(unittest.TestCase):
                     importlib.reload(self.pixel_edge)
             finally:
                 self._restore(old)
+
+    def test_chat_timeout_budget_outlives_private_host_ingress(self):
+        self.assertEqual(self.pixel_edge._TOTAL_TIMEOUT, 1980)
+        self.assertEqual(self.pixel_edge._SOCK_READ_TIMEOUT, 1980)
 
 
 # ---------------------------------------------------------------------------

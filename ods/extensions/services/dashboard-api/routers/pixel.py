@@ -19,6 +19,7 @@ from security import verify_api_key
 
 _DEFAULT_EDGE_URL = "http://pixel-edge:9595"
 _MODEL = "pixel/default"
+_CHAT_STREAM_TIMEOUT_SECONDS = 2040.0
 _MAX_KEY_LENGTH = 4096
 _MAX_STATUS_BYTES = 64 * 1024
 _MAX_SSE_LINE_BYTES = 1024 * 1024
@@ -170,7 +171,14 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         "messages": [message.model_dump() for message in body.messages],
     }
 
-    timeout = httpx.Timeout(connect=5.0, read=600.0, write=30.0, pool=5.0)
+    # Pixel Edge is capped at 33 minutes; retain one bounded minute of outer
+    # headroom so this bridge never aborts a valid CPU-only first turn first.
+    timeout = httpx.Timeout(
+        connect=5.0,
+        read=_CHAT_STREAM_TIMEOUT_SECONDS,
+        write=30.0,
+        pool=5.0,
+    )
     client = httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False)
     upstream_context = client.stream(
         "POST",
@@ -195,7 +203,7 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
     async def stream() -> AsyncIterator[bytes]:
         done_seen = False
         try:
-            async with asyncio.timeout(600.0):
+            async with asyncio.timeout(_CHAT_STREAM_TIMEOUT_SECONDS):
                 buffered = bytearray()
                 async for chunk in upstream.aiter_bytes():
                     if await request.is_disconnected():
