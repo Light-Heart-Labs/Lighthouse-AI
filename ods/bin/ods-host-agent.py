@@ -3446,9 +3446,26 @@ def validate_core_recreate_ids(service_ids: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
-def docker_compose_recreate(service_ids: list[str]) -> tuple:
-    """Force-recreate a set of allowed core services using the current compose stack."""
-    ok, error = validate_core_recreate_ids(service_ids)
+def docker_compose_recreate(
+    service_ids: list[str],
+    *,
+    model_activation_internal: bool = False,
+) -> tuple:
+    """Force-recreate validated core services using the current compose stack.
+
+    Model activation has one narrow internal exception: it may recreate only
+    ``dashboard-api`` so an atomically replaced ``.env`` bind mount follows the
+    new inode. The public Dashboard recreation path never sets this flag and
+    remains constrained by ``_ALLOWED_CORE_RECREATE_IDS``.
+    """
+    if model_activation_internal:
+        if service_ids != ["dashboard-api"]:
+            return False, "Internal model activation may recreate only dashboard-api"
+        if "dashboard-api" not in CORE_SERVICE_IDS:
+            return False, "Service is not a core ODS service: dashboard-api"
+        ok, error = True, ""
+    else:
+        ok, error = validate_core_recreate_ids(service_ids)
     if not ok:
         return False, error
 
@@ -10795,7 +10812,11 @@ def _restart_existing_container(
     if not current["exists"] or not current["running"]:
         raise RuntimeError(f"{container} stopped during model activation")
     if recreate:
-        ok, error = docker_compose_recreate([container.removeprefix("ods-")])
+        service_id = container.removeprefix("ods-")
+        ok, error = docker_compose_recreate(
+            [service_id],
+            model_activation_internal=service_id == "dashboard-api",
+        )
         if not ok:
             raise RuntimeError(f"Could not recreate {container}: {error}")
     else:
@@ -10825,7 +10846,11 @@ def _restore_container_state(
     current = _capture_container_state(container)
     if previous.get("running"):
         if recreate:
-            ok, error = docker_compose_recreate([container.removeprefix("ods-")])
+            service_id = container.removeprefix("ods-")
+            ok, error = docker_compose_recreate(
+                [service_id],
+                model_activation_internal=service_id == "dashboard-api",
+            )
             if not ok:
                 raise RuntimeError(f"Could not restore {container}: {error}")
         else:

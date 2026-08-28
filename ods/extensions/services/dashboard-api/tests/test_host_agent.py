@@ -880,6 +880,34 @@ class TestValidateCoreRecreateIds:
         assert ok is False
         assert "not eligible" in error.lower()
 
+    def test_internal_model_activation_can_recreate_only_dashboard_api(
+        self, tmp_path, monkeypatch,
+    ):
+        calls = []
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"dashboard-api", "llama-server"})
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: ["-f", "base.yml"])
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda cmd, **kwargs: calls.append((cmd, kwargs))
+            or subprocess.CompletedProcess(cmd, 0, "", ""),
+        )
+
+        ok, error = _mod.docker_compose_recreate(
+            ["dashboard-api"], model_activation_internal=True,
+        )
+
+        assert ok is True
+        assert error == ""
+        assert calls[0][0][-1] == "dashboard-api"
+        ok, error = _mod.docker_compose_recreate(
+            ["llama-server"], model_activation_internal=True,
+        )
+        assert ok is False
+        assert "only dashboard-api" in error
+        assert len(calls) == 1
+
 
 class TestResolveComposeFlagsCache:
 
