@@ -114,8 +114,9 @@ else
 fi
 
 if logger_output="$(bash -c '
-    unset -f log_info log_error 2>/dev/null || true
+    unset -f log_info log_ok log_error 2>/dev/null || true
     source "$1"
+    declare -F log_info log_ok log_error >/dev/null
     ods_pixel_uninstall_managed relative-path /tmp
 ' _ "$ROOT_DIR/lib/pixel-uninstall.sh" 2>&1)"; then
     fail "Pixel uninstall unexpectedly accepted an invalid install directory"

@@ -8,6 +8,9 @@
 if ! declare -F log_info >/dev/null 2>&1; then
     log_info() { printf '[INFO] %s\n' "$*"; }
 fi
+if ! declare -F log_ok >/dev/null 2>&1; then
+    log_ok() { printf '[OK] %s\n' "$*"; }
+fi
 if ! declare -F log_error >/dev/null 2>&1; then
     log_error() { printf '[ERROR] %s\n' "$*" >&2; }
 fi
