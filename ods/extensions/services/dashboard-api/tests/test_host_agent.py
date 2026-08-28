@@ -880,34 +880,6 @@ class TestValidateCoreRecreateIds:
         assert ok is False
         assert "not eligible" in error.lower()
 
-    def test_internal_model_activation_can_recreate_only_dashboard_api(
-        self, tmp_path, monkeypatch,
-    ):
-        calls = []
-        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"dashboard-api", "llama-server"})
-        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
-        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: ["-f", "base.yml"])
-        monkeypatch.setattr(
-            _mod.subprocess,
-            "run",
-            lambda cmd, **kwargs: calls.append((cmd, kwargs))
-            or subprocess.CompletedProcess(cmd, 0, "", ""),
-        )
-
-        ok, error = _mod.docker_compose_recreate(
-            ["dashboard-api"], model_activation_internal=True,
-        )
-
-        assert ok is True
-        assert error == ""
-        assert calls[0][0][-1] == "dashboard-api"
-        ok, error = _mod.docker_compose_recreate(
-            ["llama-server"], model_activation_internal=True,
-        )
-        assert ok is False
-        assert "only dashboard-api" in error
-        assert len(calls) == 1
-
 
 class TestResolveComposeFlagsCache:
 
@@ -3496,26 +3468,6 @@ class TestModelActivationModeAndMacosBridge:
         monkeypatch.setattr(_mod, "_configure_macos_llm_bridge", record_bridge)
         monkeypatch.setattr(_mod, "_launch_native_llama_server", record_launch)
         monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_args, **_kwargs: True)
-        monkeypatch.setattr(
-            _mod,
-            "_capture_container_state",
-            lambda name: {"exists": name == "ods-dashboard-api", "running": name == "ods-dashboard-api"},
-        )
-
-        def record_dependent_restart(container, expected_state=None, *, recreate=False):
-            if container == "ods-dashboard-api":
-                assert expected_state == {"exists": True, "running": True}
-                assert recreate is True
-                events.append(("recreate-dashboard", container))
-                return True
-            return False
-
-        monkeypatch.setattr(_mod, "_restart_existing_container", record_dependent_restart)
-        monkeypatch.setattr(
-            _mod,
-            "_wait_for_container_health",
-            lambda container: events.append(("wait-container-health", container)),
-        )
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         handler = _FakeHandler(b"")
 
@@ -3528,9 +3480,7 @@ class TestModelActivationModeAndMacosBridge:
         assert receipt["llm_model"] == "new-model"
         assert receipt["gguf_file"] == "new-model.gguf"
         assert receipt["context_length"] == 4096
-        assert receipt["consumers"]["dashboard"] == "recreated"
-        assert ("recreate-dashboard", "ods-dashboard-api") in events
-        assert ("wait-container-health", "ods-dashboard-api") in events
+        assert receipt["consumers"]["dashboard"] == "live_env"
         assert events[:5] == [
             ("bridge-preflight", "127.0.0.1"),
             ("stop-old-direct-listener", ".llama-server.pid"),
