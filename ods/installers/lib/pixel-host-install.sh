@@ -1084,8 +1084,13 @@ EOF
     ods_sudo install -o root -g root -m 0644 "$stage/pixel-ingress.service" /etc/systemd/system/pixel-ingress.service
     rm -f -- "$stage/pixel-agent.env" "$stage/pixel-ingress.service"
     rmdir -- "$stage"
-    ods_sudo systemctl daemon-reload
-    ods_sudo systemctl enable --now openclaw-gateway.service pixel-ingress.service
+    ods_sudo systemctl daemon-reload || return 1
+    ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service || return 1
+    ods_sudo systemctl start openclaw-gateway.service || return 1
+    # `enable --now` does not refresh an already-running ingress after its
+    # reviewed program or environment changes. Restart only the ingress here;
+    # the Pixel gateway was already verified above and need not be disturbed.
+    ods_sudo systemctl restart pixel-ingress.service || return 1
     ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service
 }
 

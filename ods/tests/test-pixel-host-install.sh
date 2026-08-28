@@ -481,6 +481,7 @@ assert "The exact ODS-managed Pixel contract is already active" in text
 assert "refreshing the verified ODS extension without reapplying the release" in text
 assert "pixel\" verify >>\"$LOG_FILE\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
+assert "systemctl restart pixel-ingress.service" in text
 assert "if ! _ods_pixel_mark_verified_installing" in text
 assert text.index("_ods_pixel_mark_verified_installing \"$owner\"") < text.index("_ods_pixel_install_ingress \"$owner\"")
 assert "if ! _ods_pixel_mark_ready" in text
