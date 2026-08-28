@@ -267,11 +267,15 @@ To restore Hermes as the default agent route:
 
 Then verify Open WebUI selects the ordinary ODS model, the Dashboard remains
 healthy, and the authenticated Hermes URL works. This removes the Pixel edge
-Compose layer, model registration, environment, and default route. The
-ODS-managed host gateway and private ingress may remain running as a warm,
-unexposed re-enable path; rollback does not delete the managed deployment.
-Re-enable only after the qualification predicate and written authorization are
-still valid:
+Compose layer, model registration, environment, and default route. When the
+private ODS management marker securely binds the active deployment to this
+exact install, rollback also stops and removes the managed host gateway and
+private ingress, removes their active release link and runtime attestation, and
+moves the fully verified release tree into Pixel's private
+`retired-ods-releases/` archive. An ambient, legacy, incompletely bound, or
+drifted Pixel/OpenClaw deployment is left untouched. Re-enable only after the
+qualification predicate and written authorization are still valid; ODS then
+recreates the live deployment from the configured immutable Pixel source:
 
 ```bash
 PIXEL_LICENSE_ACCEPTED=true ./install.sh --pixel
