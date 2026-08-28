@@ -195,6 +195,53 @@ if value.get("configuration_sha256") != observed:
 PY
 }
 
+_ods_pixel_verified_source_matches() {
+    local owner="$1" home="$2" marker
+    marker="$home/.config/ods/pixel-managed.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$marker" "${INSTALL_DIR:?}" "${PIXEL_SOURCE_REF:?}" <<'PY'
+import json, os, pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536):
+    raise SystemExit(1)
+value = json.loads(path.read_text(encoding="utf-8"))
+if (value.get("schema_version") != 1 or value.get("manager") != "ods"
+        or value.get("install_dir") != sys.argv[2]
+        or value.get("pixel_source_ref") != sys.argv[3]
+        or value.get("state") not in {"ready", "installing"}):
+    raise SystemExit(1)
+for key in ("contract_sha256", "configuration_sha256"):
+    item = value.get(key)
+    if not isinstance(item, str) or len(item) != 64 or any(ch not in "0123456789abcdef" for ch in item):
+        raise SystemExit(1)
+PY
+}
+
+_ods_pixel_candidate_config_matches_live() {
+    local owner="$1" home="$2" candidate="$3" live
+    live="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$live" "$candidate" <<'PY'
+import json, os, pathlib, stat, sys
+
+values = []
+for raw in sys.argv[1:]:
+    path = pathlib.Path(raw)
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o022
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit(1)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit(1)
+    values.append(json.dumps(value, sort_keys=True, separators=(",", ":")))
+if values[0] != values[1]:
+    raise SystemExit(1)
+PY
+}
+
 _ods_pixel_mark_installing() {
     local owner="$1" home="$2" marker
     marker="$home/.config/ods/pixel-managed.json"
@@ -464,7 +511,7 @@ EOF
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
     local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256
-    local reuse_active=false
+    local reuse_active=false same_verified_source=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
     _ods_pixel_assert_managed_state "$owner" "$home" || return 1
@@ -511,6 +558,9 @@ ods_pixel_install_default_agent() {
     if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
         reuse_active=true
     fi
+    if _ods_pixel_verified_source_matches "$owner" "$home"; then
+        same_verified_source=true
+    fi
     _ods_pixel_mark_installing "$owner" "$home" || return 1
     if ! _ods_pixel_enable_chat_endpoint "$owner" "$home"; then
         ai_bad "Could not enable Pixel's loopback chat endpoint."
@@ -523,13 +573,25 @@ ods_pixel_install_default_agent() {
             return 1
         fi
     else
-        if ! {
-            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force &&
-            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan &&
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force >>"$LOG_FILE" 2>&1 \
+            || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan >>"$LOG_FILE" 2>&1; then
+            ai_bad "Pixel configure or plan failed. See $LOG_FILE for the exact Pixel error."
+            return 1
+        fi
+        if [[ "$same_verified_source" == true ]] \
+            && _ods_pixel_candidate_config_matches_live "$owner" "$home" "$pixel_root/dist/openclaw.json"; then
+            ai "The exact Pixel release and runtime configuration are unchanged; refreshing the verified ODS extension without reapplying the release..."
+            if ! ods_sudo systemctl restart openclaw-gateway.service \
+                || ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" 60 '.ok == true and .status == "live"' \
+                || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
+                ai_bad "The ODS-managed Pixel extension refresh failed verification. See $LOG_FILE."
+                return 1
+            fi
+        elif ! {
             ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&
             ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
         } >>"$LOG_FILE" 2>&1; then
-            ai_bad "Pixel configure, plan, apply, or verify failed. See $LOG_FILE for the exact Pixel error."
+            ai_bad "Pixel apply or verify failed. See $LOG_FILE for the exact Pixel error."
             return 1
         fi
     fi

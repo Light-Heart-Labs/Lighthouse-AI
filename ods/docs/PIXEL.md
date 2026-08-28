@@ -167,10 +167,13 @@ reuse the active release on retry without claiming readiness.
 The ready marker binds the exact Pixel source revision and a domain-separated
 SHA-256 of the deterministic ODS onboarding contract, including the approved
 ODS plugin tree digest, plus a canonical hash of the verified live OpenClaw
-configuration. A rerun skips Pixel's same-release apply transaction only when
-all of those bindings match exactly, and still runs Pixel's exact-source
-verification before reinstalling the ODS ingress. Any contract or live-config
-drift takes the ordinary configure/plan/apply path and remains fail closed.
+configuration. When all bindings match exactly, a rerun skips Pixel's
+same-release apply transaction, verifies the exact source, and reinstalls the
+ODS ingress. If only the ODS extension contract changed while the exact
+verified Pixel source and newly planned canonical runtime configuration still
+match the live configuration, ODS restarts and verifies the gateway before
+refreshing the extension. Pixel source drift or runtime-configuration drift
+takes the ordinary configure/plan/apply path and remains fail closed.
 
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel
@@ -227,9 +230,12 @@ To restore Hermes as the default agent route:
 ```
 
 Then verify Open WebUI selects the ordinary ODS model, the Dashboard remains
-healthy, and the authenticated Hermes URL works. This disables the Pixel edge
-Compose layer; it does not delete an owner-managed deployment. Re-enable only
-after the qualification predicate and written authorization are still valid:
+healthy, and the authenticated Hermes URL works. This removes the Pixel edge
+Compose layer, model registration, environment, and default route. The
+ODS-managed host gateway and private ingress may remain running as a warm,
+unexposed re-enable path; rollback does not delete the managed deployment.
+Re-enable only after the qualification predicate and written authorization are
+still valid:
 
 ```bash
 PIXEL_LICENSE_ACCEPTED=true ./install.sh --pixel

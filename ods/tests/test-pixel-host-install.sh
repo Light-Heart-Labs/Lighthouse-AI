@@ -56,6 +56,7 @@ contract_sha256="$(printf 'c%.0s' {1..64})"
 _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
+check _ods_pixel_verified_source_matches "$owner" "$home"
 _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "ready" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3] and len(v["configuration_sha256"]) == 64' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
 check _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"
@@ -70,6 +71,11 @@ if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
     fail "mismatched exact Pixel source commit rejected"
 else
     pass "mismatched exact Pixel source commit rejected"
+fi
+if _ods_pixel_verified_source_matches "$owner" "$home"; then
+    fail "mismatched verified Pixel source rejected for extension refresh"
+else
+    pass "mismatched verified Pixel source rejected for extension refresh"
 fi
 PIXEL_SOURCE_REF="$original_source_ref"
 chmod 0644 "$marker"
@@ -87,6 +93,24 @@ else
     pass "drifted managed OpenClaw configuration rejected"
 fi
 mv "$TEST_ROOT/openclaw.valid.json" "$home/.openclaw/openclaw.json"
+candidate="$TEST_ROOT/openclaw.candidate.json"
+printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}' > "$candidate"
+chmod 0600 "$candidate"
+check _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate"
+printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":false}}}}}' > "$candidate"
+if _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate"; then
+    fail "drifted Pixel candidate config rejected"
+else
+    pass "drifted Pixel candidate config rejected"
+fi
+rm -f "$candidate"
+ln -s "$home/.openclaw/openclaw.json" "$candidate"
+if _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate"; then
+    fail "symlink Pixel candidate config rejected"
+else
+    pass "symlink Pixel candidate config rejected"
+fi
+rm -f "$candidate"
 check _ods_pixel_assert_managed_state "$owner" "$home"
 _ods_pixel_mark_installing "$owner" "$home"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["state"] == "installing" and v["pixel_source_ref"] == sys.argv[2] and v["contract_sha256"] == sys.argv[3]' "$marker" "$PIXEL_SOURCE_REF" "$contract_sha256"
@@ -152,13 +176,18 @@ assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_stat
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
+installer=text[text.index("ods_pixel_install_default_agent() {"):]
 assert "ods_pixel_run_as_owner \"$owner\" \"$home\" curl" in text
 assert text.index("http://localhost/health >/dev/null") < text.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
-assert "pixel\" configure --answers \"$answers\" --force &&" in text
-assert "pixel\" plan &&" in text
+assert "pixel\" configure --answers \"$answers\" --force" in text
+assert "pixel\" plan" in text
 assert "pixel\" apply --confirm &&" in text
 assert "_ods_pixel_managed_contract_matches" in text
+assert "_ods_pixel_verified_source_matches" in text
+assert "_ods_pixel_candidate_config_matches_live" in text
+assert installer.index("if _ods_pixel_verified_source_matches") < installer.index("_ods_pixel_mark_installing")
 assert "The exact ODS-managed Pixel contract is already active" in text
+assert "refreshing the verified ODS extension without reapplying the release" in text
 assert "pixel\" verify >>\"$LOG_FILE\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
 assert "if ! _ods_pixel_mark_verified_installing" in text
