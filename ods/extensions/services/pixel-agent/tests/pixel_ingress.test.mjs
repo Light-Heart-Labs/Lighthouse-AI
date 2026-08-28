@@ -167,9 +167,11 @@ test("readGatewayToken refuses non-regular file", () => {
 test("readGatewayToken refuses group/world-readable modes", () => {
   const f = path.join(DIR, "groupread.env");
   fs.writeFileSync(f, `PIXEL_GATEWAY_TOKEN=${TOKEN}\n`, { mode: 0o640 });
+  fs.chmodSync(f, 0o640);
   assert.throws(() => readGatewayToken(f, EUID), /group\/world readable/);
   const w = path.join(DIR, "worldread.env");
   fs.writeFileSync(w, `PIXEL_GATEWAY_TOKEN=${TOKEN}\n`, { mode: 0o604 });
+  fs.chmodSync(w, 0o604);
   assert.throws(() => readGatewayToken(w, EUID), /group\/world readable/);
 });
 
