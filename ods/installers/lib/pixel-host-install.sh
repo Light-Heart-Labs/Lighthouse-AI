@@ -590,10 +590,15 @@ if not isinstance(normalized_defaults, dict) or not isinstance(normalized_sessio
 # other candidate change still fails closed below.
 normalized_provider["timeoutSeconds"] = 1800
 normalized_defaults["timeoutSeconds"] = 1800
+normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
 normalized_write_lock = normalized_session.setdefault("writeLock", {})
-if not isinstance(normalized_diagnostics, dict) or not isinstance(normalized_write_lock, dict):
+if (not isinstance(normalized_compaction, dict)
+        or not isinstance(normalized_diagnostics, dict)
+        or not isinstance(normalized_write_lock, dict)):
     raise SystemExit("live Pixel runtime policy is outside the ODS contract")
+normalized_compaction["reserveTokens"] = contract.get("modelMaxTokens")
+normalized_compaction["reserveTokensFloor"] = 0
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
 normalized_write_lock["maxHoldMs"] = 1920000
 normalized_write_lock["staleMs"] = 3600000
@@ -745,13 +750,26 @@ updated_agent = next(item for item in updated["agents"]["list"] if isinstance(it
 updated_model = updated_provider["models"][0]
 updated_session = updated["session"]
 updated_diagnostics = updated.setdefault("diagnostics", {})
+updated_compaction = updated_defaults.setdefault("compaction", {})
 write_lock = updated_session.setdefault("writeLock", {})
+if not isinstance(updated_compaction, dict):
+    raise SystemExit("OpenClaw compaction configuration must be an object")
 if not isinstance(write_lock, dict):
     raise SystemExit("OpenClaw session write-lock configuration must be an object")
 if not isinstance(updated_diagnostics, dict):
     raise SystemExit("OpenClaw diagnostics configuration must be an object")
 updated_provider["timeoutSeconds"] = 1800
 updated_defaults["timeoutSeconds"] = 1800
+context_window = updated_model.get("contextWindow")
+model_max_tokens = updated_model.get("maxTokens")
+if (type(context_window) is not int or type(model_max_tokens) is not int
+        or context_window < 4096 or not 1 <= model_max_tokens <= context_window):
+    raise SystemExit("OpenClaw model limits are outside the ODS Pixel runtime contract")
+# OpenClaw otherwise reserves 16K tokens even for a small local context. Bind
+# compaction headroom to the model's real output ceiling so the fixed Pixel
+# system/tool prompt remains usable, and disable the larger embedded-run floor.
+updated_compaction["reserveTokens"] = model_max_tokens
+updated_compaction["reserveTokensFloor"] = 0
 # The llama.cpp reasoning-output setting controls response parsing, not whether a
 # Qwen chat template generates a thinking-only continuation. Advertise the
 # Qwen capability to OpenClaw, select its supported template control, and keep
@@ -1104,8 +1122,11 @@ PY
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false model_label
-    [[ "$context" =~ ^[0-9]+$ && "$context" -ge 4096 ]] || context=16384
-    (( context / 2 < max_tokens )) && max_tokens="$((context / 2))"
+    [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]] || {
+        ai_bad "Pixel requires a model context of at least 16384 tokens."
+        return 1
+    }
+    (( context < 32768 )) && max_tokens="$((context / 8))"
     # modelReasoning describes model capability to OpenClaw. Qwen needs that
     # capability flag even when ODS defaults it to no-think so OpenClaw can
     # send chat_template_kwargs.enable_thinking=false explicitly.

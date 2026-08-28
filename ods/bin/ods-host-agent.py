@@ -193,6 +193,7 @@ _MODEL_TIERS = frozenset({
 })
 _MIN_MODEL_CONTEXT = 1024
 _MAX_MODEL_CONTEXT = 9007199254740991
+_MIN_MANAGED_PIXEL_CONTEXT = 16384
 
 # Per-service locks to prevent concurrent start+stop races on the same service
 _service_locks: dict[str, threading.Lock] = collections.defaultdict(threading.Lock)
@@ -2240,6 +2241,14 @@ def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
         marker in label
         for marker in ("qwen", "reasoning", "deepseek-r1", "nemotron")
     )
+
+
+def _pixel_max_tokens_for_context(context_length: int) -> int:
+    """Keep enough prompt room for Pixel's managed agent/tool contract."""
+    if context_length < _MIN_MANAGED_PIXEL_CONTEXT:
+        # Preserve the legacy rollback shape for older managed installations.
+        return min(4096, max(1, context_length // 2))
+    return min(4096, max(1, context_length // 8))
 
 
 def _reconcile_ods_managed_pixel_model(
@@ -7946,10 +7955,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     restored_pixel = _reconcile_ods_managed_pixel_model(
                         previous_model,
                         previous_pixel_context,
-                        max_tokens=min(
-                            4096,
-                            max(1, previous_pixel_context // 2),
-                        ),
+                        max_tokens=_pixel_max_tokens_for_context(previous_pixel_context),
                         reasoning=previous_reasoning,
                     )
                     if restored_pixel != "reconciled":
@@ -7974,10 +7980,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 captured_pixel_context = 0
             if captured_pixel_context >= 4096:
                 previous_pixel_context = captured_pixel_context
-            if (
-                _ods_managed_pixel_identity() is not None
-                and previous_pixel_context is None
-            ):
+            managed_pixel_identity = _ods_managed_pixel_identity()
+            if managed_pixel_identity is not None and previous_pixel_context is None:
                 raise RuntimeError(
                     "The current ODS-managed Pixel route requires a valid "
                     "MAX_CONTEXT or CTX_SIZE of at least 4096 before model activation"
@@ -8047,6 +8051,22 @@ class AgentHandler(BaseHTTPRequestHandler):
                 context_length = requested_context_length
             if tier_context_limit is not None:
                 context_length = min(int(context_length), tier_context_limit)
+            if (
+                managed_pixel_identity is not None
+                and int(context_length) < _MIN_MANAGED_PIXEL_CONTEXT
+            ):
+                json_response(
+                    self,
+                    400,
+                    {
+                        "error": (
+                            "ODS-managed Pixel requires a model context of at least "
+                            f"{_MIN_MANAGED_PIXEL_CONTEXT} tokens; no model state was changed"
+                        ),
+                        "code": "pixel_context_too_small",
+                    },
+                )
+                return
 
             if gpu_backend == "apple":
                 apple_pid_file = INSTALL_DIR / "data" / ".llama-server.pid"
@@ -8560,7 +8580,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 pixel_status = _reconcile_ods_managed_pixel_model(
                     str(llm_model_name),
                     int(context_length),
-                    max_tokens=min(4096, max(1, int(context_length) // 2)),
+                    max_tokens=_pixel_max_tokens_for_context(int(context_length)),
                     reasoning=_pixel_model_reasoning_capable(
                         str(llm_model_name),
                         env,

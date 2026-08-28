@@ -157,9 +157,14 @@ If Pixel reconciliation fails, ODS restores and proves both the previous model
 runtime and Pixel route. A stopped or unmanaged Pixel is never adopted. Model
 family changes are supported: Qwen-only no-think compatibility is added for
 Qwen models and removed again when a non-Qwen model is activated. Pixel's
-upstream configuration contract requires a context of at least 4096 tokens;
-the bundled ODS catalog models are above that floor, while an advanced custom
-activation below it fails and rolls back instead of leaving Pixel stale.
+managed agent and tool prompt requires a context of at least 16384 tokens; all
+bundled ODS catalog models are at or above that floor. An advanced custom
+activation below it is rejected before any model state changes. At 16K and 24K,
+ODS lowers Pixel's output ceiling to one eighth of the context; at 32K and
+above it allows up to 4096 output tokens. The same value is applied as
+OpenClaw's compaction reserve, with its larger embedded reserve floor disabled,
+so a smaller qualified context still leaves room for Pixel's fixed prompt and
+tool results.
 
 ## Bounded ODS tools
 
@@ -304,6 +309,10 @@ head:
 - a real Open WebUI `pixel/default` chat;
 - a real Dashboard `/pixel` streaming chat;
 - a real turn invoking `pixel_ods_status` with sanitized ODS results;
+- a cross-family model swap and a context-only change, with Pixel using the
+  newly active identity and invoking both bounded ODS tools after each change;
+- rejection of a managed-Pixel activation below 16K with the previous runtime,
+  persisted configuration, and gateway process unchanged;
 - `--no-pixel --hermes` rollback with ordinary chat and Hermes verified; and
 - reinstallation/reactivation from the same clean, exact source.
 

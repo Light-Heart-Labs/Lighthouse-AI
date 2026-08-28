@@ -3440,6 +3440,17 @@ def test_managed_pixel_reconcile_rejects_context_below_pixel_contract(monkeypatc
 
 
 @pytest.mark.parametrize(
+    ("context_length", "expected"),
+    [(4096, 2048), (8192, 4096), (16384, 2048), (24576, 3072), (32768, 4096)],
+)
+def test_managed_pixel_output_budget_preserves_agent_prompt_room(
+    context_length,
+    expected,
+):
+    assert _mod._pixel_max_tokens_for_context(context_length) == expected
+
+
+@pytest.mark.parametrize(
     ("model", "mode", "expected"),
     [
         ("qwen3.5-9b", "off", True),
@@ -6645,6 +6656,40 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 400
         assert handler.parse_response()["code"] == "tier_model_mismatch"
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert restarts == []
+
+    def test_managed_pixel_rejects_unusable_context_before_mutation(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_text = env_text.replace("CTX_SIZE=2048", "CTX_SIZE=65536")
+        env_path.write_text(env_text, encoding="utf-8")
+        restarts = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_ods_managed_pixel_identity",
+            lambda: ("pixel-owner", tmp_path / "pixel-owner"),
+        )
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=8192,
+        )
+
+        assert handler.response_code == 400
+        response = handler.parse_response()
+        assert "at least 16384" in response["error"]
+        assert response["code"] == "pixel_context_too_small"
+        assert "rolled_back" not in response
         assert env_path.read_text(encoding="utf-8") == env_text
         assert restarts == []
 

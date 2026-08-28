@@ -262,12 +262,19 @@ assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
 
-MAX_CONTEXT=4096
+MAX_CONTEXT=16384
 LLM_MODEL=NVIDIA-Nemotron3-Nano-4B
 _ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/nemotron-onboarding.json" \
     /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelContextWindow"] == 4096 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' \
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelContextWindow"] == 16384 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' \
     "$TEST_ROOT/nemotron-onboarding.json"
+MAX_CONTEXT=8192
+if _ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/undersized-onboarding.json" \
+    /usr/bin/openclaw /opt/ods/pixel-plugin "$digest" >/dev/null 2>&1; then
+    fail "Pixel onboarding below the usable 16K context floor rejected"
+else
+    pass "Pixel onboarding below the usable 16K context floor rejected"
+fi
 MAX_CONTEXT=32768
 LLM_MODEL=qwen-test
 
@@ -288,7 +295,12 @@ cat > "$runtime_config" <<'JSON'
         "api": "openai-completions",
         "apiKey": "local-no-auth",
         "baseUrl": "http://127.0.0.1:11434/v1",
-        "models": [{"id": "qwen-test", "name": "ODS Local qwen-test"}]
+        "models": [{
+          "id": "qwen-test",
+          "name": "ODS Local qwen-test",
+          "contextWindow": 32768,
+          "maxTokens": 4096
+        }]
       }
     }
   },
@@ -304,11 +316,20 @@ python3 - "$OPENCLAW_CONFIG_PATH" <<'PY'
 import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
-assert value["agents"]["list"][0]["thinkingDefault"] == "off"
 assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
+agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
-assert model["reasoning"] is True
-assert model["compat"] == {"thinkingFormat": "qwen-chat-template"}
+assert value["agents"]["defaults"]["compaction"] == {
+    "reserveTokens": model["maxTokens"], "reserveTokensFloor": 0,
+}
+if "qwen" in model["id"].lower():
+    assert agent["thinkingDefault"] == "off"
+    assert model["reasoning"] is True
+    assert model["compat"] == {"thinkingFormat": "qwen-chat-template"}
+else:
+    assert "thinkingDefault" not in agent
+    assert model["reasoning"] is False
+    assert "compat" not in model
 assert value["diagnostics"]["stuckSessionAbortMs"] == 1860000
 assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 3600000}
 PY
@@ -316,7 +337,7 @@ SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["agents"]["list"][0]["thinkingDefault"] == "off"; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["agents"]["defaults"]["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; assert v["agents"]["list"][0]["thinkingDefault"] == "off"; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -522,6 +543,7 @@ model.pop("compat", None)
 path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY
 chmod 0600 "$non_qwen_answers" "$non_qwen_candidate"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$non_qwen_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" \
     "$non_qwen_candidate" "$non_qwen_answers"
 check _ods_pixel_atomic_replace_managed_file "$owner" "$reconcile_home" \
