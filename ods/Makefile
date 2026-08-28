@@ -116,6 +116,9 @@ test: ## Run unit and contract tests
 	@echo "=== ods-update.sh backup command ==="
 	@bash tests/test-update-script-backup.sh
 	@echo ""
+	@echo "=== ods-update.sh Hermes token migration ==="
+	@bash tests/test-update-hermes-session-token.sh
+	@echo ""
 	@echo "=== bootstrap-upgrade spawn closes inherited FDs ==="
 	@bash tests/test-bootstrap-upgrade-close-inherited-fds.sh
 	@echo ""

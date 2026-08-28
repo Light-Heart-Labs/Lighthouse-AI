@@ -235,6 +235,9 @@ jobs:
       - name: Update Rollback Contract
         run: bash tests/test-update-rollback-contract.sh
 
+      - name: Source Update Hermes Token Migration
+        run: bash tests/test-update-hermes-session-token.sh
+
       - name: Bootstrap Upgrade Compose Flags Recovery Tests
         run: bash tests/test-bootstrap-upgrade-compose-flags-recovery.sh
 
