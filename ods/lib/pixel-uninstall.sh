@@ -36,8 +36,9 @@ ods_pixel_uninstall_managed() {
     local staged_current="$pixel_install/.ods-uninstall-current"
     local staged_attestation="$pixel_install/.ods-uninstall-runtime-attestation"
     local deployment_lock="$pixel_install/.deployment.lock"
+    local retired_releases="$pixel_install/retired-ods-releases"
     local cleanup_plan cleanup_state release_version sandbox_image sandbox_image_id release_path
-    local release_identity_sha256 install_manifest_sha256
+    local release_identity_sha256 install_manifest_sha256 retired_release_path
     local pixel_lock_fd="" owner_uid
     local root_artifacts_present=false
 
@@ -64,7 +65,8 @@ ods_pixel_uninstall_managed() {
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
         "$openclaw_config" "$gateway_env" "$onboarding" \
-        "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" <<'PY'
+        "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
+        "$retired_releases" <<'PY'
 import hashlib
 import json
 import os
@@ -92,6 +94,7 @@ import sys
     staged_current_raw,
     staged_attestation_raw,
     deployment_lock_raw,
+    retired_releases_raw,
 ) = sys.argv[1:]
 
 marker = pathlib.Path(marker_raw)
@@ -118,12 +121,14 @@ def regular(path: pathlib.Path, uid: int, maximum: int, private: bool = False) -
 
 regular(marker, owner_uid, 65536, private=True)
 value = json.loads(marker.read_text(encoding="utf-8"))
+if not isinstance(value, dict):
+    raise SystemExit("Pixel management marker does not bind this ODS install")
+state = value.get("state")
 if (
-    not isinstance(value, dict)
-    or value.get("schema_version") not in {1, 2}
+    value.get("schema_version") not in {1, 2}
     or value.get("manager") != "ods"
     or value.get("install_dir") != str(install_dir)
-    or value.get("state") not in {"installing", "ready"}
+    or state not in {"installing", "ready", "deactivating"}
 ):
     raise SystemExit("Pixel management marker does not bind this ODS install")
 source_ref = value.get("pixel_source_ref")
@@ -135,6 +140,12 @@ runtime_attestation = pathlib.Path(runtime_attestation_raw)
 staged_current = pathlib.Path(staged_current_raw)
 staged_attestation = pathlib.Path(staged_attestation_raw)
 deployment_lock = pathlib.Path(deployment_lock_raw)
+retired_releases = pathlib.Path(retired_releases_raw)
+if retired_releases.exists() or retired_releases.is_symlink():
+    retired_root_info = retired_releases.lstat()
+    if (not stat.S_ISDIR(retired_root_info.st_mode) or stat.S_ISLNK(retired_root_info.st_mode)
+            or retired_root_info.st_uid != owner_uid or retired_root_info.st_mode & 0o077):
+        raise SystemExit("unsafe ODS-managed Pixel retired release root")
 current_present = current.exists() or current.is_symlink()
 attestation_present = runtime_attestation.exists() or runtime_attestation.is_symlink()
 staged_current_present = staged_current.exists() or staged_current.is_symlink()
@@ -143,62 +154,120 @@ if current_present and not current.is_symlink():
     raise SystemExit("Pixel current active-release object is not a symlink")
 if staged_current_present and not staged_current.is_symlink():
     raise SystemExit("Pixel staged active-release object is not a symlink")
-if not any((current_present, attestation_present, staged_current_present, staged_attestation_present)):
-    cleanup = ("none", "", "", "", "", "", "")
+retired_release_raw = value.get("retired_release_path")
+if state == "deactivating":
+    # The marker is changed before the release move, so both the pre-move and
+    # post-move layouts are valid resumable states. The release must exist in
+    # exactly one of those locations.
+    if value.get("schema_version") != 2 or value.get("initial_active_state") != "absent":
+        raise SystemExit("Pixel deactivation state lacks an ODS pre-install absence proof")
+    if current_present or attestation_present or staged_current_present != staged_attestation_present:
+        raise SystemExit("Pixel deactivation state is partial or still active")
+    if not isinstance(retired_release_raw, str) or "|" in retired_release_raw:
+        raise SystemExit("Pixel deactivation marker has an invalid retired release path")
+    retired_release = pathlib.Path(retired_release_raw)
+    try:
+        if retired_release.name != "release" or retired_release.parent.parent != retired_releases:
+            raise ValueError
+        if not re.fullmatch(r"[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}-[0-9a-f]{12}\.[A-Za-z0-9]{8}", retired_release.parent.name):
+            raise ValueError
+    except ValueError:
+        raise SystemExit("Pixel retired release path is outside its bounded archive root")
+    retired_root_info = retired_releases.lstat()
+    retired_container_info = retired_release.parent.lstat()
+    if (not stat.S_ISDIR(retired_root_info.st_mode) or stat.S_ISLNK(retired_root_info.st_mode)
+            or retired_root_info.st_uid != owner_uid or retired_root_info.st_mode & 0o077
+            or not stat.S_ISDIR(retired_container_info.st_mode) or stat.S_ISLNK(retired_container_info.st_mode)
+            or retired_container_info.st_uid != owner_uid or retired_container_info.st_mode & 0o077):
+        raise SystemExit("unsafe ODS-managed Pixel retired release archive")
+    version = value.get("active_release_version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}", version):
+        raise SystemExit("Pixel deactivation marker has an invalid release version")
+    identity_prefix = value.get("release_identity_sha256")
+    if (not isinstance(identity_prefix, str) or not re.fullmatch(r"[0-9a-f]{64}", identity_prefix)
+            or not retired_release.parent.name.startswith(f"{version}-{identity_prefix[:12]}.")):
+        raise SystemExit("Pixel retired release archive is not bound to its release identity")
+    expected_release = pathlib.Path(home_raw) / ".local/share/pixel/releases" / version
+    live_release_present = expected_release.exists() or expected_release.is_symlink()
+    retired_release_present = retired_release.exists() or retired_release.is_symlink()
+    if int(live_release_present) + int(retired_release_present) != 1:
+        raise SystemExit("Pixel deactivation release is missing or duplicated")
+    if staged_current_present:
+        link_info = staged_current.lstat()
+        if not stat.S_ISLNK(link_info.st_mode) or link_info.st_uid != owner_uid:
+            raise SystemExit("unsafe ODS-managed Pixel staged active-release link")
+        if staged_current.resolve(strict=False) != expected_release.resolve(strict=False):
+            raise SystemExit("Pixel staged active-release link has an unexpected target")
+    release = expected_release if live_release_present else retired_release
+    cleanup = (
+        "retiring" if live_release_present else "retired",
+        None, None, None, None, None, None, str(retired_release),
+    )
+elif not any((current_present, attestation_present, staged_current_present, staged_attestation_present)):
+    cleanup = ("none", "", "", "", "", "", "", "")
 else:
     if ((int(current_present) + int(staged_current_present) != 1)
             or (int(attestation_present) + int(staged_attestation_present) != 1)):
         raise SystemExit("Pixel active-release state is partial, duplicated, or has an unsafe type")
     if current_present and attestation_present:
-        cleanup = ("active", None, None, None, None, None, None)
+        cleanup = ("active", None, None, None, None, None, None, "")
     elif current_present and staged_attestation_present:
-        cleanup = ("staging-attestation", None, None, None, None, None, None)
+        cleanup = ("staging-attestation", None, None, None, None, None, None, "")
     elif staged_current_present and attestation_present:
-        cleanup = ("staging-link", None, None, None, None, None, None)
+        cleanup = ("staging-link", None, None, None, None, None, None, "")
     else:
-        cleanup = ("staged", None, None, None, None, None, None)
+        cleanup = ("staged", None, None, None, None, None, None, "")
 
 if cleanup[0] != "none":
     if value.get("schema_version") != 2 or value.get("initial_active_state") != "absent":
         raise SystemExit("Pixel active state lacks an ODS pre-install absence proof")
-    link = current if cleanup[0] in {"active", "staging-attestation"} else staged_current
-    receipt = runtime_attestation if cleanup[0] in {"active", "staging-link"} else staged_attestation
-    link_info = link.lstat()
-    if not stat.S_ISLNK(link_info.st_mode) or link_info.st_uid != owner_uid:
-        raise SystemExit("unsafe ODS-managed Pixel active-release link")
-    release = link.resolve(strict=True)
+    receipt = None
+    if cleanup[0] not in {"retiring", "retired"}:
+        link = current if cleanup[0] in {"active", "staging-attestation"} else staged_current
+        receipt = runtime_attestation if cleanup[0] in {"active", "staging-link"} else staged_attestation
+        link_info = link.lstat()
+        if not stat.S_ISLNK(link_info.st_mode) or link_info.st_uid != owner_uid:
+            raise SystemExit("unsafe ODS-managed Pixel active-release link")
+        release = link.resolve(strict=True)
+    elif staged_attestation_present:
+        receipt = staged_attestation
     releases_root = pathlib.Path(home_raw) / ".local/share/pixel/releases"
     releases_info = releases_root.lstat()
     release_info = release.lstat()
     if (not stat.S_ISDIR(releases_info.st_mode) or stat.S_ISLNK(releases_info.st_mode)
             or releases_info.st_uid != owner_uid or releases_info.st_mode & 0o022
             or not stat.S_ISDIR(release_info.st_mode) or stat.S_ISLNK(release_info.st_mode)
-            or release_info.st_uid != owner_uid or release_info.st_mode & 0o022
-            or release.parent.resolve(strict=True) != releases_root.resolve(strict=True)):
+            or release_info.st_uid != owner_uid or release_info.st_mode & 0o022):
         raise SystemExit("ODS-managed Pixel release is outside its owner-controlled release root")
+    if cleanup[0] in {"retiring", "active", "staging-attestation", "staging-link", "staged"}:
+        if release.parent.resolve(strict=True) != releases_root.resolve(strict=True):
+            raise SystemExit("ODS-managed Pixel release is outside its owner-controlled release root")
+    elif release != pathlib.Path(retired_release_raw):
+        raise SystemExit("ODS-managed Pixel retired release path changed")
     identity_path = release / "release-identity.json"
     manifest_path = release / "install-manifest.sha256"
     regular(identity_path, owner_uid, 65536)
     regular(manifest_path, owner_uid, 2 * 1024 * 1024)
-    regular(receipt, owner_uid, 2 * 1024 * 1024, private=True)
+    if receipt is not None:
+        regular(receipt, owner_uid, 2 * 1024 * 1024, private=True)
     regular(deployment_lock, owner_uid, 65536, private=True)
     identity_bytes = identity_path.read_bytes()
     manifest_bytes = manifest_path.read_bytes()
-    attestation_bytes = receipt.read_bytes()
+    attestation_bytes = receipt.read_bytes() if receipt is not None else None
     identity = json.loads(identity_bytes)
-    attestation = json.loads(attestation_bytes)
+    attestation = json.loads(attestation_bytes) if attestation_bytes is not None else None
     version = value.get("active_release_version")
     identity_sha256 = hashlib.sha256(identity_bytes).hexdigest()
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     if (not isinstance(version, str) or not re.fullmatch(r"[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}", version)
-            or release.name != version or identity.get("pixel") != version
+            or (cleanup[0] != "retired" and release.name != version) or identity.get("pixel") != version
             or not isinstance(identity.get("source"), dict)
             or identity["source"].get("state") != "git-clean"
             or identity["source"].get("commit") != source_ref
             or value.get("release_identity_sha256") != identity_sha256
             or value.get("install_manifest_sha256") != manifest_sha256):
         raise SystemExit("ODS marker does not bind the active Pixel release identity")
-    if (not isinstance(attestation, dict) or attestation.get("kind") != "pixel-runtime-attestation"
+    if receipt is not None and (not isinstance(attestation, dict) or attestation.get("kind") != "pixel-runtime-attestation"
             or attestation.get("status") not in {"verified", "limited"}
             or attestation.get("pixel") != version or attestation.get("source") != identity.get("source")
             or not isinstance(attestation.get("release"), dict)
@@ -215,7 +284,7 @@ if cleanup[0] != "none":
         raise SystemExit("ODS marker has an invalid Pixel sandbox binding")
     cleanup = (
         cleanup[0], version, sandbox_image, sandbox_image_id, str(release),
-        identity_sha256, manifest_sha256,
+        identity_sha256, manifest_sha256, cleanup[7],
     )
 
 openclaw_config = pathlib.Path(openclaw_config_raw)
@@ -258,7 +327,7 @@ if openclaw_config.exists():
         observed = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical).hexdigest()
         if value.get("configuration_sha256") != observed:
             raise SystemExit("OpenClaw configuration drifted from its ODS marker")
-elif cleanup[0] != "none":
+elif cleanup[0] != "none" and state != "deactivating":
     raise SystemExit("ODS-managed active Pixel configuration is missing")
 
 if onboarding.exists():
@@ -274,7 +343,7 @@ if onboarding.exists():
         observed = hashlib.sha256(b"ods-pixel-contract-v1\0" + onboarding.read_bytes()).hexdigest()
         if value.get("contract_sha256") != observed:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
-elif cleanup[0] != "none":
+elif cleanup[0] != "none" and state != "deactivating":
     raise SystemExit("ODS-managed active Pixel onboarding contract is missing")
 
 gateway_unit = pathlib.Path(gateway_unit_raw)
@@ -333,18 +402,20 @@ PY
         return 1
     fi
     IFS='|' read -r cleanup_state release_version sandbox_image sandbox_image_id release_path \
-        release_identity_sha256 install_manifest_sha256 <<<"$cleanup_plan"
+        release_identity_sha256 install_manifest_sha256 retired_release_path <<<"$cleanup_plan"
     [[ "$cleanup_state" == none || "$cleanup_state" == active || "$cleanup_state" == staged \
-        || "$cleanup_state" == staging-attestation || "$cleanup_state" == staging-link ]] || {
+        || "$cleanup_state" == staging-attestation || "$cleanup_state" == staging-link \
+        || "$cleanup_state" == retiring || "$cleanup_state" == retired ]] || {
         log_error "ODS-managed Pixel cleanup plan is invalid"
         return 1
     }
 
     (
     local candidate_image observed_image shared_image_present=true sandbox_container_list
+    local retired_container
     local -a sandbox_containers=()
     if [[ "$cleanup_state" != none ]]; then
-        for required_command in docker flock sha256sum timeout; do
+        for required_command in docker flock sha256sum timeout mktemp; do
             command -v "$required_command" >/dev/null 2>&1 || {
                 log_error "Cannot safely deactivate ODS-managed Pixel without $required_command"
                 return 1
@@ -359,8 +430,9 @@ PY
             return 1
         }
         local active_link="$current"
-        [[ "$cleanup_state" == staged || "$cleanup_state" == staging-link ]] && active_link="$staged_current"
-        [[ "$(readlink -f -- "$active_link")" == "$release_path" \
+        [[ "$cleanup_state" == staged || "$cleanup_state" == staging-link \
+            || "$cleanup_state" == retiring ]] && active_link="$staged_current"
+        [[ ( "$cleanup_state" == retired || "$(readlink -f -- "$active_link")" == "$release_path" ) \
             && "$(sha256sum "$release_path/release-identity.json" | awk '{print $1}')" == "$release_identity_sha256" \
             && "$(sha256sum "$release_path/install-manifest.sha256" | awk '{print $1}')" == "$install_manifest_sha256" ]] || {
             log_error "ODS-managed Pixel release changed while acquiring its deployment lock"
@@ -391,7 +463,8 @@ PY
             }
         else
             shared_image_present=false
-            [[ "$cleanup_state" == staged ]] || {
+            [[ "$cleanup_state" == staged || "$cleanup_state" == retiring \
+                || "$cleanup_state" == retired ]] || {
                 log_error "The active ODS-managed Pixel sandbox image is missing"
                 return 1
             }
@@ -488,10 +561,111 @@ PY
             log_error "Could not remove the exact ODS-managed Pixel live sandbox tag"
             return 1
         fi
+        # Pixel release plans contain ODS-path-bound generated config. Preserve
+        # the verified bytes for recovery, but move them out of the active
+        # version namespace so another ODS path can install the same version.
+        # Record the destination first so either side of the move is resumable.
+        if [[ "$cleanup_state" != retiring && "$cleanup_state" != retired ]]; then
+            if [[ ! -e "$retired_releases" && ! -L "$retired_releases" ]]; then
+                mkdir -m 0700 -- "$retired_releases" || {
+                    log_error "Could not create the private ODS-managed Pixel release archive"
+                    return 1
+                }
+            fi
+            retired_container="$(mktemp -d \
+                "$retired_releases/${release_version}-${release_identity_sha256:0:12}.XXXXXXXX")" || {
+                log_error "Could not reserve the ODS-managed Pixel release archive"
+                return 1
+            }
+            retired_release_path="$retired_container/release"
+            if ! python3 - "$marker" "$retired_release_path" "$release_version" \
+                "$release_identity_sha256" "$install_manifest_sha256" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+import tempfile
+
+marker = pathlib.Path(sys.argv[1])
+retired_release = pathlib.Path(sys.argv[2])
+version, identity_sha256, manifest_sha256 = sys.argv[3:]
+value = json.loads(marker.read_text(encoding="utf-8"))
+if (
+    not isinstance(value, dict)
+    or value.get("schema_version") != 2
+    or value.get("state") not in {"installing", "ready"}
+    or value.get("initial_active_state") != "absent"
+    or value.get("active_release_version") != version
+    or value.get("release_identity_sha256") != identity_sha256
+    or value.get("install_manifest_sha256") != manifest_sha256
+):
+    raise SystemExit("Pixel marker changed before its deactivation transition")
+container_info = retired_release.parent.lstat()
+if (
+    retired_release.name != "release"
+    or not stat.S_ISDIR(container_info.st_mode)
+    or stat.S_ISLNK(container_info.st_mode)
+    or container_info.st_uid != os.getuid()
+    or container_info.st_mode & 0o077
+    or retired_release.exists()
+    or retired_release.is_symlink()
+):
+    raise SystemExit("unsafe Pixel retired release reservation")
+value["state"] = "deactivating"
+value["retired_release_path"] = str(retired_release)
+temporary = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=marker.parent,
+        prefix=".pixel-managed-deactivating-", delete=False,
+    ) as output:
+        temporary = pathlib.Path(output.name)
+        os.fchmod(output.fileno(), 0o600)
+        json.dump(value, output, sort_keys=True, separators=(",", ":"))
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, marker)
+    directory_fd = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+except BaseException:
+    if temporary is not None:
+        temporary.unlink(missing_ok=True)
+    raise
+PY
+            then
+                log_error "Could not record the resumable ODS-managed Pixel deactivation state"
+                return 1
+            fi
+            cleanup_state=retiring
+        fi
+        if [[ "$cleanup_state" == retiring ]]; then
+            [[ ! -e "$retired_release_path" && ! -L "$retired_release_path" ]] || {
+                log_error "The ODS-managed Pixel release archive destination is not empty"
+                return 1
+            }
+            mv -T -- "$release_path" "$retired_release_path" || {
+                log_error "Could not retire the exact ODS-managed Pixel release"
+                return 1
+            }
+            release_path="$retired_release_path"
+            cleanup_state=retired
+        fi
+        (cd "$release_path" && timeout 60s sha256sum -c install-manifest.sha256 >/dev/null) || {
+            log_error "The retired ODS-managed Pixel release failed its exact-byte verification"
+            return 1
+        }
         rm -f -- "$staged_current" "$staged_attestation"
         if [[ -e "$current" || -L "$current" || -e "$runtime_attestation" || -L "$runtime_attestation" \
             || -e "$staged_current" || -L "$staged_current" \
-            || -e "$staged_attestation" || -L "$staged_attestation" ]] \
+            || -e "$staged_attestation" || -L "$staged_attestation" \
+            || -e "$pixel_install/releases/$release_version" \
+            || -L "$pixel_install/releases/$release_version" \
+            || ! -d "$retired_release_path" ]] \
             || timeout 30s docker image inspect "$sandbox_image" >/dev/null 2>&1; then
             log_error "ODS-managed Pixel active-state cleanup was incomplete"
             return 1

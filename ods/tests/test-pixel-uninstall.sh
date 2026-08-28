@@ -294,15 +294,21 @@ fi
 write_active_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     pixel_install="$HOME_DIR/.local/share/pixel"
+    shopt -s nullglob
+    retired_release_matches=("$pixel_install"/retired-ods-releases/4.3.14-*.????????/release)
+    shopt -u nullglob
     [[ ! -e "$pixel_install/current" && ! -L "$pixel_install/current" \
         && ! -e "$pixel_install/runtime-attestation.json" \
         && ! -e "$pixel_install/.ods-uninstall-current" \
         && ! -e "$pixel_install/.ods-uninstall-runtime-attestation" \
-        && -d "$pixel_install/releases/4.3.14" \
+        && ! -e "$pixel_install/releases/4.3.14" \
+        && ${#retired_release_matches[@]} -eq 1 \
+        && -f "${retired_release_matches[0]}/release-identity.json" \
+        && "$(stat -c '%a' "$pixel_install/retired-ods-releases")" == 700 \
         && -f "$pixel_install/.deployment.lock" \
         && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
         && ! -e "$DOCKER_STATE" ]] \
-        && pass "fully bound ODS Pixel is deactivated while its release, caches, and lock are preserved" \
+        && pass "fully bound ODS Pixel is deactivated while its exact release is privately retired" \
         || fail "fully bound ODS Pixel active-state cleanup was incomplete or over-broad"
     grep -Fq 'rm -f' "$DOCKER_LOG" \
         && grep -Fq 'image rm -- openclaw-sandbox:test' "$DOCKER_LOG" \
@@ -360,6 +366,65 @@ for interrupted_step in attestation link; do
         fail "deactivation could not resume after the $interrupted_step move"
     fi
 done
+
+for archive_step in before-release-move after-release-move after-active-state-cleanup; do
+    write_active_fixture
+    pixel_install="$HOME_DIR/.local/share/pixel"
+    mv -T "$pixel_install/runtime-attestation.json" \
+        "$pixel_install/.ods-uninstall-runtime-attestation"
+    mv -T "$pixel_install/current" "$pixel_install/.ods-uninstall-current"
+    mkdir -m 0700 "$pixel_install/retired-ods-releases"
+    identity_prefix="$(python3 - "$HOME_DIR/.config/ods/pixel-managed.json" <<'PY'
+import json, pathlib, sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text())["release_identity_sha256"][:12])
+PY
+)"
+    retired_container="$(mktemp -d \
+        "$pixel_install/retired-ods-releases/4.3.14-${identity_prefix}.XXXXXXXX")"
+    retired_release="$retired_container/release"
+    python3 - "$HOME_DIR/.config/ods/pixel-managed.json" "$retired_release" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["state"] = "deactivating"
+value["retired_release_path"] = sys.argv[2]
+path.write_text(json.dumps(value) + "\n")
+PY
+    chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
+    if [[ "$archive_step" != before-release-move ]]; then
+        mv -T "$pixel_install/releases/4.3.14" "$retired_release"
+    fi
+    if [[ "$archive_step" == after-active-state-cleanup ]]; then
+        rm -f -- "$pixel_install/.ods-uninstall-current" \
+            "$pixel_install/.ods-uninstall-runtime-attestation" \
+            "$HOME_DIR/.openclaw/openclaw.json" \
+            "$HOME_DIR/.config/pixel-agent/gateway.env" \
+            "$HOME_DIR/.config/pixel-deployment/onboarding.json"
+    fi
+    if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR" \
+        && [[ -d "$retired_release" \
+            && ! -e "$pixel_install/releases/4.3.14" \
+            && ! -e "$pixel_install/.ods-uninstall-current" \
+            && ! -e "$pixel_install/.ods-uninstall-runtime-attestation" \
+            && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+            && ! -e "$DOCKER_STATE" ]]; then
+        pass "deactivation resumes from $archive_step archive state"
+    else
+        fail "deactivation could not resume from $archive_step archive state"
+    fi
+done
+
+write_active_fixture
+mkdir -m 0770 "$HOME_DIR/.local/share/pixel/retired-ods-releases"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "unsafe retired release root was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && -e "$DOCKER_STATE" && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "unsafe retired release root fails before service or Docker mutation" \
+        || fail "unsafe retired release root caused partial cleanup"
+fi
 
 write_active_fixture
 python3 - "$HOME_DIR/.config/ods/pixel-managed.json" <<'PY'

@@ -285,13 +285,17 @@ drifted Pixel/OpenClaw deployment untouched. For a fully bound ODS-created
 deployment, uninstall holds Pixel's deployment lock, verifies the installed
 release manifest, retires only Pixel's validated sandbox containers, and
 removes the exact live sandbox tag, active-release link, and runtime
-attestation. The immutable release tree, candidate image tag, deployment lock,
-browser/bootstrap caches, workspace, and user backups remain available for
-exact re-adoption or recovery. An interrupted deactivation resumes from its
-private staged state. This behavior is the same with `--keep-data`; that flag
-additionally preserves the ODS `data/` tree. The bounded deactivation prevents
-a retired ODS install from blocking a later fresh install at a different path
-without treating ambient Pixel state as ODS-owned.
+attestation. It moves the byte-verified release tree out of Pixel's active
+`releases/<version>` namespace into a private
+`retired-ods-releases/<version>-<identity>.<nonce>/release` archive. The exact
+retired bytes, candidate image tag, deployment lock, browser/bootstrap caches,
+workspace, and user backups therefore remain available for recovery without a
+path-bound release blocking a fresh install of the same Pixel version. An
+interrupted deactivation resumes from its private staged or archive state. This
+behavior is the same with `--keep-data`; that flag additionally preserves the
+ODS `data/` tree. The bounded deactivation prevents a retired ODS install from
+blocking a later fresh install at a different path without treating ambient
+Pixel state as ODS-owned.
 
 ## Qualification gate
 
