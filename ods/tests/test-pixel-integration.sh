@@ -612,7 +612,7 @@ else
 fi
 
 section "Pixel .env schema contract"
-if python3 - "$ROOT/.env.schema.json" <<'PY'
+if python3 - "$SCRIPT_DIR/../.env.schema.json" <<'PY'
 import json, sys
 
 properties = json.load(open(sys.argv[1], encoding="utf-8"))["properties"]
