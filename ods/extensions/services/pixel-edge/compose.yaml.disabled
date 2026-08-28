@@ -1,3 +1,5 @@
+# Disabled by default: the qualified Linux installer enables this fragment
+# only after Pixel licensing, host systemd, and UDS prerequisites pass.
 services:
   pixel-edge:
     build:

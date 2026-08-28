@@ -2,8 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EDGE="$ROOT/extensions/services/pixel-edge/compose.yaml"
+EDGE="$ROOT/extensions/services/pixel-edge/compose.yaml.disabled"
 BASE="$ROOT/docker-compose.base.yml"
+
+[[ -f "$EDGE" && ! -e "$ROOT/extensions/services/pixel-edge/compose.yaml" ]] || {
+    echo "Pixel Edge must ship disabled until the qualified Linux installer enables it" >&2
+    exit 1
+}
 
 python3 - "$EDGE" <<'PY'
 import pathlib, re, sys

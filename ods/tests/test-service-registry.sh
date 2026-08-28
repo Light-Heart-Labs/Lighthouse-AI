@@ -349,9 +349,15 @@ for sid in "${SERVICE_IDS[@]}"; do
         # Most core services live in base.yml. A core service may also be a
         # conditional compose fragment (for example Pixel Edge), in which case
         # validate the declared fragment instead of treating it as optional.
-        if [[ ! -f "$svc_dir/compose.yaml" ]]; then
+        core_compose=""
+        if [[ -f "$svc_dir/compose.yaml" ]]; then
+            core_compose="$svc_dir/compose.yaml"
+        elif [[ -f "$svc_dir/compose.yaml.disabled" ]]; then
+            core_compose="$svc_dir/compose.yaml.disabled"
+        fi
+        if [[ -z "$core_compose" ]]; then
             pass "Core service has no compose fragment: $sid"
-        elif "$PYTHON_CMD" -c "import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$svc_dir/compose.yaml" 2>/dev/null; then
+        elif "$PYTHON_CMD" -c "import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding='utf-8'))" "$core_compose" 2>/dev/null; then
             pass "Core service has valid compose fragment: $sid"
         else
             fail "Core service has invalid compose fragment: $sid"
