@@ -195,6 +195,11 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         log "Running in-place (source == install dir), skipping file copy"
     fi
 
+    _phase06_step "reconcile-pixel-compose"
+    if ! ods_pixel_reconcile_installed_compose "$SCRIPT_DIR" "$INSTALL_DIR" "${ENABLE_PIXEL_RUNTIME:-false}"; then
+        error "Could not reconcile the installed Pixel Compose fragment with the selected default agent"
+    fi
+
     # ODSForge was retired from the shipped stack after Hermes became the
     # default agent surface. Existing installs may still contain the old
     # bundled extension because the source copy above does not prune removed

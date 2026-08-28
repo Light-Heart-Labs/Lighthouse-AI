@@ -611,6 +611,41 @@ else
     fail "Key uniqueness: $unique unique, $duplicates duplicates (expected 20/0)"
 fi
 
+section "ods_pixel_reconcile_installed_compose"
+RECONCILE_SOURCE="$TMPDIR_TEST/reconcile-source"
+RECONCILE_INSTALL="$TMPDIR_TEST/reconcile-install"
+mkdir -p "$RECONCILE_SOURCE/extensions/services/pixel-edge" \
+    "$RECONCILE_INSTALL/extensions/services/pixel-edge"
+
+# Disabled source copied over an existing install must remove only the stale
+# active fragment and retain the disabled source record.
+printf '%s\n' 'services: {}' > "$RECONCILE_SOURCE/extensions/services/pixel-edge/compose.yaml.disabled"
+printf '%s\n' 'services: { pixel-edge: {} }' > "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml"
+cp "$RECONCILE_SOURCE/extensions/services/pixel-edge/compose.yaml.disabled" \
+    "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml.disabled"
+if ods_pixel_reconcile_installed_compose "$RECONCILE_SOURCE" "$RECONCILE_INSTALL" false \
+    && [[ ! -e "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml" ]] \
+    && [[ -f "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml.disabled" ]]; then
+    pass "Pixel rollback removes the stale installed active Compose fragment"
+else
+    fail "Pixel rollback should remove only the stale installed active Compose fragment"
+fi
+
+# Re-enablement must retain the copied active fragment and remove a stale
+# disabled twin so the installed tree has one unambiguous state.
+rm -f -- "$RECONCILE_SOURCE/extensions/services/pixel-edge/compose.yaml.disabled"
+printf '%s\n' 'services: { pixel-edge: {} }' > "$RECONCILE_SOURCE/extensions/services/pixel-edge/compose.yaml"
+cp "$RECONCILE_SOURCE/extensions/services/pixel-edge/compose.yaml" \
+    "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml"
+printf '%s\n' 'stale' > "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml.disabled"
+if ods_pixel_reconcile_installed_compose "$RECONCILE_SOURCE" "$RECONCILE_INSTALL" true \
+    && [[ -f "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml" ]] \
+    && [[ ! -e "$RECONCILE_INSTALL/extensions/services/pixel-edge/compose.yaml.disabled" ]]; then
+    pass "Pixel re-enable keeps one active installed Compose fragment"
+else
+    fail "Pixel re-enable should keep one active installed Compose fragment"
+fi
+
 section "Pixel .env schema contract"
 if python3 - "$SCRIPT_DIR/../.env.schema.json" <<'PY'
 import json, sys

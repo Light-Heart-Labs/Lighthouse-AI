@@ -192,3 +192,37 @@ ods_pixel_generate_key() {
     [[ "$key" =~ ^[0-9a-f]{64}$ ]] || return 1
     printf '%s\n' "$key"
 }
+
+# Reconcile the installed Pixel Compose fragment after the source tree has
+# been copied into an existing install. rsync deliberately preserves runtime
+# data and does not use --delete, so a previously enabled compose.yaml would
+# otherwise survive after Phase 3 renamed the source copy to
+# compose.yaml.disabled. That stale fragment can keep Pixel selected or make
+# Compose interpolation fail after the Pixel secrets are correctly removed.
+ods_pixel_reconcile_installed_compose() {
+    local source_root="${1:-}"
+    local install_root="${2:-}"
+    local enabled="${3:-}"
+    [[ "$source_root" == /* && "$install_root" == /* ]] || return 1
+
+    local source_service="$source_root/extensions/services/pixel-edge"
+    local installed_service="$install_root/extensions/services/pixel-edge"
+    [[ -d "$source_service" && -d "$installed_service" ]] || return 1
+
+    case "$enabled" in
+        true)
+            [[ -f "$source_service/compose.yaml" && ! -L "$source_service/compose.yaml" ]] || return 1
+            rm -f -- "$installed_service/compose.yaml.disabled" || return 1
+            [[ -f "$installed_service/compose.yaml" && ! -L "$installed_service/compose.yaml" ]]
+            ;;
+        false)
+            [[ ! -e "$source_service/compose.yaml" && ! -L "$source_service/compose.yaml" ]] || return 1
+            [[ -f "$source_service/compose.yaml.disabled" && ! -L "$source_service/compose.yaml.disabled" ]] || return 1
+            rm -f -- "$installed_service/compose.yaml" || return 1
+            [[ ! -e "$installed_service/compose.yaml" && ! -L "$installed_service/compose.yaml" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
