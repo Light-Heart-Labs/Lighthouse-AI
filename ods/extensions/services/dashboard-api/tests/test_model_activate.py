@@ -5685,6 +5685,7 @@ class TestModelActivateRollback:
                     "env": {
                         "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
                         "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+                        "LLAMA_SERVER_MEMORY_LIMIT": "8G",
                     },
                 }],
             }]
@@ -5701,6 +5702,7 @@ class TestModelActivateRollback:
                 "env": {
                     "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
                     "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+                    "LLAMA_SERVER_MEMORY_LIMIT": "8G",
                 },
             },
         )
@@ -5747,6 +5749,7 @@ class TestModelActivateRollback:
         assert env["MODEL_RUNTIME_PROFILE"] == "nvidia-8gb-64k"
         assert env["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
         assert env["LLAMA_ARG_CACHE_TYPE_V"] == "q4_0"
+        assert env["LLAMA_SERVER_MEMORY_LIMIT"] == "8G"
         assert "n-ctx = 524288" in (
             install_dir / "config" / "llama-server" / "models.ini"
         ).read_text(encoding="utf-8")

@@ -660,16 +660,17 @@ def test_ministral3_8b_is_recommended_after_six_host_validation():
     assert model["vram_required_gb"] == 7
     assert model["context_length"] == 262144
     profiles = {item["id"]: item for item in model["runtime_profiles"]}
-    cpu_profile = profiles["cpu-16k-q4-kv"]
+    cpu_profile = profiles["cpu-16k-agent-memory"]
     assert cpu_profile["backend"] == "cpu"
-    assert cpu_profile["system_ram_min_gb"] == 12
+    assert cpu_profile["system_ram_min_gb"] == 16
     assert cpu_profile["context_length"] == 16384
-    assert cpu_profile["estimated_required_gb"] == 5.7
+    assert cpu_profile["estimated_required_gb"] == 7.8
     assert cpu_profile["env"] == {
         "LLAMA_PARALLEL": "1",
-        "LLAMA_ARG_FLASH_ATTN": "on",
-        "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
-        "LLAMA_ARG_CACHE_TYPE_V": "q4_0",
+        "LLAMA_ARG_FLASH_ATTN": "auto",
+        "LLAMA_ARG_CACHE_TYPE_K": "f16",
+        "LLAMA_ARG_CACHE_TYPE_V": "f16",
+        "LLAMA_SERVER_MEMORY_LIMIT": "8G",
     }
     nvidia_profile = profiles["nvidia-8gb-64k-q4-kv"]
     assert nvidia_profile["backend"] == "nvidia"

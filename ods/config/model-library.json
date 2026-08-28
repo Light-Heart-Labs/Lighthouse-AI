@@ -901,18 +901,19 @@
       "llama_server_image": null,
       "runtime_profiles": [
         {
-          "id": "cpu-16k-q4-kv",
-          "label": "CPU 16K context with Q4 KV cache",
+          "id": "cpu-16k-agent-memory",
+          "label": "CPU 16K agent context with 8G memory budget",
           "backend": "cpu",
-          "system_ram_min_gb": 12,
+          "system_ram_min_gb": 16,
           "context_length": 16384,
-          "estimated_required_gb": 5.7,
-          "fit_label": "16K CPU Q4 KV profile",
+          "estimated_required_gb": 7.8,
+          "fit_label": "16K CPU agent profile",
           "env": {
             "LLAMA_PARALLEL": "1",
-            "LLAMA_ARG_FLASH_ATTN": "on",
-            "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
-            "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
+            "LLAMA_ARG_FLASH_ATTN": "auto",
+            "LLAMA_ARG_CACHE_TYPE_K": "f16",
+            "LLAMA_ARG_CACHE_TYPE_V": "f16",
+            "LLAMA_SERVER_MEMORY_LIMIT": "8G"
           }
         },
         {

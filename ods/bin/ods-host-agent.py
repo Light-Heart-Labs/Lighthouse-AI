@@ -8202,6 +8202,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     updates["LEMONADE_MODEL"] = lemonade_model_id
                 runtime_keys = {
                     "LLAMA_PARALLEL",
+                    "LLAMA_SERVER_MEMORY_LIMIT",
                     "LLAMA_ARG_FLASH_ATTN",
                     "LLAMA_ARG_CACHE_TYPE_K",
                     "LLAMA_ARG_CACHE_TYPE_V",
