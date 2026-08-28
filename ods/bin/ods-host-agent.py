@@ -2173,6 +2173,166 @@ def _restore_text_file(path: Path, snapshot: dict) -> None:
         path.unlink(missing_ok=True)
 
 
+def _ods_managed_pixel_identity() -> tuple[str, Path] | None:
+    """Return the exact ODS-managed Pixel owner/home for this install.
+
+    A marker owned by another ODS tree is intentionally out of scope: model
+    activation in this tree must never adopt or rewrite an ambient Pixel.
+    An unsafe marker that claims this install is a hard error rather than a
+    silent skip, because continuing would leave the default agent stale.
+    """
+    if platform.system() != "Linux" or os.name == "nt" or not hasattr(os, "geteuid"):
+        return None
+    try:
+        import pwd
+
+        owner_record = pwd.getpwuid(os.geteuid())
+    except (ImportError, KeyError, OSError) as exc:
+        raise RuntimeError(f"Could not resolve the Pixel install owner: {exc}") from exc
+    owner = owner_record.pw_name
+    home = Path(owner_record.pw_dir)
+    marker = home / ".config" / "ods" / "pixel-managed.json"
+    try:
+        metadata = marker.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError(f"Could not inspect the ODS-managed Pixel marker: {exc}") from exc
+    if (
+        stat_mod.S_ISLNK(metadata.st_mode)
+        or not stat_mod.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != os.geteuid()
+        or stat_mod.S_IMODE(metadata.st_mode) & 0o077
+        or metadata.st_size > 65536
+    ):
+        raise RuntimeError("The ODS-managed Pixel marker is unsafe")
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read the ODS-managed Pixel marker: {exc}") from exc
+    if not isinstance(value, dict) or value.get("manager") != "ods":
+        raise RuntimeError("The Pixel marker is outside the ODS management contract")
+    raw_install = value.get("install_dir")
+    if not isinstance(raw_install, str) or not raw_install or not Path(raw_install).is_absolute():
+        raise RuntimeError("The Pixel marker has no safe ODS install boundary")
+    try:
+        marker_install = str(Path(raw_install).resolve())
+        current_install = str(INSTALL_DIR.resolve())
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"Could not resolve the Pixel management boundary: {exc}") from exc
+    if marker_install != current_install:
+        return None
+    if value.get("schema_version") != 2 or value.get("state") != "ready":
+        raise RuntimeError("The ODS-managed Pixel runtime is not in a ready state")
+    if not owner or owner == "root" or not home.is_absolute() or home == Path("/"):
+        raise RuntimeError("The ODS-managed Pixel owner identity is unsafe")
+    return owner, home
+
+
+def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
+    """Project ODS's runtime reasoning contract into Pixel model metadata."""
+    configured = str(env.get("LLAMA_REASONING") or "").strip().lower()
+    if configured not in {"", "off", "none", "false", "0"}:
+        return True
+    label = str(model or "").casefold()
+    return any(marker in label for marker in ("qwen", "reasoning", "deepseek-r1"))
+
+
+def _reconcile_ods_managed_pixel_model(
+    model: str,
+    context_length: int,
+    *,
+    max_tokens: int = 4096,
+    reasoning: bool = False,
+) -> str:
+    """Transactionally bind the managed Pixel gateway to an activated model."""
+    identity = _ods_managed_pixel_identity()
+    if identity is None:
+        return "not_installed"
+    if not _valid_local_model_name(model):
+        raise RuntimeError("The promoted Pixel model identity is invalid")
+    if not isinstance(context_length, int) or isinstance(context_length, bool) \
+            or not 4096 <= context_length <= 10_000_000:
+        raise RuntimeError("Pixel requires a model context between 4096 and 10000000 tokens")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) \
+            or not 1 <= max_tokens <= context_length:
+        raise RuntimeError("The promoted Pixel output-token limit is invalid")
+
+    owner, home = identity
+    env_values = load_env(INSTALL_DIR / ".env")
+    source_url = str(
+        env_values.get("PIXEL_SOURCE_URL")
+        or "https://github.com/Osmantic/Pixel.git"
+    )
+    if any(character in source_url for character in "\r\n\x00"):
+        raise RuntimeError("The configured Pixel source URL is invalid")
+    if source_url != "https://github.com/Osmantic/Pixel.git":
+        source_path = Path(source_url)
+        if not source_path.is_absolute() or source_path == Path("/"):
+            raise RuntimeError("The configured Pixel source must be the canonical URL or an absolute local checkout")
+
+    script = r'''
+set -uo pipefail
+INSTALL_DIR="$1"
+owner="$2"
+home="$3"
+target_model="$4"
+target_context="$5"
+target_max_tokens="$6"
+target_reasoning="$7"
+INTERACTIVE=false
+DRY_RUN=false
+log() { printf '%s\n' "$*" >&2; }
+ai() { log "$*"; }
+ai_ok() { log "$*"; }
+ai_warn() { log "$*"; }
+ai_bad() { log "$*"; }
+error() { log "$*"; return 1; }
+if [[ ${EUID:-$(id -u)} -eq 0 ]] \
+    || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; then
+    ODS_SUDO_AVAILABLE=true
+else
+    ODS_SUDO_AVAILABLE=false
+fi
+export INSTALL_DIR INTERACTIVE DRY_RUN ODS_SUDO_AVAILABLE
+. "$INSTALL_DIR/installers/lib/sudo.sh"
+. "$INSTALL_DIR/installers/lib/pixel-host-install.sh"
+ods_pixel_reconcile_promoted_model "$owner" "$home" "$target_model" ready \
+    "$target_context" "$target_max_tokens" "$target_reasoning"
+'''
+    child_env = {
+        "HOME": str(home),
+        "USER": owner,
+        "LOGNAME": owner,
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "PIXEL_SOURCE_URL": source_url,
+    }
+    if os.environ.get("TMPDIR"):
+        child_env["TMPDIR"] = str(os.environ["TMPDIR"])
+    try:
+        result = subprocess.run(
+            [
+                "bash", "-c", script, "ods-pixel-model-reconcile",
+                str(INSTALL_DIR), owner, str(home), model,
+                str(context_length), str(max_tokens),
+                "true" if reasoning else "false",
+            ],
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"ODS-managed Pixel model reconciliation could not run: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown failure")[-500:].strip()
+        logger.error("ODS-managed Pixel model reconciliation failed: %s", detail)
+        raise RuntimeError("ODS-managed Pixel model reconciliation failed")
+    return "reconciled"
+
+
 class _RemoteProviderApplyError(RuntimeError):
     """Lifecycle apply failure with support-bundle-safe rollback metadata."""
 
@@ -7606,6 +7766,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         hermes_restart_attempted = False
         openclaw_recreate_attempted = False
         perplexica_mutated = False
+        pixel_reconcile_attempted = False
+        pixel_status = "not_installed"
         apple_llama_bin: Path | None = None
         apple_llama_log: Path | None = None
         apple_pid_file: Path | None = None
@@ -7687,7 +7849,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                 hermes_restarted = False
                 if hermes_restart_attempted or hermes_config_mutated:
                     hermes_restarted = _restore_container_state(
-                        "ods-hermes", container_states["ods-hermes"]
+                        "ods-hermes",
+                        container_states["ods-hermes"],
+                        recreate=True,
                     )
                 openclaw_recreated = False
                 if openclaw_recreate_attempted:
@@ -7753,6 +7917,29 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if openclaw_recreated:
                     _verify_openclaw_model_env(previous_hermes_model)
                     _wait_for_container_health("ods-openclaw")
+                if pixel_reconcile_attempted:
+                    try:
+                        previous_context = int(
+                            rollback_env.get("MAX_CONTEXT")
+                            or rollback_env.get("CTX_SIZE")
+                            or 0
+                        )
+                    except (TypeError, ValueError):
+                        previous_context = 0
+                    previous_reasoning = _pixel_model_reasoning_capable(
+                        previous_model,
+                        rollback_env,
+                    )
+                    restored_pixel = _reconcile_ods_managed_pixel_model(
+                        previous_model,
+                        previous_context,
+                        max_tokens=min(4096, previous_context),
+                        reasoning=previous_reasoning,
+                    )
+                    if restored_pixel != "reconciled":
+                        raise RuntimeError(
+                            "the previous managed Pixel model route disappeared during rollback"
+                        )
                 return True, ""
             except Exception as rollback_exc:
                 logger.exception("Failed to prove previous model route during rollback")
@@ -8287,7 +8474,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if hermes_patched:
                     hermes_restart_attempted = container_states["ods-hermes"]["running"]
                 if hermes_patched and _restart_existing_container(
-                    "ods-hermes", container_states["ods-hermes"]
+                    "ods-hermes",
+                    container_states["ods-hermes"],
+                    recreate=True,
                 ):
                     _verify_running_hermes_route(
                         hermes_model_name,
@@ -8330,6 +8519,18 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "Final runtime proof failed for activated model "
                         f"{gguf_file}; rolling back to previous model"
                     )
+                pixel_reconcile_attempted = True
+                pixel_status = _reconcile_ods_managed_pixel_model(
+                    str(llm_model_name),
+                    int(context_length),
+                    max_tokens=min(4096, int(context_length)),
+                    reasoning=_pixel_model_reasoning_capable(
+                        str(llm_model_name),
+                        env,
+                    ),
+                )
+                if pixel_status == "not_installed":
+                    pixel_reconcile_attempted = False
                 consumers = {
                     "open-webui": "dynamic_route",
                     "dashboard": "live_env",
@@ -8368,6 +8569,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                         if container_states["ods-perplexica"]["exists"]
                         else "not_installed"
                     ),
+                    "pixel": pixel_status,
                 }
                 _atomic_write_json(
                     activation_receipt,
@@ -10487,8 +10689,15 @@ def _wait_for_container_health(container: str, attempts: int = 60) -> None:
 def _restart_existing_container(
     container: str,
     expected_state: dict[str, bool] | None = None,
+    *,
+    recreate: bool = False,
 ) -> bool:
-    """Restart a dependent only when it was already running."""
+    """Restart or recreate a dependent only when it was already running.
+
+    Recreate is required after atomically replacing a host file that is bind
+    mounted into Docker Desktop. A plain ``docker restart`` keeps the old bind
+    mount inode and can leave the dependent on the previous model route.
+    """
     state = expected_state or _capture_container_state(container)
     if not state["exists"]:
         logger.info("Skipping restart for optional missing container %s", container)
@@ -10499,17 +10708,22 @@ def _restart_existing_container(
     current = _capture_container_state(container)
     if not current["exists"] or not current["running"]:
         raise RuntimeError(f"{container} stopped during model activation")
-    result = subprocess.run(
-        ["docker", "restart", container],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(
-            f"docker restart {container} failed (exit {result.returncode}): {detail[:300]}"
+    if recreate:
+        ok, error = docker_compose_recreate([container.removeprefix("ods-")])
+        if not ok:
+            raise RuntimeError(f"Could not recreate {container}: {error}")
+    else:
+        result = subprocess.run(
+            ["docker", "restart", container],
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(
+                f"docker restart {container} failed (exit {result.returncode}): {detail[:300]}"
+            )
     return True
 
 

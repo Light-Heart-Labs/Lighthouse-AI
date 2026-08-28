@@ -93,10 +93,12 @@ Dashboard activation, Unix `ods model swap <tier>`, and Windows
 `.\ods.ps1 model swap <tier>` use the same authenticated host-agent transaction.
 The transaction updates `.env`, `models.ini`, the
 native or container inference runtime, LiteLLM, Hermes, OpenClaw, OpenCode, and
-Perplexica when those consumers are installed. It verifies the new runtime and
-downstream routes before reporting success. A late failure restores the prior
-files, runtime, and persisted app routes and then proves the previous model is
-serving again.
+Perplexica when those consumers are installed. On a qualified ODS-managed
+Pixel installation it also updates Pixel's model ID, context, output limit,
+reasoning and model-family compatibility policy, then restarts and verifies the
+gateway. It verifies the new runtime and downstream routes before reporting
+success. A late failure restores the prior files, runtime, persisted app routes,
+and Pixel binding, then proves the previous model is serving again.
 
 ### Choosing the runtime context
 

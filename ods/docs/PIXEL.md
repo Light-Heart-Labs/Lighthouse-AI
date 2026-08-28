@@ -143,6 +143,24 @@ For Qwen models, the managed Pixel route tells OpenClaw to pass
 tool continuations in the visible answer channel; it does not broaden the tool
 allowlist or make custom tools replay-safe.
 
+### Model swapping
+
+Pixel follows the same local-model activation transaction as the rest of ODS.
+Using the Dashboard Models page or `ods model swap <tier>` updates Pixel's exact
+model ID, context window, output limit, reasoning capability, and model-family
+compatibility policy after the new runtime and downstream routes pass their
+proofs. The gateway is restarted and verified before the transaction commits.
+The public Open WebUI identity remains `pixel/default`; the underlying model is
+the newly activated ODS model.
+
+If Pixel reconciliation fails, ODS restores and proves both the previous model
+runtime and Pixel route. A stopped or unmanaged Pixel is never adopted. Model
+family changes are supported: Qwen-only no-think compatibility is added for
+Qwen models and removed again when a non-Qwen model is activated. Pixel's
+upstream configuration contract requires a context of at least 4096 tokens;
+the bundled ODS catalog models are above that floor, while an advanced custom
+activation below it fails and rolls back instead of leaving Pixel stale.
+
 ## Bounded ODS tools
 
 The first slice exposes exactly two read-only tools to Pixel:

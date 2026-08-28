@@ -395,6 +395,9 @@ candidate["agents"]["list"][0]["model"] = "ods-local/qwen-new"
 candidate_model = candidate["models"]["providers"]["ods-local"]["models"][0]
 candidate_model["id"] = "qwen-new"
 candidate_model["name"] = "ODS Local qwen-new"
+candidate_model["contextWindow"] = 65536
+candidate_model["maxTokens"] = 2048
+candidate_model["reasoning"] = True
 live_path.write_text(json.dumps(base, indent=2, sort_keys=True) + "\n")
 candidate_path.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
 PY
@@ -440,8 +443,15 @@ chmod 0600 "$reconcile_marker"
 check test "$(_ods_pixel_managed_source_ref "$owner" "$reconcile_home")" = "$reconcile_ref"
 reconcile_backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$reconcile_home" "$reconcile_answers")"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-old" and v["modelName"] == "ODS Local qwen-old"' "$reconcile_backup/rollback-onboarding.json"
-_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" qwen-new
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new"' "$reconcile_answers"
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" \
+    qwen-new 65536 2048 true
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new" and v["modelContextWindow"] == 65536 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' "$reconcile_answers"
+if _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" \
+    qwen-invalid 2048 1024 false >/dev/null 2>&1; then
+    fail "undersized Pixel model context rejected"
+else
+    pass "undersized Pixel model context rejected"
+fi
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
 python3 - "$reconcile_candidate" <<'PY'
@@ -474,6 +484,41 @@ else
     pass "symlink model reconciliation source rejected"
 fi
 
+# A model-family change is part of the supported ODS swap contract, not only a
+# Qwen-to-Qwen rename. The exact model limits may change and Qwen-only runtime
+# policy must disappear, while every unrelated Pixel field stays identical.
+non_qwen_answers="$TEST_ROOT/non-qwen-onboarding.json"
+non_qwen_candidate="$TEST_ROOT/non-qwen-candidate.json"
+cp "$reconcile_answers" "$non_qwen_answers"
+cp "$reconcile_config" "$non_qwen_candidate"
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$non_qwen_answers" \
+    phi-4-mini 128000 4096 false
+python3 - "$non_qwen_candidate" <<'PY'
+import json, pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+agent = next(item for item in value["agents"]["list"] if item.get("id") == "pixel")
+model = value["models"]["providers"]["ods-local"]["models"][0]
+agent["model"] = "ods-local/phi-4-mini"
+agent.pop("thinkingDefault", None)
+model.update({
+    "id": "phi-4-mini",
+    "name": "ODS Local phi-4-mini",
+    "contextWindow": 128000,
+    "maxTokens": 4096,
+    "reasoning": False,
+})
+model.pop("compat", None)
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$non_qwen_answers" "$non_qwen_candidate"
+check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" \
+    "$non_qwen_candidate" "$non_qwen_answers"
+check _ods_pixel_atomic_replace_managed_file "$owner" "$reconcile_home" \
+    "$non_qwen_candidate" "$reconcile_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["id"] == "phi-4-mini" and m["contextWindow"] == 128000 and m["maxTokens"] == 4096 and m["reasoning"] is False and "compat" not in m and "thinkingDefault" not in a' "$reconcile_config"
+
 linked_answers="$TEST_ROOT/onboarding-linked.json"
 printf '%s\n' 'sentinel' > "$TEST_ROOT/onboarding-link-target"
 ln -s "$TEST_ROOT/onboarding-link-target" "$linked_answers"
@@ -502,6 +547,76 @@ if _ods_pixel_wait_ingress "$owner" "$home" 2 0; then
 else
     pass "non-ready Pixel ingress status rejected"
 fi
+eval "$original_run_as_owner"
+
+# The long-lived host agent normally lacks an active sudo credential. Prove
+# its fallback can only terminate the same-owner PID of the exact hardened
+# Restart=always unit, then waits for systemd to replace it before verification.
+gateway_mock_root="$TEST_ROOT/gateway-restart-mock"
+mkdir -p "$gateway_mock_root"
+printf '0\n' > "$gateway_mock_root/mainpid-calls"
+systemctl() {
+    case "$*" in
+        'show openclaw-gateway.service -p MainPID --value')
+            local count
+            read -r count < "$gateway_mock_root/mainpid-calls"
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$gateway_mock_root/mainpid-calls"
+            if (( count <= 2 )); then printf '111\n'; else printf '222\n'; fi
+            ;;
+        'show openclaw-gateway.service -p User --value') printf '%s\n' "$owner" ;;
+        'show openclaw-gateway.service -p Restart --value') printf 'always\n' ;;
+        'is-active --quiet openclaw-gateway.service') return 0 ;;
+        *) return 1 ;;
+    esac
+}
+id() {
+    case "$1" in
+        -u) printf '1000\n' ;;
+        -un) printf '%s\n' "$owner" ;;
+        *) return 1 ;;
+    esac
+}
+awk() {
+    [[ "$*" == *'/proc/111/status'* ]] || return 1
+    printf '1000\n'
+}
+kill() {
+    printf '%s\n' "$*" >> "$gateway_mock_root/kills"
+}
+curl() {
+    printf '%s\n' '{"ok":true,"status":"live"}'
+}
+jq() {
+    command jq "$@"
+}
+sleep() { :; }
+ods_sudo_available() { return 1; }
+ods_pixel_run_as_owner() {
+    printf '%s\n' "$*" >> "$gateway_mock_root/owner-runs"
+}
+check _ods_pixel_restart_gateway_and_verify "$owner" "$reconcile_home" /verified/pixel
+check test "$(cat "$gateway_mock_root/kills")" = '-TERM 111'
+check grep -F '/verified/pixel/pixel verify' "$gateway_mock_root/owner-runs"
+
+# A mismatched systemd User must fail before any signal is sent.
+printf '0\n' > "$gateway_mock_root/mainpid-calls"
+: > "$gateway_mock_root/kills"
+systemctl() {
+    case "$*" in
+        'show openclaw-gateway.service -p MainPID --value') printf '111\n' ;;
+        'show openclaw-gateway.service -p User --value') printf 'someone-else\n' ;;
+        'show openclaw-gateway.service -p Restart --value') printf 'always\n' ;;
+        *) return 1 ;;
+    esac
+}
+if _ods_pixel_restart_gateway_and_verify "$owner" "$reconcile_home" /verified/pixel >/dev/null 2>&1; then
+    fail "mismatched Pixel gateway unit owner rejected"
+else
+    pass "mismatched Pixel gateway unit owner rejected"
+fi
+check test ! -s "$gateway_mock_root/kills"
+unset -f systemctl id awk kill curl jq sleep ods_sudo_available
 eval "$original_run_as_owner"
 
 plugin="$ROOT/extensions/services/pixel-agent/plugin"

@@ -3364,6 +3364,102 @@ def test_model_gpu_plan_explicitly_skips_wsl_auto_replan(tmp_path, monkeypatch):
     ) is None
 
 
+def test_managed_pixel_reconcile_is_noop_when_this_install_does_not_own_pixel(
+    monkeypatch,
+):
+    monkeypatch.setattr(_mod, "_ods_managed_pixel_identity", lambda: None)
+    monkeypatch.setattr(
+        _mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("an unmanaged Pixel must not be touched"),
+    )
+
+    assert _mod._reconcile_ods_managed_pixel_model("safe-model", 65536) == "not_installed"
+
+
+def test_managed_pixel_reconcile_uses_positional_args_and_minimal_environment(
+    tmp_path,
+    monkeypatch,
+):
+    install_dir = tmp_path / "install"
+    home = tmp_path / "owner-home"
+    install_dir.mkdir()
+    home.mkdir()
+    (install_dir / ".env").write_text(
+        "PIXEL_SOURCE_URL=https://github.com/Osmantic/Pixel.git\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout="reconciled\n", stderr="")
+
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+    monkeypatch.setattr(
+        _mod,
+        "_ods_managed_pixel_identity",
+        lambda: ("pixel-owner", home),
+    )
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-cross-boundary")
+    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+    assert _mod._reconcile_ods_managed_pixel_model(
+        "qwen3.5-9b",
+        131072,
+        max_tokens=4096,
+        reasoning=True,
+    ) == "reconciled"
+    assert captured["argv"][-7:] == [
+        str(install_dir),
+        "pixel-owner",
+        str(home),
+        "qwen3.5-9b",
+        "131072",
+        "4096",
+        "true",
+    ]
+    assert captured["kwargs"]["timeout"] == 900
+    assert captured["kwargs"]["check"] is False
+    assert captured["kwargs"]["env"]["PIXEL_SOURCE_URL"] == (
+        "https://github.com/Osmantic/Pixel.git"
+    )
+    assert "UNRELATED_SECRET" not in captured["kwargs"]["env"]
+
+
+def test_managed_pixel_reconcile_rejects_context_below_pixel_contract(monkeypatch):
+    monkeypatch.setattr(
+        _mod,
+        "_ods_managed_pixel_identity",
+        lambda: ("pixel-owner", Path("/safe/pixel-owner")),
+    )
+
+    with pytest.raises(RuntimeError, match="at least|between 4096"):
+        _mod._reconcile_ods_managed_pixel_model("safe-model", 2048)
+
+
+@pytest.mark.parametrize(
+    ("model", "mode", "expected"),
+    [
+        ("qwen3.5-9b", "off", True),
+        ("jamba-reasoning-3b", "none", True),
+        ("deepseek-r1-7b", "false", True),
+        ("phi-4-mini", "off", False),
+        ("phi-4-mini", "deepseek", True),
+    ],
+)
+def test_pixel_reasoning_capability_follows_model_family_and_runtime_mode(
+    model,
+    mode,
+    expected,
+):
+    assert _mod._pixel_model_reasoning_capable(
+        model,
+        {"LLAMA_REASONING": mode},
+    ) is expected
+
+
 class TestModelActivateRollback:
 
     @pytest.fixture(autouse=True)
@@ -3400,6 +3496,90 @@ class TestModelActivateRollback:
         assert "requires the persisted environment" in handler.parse_response()["error"]
         assert not env_path.exists()
         assert models_ini.read_text(encoding="utf-8") == ini_text
+
+    def test_activation_reconciles_pixel_model_context_and_receipt(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        reconciliations = []
+
+        def reconcile(model, context, **options):
+            reconciliations.append((model, context, options))
+            return "reconciled"
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        monkeypatch.setattr(_mod, "_reconcile_ods_managed_pixel_model", reconcile)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_context_length=65536,
+        )
+
+        assert handler.response_code == 200
+        assert reconciliations == [(
+            "new-model",
+            65536,
+            {"max_tokens": 4096, "reasoning": False},
+        )]
+        response = handler.parse_response()
+        assert response["consumers"]["pixel"] == "reconciled"
+        receipt = json.loads(
+            (install_dir / "data" / "model-activation-receipt.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert receipt["consumers"]["pixel"] == "reconciled"
+
+    def test_pixel_reconcile_failure_rolls_back_and_rebinds_previous_pixel_model(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.write_text(
+            env_path.read_text(encoding="utf-8").replace("CTX_SIZE=2048", "CTX_SIZE=4096"),
+            encoding="utf-8",
+        )
+        runtime_restarts = []
+        reconciliations = []
+
+        def restart_runtime(env):
+            runtime_restarts.append(env["LLM_MODEL"])
+
+        def reconcile(model, context, **options):
+            reconciliations.append((model, context, options))
+            if model == "new-model":
+                raise RuntimeError("simulated Pixel reconciliation failure")
+            return "reconciled"
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", restart_runtime)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        monkeypatch.setattr(_mod, "_reconcile_ods_managed_pixel_model", reconcile)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert "simulated Pixel reconciliation failure" in response["error"]
+        assert runtime_restarts == ["new-model", "old-model"]
+        assert reconciliations == [
+            ("new-model", 4096, {"max_tokens": 4096, "reasoning": False}),
+            ("old-model", 4096, {"max_tokens": 4096, "reasoning": False}),
+        ]
+        assert _mod.load_env(env_path)["LLM_MODEL"] == "old-model"
 
     def test_malformed_model_library_cannot_fall_back_to_unverified_local_model(
         self,
@@ -4475,7 +4655,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(
             _mod,
             "_restart_existing_container",
-            lambda name, _state=None: events.append(f"restart:{name}") or name == "ods-litellm",
+            lambda name, _state=None, **_kwargs: events.append(f"restart:{name}") or name == "ods-litellm",
         )
         monkeypatch.setattr(
             _mod,
@@ -4835,6 +5015,8 @@ class TestModelActivateRollback:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"hermes"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: [])
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
@@ -4867,7 +5049,11 @@ class TestModelActivateRollback:
         assert "model: openai/new-model.gguf" in content
         assert "api_base: http://host.docker.internal:9090/v1" in content
         assert ["docker", "restart", "ods-litellm"] in calls
-        assert ["docker", "restart", "ods-hermes"] in calls
+        assert [
+            "docker", "compose", "up", "-d", "--no-deps",
+            "--force-recreate", "hermes",
+        ] in calls
+        assert ["docker", "restart", "ods-hermes"] not in calls
 
     def test_windows_native_llama_applies_advanced_context_override(
         self, tmp_path, monkeypatch,
@@ -5043,6 +5229,8 @@ class TestModelActivateRollback:
         hermes_template.write_text(hermes_text, encoding="utf-8")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"hermes"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: [])
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
@@ -5072,7 +5260,11 @@ class TestModelActivateRollback:
         assert handler.response_code == 200
         assert '  default: "new-model.gguf"' in hermes_live.read_text(encoding="utf-8")
         assert '  default: "new-model.gguf"' in hermes_template.read_text(encoding="utf-8")
-        assert ["docker", "restart", "ods-hermes"] in calls
+        assert [
+            "docker", "compose", "up", "-d", "--no-deps",
+            "--force-recreate", "hermes",
+        ] in calls
+        assert ["docker", "restart", "ods-hermes"] not in calls
 
     def test_activation_uses_catalog_context_instead_of_current_env_floor(
         self, tmp_path, monkeypatch,
@@ -5252,6 +5444,8 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "CORE_SERVICE_IDS", {"hermes"})
+        monkeypatch.setattr(_mod, "resolve_compose_flags", lambda: [])
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
@@ -5280,7 +5474,11 @@ class TestModelActivateRollback:
         assert container_writes
         assert '  default: "new-model.gguf"' in container_config["text"]
         assert '  default: "new-model.gguf"' in hermes_template.read_text(encoding="utf-8")
-        assert ["docker", "restart", "ods-hermes"] in calls
+        assert [
+            "docker", "compose", "up", "-d", "--no-deps",
+            "--force-recreate", "hermes",
+        ] in calls
+        assert ["docker", "restart", "ods-hermes"] not in calls
 
     def test_capture_hermes_config_falls_back_when_stat_is_denied(
         self, tmp_path, monkeypatch,
@@ -5615,7 +5813,7 @@ class TestModelActivateRollback:
                 return kwargs["gguf_file"]
             return True
 
-        def restart_dependent(container, _state=None):
+        def restart_dependent(container, _state=None, **_kwargs):
             nonlocal litellm_restarts
             events.append(f"dependent:{container}")
             if container == "ods-litellm":
@@ -5672,7 +5870,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
-            _mod, "_restart_existing_container", lambda _container, _state=None: False
+            _mod, "_restart_existing_container", lambda _container, _state=None, **_kwargs: False
         )
         monkeypatch.setattr(
             _mod,
@@ -6294,7 +6492,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(
             _mod,
             "_restart_existing_container",
-            lambda name, _state=None: name == "ods-hermes",
+            lambda name, _state=None, **_kwargs: name == "ods-hermes",
         )
         monkeypatch.setattr(
             _mod,
@@ -6575,7 +6773,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(
             _mod,
             "_restart_existing_container",
-            lambda name, _state=None: events.append(f"restart:{name}") or name == "ods-litellm",
+            lambda name, _state=None, **_kwargs: events.append(f"restart:{name}") or name == "ods-litellm",
         )
         monkeypatch.setattr(_mod, "_verify_litellm_route", lambda _env: events.append("litellm-ready"))
         monkeypatch.setattr(

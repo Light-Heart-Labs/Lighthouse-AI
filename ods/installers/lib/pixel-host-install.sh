@@ -449,11 +449,14 @@ PY
 
 _ods_pixel_update_onboarding_model() {
     local owner="$1" home="$2" answers="$3" model="$4"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$model" <<'PY'
+    local context="${5:-}" max_tokens="${6:-}" reasoning="${7:-}"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$answers" "$model" "$context" "$max_tokens" "$reasoning" <<'PY'
 import json, os, pathlib, re, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
 model = sys.argv[2]
+context_raw, max_tokens_raw, reasoning_raw = sys.argv[3:6]
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
     raise SystemExit("invalid promoted Pixel model id")
 info = path.lstat()
@@ -472,6 +475,26 @@ if (value.get("deploymentName") != "ods-default" or value.get("agentId") != "pix
         or not isinstance(extensions, list) or len(extensions) != 1
         or extensions[0].get("id") != "pixel-ods"):
     raise SystemExit("onboarding contract is outside the ODS-managed Pixel boundary")
+if (type(value.get("modelContextWindow")) is not int
+        or type(value.get("modelMaxTokens")) is not int
+        or type(value.get("modelReasoning")) is not bool
+        or not 4096 <= value["modelContextWindow"] <= 10_000_000
+        or not 1 <= value["modelMaxTokens"] <= value["modelContextWindow"]):
+    raise SystemExit("onboarding model limits are outside the ODS-managed Pixel boundary")
+if context_raw:
+    if not context_raw.isdigit() or not 4096 <= int(context_raw) <= 10_000_000:
+        raise SystemExit("invalid promoted Pixel context window")
+    value["modelContextWindow"] = int(context_raw)
+if max_tokens_raw:
+    if not max_tokens_raw.isdigit() or not 1 <= int(max_tokens_raw) <= value.get("modelContextWindow", 0):
+        raise SystemExit("invalid promoted Pixel maximum tokens")
+    value["modelMaxTokens"] = int(max_tokens_raw)
+elif context_raw and value.get("modelMaxTokens", 0) > value["modelContextWindow"]:
+    value["modelMaxTokens"] = value["modelContextWindow"]
+if reasoning_raw:
+    if reasoning_raw not in {"true", "false"}:
+        raise SystemExit("invalid promoted Pixel reasoning capability")
+    value["modelReasoning"] = reasoning_raw == "true"
 value["modelId"] = model
 value["modelName"] = f"ODS Local {model}"
 payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
@@ -552,6 +575,9 @@ normalized = copy.deepcopy(live)
 normalized_provider, normalized_model, normalized_agent = binding(normalized)
 normalized_model["id"] = model_id
 normalized_model["name"] = model_name
+normalized_model["contextWindow"] = contract.get("modelContextWindow")
+normalized_model["maxTokens"] = contract.get("modelMaxTokens")
+normalized_model["reasoning"] = contract.get("modelReasoning")
 normalized_agent["model"] = f"{provider}/{model_id}"
 normalized_agents = normalized.get("agents")
 normalized_defaults = normalized_agents.get("defaults") if isinstance(normalized_agents, dict) else None
@@ -574,11 +600,11 @@ normalized_write_lock["staleMs"] = 3600000
 model_label = f"{model_id} {model_name}".casefold()
 if "qwen" in model_label:
     normalized_model["reasoning"] = True
-    normalized_compat = normalized_model.setdefault("compat", {})
-    if not isinstance(normalized_compat, dict):
-        raise SystemExit("live Pixel Qwen policy is outside the ODS contract")
-    normalized_compat["thinkingFormat"] = "qwen-chat-template"
+    normalized_model["compat"] = {"thinkingFormat": "qwen-chat-template"}
     normalized_agent["thinkingDefault"] = "off"
+else:
+    normalized_model.pop("compat", None)
+    normalized_agent.pop("thinkingDefault", None)
 if normalized != candidate:
     raise SystemExit("candidate changes more than the ODS managed model/runtime fields")
 PY
@@ -785,10 +811,38 @@ PY
 
 _ods_pixel_restart_gateway_and_verify() {
     local owner="$1" home="$2" pixel_root="$3" attempt ready=false previous_pid current_pid
-    ods_sudo_available || return 1
     previous_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
-    ods_sudo systemctl restart openclaw-gateway.service || return 1
-    current_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
+    [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    if ods_sudo_available; then
+        ods_sudo systemctl restart openclaw-gateway.service || return 1
+    else
+        # The ODS host agent runs as the same unprivileged install owner. Its
+        # non-interactive sudo credential may expire long after installation,
+        # so allow one narrow restart path without granting general sudo: the
+        # verified system unit must run as this owner with Restart=always, and
+        # /proc must prove the current MainPID has that owner's UID. SIGTERM is
+        # then enough for systemd to replace the process under the same unit.
+        local unit_user restart_policy owner_uid process_uid
+        unit_user="$(systemctl show openclaw-gateway.service -p User --value 2>/dev/null || true)"
+        restart_policy="$(systemctl show openclaw-gateway.service -p Restart --value 2>/dev/null || true)"
+        owner_uid="$(id -u "$owner" 2>/dev/null || true)"
+        process_uid="$(awk '/^Uid:/ { print $2; exit }' "/proc/${previous_pid}/status" 2>/dev/null || true)"
+        [[ "$(id -un)" == "$owner" && "$unit_user" == "$owner" \
+            && "$restart_policy" == "always" && "$owner_uid" =~ ^[0-9]+$ \
+            && "$process_uid" == "$owner_uid" ]] || return 1
+        current_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
+        [[ "$current_pid" == "$previous_pid" ]] || return 1
+        kill -TERM "$previous_pid" || return 1
+    fi
+    current_pid=""
+    for attempt in {1..60}; do
+        current_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
+        if [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] \
+            && systemctl is-active --quiet openclaw-gateway.service; then
+            break
+        fi
+        sleep 1
+    done
     [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] || return 1
     for attempt in {1..60}; do
         if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18789/health 2>/dev/null \
@@ -821,6 +875,7 @@ _ods_pixel_restore_model_reconciliation() {
 
 ods_pixel_reconcile_promoted_model() {
     local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
+    local promoted_context="${5:-}" promoted_max_tokens="${6:-}" promoted_reasoning="${7:-}"
     local source_ref source_root pixel_root answers candidate backup contract_sha256 openclaw_bin failed=false
     [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
     source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
@@ -834,7 +889,8 @@ ods_pixel_reconcile_promoted_model() {
     openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
 
-    _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" || failed=true
+    _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" \
+        "$promoted_context" "$promoted_max_tokens" "$promoted_reasoning" || failed=true
     if [[ "$failed" == false ]] && {
         ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan;
