@@ -203,22 +203,48 @@ export function readGatewayToken(
     ? process.geteuid()
     : (typeof process.getuid === "function" ? process.getuid() : 0)
 ) {
-  const lst = fs.lstatSync(file);
-  if (lst.isSymbolicLink()) {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  const before = fs.lstatSync(file);
+  if (before.isSymbolicLink()) {
     throw new Error("refusing symlink token file");
   }
-  const st = fs.statSync(file);
-  if (!st.isFile()) {
+  if (!before.isFile()) {
     throw new Error("token path is not a regular file");
   }
-  if (st.uid !== euid) {
-    throw new Error("token file owner mismatch");
+  let fd;
+  let raw;
+  try {
+    try {
+      const flags = fs.constants.O_RDONLY | (typeof noFollow === "number" ? noFollow : 0);
+      fd = fs.openSync(file, flags);
+    } catch (error) {
+      if (error?.code === "ELOOP") {
+        throw new Error("refusing symlink token file");
+      }
+      throw error;
+    }
+    const st = fs.fstatSync(fd);
+    const after = fs.lstatSync(file);
+    if (after.isSymbolicLink()) {
+      throw new Error("refusing symlink token file");
+    }
+    if (!st.isFile()) {
+      throw new Error("token path is not a regular file");
+    }
+    if (st.dev !== after.dev || st.ino !== after.ino) {
+      throw new Error("token file changed during secure open");
+    }
+    if (st.uid !== euid) {
+      throw new Error("token file owner mismatch");
+    }
+    // Group-read (0o040) or world-read (0o004) => refuse. Only owner rw remains.
+    if (st.mode & 0o077) {
+      throw new Error("token file is group/world readable");
+    }
+    raw = fs.readFileSync(fd, "utf8");
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
-  // Group-read (0o040) or world-read (0o004) => refuse. Only owner rw remains.
-  if (st.mode & 0o077) {
-    throw new Error("token file is group/world readable");
-  }
-  const raw = fs.readFileSync(file, "utf8");
   let value = "";
   if (raw.trimStart().startsWith("{")) {
     let config;

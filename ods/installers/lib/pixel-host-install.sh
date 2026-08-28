@@ -440,7 +440,10 @@ _ods_pixel_source_checkout() {
         ods_pixel_run_as_owner "$owner" "$home" rmdir -- "$stage" || return 1
     fi
 
-    [[ -d "$source_root/.git" && ! -L "$source_root/.git" ]] || return 1
+    # Re-check the destination after the atomic move. The initial guard runs
+    # before cloning; this closes the narrow replacement window between mv and
+    # the exact-commit/clean-tree verification below.
+    [[ ! -L "$source_root" && -d "$source_root/.git" && ! -L "$source_root/.git" ]] || return 1
     [[ "$(ods_pixel_run_as_owner "$owner" "$home" git -C "$source_root" rev-parse HEAD)" == "$ref" ]] || return 1
     ods_pixel_run_as_owner "$owner" "$home" git -C "$source_root" diff --quiet --ignore-submodules --
     ods_pixel_run_as_owner "$owner" "$home" git -C "$source_root" diff --cached --quiet --ignore-submodules --
