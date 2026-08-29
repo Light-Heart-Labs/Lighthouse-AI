@@ -546,6 +546,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
     EXTERNAL_LLM_CONTAINER_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL:-}"
     EXTERNAL_LLM_PROVIDER_VALUE="${EXTERNAL_LLM_PROVIDER:-}"
     EXTERNAL_SELECTED_MODEL="${EXTERNAL_LLM_MODEL:-}"
+    EXTERNAL_LLM_API_BASE_PATH_VALUE="$(external_llm_api_base_path "$EXTERNAL_LLM_PROVIDER_VALUE")"
     EXTERNAL_LLM_ACTIVE=false
     if [[ -n "$EXTERNAL_LLM_URL_VALUE" ]]; then
         if [[ -z "$EXTERNAL_LLM_CONTAINER_URL_VALUE" || -z "$EXTERNAL_LLM_PROVIDER_VALUE" || -z "$EXTERNAL_SELECTED_MODEL" ]]; then
@@ -575,7 +576,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
     _default_llm_api_url="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "http://litellm:4000"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "http://litellm:4000"; elif [[ "${ODS_MODE:-local}" == "local" ]]; then echo "http://llama-server:8080"; else echo "http://litellm:4000"; fi)"
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
         LLM_API_URL_VALUE="$EXTERNAL_LLM_CONTAINER_URL_VALUE"
-        OPEN_WEBUI_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
+        OPEN_WEBUI_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}${EXTERNAL_LLM_API_BASE_PATH_VALUE}"
         OPEN_WEBUI_LLM_API_KEY_VALUE=""
     elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
         LLM_API_URL_VALUE="$_default_llm_api_url"
@@ -606,7 +607,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
         _default_hermes_api_key="${LITELLM_KEY}"
     fi
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
-        HERMES_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
+        HERMES_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}${EXTERNAL_LLM_API_BASE_PATH_VALUE}"
         HERMES_LLM_API_KEY_VALUE="not-needed"
     elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
         HERMES_LLM_BASE_URL_VALUE="$_default_hermes_base_url"
@@ -825,7 +826,7 @@ LLM_API_URL=${LLM_API_URL_VALUE}
 OPEN_WEBUI_LLM_BASE_URL=${OPEN_WEBUI_LLM_BASE_URL_VALUE}
 OPEN_WEBUI_LLM_API_KEY=${OPEN_WEBUI_LLM_API_KEY_VALUE}
 LLM_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "external"; elif [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "lemonade"; else echo "llama-server"; fi)
-LLM_API_BASE_PATH=$(if [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "${LEMONADE_API_BASE_PATH_VALUE}"; else echo "/v1"; fi)
+LLM_API_BASE_PATH=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "${EXTERNAL_LLM_API_BASE_PATH_VALUE}"; elif [[ "$ODS_MODE_VALUE" == "lemonade" ]]; then echo "${LEMONADE_API_BASE_PATH_VALUE}"; else echo "/v1"; fi)
 EXTERNAL_LLM_URL=${EXTERNAL_LLM_URL_VALUE}
 EXTERNAL_LLM_CONTAINER_URL=${EXTERNAL_LLM_CONTAINER_URL_VALUE}
 EXTERNAL_LLM_PROVIDER=${EXTERNAL_LLM_PROVIDER_VALUE}

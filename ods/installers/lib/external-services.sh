@@ -1,5 +1,5 @@
 #!/bin/bash
-# External Ollama / LM Studio discovery and validation helpers.
+# External Ollama, LM Studio, and Docker Model Runner discovery helpers.
 
 external_llm_normalize_model_name() {
     local value="${1:-}"
@@ -37,6 +37,7 @@ external_llm_strip_url() {
     local url="${1:-}"
     url="${url%/}"
     case "$url" in
+        */engines/v1) url="${url%/engines/v1}" ;;
         */api/v1) url="${url%/api/v1}" ;;
         */v1) url="${url%/v1}" ;;
     esac
@@ -63,10 +64,17 @@ if (
     or parsed.password is not None
     or parsed.query
     or parsed.fragment
-    or parsed.path.rstrip("/") not in {"", "/v1", "/api/v1"}
+    or parsed.path.rstrip("/") not in {"", "/v1", "/api/v1", "/engines/v1"}
 ):
     sys.exit(1)
 PY
+}
+
+external_llm_api_base_path() {
+    case "${1:-}" in
+        docker-model-runner) printf '/engines/v1\n' ;;
+        *) printf '/v1\n' ;;
+    esac
 }
 
 external_llm_host_url() {
@@ -94,6 +102,9 @@ external_llm_models() {
             ;;
         lmstudio)
             response="$(curl -fsS --max-time 5 "${url}/v1/models" 2>/dev/null)" || return 1
+            ;;
+        docker-model-runner)
+            response="$(curl -fsS --max-time 5 "${url}/engines/v1/models" 2>/dev/null)" || return 1
             ;;
         *)
             return 2
@@ -126,6 +137,10 @@ external_llm_detect_provider() {
         printf 'lmstudio\n'
         return 0
     fi
+    if external_llm_models docker-model-runner "$url" >/dev/null 2>&1; then
+        printf 'docker-model-runner\n'
+        return 0
+    fi
     return 1
 }
 
@@ -144,8 +159,9 @@ external_llm_resolve_model() {
 }
 
 external_llm_probe_completion() {
-    local url="${1:-}" model="${2:-}" body
+    local url="${1:-}" model="${2:-}" provider="${3:-}" body base_path
     url="$(external_llm_host_url "$url")"
+    base_path="$(external_llm_api_base_path "$provider")"
     body="$(
         EXTERNAL_LLM_MODEL_VALUE="$model" python3 - <<'PY'
 import json
@@ -163,7 +179,7 @@ PY
     curl -fsS --max-time "${EXTERNAL_LLM_PROBE_TIMEOUT:-60}" \
         -H "Content-Type: application/json" \
         -d "$body" \
-        "${url}/v1/chat/completions" >/dev/null
+        "${url}${base_path}/chat/completions" >/dev/null
 }
 
 external_llm_env_value() {

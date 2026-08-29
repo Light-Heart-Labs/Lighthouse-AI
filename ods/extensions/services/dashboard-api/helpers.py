@@ -61,8 +61,12 @@ class _DirSizeCache:
 
 _dir_size_cache = _DirSizeCache()
 
-# Lemonade serves at /api/v1 instead of llama.cpp's /v1
-_LLM_API_PREFIX = "/api/v1" if LLM_BACKEND == "lemonade" else "/v1"
+def _llm_api_prefix() -> str:
+    """Return the configured OpenAI API prefix for the active runtime."""
+    configured = (os.environ.get("LLM_API_BASE_PATH") or "").strip()
+    if configured:
+        return "/" + configured.strip("/")
+    return "/api/v1" if LLM_BACKEND == "lemonade" else "/v1"
 
 logger = logging.getLogger(__name__)
 
@@ -539,12 +543,12 @@ async def get_loaded_model() -> Optional[str]:
         # field, so the first entry is arbitrary.  The health endpoint is the
         # authoritative source for which model is actually loaded.
         if LLM_BACKEND == "lemonade":
-            resp = await client.get(f"http://{host}:{port}{_LLM_API_PREFIX}/health")
+            resp = await client.get(f"http://{host}:{port}{_llm_api_prefix()}/health")
             loaded = resp.json().get("model_loaded")
             return loaded if loaded else None
 
         # llama.cpp: /v1/models returns the loaded model with status info.
-        resp = await client.get(f"http://{host}:{port}{_LLM_API_PREFIX}/models")
+        resp = await client.get(f"http://{host}:{port}{_llm_api_prefix()}/models")
         models = resp.json().get("data", [])
         for m in models:
             status = m.get("status", {})

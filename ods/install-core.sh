@@ -159,9 +159,9 @@ Options:
     --lemonade-api-key K
                       API key LiteLLM should send to the existing Lemonade server
     --external-llm-url U
-                      Reuse an OpenAI-compatible Ollama or LM Studio endpoint
+                      Reuse an OpenAI-compatible host model endpoint
     --external-llm-provider P
-                      External provider: auto, ollama, or lmstudio
+                      Provider: auto, ollama, lmstudio, or docker-model-runner
     --external-llm-model M
                       Exact model id exposed by the external provider
     --reuse-external-llm

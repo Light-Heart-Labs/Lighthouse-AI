@@ -676,12 +676,13 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     # shellcheck disable=SC2086
     if (
         cd "$ROOT_DIR"
-        export EXTERNAL_LLM_URL="http://127.0.0.1:11434"
-        export EXTERNAL_LLM_CONTAINER_URL="http://host.docker.internal:11434"
-        export EXTERNAL_LLM_PROVIDER="ollama"
-        export EXTERNAL_LLM_MODEL="qwen3.5:9b"
+        export EXTERNAL_LLM_URL="http://127.0.0.1:12434"
+        export EXTERNAL_LLM_CONTAINER_URL="http://host.docker.internal:12434"
+        export EXTERNAL_LLM_PROVIDER="docker-model-runner"
+        export EXTERNAL_LLM_MODEL="ai/qwen3.5-9b"
+        export LLM_API_BASE_PATH="/engines/v1"
         export LLM_API_URL="$EXTERNAL_LLM_CONTAINER_URL"
-        export HERMES_LLM_BASE_URL="${EXTERNAL_LLM_CONTAINER_URL}/v1"
+        export HERMES_LLM_BASE_URL="${EXTERNAL_LLM_CONTAINER_URL}${LLM_API_BASE_PATH}"
         export HERMES_DASHBOARD_SESSION_TOKEN="external-llm-hermes-dashboard-session-token"
         export WEBUI_SECRET="external-llm-compose-test"
         export DASHBOARD_API_KEY="external-llm-compose-test"
@@ -696,10 +697,16 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
             fail "Rendered external-LLM stack still contains managed llama-server"
         elif grep -Eq '^[[:space:]]+model-router:$' "$compose_config_file"; then
             fail "Rendered external-LLM stack still contains model-router"
-        elif ! grep -Fq 'ODS_TALK_VISION_URL: http://host.docker.internal:11434/v1' "$compose_config_file"; then
-            fail "Rendered external-LLM stack does not route ODS Talk vision to the external backend"
+        elif ! grep -Fq 'LLM_API_BASE_PATH: /engines/v1' "$compose_config_file"; then
+            fail "Rendered external-LLM stack loses the provider API base path"
+        elif ! grep -Fq 'ODS_TALK_VISION_URL: http://host.docker.internal:12434/engines/v1' "$compose_config_file"; then
+            fail "Rendered external-LLM stack does not route ODS Talk vision to Docker Model Runner"
+        elif ! grep -Fq 'TARGET_API_URL: http://host.docker.internal:12434/engines/v1' "$compose_config_file"; then
+            fail "Rendered external-LLM stack does not route Privacy Shield to Docker Model Runner"
+        elif ! grep -Fq 'OPENAI_UPSTREAM: http://host.docker.internal:12434/engines/v1' "$compose_config_file"; then
+            fail "Rendered external-LLM stack does not route Token Spy to Docker Model Runner"
         else
-            pass "Real external-LLM Compose stack renders without managed inference and routes ODS Talk externally"
+            pass "Real Docker Model Runner stack renders without managed inference and preserves its OpenAI base path"
         fi
     else
         fail "Real external-LLM Compose stack failed docker compose config"

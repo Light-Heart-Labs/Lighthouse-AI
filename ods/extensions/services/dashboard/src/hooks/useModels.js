@@ -147,7 +147,7 @@ function normalizeOdsMode(value) {
 
 function modelActivationModeError(effectiveMode, configuredMode, llmBackend) {
   if (llmBackend === 'external') {
-    return 'ODS is using an external Ollama or LM Studio backend. Re-run the installer with --no-external-llm before activating a downloaded local model.'
+    return 'ODS is using an external host-managed model backend. Re-run the installer with --no-external-llm before activating a downloaded local model.'
   }
   if (effectiveMode === 'unknown' || configuredMode === 'unknown') {
     return 'ODS could not verify the active runtime mode. Repair or restart ODS before running a local model.'

@@ -144,7 +144,7 @@ def _vision_backend_base_url() -> str:
 
     ``ODS_TALK_VISION_URL`` accepts either a host root
     (``http://host:8080``) or a full OpenAI-compatible base
-    (``http://host:8080/v1`` / ``http://host:8080/api/v1``). Normalising here
+    (for example ``/v1``, ``/api/v1``, or ``/engines/v1``). Normalising here
     keeps Linux container, Windows host, llama-server, and Lemonade paths from
     accidentally becoming ``/v1/v1`` or ``/api/v1/v1``.
     """

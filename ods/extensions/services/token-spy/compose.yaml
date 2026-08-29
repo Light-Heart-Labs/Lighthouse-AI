@@ -16,6 +16,9 @@ services:
       - ./data/token-spy:/app/data:z
     environment:
       - OLLAMA_URL=${LLM_API_URL:-http://llama-server:8080}
+      - API_PROVIDER=local
+      - UPSTREAM_BASE_URL=${LLM_API_URL:-http://llama-server:8080}${LLM_API_BASE_PATH:-/v1}
+      - OPENAI_UPSTREAM=${LLM_API_URL:-http://llama-server:8080}${LLM_API_BASE_PATH:-/v1}
       - TOKEN_SPY_API_KEY=${TOKEN_SPY_API_KEY:-}
     deploy:
       resources:
