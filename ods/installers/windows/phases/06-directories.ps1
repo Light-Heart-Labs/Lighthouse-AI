@@ -387,6 +387,12 @@ function Update-HermesConfigFile {
 
     if (-not (Test-Path $Path)) { return $false }
 
+    # The -replace operator treats '$' in the replacement string as a .NET
+    # substitution token (e.g. '$1', '$$'). Literal '$' characters in the model
+    # id or base URL would otherwise be mangled, so escape them first.
+    $Model = $Model.Replace('$', '$$')
+    $BaseUrl = $BaseUrl.Replace('$', '$$')
+
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $content = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
     $content = $content -replace '(?m)^  default: ".*"\r?$', "  default: `"$Model`""
