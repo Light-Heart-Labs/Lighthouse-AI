@@ -1209,6 +1209,8 @@ search:
     - html
     - json
 engines:
+  - name: bing
+    disabled: false
   - name: duckduckgo
     disabled: false
   - name: google

@@ -73,3 +73,6 @@ def test_ingress_does_not_inherit_fetch_body_idle_timeout() -> None:
     assert "body: Readable.toWeb(response)" in ingress
     assert "fetch: gatewayFetch" in ingress
     assert "fetch: globalThis.fetch" not in ingress
+    assert "request.once(\"socket\"" in ingress
+    assert "socket.once(\"connect\", clearConnectTimer)" in ingress
+    assert "headerTimer" not in ingress

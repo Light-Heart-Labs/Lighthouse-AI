@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pathlib
@@ -72,9 +73,44 @@ class FakeClient:
         return FakeStreamContext(self.response)
 
 
+class CancelAwareClient(FakeClient):
+    def __init__(self, response, calls):
+        super().__init__(response)
+        self.calls = calls
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, **kwargs})
+        if url.endswith("/v1/chat/cancel"):
+            return FakeStreamContext(
+                FakeResponse(
+                    content_type="application/json",
+                    chunks=[b'{"aborted":true}'],
+                )
+            )
+        return FakeStreamContext(self.response)
+
+
 class ConnectedRequest:
     async def is_disconnected(self):
         return False
+
+
+class DisconnectedRequest:
+    async def is_disconnected(self):
+        return True
+
+
+class SilentResponse(FakeResponse):
+    def __init__(self):
+        super().__init__(content_type="text/event-stream")
+        self.cancelled = asyncio.Event()
+
+    async def aiter_bytes(self):
+        try:
+            await asyncio.Future()
+        finally:
+            self.cancelled.set()
+        yield b""  # pragma: no cover - keeps this an async generator
 
 
 async def stream_body(response):
@@ -214,6 +250,30 @@ async def test_chat_forwards_exact_body_and_narrow_edge_key_only():
     }
     assert capture["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
     assert "dashboard-test-key" not in json.dumps(capture)
+
+
+@pytest.mark.asyncio
+async def test_silent_upstream_is_cancelled_when_dashboard_client_disconnects():
+    upstream = SilentResponse()
+    calls = []
+    body = pixel.ChatStreamRequest.model_validate(
+        {"chat_id": "c1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        return_value=CancelAwareClient(upstream, calls),
+    ):
+        response = await pixel.pixel_chat_stream(DisconnectedRequest(), body)
+        streamed = await asyncio.wait_for(stream_body(response), timeout=2)
+    assert streamed == b""
+    assert upstream.cancelled.is_set()
+    assert [call["url"] for call in calls] == [
+        "http://pixel-edge:9595/v1/chat/completions",
+        "http://pixel-edge:9595/v1/chat/cancel",
+    ]
+    assert calls[1]["json"] == {"user": "c1"}
+    assert calls[1]["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
 
 
 @pytest.mark.asyncio

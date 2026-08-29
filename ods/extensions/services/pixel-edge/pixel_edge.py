@@ -12,6 +12,7 @@ import asyncio
 import hmac
 import json
 import os
+import re
 import sys
 
 from aiohttp import web, ClientSession, UnixConnector, ClientTimeout
@@ -44,7 +45,9 @@ _HOP_BY_HOP = frozenset({
 })
 
 _MAX_BODY = 2 * 1024 * 1024          # 2 MiB request body
+_MAX_CANCEL_BODY = 256
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MiB non-stream response cap
+_MAX_CANCEL_RESPONSE_BYTES = 1024
 
 _CONNECT_TIMEOUT = 5
 # The host ingress is capped at 32 minutes. Pixel Edge sits outside that
@@ -56,6 +59,7 @@ _MAX_SSE_LINE = 1024 * 1024
 
 _UPSTREAM_REWRITE = "openclaw/default"
 _PIXEL_REWRITE = "pixel/default"
+_SAFE_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _validate_config() -> str:
@@ -124,6 +128,17 @@ def _rewrite_json_model(raw: bytes) -> bytes:
         return obj
 
     return json.dumps(_walk(parsed)).encode("utf-8")
+
+
+async def _read_bounded(content, limit: int) -> bytes:
+    chunks = []
+    total = 0
+    async for chunk in content.iter_any():
+        total += len(chunk)
+        if total > limit:
+            raise ValueError("response too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +256,63 @@ async def handle_chat_completions(request: web.Request):
         return web.json_response({"error": "bad gateway"}, status=502)
 
 
+async def handle_chat_cancel(request: web.Request):
+    """Relay one authenticated, bounded cancellation to the private ingress."""
+    fail = _check_auth(request)
+    if fail is not None:
+        return fail
+    if request.content_type != "application/json":
+        return web.json_response({"error": "Content-Type must be application/json"},
+                                 status=415)
+    if request.content_length and request.content_length > _MAX_CANCEL_BODY:
+        return web.json_response({"error": "request too large"}, status=413)
+
+    try:
+        raw = await request.read()
+    except Exception:
+        return web.json_response({"error": "bad request"}, status=400)
+    if len(raw) > _MAX_CANCEL_BODY:
+        return web.json_response({"error": "request too large"}, status=413)
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"user"}
+        or not isinstance(data.get("user"), str)
+        or not _SAFE_CHAT_ID.fullmatch(data["user"])
+    ):
+        return web.json_response({"error": "invalid cancellation request"}, status=400)
+
+    connector = UnixConnector(path=_SOCKET_PATH)
+    timeout = ClientTimeout(total=6, sock_connect=2, sock_read=5)
+    try:
+        async with ClientSession(connector=connector, timeout=timeout) as session:
+            async with session.post(
+                "http://pixel-upstream/v1/chat/cancel",
+                json={"user": data["user"]},
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            ) as resp:
+                if resp.status != 200:
+                    return web.json_response({"error": "pixel cancellation failed"}, status=502)
+                if "application/json" not in resp.headers.get("Content-Type", "").lower():
+                    return web.json_response({"error": "pixel cancellation failed"}, status=502)
+                raw_result = await _read_bounded(resp.content, _MAX_CANCEL_RESPONSE_BYTES)
+                result = json.loads(raw_result)
+                if (
+                    not isinstance(result, dict)
+                    or set(result) != {"aborted"}
+                    or not isinstance(result.get("aborted"), bool)
+                ):
+                    return web.json_response({"error": "pixel cancellation failed"}, status=502)
+                return web.json_response({"aborted": result["aborted"]})
+    except (ConnectionError, OSError, asyncio.TimeoutError, json.JSONDecodeError, ValueError):
+        return web.json_response({"error": "pixel cancellation failed"}, status=502)
+    except Exception:
+        return web.json_response({"error": "pixel cancellation failed"}, status=502)
+
+
 async def _stream_upstream(request: web.Request, resp):
     """Stream bounded SSE lines while rewriting only exact JSON model fields."""
     response = web.StreamResponse(
@@ -287,6 +359,7 @@ def create_app() -> web.Application:
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
+    app.router.add_post("/v1/chat/cancel", handle_chat_cancel)
     # Catch-all registered last: unmatched paths AND unmatched methods → 404.
     app.router.add_route("*", "/{tail:.*}", handle_not_found)
     return app

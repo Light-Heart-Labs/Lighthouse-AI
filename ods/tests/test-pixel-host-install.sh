@@ -339,8 +339,23 @@ assert value["agents"]["defaults"]["contextInjection"] == "continuation-skip"
 assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
 agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
-assert agent["tools"]["deny"] == ["web_fetch"]
-assert "web_search" in value["tools"]["sandbox"]["tools"]["allow"]
+assert agent["tools"]["deny"] == []
+assert {"web_search", "web_fetch"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
+assert value["tools"]["web"]["fetch"] == {
+    "enabled": True,
+    "maxChars": 12000,
+    "maxCharsCap": 20000,
+    "maxResponseBytes": 1000000,
+    "timeoutSeconds": 20,
+    "cacheTtlMinutes": 15,
+    "maxRedirects": 3,
+    "readability": True,
+    "useTrustedEnvProxy": False,
+    "ssrfPolicy": {
+        "allowRfc2544BenchmarkRange": False,
+        "allowIpv6UniqueLocalRange": False,
+    },
+}
 assert value["tools"]["loopDetection"] == {
     "enabled": True,
     "historySize": 12,
@@ -372,7 +387,7 @@ SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert a["thinkingDefault"] == "off" and a["tools"]["deny"] == ["web_fetch"]; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert "web_search" in v["tools"]["sandbox"]["tools"]["allow"] and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert a["thinkingDefault"] == "off" and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"web_search","web_fetch"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -716,7 +731,7 @@ check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "api.on(\"before_prompt_build\"" in text
-assert "promptContractForAgent(context, AGENT_ID)" in text
+assert "promptContractForAgent(context, AGENT_ID, event)" in text
 ' "$plugin/index.js"
 # Dollar expressions below are literal source-code assertions.
 # shellcheck disable=SC2016
@@ -735,6 +750,18 @@ assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
 assert "_ods_pixel_apply_runtime_budget" in text
 assert "ods_pixel_reconcile_promoted_model" in text
+assert "failure_phase=onboarding-update" in text
+assert "failure_phase=pixel-configure" in text
+assert "failure_phase=pixel-plan" in text
+assert "failure_phase=runtime-budget" in text
+assert "failure_phase=managed-update-validation" in text
+assert "failure_phase=config-install" in text
+assert "failure_phase=gateway-restart-verify" in text
+assert "failure_phase=contract-hash" in text
+assert "failure_phase=ready-marker" in text
+assert "failure_phase=installing-marker" in text
+assert "rollback=verified" in text
+assert "rollback=failed" in text
 assert installer.index("if _ods_pixel_verified_source_matches") < installer.index("_ods_pixel_mark_installing")
 assert "The exact ODS-managed Pixel contract is already active" in text
 assert "refreshing the verified ODS extension without reapplying the release" in text
@@ -763,6 +790,7 @@ import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "ProtectHome=true" in text
 assert "RestrictNamespaces=true" in text
+assert "RuntimeDirectoryPreserve=restart" in text
 assert "BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_SOURCE__:__PIXEL_GATEWAY_TOKEN_FILE__" in text
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-ingress.service"
 check python3 -c '

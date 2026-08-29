@@ -817,15 +817,33 @@ raise SystemExit(1)' 2>/dev/null && return 0
     fi
     ODS_DEVICE_NAME=$(_env_get ODS_DEVICE_NAME "$_device_default")
 
-    # Whisper STT model — NVIDIA picks the larger turbo model, everyone else
-    # uses base. Phase 12 reads this to pre-download the right file, and
-    # Open WebUI reads it to request the same model for transcription.
-    if [[ "$GPU_BACKEND" == "nvidia" ]]; then
+    # Whisper acceleration is separately capability-gated from the primary LLM
+    # backend because the pinned Speaches CUDA image has a stricter driver
+    # floor. Phase 02 forces CPU only for Whisper when needed.
+    if [[ "${WHISPER_ACCELERATION_FORCED_CPU:-false}" == "true" ]]; then
+        WHISPER_ACCELERATION_VALUE="cpu"
+    else
+        WHISPER_ACCELERATION_VALUE=$(_env_get WHISPER_ACCELERATION "${WHISPER_ACCELERATION:-$([[ "$GPU_BACKEND" == "nvidia" ]] && echo cuda || echo cpu)}")
+    fi
+    case "$WHISPER_ACCELERATION_VALUE" in
+        cpu|cuda) ;;
+        *) WHISPER_ACCELERATION_VALUE="$([[ "$GPU_BACKEND" == "nvidia" ]] && echo cuda || echo cpu)" ;;
+    esac
+    if [[ "$WHISPER_ACCELERATION_VALUE" == "cuda" ]]; then
         _default_stt_model="deepdml/faster-whisper-large-v3-turbo-ct2"
+        _default_whisper_image=""
     else
         _default_stt_model="Systran/faster-whisper-base"
+        _default_whisper_image="ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu"
     fi
     AUDIO_STT_MODEL=$(_env_get AUDIO_STT_MODEL "${AUDIO_STT_MODEL:-$_default_stt_model}")
+    WHISPER_IMAGE_VALUE=$(_env_get WHISPER_IMAGE "${WHISPER_IMAGE:-$_default_whisper_image}")
+    if [[ "$WHISPER_ACCELERATION_VALUE" == "cpu" ]]; then
+        [[ "$AUDIO_STT_MODEL" =~ ([Ll]arge-v3|[Tt]urbo) ]] && AUDIO_STT_MODEL="$_default_stt_model"
+        if [[ -z "$WHISPER_IMAGE_VALUE" || "$WHISPER_IMAGE_VALUE" =~ [Cc][Uu][Dd][Aa] ]]; then
+            WHISPER_IMAGE_VALUE="$_default_whisper_image"
+        fi
+    fi
     EMBEDDING_MODEL_VALUE=$(_env_get EMBEDDING_MODEL "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}")
     RAG_EMBEDDING_MODEL_VALUE=$(_env_get_preserve_empty RAG_EMBEDDING_MODEL "${RAG_EMBEDDING_MODEL:-}")
     RAG_OPENAI_API_BASE_URL_VALUE=$(_env_get_preserve_empty RAG_OPENAI_API_BASE_URL "${RAG_OPENAI_API_BASE_URL:-}")
@@ -1103,8 +1121,10 @@ DIFY_SECRET_KEY=${DIFY_SECRET_KEY}
 
 #=== Voice Settings ===
 WHISPER_MODEL=base
+# Whisper acceleration is independently capability-gated from the LLM GPU.
+WHISPER_ACCELERATION=${WHISPER_ACCELERATION_VALUE}
+WHISPER_IMAGE=${WHISPER_IMAGE_VALUE}
 # Whisper STT model passed to Open WebUI and pre-downloaded by Phase 12.
-# Auto-selected based on GPU backend; edit to override.
 AUDIO_STT_MODEL=${AUDIO_STT_MODEL}
 TTS_VOICE=en_US-lessac-medium
 
@@ -1333,6 +1353,8 @@ search:
     - html
     - json
 engines:
+  - name: bing
+    disabled: false
   - name: duckduckgo
     disabled: false
   - name: google

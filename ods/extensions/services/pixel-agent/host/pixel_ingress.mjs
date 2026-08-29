@@ -30,8 +30,10 @@ const CONNECT_TIMEOUT_MS = 5000;
 // and the gateway, rather than an intermediate proxy, owns terminal timeout.
 const TOTAL_TIMEOUT_MS = 1920000;
 const GATEWAY_PROBE_TIMEOUT_MS = 2000;
+const GATEWAY_ABORT_TIMEOUT_MS = 5000;
 const DOCKER_TIMEOUT_MS = 10000;
 const MAX_TOKEN_LEN = 4096;
+const MAX_CANCEL_BODY = 256;
 const MAX_STATUS_INTERVAL_MS = 86400000; // 1 day
 const STATUS_MODE = 0o640; // group-readable, service-owner-writable projection
 
@@ -148,6 +150,13 @@ class HttpError extends Error {
 // AbortController budgets below are the only transport deadlines.
 export function gatewayFetch(url, options = {}) {
   return new Promise((resolve, reject) => {
+    let connectTimer = null;
+    const clearConnectTimer = () => {
+      if (connectTimer !== null) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+    };
     const request = http.request(
       url,
       {
@@ -157,6 +166,7 @@ export function gatewayFetch(url, options = {}) {
         agent: false,
       },
       (response) => {
+        clearConnectTimer();
         const headers = {
           get(name) {
             const value = response.headers[String(name).toLowerCase()];
@@ -171,7 +181,21 @@ export function gatewayFetch(url, options = {}) {
         });
       }
     );
-    request.once("error", reject);
+    request.once("socket", (socket) => {
+      if (!socket.connecting) {
+        clearConnectTimer();
+        return;
+      }
+      socket.once("connect", clearConnectTimer);
+    });
+    request.once("error", (error) => {
+      clearConnectTimer();
+      reject(error);
+    });
+    connectTimer = setTimeout(() => {
+      request.destroy(new Error("gateway connect timeout"));
+    }, CONNECT_TIMEOUT_MS);
+    connectTimer.unref?.();
     request.end(options.body);
   });
 }
@@ -438,6 +462,50 @@ async function drain(body) {
   }
 }
 
+async function abortGatewayRun(user, token, gatewayPort, deps) {
+  if (typeof user !== "string" || !/^ods-[0-9a-f]{64}$/.test(user)) return false;
+  const controller = new AbortController();
+  const timer = deps.setTimeout(() => controller.abort(), GATEWAY_ABORT_TIMEOUT_MS);
+  try {
+    const response = await deps.fetch(
+      `http://127.0.0.1:${gatewayPort}/pixel-ods/abort`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ user }),
+        redirect: "error",
+        signal: controller.signal,
+      }
+    );
+    if (response.status < 200 || response.status >= 300) {
+      await drain(response.body);
+      return false;
+    }
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("application/json")) {
+      await drain(response.body);
+      return false;
+    }
+    const body = await readBounded(response.body, 1024);
+    const result = JSON.parse(body.toString("utf8"));
+    return Boolean(
+      result &&
+      typeof result === "object" &&
+      !Array.isArray(result) &&
+      Object.keys(result).length === 1 &&
+      result.aborted === true
+    );
+  } catch {
+    return false;
+  } finally {
+    deps.clearTimeout(timer);
+  }
+}
+
 async function readBounded(stream, limit) {
   const reader = stream.getReader();
   const chunks = [];
@@ -506,7 +574,13 @@ async function streamSse(stream, res) {
 async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps) {
   const controller = new AbortController();
   const totalTimer = deps.setTimeout(() => controller.abort(), TOTAL_TIMEOUT_MS);
-  const headerTimer = deps.setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
+  const abortOnDownstreamClose = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  // Socket close remains transport cleanup only. The explicit /v1/chat/cancel
+  // control path owns run cancellation and draining, because an intermediate
+  // proxy can consume a close before it reaches this response object.
+  res.once("close", abortOnDownstreamClose);
   const wantsStream = outgoing.stream === true;
   try {
     const upstream = await deps.fetch(
@@ -519,8 +593,6 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
         signal: controller.signal,
       }
     );
-    deps.clearTimeout(headerTimer);
-
     if (upstream.status < 200 || upstream.status >= 300) {
       await drain(upstream.body);
       sendError(res, upstream.status >= 400 && upstream.status < 500 ? 400 : 502, "pixel request rejected");
@@ -540,6 +612,7 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
+      res.flushHeaders?.();
       await streamSse(upstream.body, res);
       return;
     }
@@ -569,7 +642,7 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
       res.destroy();
     }
   } finally {
-    deps.clearTimeout(headerTimer);
+    res.off("close", abortOnDownstreamClose);
     deps.clearTimeout(totalTimer);
   }
 }
@@ -584,6 +657,18 @@ function sendError(res, status, message) {
     "Cache-Control": "no-store",
   });
   res.end(JSON.stringify({ error: { message, type: "pixel_ingress_error" } }));
+}
+
+function sendJson(res, status, payload) {
+  if (res.headersSent) {
+    if (!res.writableEnded) res.destroy();
+    return;
+  }
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(payload));
 }
 
 export async function checkGatewayReachable(gatewayPort, deps = defaultDeps) {
@@ -754,8 +839,56 @@ export function createIngressServer({ token, gatewayPort, deps = defaultDeps }) 
       return;
     }
 
+    if (pathname === "/v1/chat/cancel") {
+      if (req.method !== "POST") {
+        sendError(res, 405, "method not allowed");
+        return;
+      }
+      const contentType = String(req.headers["content-type"] || "").toLowerCase();
+      if (contentType.split(";", 1)[0].trim() !== "application/json") {
+        sendError(res, 415, "content type must be application/json");
+        return;
+      }
+      void handleCancel(req, res, token, gatewayPort, deps);
+      return;
+    }
+
     sendError(res, 404, "not found");
   });
+}
+
+async function handleCancel(req, res, token, gatewayPort, deps) {
+  let raw;
+  try {
+    raw = await readBody(req, MAX_CANCEL_BODY);
+  } catch (error) {
+    sendError(
+      res,
+      error instanceof HttpError ? error.status : 400,
+      error instanceof HttpError ? error.message : "bad request"
+    );
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.toString("utf8"));
+  } catch {
+    sendError(res, 400, "invalid json");
+    return;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).length !== 1 ||
+    typeof parsed.user !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(parsed.user)
+  ) {
+    sendError(res, 400, "invalid cancellation request");
+    return;
+  }
+  const user = computeSessionUser({ user: parsed.user });
+  sendJson(res, 200, { aborted: await abortGatewayRun(user, token, gatewayPort, deps) });
 }
 
 async function handleChat(req, res, token, gatewayPort, deps) {

@@ -53,8 +53,18 @@ function fakeGateway({ onRequest } = {}) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
-      const captured = { headers: req.headers, body: body ? JSON.parse(body) : null };
+      const captured = {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: body ? JSON.parse(body) : null,
+      };
       if (onRequest) onRequest(captured);
+      if (req.url === "/pixel-ods/abort") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end('{"aborted":true}');
+        return;
+      }
       if (req.headers.accept === "text/event-stream") {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.write("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n");
@@ -236,7 +246,7 @@ test("prepareSocketPath removes only a socket at its own path", () => {
 // Route/method behavior
 // ---------------------------------------------------------------------------
 
-test("exact routes and methods: health ok, chat ok, others 404/405", async () => {
+test("exact routes and methods: health, chat, and cancel work; others 404/405", async () => {
   const gw = await fakeGateway();
   try {
     const srv = await startIngress({ gatewayPort: gw.port });
@@ -251,8 +261,18 @@ test("exact routes and methods: health ok, chat ok, others 404/405", async () =>
       });
       assert.equal(chat.status, 200);
 
+      const cancel = await request(srv, "POST", "/v1/chat/cancel", {
+        body: JSON.stringify({ user: "conversation-42" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(cancel.status, 200);
+      assert.deepEqual(JSON.parse(cancel.body), { aborted: true });
+
       const badMethod = await request(srv, "DELETE", "/health");
       assert.equal(badMethod.status, 405);
+
+      const badCancelMethod = await request(srv, "GET", "/v1/chat/cancel");
+      assert.equal(badCancelMethod.status, 405);
 
       const unknown = await request(srv, "GET", "/v1/models");
       assert.equal(unknown.status, 404);
@@ -261,6 +281,46 @@ test("exact routes and methods: health ok, chat ok, others 404/405", async () =>
     }
   } finally {
     await new Promise((r) => gw.server.close(r));
+  }
+});
+
+test("cancel validates the raw chat id and forwards only its opaque digest", async () => {
+  const captured = [];
+  const gw = await fakeGateway({ onRequest: (value) => captured.push(value) });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const chatId = "conversation-99";
+      const response = await request(srv, "POST", "/v1/chat/cancel", {
+        body: JSON.stringify({ user: chatId }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(JSON.parse(response.body), { aborted: true });
+      const digest = createHash("sha256").update(chatId).digest("hex");
+      assert.equal(captured.length, 1);
+      assert.equal(captured[0].url, "/pixel-ods/abort");
+      assert.equal(captured[0].headers.authorization, `Bearer ${TOKEN}`);
+      assert.deepEqual(captured[0].body, { user: `ods-${digest}` });
+
+      for (const body of [
+        {},
+        { user: "../../escape" },
+        { user: "safe", extra: true },
+        { user: 7 },
+      ]) {
+        const invalid = await request(srv, "POST", "/v1/chat/cancel", {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+        });
+        assert.equal(invalid.status, 400);
+      }
+      assert.equal(captured.length, 1);
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
   }
 });
 
@@ -427,6 +487,58 @@ test("streaming request forwards accept and returns SSE", async () => {
   }
 });
 
+test("closing a silent downstream stream closes the active gateway transport", async () => {
+  let markUpstreamClosed;
+  const upstreamClosed = new Promise((resolve) => {
+    markUpstreamClosed = resolve;
+  });
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.flushHeaders();
+      res.on("close", () => markUpstreamClosed(!res.writableEnded));
+    });
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const ingress = await startIngress({ gatewayPort: upstream.address().port });
+  try {
+    await new Promise((resolve, reject) => {
+      const client = http.request(
+        {
+          socketPath: ingress.address(),
+          method: "POST",
+          path: "/v1/chat/completions",
+          headers: { "Content-Type": "application/json" },
+        },
+        (response) => {
+          response.once("error", () => {});
+          response.destroy();
+          resolve();
+        }
+      );
+      client.once("error", (error) => {
+        if (error.code === "ECONNRESET") resolve();
+        else reject(error);
+      });
+      client.end(JSON.stringify({
+        stream: true,
+        messages: [{ role: "user", content: "cancel me" }],
+      }));
+    });
+    assert.equal(
+      await Promise.race([
+        upstreamClosed,
+        new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
+      ]),
+      true
+    );
+  } finally {
+    await new Promise((resolve) => ingress.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
 test("core gateway transport preserves a delayed response body", async () => {
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -457,6 +569,46 @@ test("core gateway transport preserves a delayed response body", async () => {
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("chat waits for delayed gateway headers after the loopback connection succeeds", async () => {
+  const armedTimeouts = [];
+  const deps = {
+    fetch: (_url, options) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          resolve(
+            new Response(
+              JSON.stringify({ id: "slow", choices: [{ message: { content: "ok" } }] }),
+              { status: 200, headers: { "Content-Type": "application/json" } }
+            )
+          );
+        }, 40);
+        options.signal.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new Error("aborted before delayed headers"));
+        }, { once: true });
+      }),
+    setTimeout: (callback, milliseconds) => {
+      armedTimeouts.push(milliseconds);
+      if (milliseconds < 100000) return setTimeout(callback, 5);
+      return { longBudget: true };
+    },
+    clearTimeout: (timer) => {
+      if (timer && !timer.longBudget) clearTimeout(timer);
+    },
+  };
+  const srv = await startIngress({ gatewayPort: 18789, deps });
+  try {
+    const response = await request(srv, "POST", "/v1/chat/completions", {
+      body: JSON.stringify({ messages: [{ role: "user", content: "slow reply" }] }),
+      headers: { "Content-Type": "application/json" },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(armedTimeouts, [1920000]);
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
   }
 });
 

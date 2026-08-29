@@ -20,6 +20,8 @@ from security import verify_api_key
 _DEFAULT_EDGE_URL = "http://pixel-edge:9595"
 _MODEL = "pixel/default"
 _CHAT_STREAM_TIMEOUT_SECONDS = 2040.0
+_CLIENT_DISCONNECT_POLL_SECONDS = 0.25
+_CLIENT_CANCEL_TIMEOUT_SECONDS = 7.0
 _MAX_KEY_LENGTH = 4096
 _MAX_STATUS_BYTES = 64 * 1024
 _MAX_SSE_LINE_BYTES = 1024 * 1024
@@ -157,6 +159,83 @@ def _error_event(message: str) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
+async def _cancel_edge_run(edge_url: str, key: str, chat_id: str) -> bool:
+    """Best-effort cancellation over the fixed authenticated internal edge."""
+    timeout = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "POST",
+                f"{edge_url}/v1/chat/cancel",
+                json={"user": chat_id},
+                headers=_edge_headers(key, accept="application/json"),
+            ) as response:
+                if response.status_code != 200:
+                    return False
+                if not response.headers.get("content-type", "").lower().startswith(
+                    "application/json"
+                ):
+                    return False
+                raw = await _bounded_response_bytes(response, 1024)
+        parsed = json.loads(raw)
+        return (
+            isinstance(parsed, dict)
+            and set(parsed) == {"aborted"}
+            and parsed.get("aborted") is True
+        )
+    except (
+        httpx.HTTPError,
+        asyncio.TimeoutError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+    ):
+        return False
+
+
+class _ClientDisconnected(Exception):
+    """The dashboard consumer left while Pixel was still producing a turn."""
+
+
+async def _iter_upstream_chunks(
+    upstream: httpx.Response,
+    request: Request,
+) -> AsyncIterator[bytes]:
+    """Yield upstream bytes while promptly observing a silent client exit."""
+    iterator = upstream.aiter_bytes().__aiter__()
+    pending: asyncio.Task[bytes] | None = None
+    try:
+        while True:
+            pending = asyncio.create_task(anext(iterator))
+            while not pending.done():
+                done, _ = await asyncio.wait(
+                    {pending},
+                    timeout=_CLIENT_DISCONNECT_POLL_SECONDS,
+                )
+                if done:
+                    break
+                if await request.is_disconnected():
+                    raise _ClientDisconnected
+            try:
+                chunk = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield chunk
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        close = getattr(iterator, "aclose", None)
+        if callable(close):
+            await close()
+
+
 @router.post("/chat/stream", dependencies=[Depends(verify_api_key)])
 async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> StreamingResponse:
     """Forward one bounded chat over authenticated, unbuffered SSE."""
@@ -205,9 +284,7 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         try:
             async with asyncio.timeout(_CHAT_STREAM_TIMEOUT_SECONDS):
                 buffered = bytearray()
-                async for chunk in upstream.aiter_bytes():
-                    if await request.is_disconnected():
-                        return
+                async for chunk in _iter_upstream_chunks(upstream, request):
                     buffered.extend(chunk)
                     while True:
                         newline = buffered.find(b"\n")
@@ -228,6 +305,8 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
                         return
                 if buffered:
                     yield bytes(buffered)
+        except _ClientDisconnected:
+            return
         except (GeneratorExit, asyncio.CancelledError):
             raise
         except (httpx.HTTPError, asyncio.TimeoutError):
@@ -235,6 +314,15 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         except Exception:
             yield _error_event("Pixel stream failed")
         finally:
+            if not done_seen:
+                cancel_task = asyncio.create_task(_cancel_edge_run(edge_url, key, body.chat_id))
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(cancel_task),
+                        timeout=_CLIENT_CANCEL_TIMEOUT_SECONDS,
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
             await upstream_context.__aexit__(None, None, None)
             await client.aclose()
         if not done_seen:

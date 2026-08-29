@@ -65,12 +65,20 @@ async def _upstream_health(_request):
     return web.json_response({"status": "ok"})
 
 
+async def _upstream_cancel(request):
+    data = await request.json()
+    request.app["cancel_users"].append(data.get("user"))
+    return web.json_response({"aborted": True})
+
+
 async def _start_upstream():
     fd, path = tempfile.mkstemp(suffix=".sock")
     os.close(fd)
     os.unlink(path)
     app = web.Application()
+    app["cancel_users"] = []
     app.router.add_post("/v1/chat/completions", _upstream_chat)
+    app.router.add_post("/v1/chat/cancel", _upstream_cancel)
     app.router.add_get("/v1/models", _upstream_models)
     app.router.add_get("/health", _upstream_health)
     runner = web.AppRunner(app)
@@ -270,6 +278,12 @@ class TestAuth(BaseEdgeTest):
                                     json={"model": "pixel/default", "messages": []}) as resp:
             self.assertEqual(resp.status, 401)
 
+    async def test_cancel_requires_auth(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/cancel", json={"user": "conversation-1"}
+        ) as resp:
+            self.assertEqual(resp.status, 401)
+
 
 # ---------------------------------------------------------------------------
 # Refused routes / methods
@@ -304,6 +318,43 @@ class TestContentType(BaseEdgeTest):
             headers={**self.auth(), "Content-Type": "text/plain"},
             data="not json") as resp:
             self.assertEqual(resp.status, 415)
+
+    async def test_cancel_wrong_content_type(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/cancel",
+            headers={**self.auth(), "Content-Type": "text/plain"},
+            data="not json",
+        ) as resp:
+            self.assertEqual(resp.status, 415)
+
+
+class TestCancellation(BaseEdgeTest):
+    async def test_cancel_forwards_only_the_validated_chat_id(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/cancel",
+            headers=self.auth(),
+            json={"user": "conversation-42"},
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(await resp.json(), {"aborted": True})
+        self.assertEqual(self.up_runner.app["cancel_users"], ["conversation-42"])
+
+    async def test_cancel_rejects_ambiguous_or_unsafe_bodies(self):
+        cases = (
+            {},
+            {"user": "../../escape"},
+            {"user": "safe", "extra": True},
+            {"user": 7},
+            ["conversation-42"],
+        )
+        for body in cases:
+            async with self.client.post(
+                "http://localhost/v1/chat/cancel",
+                headers=self.auth(),
+                json=body,
+            ) as resp:
+                self.assertEqual(resp.status, 400)
+        self.assertEqual(self.up_runner.app["cancel_users"], [])
 
 
 # ---------------------------------------------------------------------------

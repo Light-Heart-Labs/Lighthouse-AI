@@ -597,6 +597,8 @@ normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
 normalized_write_lock = normalized_session.setdefault("writeLock", {})
 normalized_tools = normalized.setdefault("tools", {})
+normalized_web = normalized_tools.setdefault("web", {})
+normalized_fetch = normalized_web.setdefault("fetch", {})
 normalized_agent_tools = normalized_agent.setdefault("tools", {})
 normalized_agent_deny = normalized_agent_tools.setdefault("deny", [])
 normalized_sandbox_tools = normalized_tools.setdefault("sandbox", {}).setdefault("tools", {})
@@ -605,6 +607,8 @@ if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_diagnostics, dict)
         or not isinstance(normalized_write_lock, dict)
         or not isinstance(normalized_tools, dict)
+        or not isinstance(normalized_web, dict)
+        or not isinstance(normalized_fetch, dict)
         or not isinstance(normalized_agent_tools, dict)
         or not isinstance(normalized_agent_deny, list)
         or not all(isinstance(item, str) for item in normalized_agent_deny)
@@ -630,9 +634,27 @@ normalized_tools["loopDetection"] = {
         "pingPong": True,
     },
 }
-normalized_agent_tools["deny"] = [item for item in normalized_agent_deny if item != "web_search"]
-if "web_search" not in normalized_sandbox_allow:
-    normalized_sandbox_allow.append("web_search")
+normalized_fetch.update({
+    "enabled": True,
+    "maxChars": 12000,
+    "maxCharsCap": 20000,
+    "maxResponseBytes": 1000000,
+    "timeoutSeconds": 20,
+    "cacheTtlMinutes": 15,
+    "maxRedirects": 3,
+    "readability": True,
+    "useTrustedEnvProxy": False,
+    "ssrfPolicy": {
+        "allowRfc2544BenchmarkRange": False,
+        "allowIpv6UniqueLocalRange": False,
+    },
+})
+normalized_agent_tools["deny"] = [
+    item for item in normalized_agent_deny if item not in {"web_search", "web_fetch"}
+]
+for web_tool in ("web_search", "web_fetch"):
+    if web_tool not in normalized_sandbox_allow:
+        normalized_sandbox_allow.append(web_tool)
 normalized_sandbox_tools["allow"] = sorted(set(normalized_sandbox_allow))
 model_label = f"{model_id} {model_name}".casefold()
 if "qwen" in model_label:
@@ -785,6 +807,8 @@ updated_diagnostics = updated.setdefault("diagnostics", {})
 updated_compaction = updated_defaults.setdefault("compaction", {})
 write_lock = updated_session.setdefault("writeLock", {})
 updated_tools = updated.setdefault("tools", {})
+updated_web = updated_tools.setdefault("web", {})
+updated_fetch = updated_web.setdefault("fetch", {})
 updated_agent_tools = updated_agent.setdefault("tools", {})
 updated_agent_deny = updated_agent_tools.setdefault("deny", [])
 updated_sandbox = updated_tools.setdefault("sandbox", {})
@@ -804,7 +828,9 @@ if (not isinstance(updated_tools, dict) or not isinstance(updated_agent_tools, d
         or not isinstance(updated_sandbox_allow, list)
         or not all(isinstance(item, str) for item in updated_sandbox_allow)):
     raise SystemExit("OpenClaw tool policy is outside the ODS Pixel runtime contract")
-search = updated_tools.get("web", {}).get("search", {})
+if not isinstance(updated_web, dict) or not isinstance(updated_fetch, dict):
+    raise SystemExit("OpenClaw web tool policy is outside the ODS Pixel runtime contract")
+search = updated_web.get("search", {})
 searxng = updated.get("plugins", {}).get("entries", {}).get("searxng", {})
 search_url = searxng.get("config", {}).get("webSearch", {}).get("baseUrl")
 if (not isinstance(search, dict) or search.get("provider") != "searxng"
@@ -861,12 +887,30 @@ updated_tools["loopDetection"] = {
         "pingPong": True,
     },
 }
-# ODS ships a loopback-only SearXNG provider. Expose its search tool to Pixel,
-# but retain the generic web_fetch denial so arbitrary URL retrieval still
-# stays behind a separately reviewed broker boundary.
-updated_agent_tools["deny"] = [item for item in updated_agent_deny if item != "web_search"]
-if "web_search" not in updated_sandbox_allow:
-    updated_sandbox_allow.append("web_search")
+# Search stays private through loopback-only SearXNG. Page retrieval uses
+# OpenClaw's public-network SSRF guard with deliberately tighter ODS bounds;
+# private/link-local targets and trusted environment proxies remain disabled.
+updated_fetch.update({
+    "enabled": True,
+    "maxChars": 12000,
+    "maxCharsCap": 20000,
+    "maxResponseBytes": 1000000,
+    "timeoutSeconds": 20,
+    "cacheTtlMinutes": 15,
+    "maxRedirects": 3,
+    "readability": True,
+    "useTrustedEnvProxy": False,
+    "ssrfPolicy": {
+        "allowRfc2544BenchmarkRange": False,
+        "allowIpv6UniqueLocalRange": False,
+    },
+})
+updated_agent_tools["deny"] = [
+    item for item in updated_agent_deny if item not in {"web_search", "web_fetch"}
+]
+for web_tool in ("web_search", "web_fetch"):
+    if web_tool not in updated_sandbox_allow:
+        updated_sandbox_allow.append(web_tool)
 updated_sandbox_tools["allow"] = sorted(set(updated_sandbox_allow))
 if updated == value:
     print("unchanged")
@@ -973,6 +1017,7 @@ ods_pixel_reconcile_promoted_model() {
     local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
     local promoted_context="${5:-}" promoted_max_tokens="${6:-}" promoted_reasoning="${7:-}"
     local source_ref source_root pixel_root answers candidate backup contract_sha256 openclaw_bin failed=false
+    local failure_phase=unknown
     [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
     source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
     local PIXEL_SOURCE_REF="$source_ref"
@@ -985,39 +1030,59 @@ ods_pixel_reconcile_promoted_model() {
     openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
 
-    _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" \
-        "$promoted_context" "$promoted_max_tokens" "$promoted_reasoning" || failed=true
-    if [[ "$failed" == false ]] && {
-        ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
-        || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan;
-    }; then
+    if ! _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" \
+        "$promoted_context" "$promoted_max_tokens" "$promoted_reasoning"; then
         failed=true
+        failure_phase=onboarding-update
+    fi
+    if [[ "$failed" == false ]] \
+        && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force; then
+        failed=true
+        failure_phase=pixel-configure
+    fi
+    if [[ "$failed" == false ]] \
+        && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan; then
+        failed=true
+        failure_phase=pixel-plan
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_apply_runtime_budget "$owner" "$home" "$candidate" "$openclaw_bin" >/dev/null; then
         failed=true
+        failure_phase=runtime-budget
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_candidate_is_managed_runtime_update "$owner" "$home" "$candidate" "$answers"; then
         failed=true
+        failure_phase=managed-update-validation
     fi
-    if [[ "$failed" == false ]] \
-        && ! _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate" \
-        && ! _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$candidate" "$home/.openclaw/openclaw.json"; then
-        failed=true
+    if [[ "$failed" == false ]] && ! _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate"; then
+        if ! _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$candidate" "$home/.openclaw/openclaw.json"; then
+            failed=true
+            failure_phase=config-install
+        fi
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
         failed=true
+        failure_phase=gateway-restart-verify
     fi
     if [[ "$failed" == false ]]; then
-        contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || failed=true
+        if ! contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"; then
+            failed=true
+            failure_phase=contract-hash
+        fi
     fi
     if [[ "$failed" == false ]]; then
         if [[ "$final_state" == ready ]]; then
-            _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || failed=true
+            if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then
+                failed=true
+                failure_phase=ready-marker
+            fi
         else
-            _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || failed=true
+            if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
+                failed=true
+                failure_phase=installing-marker
+            fi
         fi
     fi
     if [[ "$failed" == false ]]; then
@@ -1025,11 +1090,12 @@ ods_pixel_reconcile_promoted_model() {
         return 0
     fi
 
-    printf '%s\n' 'warning: Pixel model reconciliation failed; restoring the previous verified route' >&2
+    printf 'warning: Pixel model reconciliation failed during phase=%s; restoring the previous verified route\n' \
+        "$failure_phase" >&2
     if _ods_pixel_restore_model_reconciliation "$owner" "$home" "$pixel_root" "$answers" "$backup"; then
-        printf '%s\n' 'warning: previous Pixel model route restored and verified' >&2
+        printf '%s\n' 'warning: previous Pixel model route restored and verified; rollback=verified' >&2
     else
-        printf '%s\n' "error: Pixel model reconciliation and verified rollback both failed; evidence retained at $backup" >&2
+        printf '%s\n' "error: Pixel model reconciliation and verified rollback both failed; rollback=failed evidence=$backup" >&2
     fi
     return 1
 }

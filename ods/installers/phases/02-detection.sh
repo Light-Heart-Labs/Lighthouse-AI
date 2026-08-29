@@ -266,6 +266,17 @@ if [[ $GPU_COUNT -gt 0 && "$GPU_BACKEND" == "nvidia" ]]; then
     fi
 fi
 
+# The pinned Speaches CUDA image requires driver 575+, which is stricter than
+# the llama-server CUDA floor. Keep the primary NVIDIA LLM path enabled on
+# older drivers while selecting CPU Whisper and suppressing only its GPU
+# overlay. This mirrors the existing Windows installer contract.
+ods_configure_whisper_acceleration "$GPU_BACKEND" "${DRIVER_VERSION:-0}"
+if [[ "$WHISPER_ACCELERATION_FORCED_CPU" == "true" ]]; then
+    ai_warn "Whisper CUDA requires NVIDIA driver ${MIN_WHISPER_CUDA_DRIVER_VERSION}+; detected ${DRIVER_VERSION:-unknown}. Using CPU Whisper while keeping GPU inference enabled."
+elif [[ "$WHISPER_ACCELERATION" == "cpu" && "$GPU_BACKEND" == "nvidia" ]]; then
+    log "Whisper CPU acceleration explicitly selected; NVIDIA inference remains enabled"
+fi
+
 #-----------------------------------------------------------------------------
 # Intel Arc validation (lspci cross-check, Level Zero, intel_gpu_top)
 #-----------------------------------------------------------------------------

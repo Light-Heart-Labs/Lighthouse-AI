@@ -528,6 +528,59 @@ detect_gpu() {
 }
 
 MIN_DRIVER_VERSION=570
+MIN_WHISPER_CUDA_DRIVER_VERSION=575
+
+ods_whisper_cuda_supported() {
+    local backend="${1:-${GPU_BACKEND:-cpu}}"
+    local driver_major="${2:-${DRIVER_VERSION:-0}}"
+    [[ "$backend" == "nvidia" && "$driver_major" =~ ^[0-9]+$ \
+        && "$driver_major" -ge "$MIN_WHISPER_CUDA_DRIVER_VERSION" ]]
+}
+
+_ods_csv_add_unique() {
+    local variable_name="$1" value="$2" current=""
+    current="${!variable_name:-}"
+    case ",$current," in
+        *",$value,"*) ;;
+        *)
+            if [[ -n "$current" ]]; then
+                printf -v "$variable_name" '%s,%s' "$current" "$value"
+            else
+                printf -v "$variable_name" '%s' "$value"
+            fi
+            ;;
+    esac
+}
+
+ods_configure_whisper_acceleration() {
+    local backend="${1:-${GPU_BACKEND:-cpu}}"
+    local driver_major="${2:-${DRIVER_VERSION:-0}}"
+    local requested="${WHISPER_ACCELERATION:-}"
+
+    WHISPER_ACCELERATION_FORCED_CPU=false
+    if ods_whisper_cuda_supported "$backend" "$driver_major"; then
+        case "$requested" in
+            cpu|cuda) WHISPER_ACCELERATION="$requested" ;;
+            *) WHISPER_ACCELERATION="cuda" ;;
+        esac
+    else
+        WHISPER_ACCELERATION="cpu"
+        [[ "$backend" == "nvidia" ]] && WHISPER_ACCELERATION_FORCED_CPU=true
+    fi
+
+    if [[ "$WHISPER_ACCELERATION" == "cpu" ]]; then
+        _ods_csv_add_unique ODS_SKIP_GPU_OVERLAYS whisper
+        if [[ -z "${WHISPER_IMAGE:-}" || "${WHISPER_IMAGE:-}" =~ [Cc][Uu][Dd][Aa] ]]; then
+            WHISPER_IMAGE="ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu"
+        fi
+        if [[ "${AUDIO_STT_MODEL:-}" =~ ([Ll]arge-v3|[Tt]urbo) ]]; then
+            AUDIO_STT_MODEL="Systran/faster-whisper-base"
+        fi
+    fi
+
+    export WHISPER_ACCELERATION WHISPER_ACCELERATION_FORCED_CPU
+    export ODS_SKIP_GPU_OVERLAYS WHISPER_IMAGE AUDIO_STT_MODEL
+}
 
 nvidia_name_is_blackwell() {
     local name="$1"

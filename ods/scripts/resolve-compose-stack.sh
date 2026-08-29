@@ -93,6 +93,8 @@ skip_gpu_overlays = {
     for x in (sys.argv[9] or os.environ.get("ODS_SKIP_GPU_OVERLAYS", "")).split(",")
     if x.strip()
 }
+if os.environ.get("WHISPER_ACCELERATION", "").strip().lower() == "cpu":
+    skip_gpu_overlays.add("whisper")
 lemonade_external = (
     os.environ.get("LEMONADE_EXTERNAL", "").lower() in {"1", "true", "yes", "on"}
     or (

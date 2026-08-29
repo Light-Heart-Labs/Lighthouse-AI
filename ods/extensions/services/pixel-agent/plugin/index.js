@@ -8,6 +8,10 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  abortAgentHarnessRun,
+  abortAndDrainAgentHarnessRun,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
   appsPayload,
   readProjection,
   statusFileFromEnv,
@@ -19,8 +23,10 @@ import {
   statusToolText,
   unavailableToolText,
 } from "./tool-content.mjs";
+import { createToolLoopGuard } from "./tool-loop-guard.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
+const ABORT_BODY_LIMIT = 256;
 
 // Restrict tool registration to the Pixel agent. Tools are only offered to the
 // agent id declared by this plugin (see openclaw.plugin.json); this guards the
@@ -80,19 +86,89 @@ function errorResult() {
   };
 }
 
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(body);
+}
+
+async function readAbortUser(req) {
+  if (req.method !== "POST") return { status: 405 };
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.split(";", 1)[0].trim() !== "application/json") return { status: 415 };
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > ABORT_BODY_LIMIT) return { status: 413 };
+    chunks.push(chunk);
+  }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks, total).toString("utf8"));
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      typeof body.user !== "string" ||
+      !/^ods-[0-9a-f]{64}$/.test(body.user)
+    ) {
+      return { status: 400 };
+    }
+    return { status: 200, user: body.user };
+  } catch {
+    return { status: 400 };
+  }
+}
+
 export default definePluginEntry({
   id: "pixel-ods",
   name: "Pixel ODS Status",
   description: "Read-only, sanitized ODS service status for the Pixel agent.",
   register(api) {
     const statusFile = statusFileFromEnv();
+    const toolLoopGuard = createToolLoopGuard({
+      abortRun: abortAgentHarnessRun,
+      abortRunAndDrain: (sessionId, sessionKey) =>
+        abortAndDrainAgentHarnessRun({
+          sessionId,
+          sessionKey,
+          settleMs: 4000,
+          forceClear: false,
+          reason: "ods_client_disconnect",
+        }),
+      warn: (message) => api.logger.warn(message),
+    });
 
     // OpenClaw does not replay arbitrary plugin tools after an empty model
     // continuation. Give the Pixel agent an explicit, trusted prompt contract
     // so every ODS lookup is followed by a user-visible answer.
-    api.on("before_prompt_build", (_event, context) =>
-      promptContractForAgent(context, AGENT_ID)
+    api.on("before_prompt_build", (event, context) => {
+      toolLoopGuard.observeRun(context, AGENT_ID);
+      return promptContractForAgent(context, AGENT_ID, event);
+    });
+    api.on("before_tool_call", (event, context) =>
+      toolLoopGuard.beforeToolCall(event, context, AGENT_ID)
     );
+    api.on("after_tool_call", (event, context) =>
+      toolLoopGuard.afterToolCall(event, context, AGENT_ID)
+    );
+    api.registerHttpRoute({
+      path: "/pixel-ods/abort",
+      auth: "gateway",
+      match: "exact",
+      handler: async (req, res) => {
+        const parsed = await readAbortUser(req);
+        if (parsed.status !== 200) {
+          sendJson(res, parsed.status, { error: "invalid cancellation request" });
+          return true;
+        }
+        sendJson(res, 200, { aborted: await toolLoopGuard.abortUserRun(parsed.user) });
+        return true;
+      },
+    });
 
     registerTool(
       api,
