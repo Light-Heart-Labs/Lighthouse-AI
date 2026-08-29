@@ -74,6 +74,30 @@ describe('Pixel', () => {
     })
   })
 
+  it('orients the owner with live runtime identity and editable starter tasks', async () => {
+    globalThis.fetch.mockResolvedValue(
+      response({ available: true, model: 'pixel/default', detail: 'Owner agent ready' })
+    )
+
+    render(<Pixel systemStatus={{
+      inference: {
+        loadedModel: 'Qwen3.5-9B-Q4_K_M.gguf',
+        contextSize: 32768,
+      },
+    }} />)
+
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('What should we accomplish?')).toBeInTheDocument()
+    expect(screen.getByText('Qwen3.5-9B-Q4_K_M.gguf')).toBeInTheDocument()
+    expect(screen.getByText('32K context')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Check ODS health/ }))
+    expect(screen.getByPlaceholderText('Message Pixel...')).toHaveValue(
+      'Check the current ODS status. Summarize what is healthy, identify anything degraded or stopped, and suggest the safest next action.'
+    )
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('sends exact body to stream endpoint', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })
@@ -154,6 +178,42 @@ describe('Pixel', () => {
       { role: 'user', content: 'second turn' },
     ])
     expect(body.messages.every(message => Object.keys(message).sort().join(',') === 'content,role')).toBe(true)
+  })
+
+  it('starts a clean conversation with a new opaque chat id', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'First answer' } }] }),
+      '[DONE]',
+    ]))
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Second answer' } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText('Message Pixel...')
+    fireEvent.change(textarea, { target: { value: 'first turn' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByText('First answer')).toBeInTheDocument())
+
+    const firstCall = globalThis.fetch.mock.calls.find(call => call[0] === '/api/pixel/chat/stream')
+    const firstChatId = JSON.parse(firstCall[1].body).chat_id
+    fireEvent.click(screen.getByTitle('Start a new chat'))
+    expect(screen.queryByText('First answer')).not.toBeInTheDocument()
+    expect(screen.getByText('What should we accomplish?')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), { target: { value: 'second turn' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByText('Second answer')).toBeInTheDocument())
+
+    const chatCalls = globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')
+    const secondChatId = JSON.parse(chatCalls[1][1].body).chat_id
+    expect(secondChatId).not.toBe(firstChatId)
   })
 
   it('parses SSE chunks and displays content', async () => {

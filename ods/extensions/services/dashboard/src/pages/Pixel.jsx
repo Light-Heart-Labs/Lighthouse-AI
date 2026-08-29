@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { AlertCircle, Bot, Loader2, Send, Square } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import {
+  AlertCircle,
+  Bot,
+  Code2,
+  Globe2,
+  Loader2,
+  Plus,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Square,
+  Wrench,
+} from 'lucide-react'
 
 const MARKDOWN_COMPONENTS = {
   p: ({ children }) => <p className="break-words [&:not(:first-child)]:mt-3">{children}</p>,
@@ -10,19 +23,53 @@ const MARKDOWN_COMPONENTS = {
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
   code: ({ inline, children }) => inline
-    ? <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[13px] text-zinc-800">{children}</code>
-    : <code className="block whitespace-pre-wrap break-words rounded bg-zinc-100 p-2 font-mono text-[13px] text-zinc-800">{children}</code>,
-  pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded bg-zinc-100">{children}</pre>,
+    ? <code className="rounded border border-theme-border bg-theme-bg/70 px-1 py-0.5 font-mono text-[13px] text-theme-text">{children}</code>
+    : <code className="block whitespace-pre-wrap break-words rounded bg-theme-bg/70 p-2 font-mono text-[13px] text-theme-text">{children}</code>,
+  pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded border border-theme-border bg-theme-bg/70">{children}</pre>,
   a: ({ href, children }) => {
     const safe = typeof href === 'string' && /^https?:\/\//i.test(href)
     return safe
-      ? <a href={href} target="_blank" rel="noopener noreferrer" className="underline">{children}</a>
+      ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-theme-accent-light underline">{children}</a>
       : <span>{children}</span>
   },
 }
 
 const MAX_INPUT_LEN = 16 * 1024
 let fallbackChatSequence = 0
+
+const SUGGESTED_TASKS = [
+  {
+    icon: ShieldCheck,
+    label: 'Check ODS health',
+    description: 'Inspect the live stack and explain anything that needs attention.',
+    prompt: 'Check the current ODS status. Summarize what is healthy, identify anything degraded or stopped, and suggest the safest next action.',
+  },
+  {
+    icon: Code2,
+    label: 'Build in my workspace',
+    description: 'Create, edit, run, and verify code instead of only suggesting it.',
+    prompt: 'Help me build and verify something useful in your writable workspace. Start by asking what outcome I want if it is not clear.',
+  },
+  {
+    icon: Globe2,
+    label: 'Research with sources',
+    description: 'Use public web evidence and keep citations exact.',
+    prompt: 'Research a public topic for me using current sources. Ask what topic and decision I need to make, then return a concise evidence-backed answer with exact source URLs.',
+  },
+  {
+    icon: Wrench,
+    label: 'Plan a multi-step task',
+    description: 'Break down a larger job, use tools, and report verified progress.',
+    prompt: 'Help me complete a multi-step task safely. Ask for the objective, then make a short plan and carry out the steps you can verify.',
+  },
+]
+
+function formatContext(value) {
+  const context = Number(value || 0)
+  if (!Number.isFinite(context) || context <= 0) return ''
+  if (context >= 1024 && context % 1024 === 0) return `${context / 1024}K context`
+  return `${context.toLocaleString()} context`
+}
 
 function makeChatId() {
   const cryptoApi = globalThis.crypto
@@ -44,7 +91,7 @@ function replaceLastAssistant(messages, update) {
   return next
 }
 
-export default function Pixel() {
+export default function Pixel({ systemStatus = null }) {
   const [status, setStatus] = useState('loading')
   const [statusDetail, setStatusDetail] = useState('')
   const [messages, setMessages] = useState([])
@@ -53,7 +100,13 @@ export default function Pixel() {
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(makeChatId())
+  const inputRef = useRef(null)
   const scrollRef = useRef(null)
+
+  const activeModel = systemStatus?.inference?.loadedModel || systemStatus?.model?.name || ''
+  const activeContext = formatContext(
+    systemStatus?.inference?.contextSize || systemStatus?.model?.contextLength
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -191,47 +244,142 @@ export default function Pixel() {
     setSending(false)
   }, [])
 
+  const startNewChat = useCallback(() => {
+    if (sending) return
+    chatIdRef.current = makeChatId()
+    setMessages([])
+    setInput('')
+    inputRef.current?.focus?.()
+  }, [sending])
+
+  const selectSuggestion = useCallback((prompt) => {
+    setInput(prompt)
+    inputRef.current?.focus?.()
+  }, [])
+
   const inputOver = input.length > MAX_INPUT_LEN
   const isDisabled = sending || status !== 'available'
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3">
-        <Bot className="h-5 w-5 text-zinc-500" />
-        <h1 className="text-lg font-semibold">Pixel</h1>
-        <span className={`ml-auto inline-flex items-center gap-1.5 text-xs font-medium ${
-          status === 'available' ? 'text-green-600' : 'text-amber-600'
-        }`}>
-          {status === 'loading' && <Loader2 className="h-3 w-3 animate-spin" />}
-          {status === 'available' ? 'Available' : status === 'loading' ? 'Connecting...' : 'Degraded'}
-          {status === 'unavailable' && statusDetail && (
-            <span className="ml-1 text-zinc-400">{statusDetail}</span>
+    <div className="flex h-full flex-col text-theme-text">
+      <div className="flex flex-wrap items-center gap-3 border-b border-theme-border bg-theme-card/35 px-4 py-3 sm:px-6">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-theme-accent/30 bg-theme-accent/15 text-theme-accent-light">
+          <Bot className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold leading-tight">Pixel</h1>
+          <p className="text-[11px] text-theme-text-muted">Your local ODS owner agent</p>
+        </div>
+
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+          {activeModel && (
+            <div
+              className="hidden min-w-0 items-center gap-2 rounded-lg border border-theme-border bg-theme-bg/40 px-2.5 py-1.5 font-mono text-[10px] text-theme-text-muted sm:flex"
+              title={activeModel}
+            >
+              <span className="max-w-52 truncate text-theme-text-secondary">{activeModel}</span>
+              {activeContext && <span className="shrink-0 text-theme-accent-light">{activeContext}</span>}
+            </div>
           )}
-        </span>
+          <Link
+            to="/models"
+            className="hidden rounded-lg px-2.5 py-1.5 text-xs font-medium text-theme-text-muted transition hover:bg-theme-surface-hover hover:text-theme-text sm:inline-flex"
+          >
+            Change model
+          </Link>
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={startNewChat}
+              disabled={sending}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-card px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary transition hover:border-theme-accent/40 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+              title="Start a new chat"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">New chat</span>
+            </button>
+          )}
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+            status === 'available'
+              ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-400'
+              : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+          }`}>
+            {status === 'loading' ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <span className={`h-1.5 w-1.5 rounded-full ${
+                status === 'available' ? 'bg-emerald-400' : 'bg-amber-300'
+              }`} />
+            )}
+            {status === 'available' ? 'Available' : status === 'loading' ? 'Connecting...' : 'Degraded'}
+          </span>
+        </div>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
         {status === 'loading' && messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center text-zinc-400">
+          <div className="flex h-full flex-col items-center justify-center text-theme-text-muted">
             <Loader2 className="mb-3 h-8 w-8 animate-spin" />
             <p>Connecting to Pixel...</p>
           </div>
         )}
         {status === 'unavailable' && messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center text-zinc-400">
-            <AlertCircle className="mb-3 h-8 w-8" />
-            <p>Pixel is currently unavailable</p>
+          <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center text-theme-text-muted">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-500/25 bg-amber-500/10 text-amber-300">
+              <AlertCircle className="h-7 w-7" />
+            </div>
+            <p className="font-medium text-theme-text">Pixel is currently unavailable</p>
             {statusDetail && <p className="mt-1 text-sm">{statusDetail}</p>}
+            <p className="mt-4 text-xs">Your other ODS applications remain available while the agent reconnects.</p>
+          </div>
+        )}
+        {status === 'available' && messages.length === 0 && (
+          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center py-8">
+            <div className="mb-7 text-center">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-theme-accent/30 bg-theme-accent/15 text-theme-accent-light shadow-[0_0_32px_rgba(157,0,255,0.18)]">
+                <Sparkles className="h-7 w-7" />
+              </div>
+              <h2 className="text-2xl font-semibold tracking-tight">What should we accomplish?</h2>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-theme-text-muted">
+                Pixel can research, write and run code, inspect ODS, and carry multi-step work through to a verified result using the active local model.
+              </p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              {SUGGESTED_TASKS.map(({ icon: Icon, label, description, prompt }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => selectSuggestion(prompt)}
+                  className="group flex items-start gap-3 rounded-xl border border-theme-border bg-theme-card/70 p-4 text-left transition hover:border-theme-accent/45 hover:bg-theme-surface-hover"
+                >
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-theme-accent/12 text-theme-accent-light">
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <span>
+                    <span className="block text-sm font-medium text-theme-text">{label}</span>
+                    <span className="mt-1 block text-xs leading-5 text-theme-text-muted">{description}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-2 text-[11px] text-theme-text-muted">
+              <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Local-first</span>
+              <span>Workspace tools</span>
+              <span>Public-source research</span>
+              <span>Explicit safety boundaries</span>
+            </div>
           </div>
         )}
         {messages.map((message, index) => (
-          <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
+          <div key={index} className={`mx-auto flex w-full max-w-5xl ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 xl:max-w-3xl ${
               message.role === 'user'
-                ? 'bg-zinc-800 text-white'
+                ? 'bg-theme-accent text-white shadow-lg shadow-black/10'
                 : message.status === 'error'
-                  ? 'border border-red-200 bg-red-50 text-red-700'
-                  : 'bg-zinc-100 text-zinc-800'
+                  ? 'border border-red-500/25 bg-red-500/10 text-red-200'
+                  : 'border border-theme-border bg-theme-card text-theme-text-secondary shadow-lg shadow-black/10'
             }`}>
               {message.role === 'assistant' && message.content ? (
                 <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
@@ -239,10 +387,9 @@ export default function Pixel() {
                 <span className="break-words whitespace-pre-wrap">{message.content}</span>
               )}
               {message.status === 'streaming' && !message.content && (
-                <span className="ml-1 inline-flex gap-1">
-                  <span className="animate-bounce">●</span>
-                  <span className="animate-bounce [animation-delay:0.1s]">●</span>
-                  <span className="animate-bounce [animation-delay:0.2s]">●</span>
+                <span className="inline-flex items-center gap-2 text-theme-text-muted">
+                  <Loader2 className="h-4 w-4 animate-spin text-theme-accent-light" />
+                  <span>Pixel is working…</span>
                 </span>
               )}
             </div>
@@ -251,9 +398,11 @@ export default function Pixel() {
         <div ref={scrollRef} />
       </div>
 
-      <div className="border-t border-zinc-200 p-4">
-        <div className="flex gap-2">
+      <div className="border-t border-theme-border bg-theme-bg/80 px-4 py-3 backdrop-blur sm:px-6">
+        <div className="mx-auto max-w-5xl">
+          <div className="flex gap-2">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -265,14 +414,14 @@ export default function Pixel() {
             placeholder={status !== 'available' ? 'Pixel is unavailable' : 'Message Pixel...'}
             disabled={isDisabled}
             rows={1}
-            className={`flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:ring-2 focus:ring-zinc-400 disabled:opacity-50 ${
-              inputOver ? 'border-red-400' : 'border-zinc-300'
+            className={`min-h-11 flex-1 resize-none rounded-xl border bg-theme-card px-4 py-2.5 text-sm text-theme-text outline-none transition placeholder:text-theme-text-muted/70 focus:ring-2 focus:ring-theme-accent/30 disabled:opacity-50 ${
+              inputOver ? 'border-red-400' : 'border-theme-border focus:border-theme-accent/60'
             }`}
           />
           {sending ? (
             <button
               onClick={stopStreaming}
-              className="inline-flex items-center justify-center rounded-xl bg-red-500 px-3 py-2.5 text-white transition hover:bg-red-600"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-red-500 text-white transition hover:bg-red-600"
               title="Stop"
             >
               <Square className="h-4 w-4" />
@@ -281,15 +430,20 @@ export default function Pixel() {
             <button
               onClick={sendMessage}
               disabled={isDisabled || inputOver}
-              className="inline-flex items-center justify-center rounded-xl bg-zinc-800 px-3 py-2.5 text-white transition hover:bg-zinc-900 disabled:opacity-50"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-theme-accent text-white shadow-[0_0_22px_rgba(157,0,255,0.18)] transition hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               title="Send"
             >
               <Send className="h-4 w-4" />
             </button>
           )}
+          </div>
+          <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-theme-text-muted/70">
+            <span>{sending ? 'Pixel is using the active ODS model and tools.' : 'Enter to send • Shift+Enter for a new line'}</span>
+            <span className={inputOver ? 'text-red-400' : ''}>{input.length.toLocaleString()} / {MAX_INPUT_LEN.toLocaleString()}</span>
+          </div>
         </div>
         {inputOver && (
-          <p className="mt-1 text-xs text-red-500">
+          <p className="mx-auto mt-1 max-w-5xl px-1 text-xs text-red-400">
             Message too long (max {MAX_INPUT_LEN.toLocaleString()} characters)
           </p>
         )}

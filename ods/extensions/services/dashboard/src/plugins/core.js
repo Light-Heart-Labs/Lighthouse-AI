@@ -106,7 +106,7 @@ export const coreRoutes = [
     label: 'Pixel',
     icon: Bot,
     component: Pixel,
-    getProps: () => ({}),
+    getProps: ({ status }) => ({ systemStatus: status }),
     sidebar: true,
     order: 0.5,
   },
