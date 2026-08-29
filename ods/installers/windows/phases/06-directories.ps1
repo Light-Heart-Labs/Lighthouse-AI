@@ -544,8 +544,8 @@ function Invoke-HermesSoulRefresh {
     }
 
     if (-not $_rendered) {
-        if (Test-Path -LiteralPath $_output -PathType Container) {
-            Remove-Item -LiteralPath $_output -Recurse -Force
+        if (Test-Path -LiteralPath $_output -PathType Leaf) {
+            Remove-Item -LiteralPath $_output -Force
         }
         if (-not (Test-Path -LiteralPath $_output -PathType Leaf)) {
             $_content = Get-Content -LiteralPath $_template -Raw
