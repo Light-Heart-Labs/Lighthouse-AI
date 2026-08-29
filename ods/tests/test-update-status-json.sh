@@ -52,3 +52,21 @@ grep -qF 'Rollback snaps: 2' <<< "$human_out" \
 grep -qF 'General backups: 2' <<< "$human_out" \
     || { printf 'FAIL: human backup status regressed\n' >&2; exit 1; }
 printf 'PASS: existing human update status remains intact\n'
+
+FRESH_INSTALL="$TMP_DIR/fresh-install"
+FRESH_HOME="$TMP_DIR/fresh-home"
+mkdir -p "$FRESH_INSTALL" "$FRESH_HOME"
+cp "$ROOT_DIR/ods-update.sh" "$FRESH_INSTALL/ods-update.sh"
+fresh_json=$(HOME="$FRESH_HOME" bash "$FRESH_INSTALL/ods-update.sh" status --json)
+jq -e '
+    .version == "0.0.0" and
+    .last_check == null and
+    .last_update == null and
+    .rollback.count == 0 and
+    .rollback.last_point == null and
+    .backups.count == 0
+' <<< "$fresh_json" >/dev/null || {
+    printf 'FAIL: fresh-install status did not expose empty lifecycle state\n' >&2
+    exit 1
+}
+printf 'PASS: fresh installs expose null timestamps and empty recovery inventory\n'
