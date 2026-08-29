@@ -136,11 +136,7 @@ reconcile_ods_managed_pixel_model() {
     target_reasoning=false
     reasoning_mode="$(read_env_value LLAMA_REASONING | tr '[:upper:]' '[:lower:]')"
     [[ -n "$reasoning_mode" ]] || reasoning_mode=off
-    if [[ ! "$reasoning_mode" =~ ^(off|none|false|0)$ \
-        || "$target_model" == *[Qq][Ww][Ee][Nn]* \
-        || "${target_model,,}" == *reasoning* \
-        || "${target_model,,}" == *deepseek-r1* \
-        || "${target_model,,}" == *nemotron* ]]; then
+    if [[ ! "$reasoning_mode" =~ ^(off|none|false|0)$ ]]; then
         target_reasoning=true
     fi
 

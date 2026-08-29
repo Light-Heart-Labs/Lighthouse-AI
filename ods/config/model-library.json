@@ -934,6 +934,26 @@
             "LLAMA_ARG_CACHE_TYPE_K": "q4_0",
             "LLAMA_ARG_CACHE_TYPE_V": "q4_0"
           }
+        },
+        {
+          "id": "nvidia-8gb-32k-q8-kv",
+          "label": "NVIDIA 8GB 32K context with Q8 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 15,
+          "context_length": 32768,
+          "estimated_required_gb": 6.8,
+          "fit_label": "32K 8GB Q8 KV constrained-runtime profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q8_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
+            "LLAMA_SERVER_MEMORY_LIMIT": "12G"
+          }
         }
       ],
       "app_compatibility": {
@@ -1708,7 +1728,29 @@
       "description": "Excellent general-purpose model. Default for most systems. Great at coding, reasoning, and multilingual tasks.",
       "tokens_per_sec_estimate": 90,
       "llm_model_name": "qwen3.5-9b",
-      "llama_server_image": null
+      "llama_server_image": null,
+      "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-32k-q8-kv",
+          "label": "NVIDIA 8GB 32K context with Q8 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 15,
+          "context_length": 32768,
+          "estimated_required_gb": 6.8,
+          "fit_label": "32K 8GB Q8 KV interactive-agent profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q8_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
+            "LLAMA_SERVER_MEMORY_LIMIT": "12G"
+          }
+        }
+      ]
     },
     {
       "id": "phi4-q4",

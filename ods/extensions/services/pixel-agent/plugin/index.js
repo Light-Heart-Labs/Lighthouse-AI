@@ -27,11 +27,12 @@ import {
   statusToolText,
   unavailableToolText,
 } from "./tool-content.mjs";
-import { createToolLoopGuard } from "./tool-loop-guard.mjs";
+import { createToolLoopGuardRegistry } from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
+const toolLoopGuardRegistry = createToolLoopGuardRegistry();
 
 // Restrict tool registration to the Pixel agent. Tools are only offered to the
 // agent id declared by this plugin (see openclaw.plugin.json); this guards the
@@ -134,7 +135,10 @@ export default definePluginEntry({
   description: "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
   register(api) {
     const statusFile = statusFileFromEnv();
-    const toolLoopGuard = createToolLoopGuard({
+    // OpenClaw registers gateway HTTP routes and per-agent runtime hooks in
+    // separate passes. Keep one process-local guard so the route can see the
+    // opaque user -> active session mapping observed by the runtime hook.
+    const toolLoopGuard = toolLoopGuardRegistry.get({
       abortRun: abortAgentHarnessRun,
       abortRunAndDrain: (sessionId, sessionKey) =>
         abortAndDrainAgentHarnessRun({
@@ -222,7 +226,7 @@ export default definePluginEntry({
         readResponseText,
         extractBasicHtmlContent,
       }),
-      { names: ["pixel_web_extract"] }
+      { names: ["pixel_ods_web_extract"] }
     );
 
   },

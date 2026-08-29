@@ -24,10 +24,10 @@ export const WEB_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another web tool after the bounded research budget was exhausted. Start a fresh message to continue with a narrower research question.";
 
 export const WEB_FETCH_REPEAT_PIVOT_REASON =
-  "Pixel already fetched this public page in this response. Do not repeat web_fetch or narrate a retry. If the needed detail was beyond the returned prefix, call pixel_web_extract now with the same URL and a distinctive literal method or section name; otherwise answer from the evidence already returned.";
+  "Pixel already fetched this public page in this response. Do not repeat web_fetch or narrate a retry. If the needed detail was beyond the returned prefix, call pixel_ods_web_extract now with the same URL and a distinctive literal method or section name; otherwise answer from the evidence already returned.";
 
 export const WEB_FETCH_TRUNCATED_PIVOT_REASON =
-  "The fetched public page was truncated. Either answer from evidence already present or make exactly one pixel_web_extract call now using that same page URL and a distinctive literal method or section name. Do not call or narrate any other tool; a different next tool will stop this response.";
+  "The fetched public page was truncated. Either answer from evidence already present or make exactly one pixel_ods_web_extract call now using that same page URL and a distinctive literal method or section name. Do not call or narrate any other tool; a different next tool will stop this response.";
 
 export const WEB_FETCH_PUBLIC_ONLY_REASON =
   "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames and must not contact local, private, or raw-IP destinations. Do not call another tool in this turn; explain the boundary to the user.";
@@ -47,8 +47,9 @@ export const CODING_RETRY_EXHAUSTED_REASON =
 export const CODING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another coding tool after the repeated-command limit was reached. Start a fresh message to continue from the preserved workspace with a different approach.";
 
-const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_web_extract"]);
+const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
+const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
 const MAX_TRACKED_RUNS = 256;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -75,7 +76,7 @@ function normalizedLimits(limits = {}) {
   };
 }
 
-function normalizeWorkspacePath(value) {
+function normalizeWorkspaceFilePath(value) {
   if (value === "/workspace" || value === "workspace") return ".";
   if (typeof value === "string" && value.startsWith("/workspace/")) {
     return value.slice("/workspace/".length);
@@ -86,19 +87,27 @@ function normalizeWorkspacePath(value) {
   return value;
 }
 
+function normalizeExecWorkdir(value) {
+  if (value === "/workspace" || value === "workspace" || value === ".") return ".";
+  if (typeof value === "string" && value.startsWith("workspace/")) {
+    return `/${value}`;
+  }
+  return value;
+}
+
 function normalizeWorkspaceParams(toolName, params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   const updated = { ...params };
   let changed = false;
   if (FILE_PATH_TOOLS.has(toolName) && typeof params.path === "string") {
-    const path = normalizeWorkspacePath(params.path);
+    const path = normalizeWorkspaceFilePath(params.path);
     if (path !== params.path) {
       updated.path = path;
       changed = true;
     }
   }
   if (toolName === "exec" && typeof params.workdir === "string") {
-    const workdir = normalizeWorkspacePath(params.workdir);
+    const workdir = normalizeExecWorkdir(params.workdir);
     if (workdir === ".") {
       delete updated.workdir;
       changed = true;
@@ -114,7 +123,7 @@ function execFingerprint(params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   const command = params.command;
   if (typeof command !== "string" || !command.trim()) return undefined;
-  const normalizedWorkdir = normalizeWorkspacePath(params.workdir);
+  const normalizedWorkdir = normalizeExecWorkdir(params.workdir);
   const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
   return JSON.stringify([command.trim(), typeof workdir === "string" ? workdir : ""]);
 }
@@ -126,6 +135,17 @@ function execFailed(event) {
   if (result.isError === true) return true;
   const exitCode = result?.details?.exitCode;
   return Number.isInteger(exitCode) && exitCode !== 0;
+}
+
+function toolCallFailed(event) {
+  if (event?.error) return true;
+  const result = event?.result;
+  return Boolean(
+    result &&
+      typeof result === "object" &&
+      !Array.isArray(result) &&
+      result.isError === true
+  );
 }
 
 function webFetchWasTruncated(event) {
@@ -318,6 +338,12 @@ export function createToolLoopGuard({
 
   function beforeToolCall(event, context, agentId = "pixel") {
     if (context?.agentId !== agentId) return undefined;
+    // OpenClaw 2026.6 does not consistently expose sessionKey during
+    // before_prompt_build for OpenAI-compatible HTTP turns. Tool hooks do
+    // receive the complete run context, so refresh the opaque user -> session
+    // cancellation mapping here as well. This keeps dashboard disconnects
+    // capable of aborting a long model continuation after the first tool.
+    observeRun(context, agentId);
     const toolName = context?.toolName ?? event?.toolName;
     const normalizedParams = normalizeWorkspaceParams(toolName, event?.params);
 
@@ -344,7 +370,7 @@ export function createToolLoopGuard({
     }
 
     if (
-      (toolName === "web_fetch" || toolName === "pixel_web_extract") &&
+      (toolName === "web_fetch" || toolName === "pixel_ods_web_extract") &&
       fetchTargetsNonPublicAddress(event)
     ) {
       if (state) state.privateNetworkExhausted = true;
@@ -360,7 +386,7 @@ export function createToolLoopGuard({
     if (state?.targetedExtractPending) {
       const requestedUrl = canonicalFetchUrl(event);
       if (
-        toolName === "pixel_web_extract" &&
+        toolName === "pixel_ods_web_extract" &&
         requestedUrl === state.targetedExtractPending
       ) {
         state.targetedExtractPending = undefined;
@@ -521,10 +547,17 @@ export function createToolLoopGuard({
     const toolName = context?.toolName ?? event?.toolName;
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
+    const state = stateFor(runId);
+    // A successful file mutation changes the program under test, so an
+    // identical verification command is no longer an identical attempt. Drop
+    // stale failures across all command fingerprints while retaining them when
+    // the mutation itself failed.
+    if (WORKSPACE_MUTATION_TOOLS.has(toolName) && !toolCallFailed(event)) {
+      state.failedExec.clear();
+    }
     if (toolName === "web_fetch" && webFetchWasTruncated(event)) {
       const fetchUrl = canonicalFetchUrl(event);
       if (fetchUrl) {
-        const state = stateFor(runId);
         state.targetedExtractPending = fetchUrl;
         state.targetedExtractBlocks = 0;
       }
@@ -533,7 +566,6 @@ export function createToolLoopGuard({
     if (toolName !== "exec") return;
     const fingerprint = execFingerprint(event?.params);
     if (!fingerprint) return;
-    const state = stateFor(runId);
     if (execFailed(event)) {
       state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);
     } else {
@@ -548,5 +580,15 @@ export function createToolLoopGuard({
     abortUserRun,
     trackedRunCount: () => runs.size,
     trackedUserCount: () => activeUsers.size,
+  };
+}
+
+export function createToolLoopGuardRegistry() {
+  let shared;
+  return {
+    get(options) {
+      shared ??= createToolLoopGuard(options);
+      return shared;
+    },
   };
 }

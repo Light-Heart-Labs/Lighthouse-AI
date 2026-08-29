@@ -13,6 +13,7 @@ import {
   WEB_FETCH_PUBLIC_ONLY_REASON,
   WEB_LOOP_ABORT_REASON,
   createToolLoopGuard,
+  createToolLoopGuardRegistry,
   textRequestsPrivateUrlAccess,
   userMessageRequestsPrivateUrl,
 } from "../plugin/tool-loop-guard.mjs";
@@ -82,13 +83,13 @@ test("counts targeted public extraction as a bounded fetch", () => {
   const guard = createToolLoopGuard({ limits: { search: 1, fetch: 1, total: 2 } });
   assert.equal(call(guard, "web_search"), undefined);
   assert.equal(
-    call(guard, "pixel_web_extract", {
+    call(guard, "pixel_ods_web_extract", {
       event: { params: { url: "https://docs.python.org/3/", query: "Path.exists" } },
     }),
     undefined
   );
   assert.equal(
-    call(guard, "pixel_web_extract", {
+    call(guard, "pixel_ods_web_extract", {
       event: { params: { url: "https://docs.python.org/3/", query: "Path.stat" } },
     }).blockReason,
     WEB_BUDGET_EXHAUSTED_REASON
@@ -115,7 +116,7 @@ test("pivots one repeated canonical fetch to targeted extraction", () => {
     { block: true, blockReason: WEB_FETCH_REPEAT_PIVOT_REASON }
   );
   assert.equal(
-    call(guard, "pixel_web_extract", {
+    call(guard, "pixel_ods_web_extract", {
       event: {
         params: {
           url: "https://docs.python.org/3/library/pathlib.html",
@@ -170,7 +171,7 @@ test("allows only same-page targeted extraction after a successful truncated fet
   });
   assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
   assert.equal(
-    call(guard, "pixel_web_extract", {
+    call(guard, "pixel_ods_web_extract", {
       event: { params: { ...params, query: "Path.exists" } },
     }),
     undefined
@@ -283,6 +284,24 @@ test("normalizes sandbox-root file paths and exec workdirs", () => {
     }),
     { params: { command: "python3 probe.py" } }
   );
+  assert.equal(
+    call(guard, "exec", {
+      event: {
+        params: { command: "python3 -m unittest", workdir: "/workspace/probe" },
+      },
+    }),
+    undefined
+  );
+  assert.deepEqual(
+    call(guard, "exec", {
+      event: {
+        params: { command: "python3 -m unittest", workdir: "workspace/probe" },
+      },
+    }),
+    {
+      params: { command: "python3 -m unittest", workdir: "/workspace/probe" },
+    }
+  );
 });
 
 test("blocks a fourth identical command after three failed executions", () => {
@@ -315,6 +334,61 @@ test("a successful identical command clears the failed execution count", () => {
   assert.deepEqual(call(guard, "exec", { event: { params } }), {
     params: { command: params.command },
   });
+});
+
+test("a successful workspace mutation restarts identical verification retries", () => {
+  const guard = createToolLoopGuard({ limits: { failedExecRetries: 2 } });
+  const params = { command: "python3 -m unittest", workdir: "/workspace" };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: { params, result: { isError: true, details: { exitCode: 1 } } },
+    });
+  }
+
+  afterCall(guard, "edit", {
+    event: {
+      params: { path: "probe.py" },
+      result: { isError: false, details: { changed: true } },
+    },
+  });
+
+  assert.deepEqual(call(guard, "exec", { event: { params } }), {
+    params: { command: params.command },
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    afterCall(guard, "exec", {
+      event: { params, result: { isError: true, details: { exitCode: 1 } } },
+    });
+    if (attempt === 0) {
+      assert.deepEqual(call(guard, "exec", { event: { params } }), {
+        params: { command: params.command },
+      });
+    }
+  }
+  assert.equal(
+    call(guard, "exec", { event: { params } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
+test("a failed workspace mutation preserves identical verification failures", () => {
+  const guard = createToolLoopGuard({ limits: { failedExecRetries: 1 } });
+  const params = { command: "python3 -m unittest", workdir: "/workspace" };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", {
+    event: { params, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  afterCall(guard, "apply_patch", {
+    event: {
+      params: { patch: "invalid" },
+      result: { isError: true },
+    },
+  });
+  assert.equal(
+    call(guard, "exec", { event: { params } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
 });
 
 test("aborts a coding run that ignores the terminal retry block", () => {
@@ -360,6 +434,55 @@ test("tracks and drains only the active hashed ODS OpenAI user", async () => {
   assert.equal(await guard.abortUserRun(user), true);
   assert.deepEqual(aborts, [["session-live", `agent:pixel:openai-user:${user}`]]);
   assert.equal(guard.trackedUserCount(), 0);
+});
+
+test("refreshes the dashboard cancellation mapping from tool hook context", async () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    abortRunAndDrain: async (sessionId, sessionKey) => {
+      aborts.push([sessionId, sessionKey]);
+      return { aborted: true, drained: true, forceCleared: false };
+    },
+  });
+  const user = `ods-${"c".repeat(64)}`;
+  call(guard, "read", {
+    context: {
+      runId: "run-live",
+      sessionId: "session-live",
+      sessionKey: `agent:pixel:openai-user:${user}`,
+    },
+  });
+
+  assert.equal(guard.trackedUserCount(), 1);
+  assert.equal(await guard.abortUserRun(user), true);
+  assert.deepEqual(aborts, [["session-live", `agent:pixel:openai-user:${user}`]]);
+});
+
+test("shares one cancellation guard across gateway and agent registration passes", async () => {
+  const aborts = [];
+  const registry = createToolLoopGuardRegistry();
+  const gatewayGuard = registry.get({
+    abortRunAndDrain: async (sessionId, sessionKey) => {
+      aborts.push([sessionId, sessionKey]);
+      return { aborted: true, drained: true, forceCleared: false };
+    },
+  });
+  const agentGuard = registry.get({ abortRun: () => false });
+  const user = `ods-${"d".repeat(64)}`;
+  agentGuard.beforeToolCall(
+    { toolName: "read", runId: "run-live" },
+    {
+      agentId: "pixel",
+      toolName: "read",
+      runId: "run-live",
+      sessionId: "session-live",
+      sessionKey: `agent:pixel:openai-user:${user}`,
+    }
+  );
+
+  assert.equal(agentGuard, gatewayGuard);
+  assert.equal(await gatewayGuard.abortUserRun(user), true);
+  assert.deepEqual(aborts, [["session-live", `agent:pixel:openai-user:${user}`]]);
 });
 
 test("rejects malformed cancellation users and bounds retained mappings", async () => {
@@ -423,7 +546,7 @@ test("blocks private HTTP destinations reached through shell network clients", (
 test("preflights private targets for targeted public extraction", () => {
   const guard = createToolLoopGuard();
   assert.deepEqual(
-    call(guard, "pixel_web_extract", {
+    call(guard, "pixel_ods_web_extract", {
       event: {
         params: { url: "http://printer.local/status", query: "status" },
       },

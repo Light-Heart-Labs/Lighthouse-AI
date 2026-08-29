@@ -4,7 +4,7 @@
   "description": "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
   "version": "1.0.0",
   "contracts": {
-    "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"]
+    "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"]
   },
   "activation": {
     "onStartup": true

@@ -334,6 +334,56 @@ def test_windows_8gb_revalidation_models_have_64k_compressed_kv_profiles():
         assert profile["env"]["LLAMA_ARG_CACHE_TYPE_V"] == cache_type
 
 
+def test_default_qwen_9b_has_an_interactive_8gb_runtime_profile():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    model = next(model for model in catalog["models"] if model["id"] == "qwen3.5-9b-q4")
+    profiles = {profile["id"]: profile for profile in model["runtime_profiles"]}
+    profile = profiles["nvidia-8gb-32k-q8-kv"]
+
+    assert profile["backend"] == "nvidia"
+    assert profile["host_arch"] == ["amd64"]
+    assert profile["memory_type"] == "discrete"
+    assert profile["vram_min_gb"] == 7.5
+    assert profile["vram_max_gb"] == 8.5
+    assert profile["system_ram_min_gb"] == 15
+    assert profile["context_length"] == 32768
+    assert profile["estimated_required_gb"] == 6.8
+    assert profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_CACHE_TYPE_K": "q8_0",
+        "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
+        "LLAMA_SERVER_MEMORY_LIMIT": "12G",
+    }
+
+
+def test_ministral_has_a_constrained_wsl_8gb_runtime_profile():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    model = next(
+        model
+        for model in catalog["models"]
+        if model["id"] == "ministral3-8b-instruct-2512-q4"
+    )
+    profiles = {profile["id"]: profile for profile in model["runtime_profiles"]}
+    profile = profiles["nvidia-8gb-32k-q8-kv"]
+
+    assert profile["backend"] == "nvidia"
+    assert profile["host_arch"] == ["amd64"]
+    assert profile["memory_type"] == "discrete"
+    assert profile["vram_min_gb"] == 7.5
+    assert profile["vram_max_gb"] == 8.5
+    assert profile["system_ram_min_gb"] == 15
+    assert profile["context_length"] == 32768
+    assert profile["estimated_required_gb"] == 6.8
+    assert profile["env"] == {
+        "LLAMA_PARALLEL": "1",
+        "LLAMA_ARG_FLASH_ATTN": "on",
+        "LLAMA_ARG_CACHE_TYPE_K": "q8_0",
+        "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
+        "LLAMA_SERVER_MEMORY_LIMIT": "12G",
+    }
+
+
 def test_windows_8gb_revalidation_models_have_verified_app_evidence():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}

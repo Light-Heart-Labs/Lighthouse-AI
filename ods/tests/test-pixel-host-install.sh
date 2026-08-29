@@ -191,13 +191,13 @@ rm -f "$plugin_tree/linked.json"
 plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_web_extract"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}}]}'
 SH
 chmod 0755 "$plugin_list_bin"
 check _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_web_extract"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}}]}'
 SH
 if _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree" >/dev/null 2>&1; then
     fail "blocked ODS Pixel plugin rejected"
@@ -208,13 +208,13 @@ fi
 plugin_registry_bin="$TEST_ROOT/openclaw-plugin-registry"
 cat > "$plugin_registry_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"state":"fresh","refreshReasons":[],"persisted":{"plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_status","pixel_web_extract"]}}}]},"current":{"plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_status","pixel_web_extract"]}}}]}}'
+printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_status","pixel_ods_web_extract"]}}}]}}'
 SH
 chmod 0755 "$plugin_registry_bin"
 check _ods_pixel_refresh_plugin_registry "$owner" "$home" "$plugin_registry_bin" "$plugin_tree"
 cat > "$plugin_registry_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"state":"fresh","refreshReasons":[],"persisted":{"plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_status"]}}}]},"current":{"plugins":[]}}'
+printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_status"]}}}]}}'
 SH
 if _ods_pixel_refresh_plugin_registry "$owner" "$home" "$plugin_registry_bin" "$plugin_tree" >/dev/null 2>&1; then
     fail "stale ODS Pixel plugin registry rejected"
@@ -272,9 +272,9 @@ assert v["modelBaseUrl"] == "http://127.0.0.1:11434/v1"
 assert v["modelId"] == "qwen-test"
 assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
-assert v["modelReasoning"] is True
+assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
-assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_web_extract"]}]
+assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}]
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
@@ -283,8 +283,15 @@ MAX_CONTEXT=16384
 LLM_MODEL=NVIDIA-Nemotron3-Nano-4B
 _ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/nemotron-onboarding.json" \
     /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelContextWindow"] == 16384 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' \
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelContextWindow"] == 16384 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is False' \
     "$TEST_ROOT/nemotron-onboarding.json"
+LLAMA_REASONING=on
+LLM_MODEL=qwen-reasoning-enabled
+_ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/qwen-reasoning-onboarding.json" \
+    /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelReasoning"] is True' \
+    "$TEST_ROOT/qwen-reasoning-onboarding.json"
+LLAMA_REASONING=off
 MAX_CONTEXT=8192
 if _ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/undersized-onboarding.json" \
     /usr/bin/openclaw /opt/ods/pixel-plugin "$digest" >/dev/null 2>&1; then
@@ -307,7 +314,7 @@ cat > "$runtime_config" <<'JSON'
     "list": [{
       "id": "pixel",
       "model": "ods-local/qwen-test",
-      "tools": {"deny": ["web_fetch", "web_search"]}
+      "tools": {"deny": ["web_fetch", "web_search", "pixel_web_extract"]}
     }]
   },
   "models": {
@@ -336,7 +343,8 @@ cat > "$runtime_config" <<'JSON'
   "session": {"dmScope": "per-account-channel-peer"},
   "tools": {
     "profile": "coding",
-    "sandbox": {"tools": {"allow": ["exec", "pixel_ods_status"]}},
+    "alsoAllow": ["pixel_web_extract"],
+    "sandbox": {"tools": {"allow": ["exec", "pixel_ods_status", "pixel_web_extract"]}},
     "web": {"search": {"provider": "searxng"}}
   }
 }
@@ -357,8 +365,10 @@ assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
 agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
 assert agent["tools"]["deny"] == []
-assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"}.issubset(value["tools"]["alsoAllow"])
-assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
+assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"}.issubset(value["tools"]["alsoAllow"])
+assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
+assert "pixel_web_extract" not in value["tools"]["alsoAllow"]
+assert "pixel_web_extract" not in value["tools"]["sandbox"]["tools"]["allow"]
 assert value["tools"]["web"]["fetch"] == {
     "enabled": True,
     "maxChars": 12000,
@@ -390,9 +400,8 @@ assert value["tools"]["loopDetection"] == {
 assert value["agents"]["defaults"]["compaction"] == {
     "reserveTokens": model["maxTokens"], "reserveTokensFloor": 0,
 }
-if "qwen" in model["id"].lower():
-    assert agent["thinkingDefault"] == "off"
-    assert model["reasoning"] is True
+if "qwen" in model["id"].lower() and model["reasoning"] is True:
+    assert agent["thinkingDefault"] == "low"
     assert model["compat"] == {"thinkingFormat": "qwen-chat-template"}
 else:
     assert "thinkingDefault" not in agent
@@ -405,7 +414,7 @@ SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert a["thinkingDefault"] == "off" and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -521,8 +530,8 @@ path = pathlib.Path(sys.argv[1])
 value = json.loads(path.read_text())
 agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
-agent.pop("thinkingDefault")
-model.pop("compat")
+agent.pop("thinkingDefault", None)
+model.pop("compat", None)
 model["reasoning"] = False
 path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY
@@ -565,6 +574,7 @@ else
     pass "undersized Pixel model context rejected"
 fi
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_candidate" "$runtime_validator")" = changed
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"} and a["thinkingDefault"] == "low"' "$reconcile_candidate"
 check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
 python3 - "$reconcile_candidate" <<'PY'
 import json, pathlib, sys
@@ -744,7 +754,10 @@ import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
-assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status","pixel_web_extract"]
+assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status","pixel_ods_web_extract"]
+import re
+reserved = re.compile(r"^pixel_(?:gmail|calendar|social|web|ops|frontier)_")
+assert all(name != "pixel_limb_status" and not reserved.match(name) for name in m["contracts"]["tools"])
 assert "toolMetadata" not in m
 ' "$plugin/package.json" "$plugin/openclaw.plugin.json"
 check python3 -c '

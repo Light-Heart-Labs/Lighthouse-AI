@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 
 const MAX_QUERY_CHARS = 200;
+const MAX_URL_CHARS = 1024;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_EVIDENCE_CHARS = 6_000;
 const BEFORE_MATCH_CHARS = 1_200;
@@ -28,7 +29,12 @@ const QUERY_STOPWORDS = new Set([
 ]);
 
 function normalizedPublicUrl(raw) {
-  if (typeof raw !== "string" || !raw || raw !== raw.trim()) {
+  if (
+    typeof raw !== "string" ||
+    !raw ||
+    raw.length > MAX_URL_CHARS ||
+    raw !== raw.trim()
+  ) {
     throw new Error("A public HTTP(S) URL is required.");
   }
   let target;
@@ -185,7 +191,7 @@ export function createPublicWebExtractTool({
   }
 
   return {
-    name: "pixel_web_extract",
+    name: "pixel_ods_web_extract",
     description:
       "Fetch one public HTTP(S) page through OpenClaw's strict SSRF guard, find a distinctive literal identifier such as Path.exists anywhere in the extracted page, and return only a bounded evidence window around it. Prefer one exact identifier; a short multi-keyword query is accepted only when at least 2-3 terms co-occur in one bounded window. Use once when web_fetch found the correct long page but its prefix was truncated before the requested detail. Never use for local/private/raw-IP destinations.",
     parameters: {
@@ -193,7 +199,9 @@ export function createPublicWebExtractTool({
       additionalProperties: false,
       required: ["url", "query"],
       properties: {
-        url: { type: "string", minLength: 10, maxLength: 4096 },
+        // llama.cpp's tool grammar rejects a single repetition of 2000 or
+        // more. Keep this runtime-enforced bound below that parser ceiling.
+        url: { type: "string", minLength: 10, maxLength: MAX_URL_CHARS },
         query: { type: "string", minLength: 2, maxLength: MAX_QUERY_CHARS },
       },
     },

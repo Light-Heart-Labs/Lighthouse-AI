@@ -279,10 +279,28 @@ def _ensure_windows_resolver_pyyaml(python_cmd: str) -> None:
         )
 
 
+def _nvidia_smi_binary() -> str | None:
+    resolved = shutil.which("nvidia-smi")
+    if resolved:
+        return resolved
+    # WSL exposes the Windows NVIDIA bridge here, but systemd services do not
+    # necessarily inherit the interactive shell PATH entry for this directory.
+    for candidate in (
+        Path("/usr/lib/wsl/lib/nvidia-smi"),
+        Path("/usr/bin/nvidia-smi"),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _nvidia_driver_major() -> int:
+    nvidia_smi = _nvidia_smi_binary()
+    if not nvidia_smi:
+        return 0
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            [nvidia_smi, "--query-gpu=driver_version", "--format=csv,noheader"],
             capture_output=True, text=True, timeout=10, check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -1755,7 +1773,16 @@ def load_env(env_path: Path) -> dict:
             continue
         if "=" in line:
             key, _, val = line.partition("=")
-            env[key.strip()] = val.strip().strip("'\"")
+            raw_value = val.strip()
+            try:
+                parsed = shlex.split(raw_value, comments=False, posix=True)
+            except ValueError:
+                parsed = []
+            env[key.strip()] = (
+                parsed[0]
+                if len(parsed) == 1
+                else raw_value.strip("'\"")
+            )
     return env
 
 
@@ -2122,6 +2149,63 @@ def _atomic_write_text(
     _atomic_write_bytes(path, text.encode("utf-8"), mode, uid, gid)
 
 
+def _write_bound_env_bytes(path: Path, content: bytes) -> None:
+    """Update an existing bind-mounted .env without replacing its inode."""
+    if not path.exists():
+        _atomic_write_bytes(path, content)
+        return
+    metadata = path.lstat()
+    if stat_mod.S_ISLNK(metadata.st_mode):
+        raise RuntimeError(f"Refusing to mutate symlinked environment file: {path}")
+    if not stat_mod.S_ISREG(metadata.st_mode):
+        raise RuntimeError(f"Refusing to mutate non-regular environment file: {path}")
+    try:
+        with path.open("r+b", buffering=0) as handle:
+            handle.seek(0)
+            handle.write(content)
+            handle.truncate()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not update bind-mounted environment file {path}: {exc}"
+        ) from exc
+
+
+def _write_bound_env_text(path: Path, text: str) -> None:
+    _write_bound_env_bytes(path, text.encode("utf-8"))
+
+
+def _restore_bound_env_file(path: Path, snapshot: dict) -> None:
+    """Restore .env content while preserving an existing Docker bind inode."""
+    if not snapshot.get("exists"):
+        if path.is_symlink():
+            raise RuntimeError(
+                f"Refusing to remove unexpected symlink during rollback: {path}"
+            )
+        path.unlink(missing_ok=True)
+        return
+    content = snapshot.get("bytes")
+    if not isinstance(content, bytes):
+        content = str(snapshot.get("text") or "").encode("utf-8")
+    _write_bound_env_bytes(path, content)
+    if snapshot.get("mode") is not None:
+        os.chmod(path, int(snapshot["mode"]))
+    if (
+        hasattr(os, "chown")
+        and snapshot.get("uid") is not None
+        and snapshot.get("gid") is not None
+    ):
+        try:
+            os.chown(path, int(snapshot["uid"]), int(snapshot["gid"]))
+        except PermissionError:
+            metadata = path.stat()
+            if (
+                metadata.st_uid != int(snapshot["uid"])
+                or metadata.st_gid != int(snapshot["gid"])
+            ):
+                raise
+
+
 def _snapshot_text_file(path: Path) -> dict:
     """Capture bytes/mode/existence for exact transactional restoration."""
     try:
@@ -2234,13 +2318,7 @@ def _ods_managed_pixel_identity() -> tuple[str, Path] | None:
 def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
     """Project ODS's runtime reasoning contract into Pixel model metadata."""
     configured = str(env.get("LLAMA_REASONING") or "").strip().lower()
-    if configured not in {"", "off", "none", "false", "0"}:
-        return True
-    label = str(model or "").casefold()
-    return any(
-        marker in label
-        for marker in ("qwen", "reasoning", "deepseek-r1", "nemotron")
-    )
+    return configured not in {"", "off", "none", "false", "0"}
 
 
 def _pixel_max_tokens_for_context(context_length: int) -> int:
@@ -2796,10 +2874,16 @@ def _assert_text_file_matches_snapshot(path: Path, snapshot: dict) -> None:
         raise RuntimeError(f"Configuration changed during model activation: {path}")
 
 
-def _upsert_env_text(raw_text: str, key: str, value: str) -> str:
-    """Return env text with one canonical ``KEY=value`` entry."""
+def _env_assignment(key: str, value: str) -> str:
+    """Serialize one shell-sourceable dotenv assignment without expansion."""
     if any(character in value for character in "\r\n\x00"):
         raise ValueError(f"Invalid newline or NUL in {key}")
+    return f"{key}={shlex.quote(value)}"
+
+
+def _upsert_env_text(raw_text: str, key: str, value: str) -> str:
+    """Return env text with one canonical ``KEY=value`` entry."""
+    assignment = _env_assignment(key, value)
     output = []
     written = False
     for line in raw_text.splitlines():
@@ -2807,19 +2891,19 @@ def _upsert_env_text(raw_text: str, key: str, value: str) -> str:
         line_key = left.strip() if separator and not line.lstrip().startswith("#") else None
         if line_key == key:
             if not written:
-                output.append(f"{key}={value}")
+                output.append(assignment)
                 written = True
             continue
         output.append(line)
     if not written:
-        output.append(f"{key}={value}")
+        output.append(assignment)
     return "\n".join(output) + "\n"
 
 
 def _upsert_env_value(env_path: Path, key: str, value: str) -> None:
     """Persist one simple ``KEY=value`` entry without disturbing other lines."""
     raw_text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-    _atomic_write_text(env_path, _upsert_env_text(raw_text, key, value))
+    _write_bound_env_text(env_path, _upsert_env_text(raw_text, key, value))
 
 
 def _write_activation_config_file(path: Path, content: str) -> None:
@@ -3392,7 +3476,7 @@ def _persist_proxy_auth_required() -> tuple[bool, str]:
             raw_text = env_path.read_text(encoding="utf-8")
             new_text = _upsert_env_text(raw_text, "WEBUI_AUTH", "true")
             if new_text != raw_text:
-                _atomic_write_text(env_path, new_text)
+                _write_bound_env_text(env_path, new_text)
                 logger.info("Enforced WEBUI_AUTH=true for network-accessible ODS")
     except (OSError, UnicodeError, RuntimeError) as exc:
         return False, f"Could not enforce proxy authentication: {exc}"
@@ -7497,7 +7581,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             rollback_errors: list[str] = []
             if mutation_started:
                 try:
-                    _restore_text_file(env_path, env_snapshot)
+                    _restore_bound_env_file(env_path, env_snapshot)
                     _restore_text_file(lemonade_path, lemonade_snapshot)
                 except Exception:
                     logger.exception(
@@ -7801,7 +7885,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         def restore_backups():
             if env_snapshot is not None:
-                _restore_text_file(env_path, env_snapshot)
+                _restore_bound_env_file(env_path, env_snapshot)
             if ini_snapshot is not None:
                 _restore_text_file(models_ini, ini_snapshot)
             if lemonade_snapshot is not None:
@@ -8035,17 +8119,30 @@ class AgentHandler(BaseHTTPRequestHandler):
                 # never strand dependents with LEMONADE_MODEL=.
                 lemonade_model_id = _resolve_lemonade_model_id(env_pre, gguf_file)
             runtime_profile = _select_runtime_profile(model, env_pre)
+            logger.info(
+                "Model activation runtime profile for %s: %s",
+                model_id,
+                runtime_profile.get("id") if runtime_profile else "none",
+            )
             runtime_env = {}
+            profile_context_length: int | None = None
             if runtime_profile:
                 if requested_context_length is None:
                     try:
-                        context_length = int(runtime_profile.get("context_length") or context_length)
+                        profile_context_length = int(
+                            runtime_profile.get("context_length") or context_length
+                        )
+                        context_length = profile_context_length
                     except (TypeError, ValueError):
-                        pass
+                        profile_context_length = None
                 llama_server_image = runtime_profile.get("llama_server_image") or llama_server_image
                 runtime_env = runtime_profile.get("env") if isinstance(runtime_profile.get("env"), dict) else {}
             recommended_context = _recommended_activation_context(model_id, model, env_pre)
-            if requested_context_length is None and recommended_context is not None:
+            if (
+                requested_context_length is None
+                and profile_context_length is None
+                and recommended_context is not None
+            ):
                 context_length = recommended_context
             if requested_context_length is not None:
                 context_length = requested_context_length
@@ -8242,7 +8339,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 for line in lines:
                     key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
                     if key and key in updates:
-                        new_lines.append(f"{key}={updates[key]}")
+                        new_lines.append(_env_assignment(key, str(updates[key])))
                         seen.add(key)
                     elif key and key in remove_keys:
                         continue
@@ -8250,8 +8347,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                         new_lines.append(line)
                 for key, val in updates.items():
                     if key not in seen:
-                        new_lines.append(f"{key}={val}")
-                _atomic_write_text(env_path, "\n".join(new_lines) + "\n")
+                        new_lines.append(_env_assignment(key, str(val)))
+                _write_bound_env_text(env_path, "\n".join(new_lines) + "\n")
 
             # Update models.ini
             models_ini.parent.mkdir(parents=True, exist_ok=True)
@@ -11962,18 +12059,24 @@ def _system_ram_gb() -> int:
 
 
 def _nvidia_vram_gb() -> float:
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-        if result.returncode == 0:
-            first = result.stdout.strip().splitlines()[0].strip()
-            return float(first) / 1024.0
-    except (IndexError, OSError, subprocess.TimeoutExpired, ValueError):
-        pass
+    nvidia_smi = _nvidia_smi_binary()
+    if not nvidia_smi:
+        return 0.0
+    for attempt in range(2):
+        try:
+            result = subprocess.run(
+                [nvidia_smi, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            if result.returncode == 0:
+                first = result.stdout.strip().splitlines()[0].strip()
+                return float(first) / 1024.0
+        except (IndexError, OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+        if attempt == 0:
+            time.sleep(0.25)
     return 0.0
 
 
@@ -11986,9 +12089,31 @@ def _select_runtime_profile(model: dict, env: dict) -> dict | None:
     host_arch = _normalize_host_arch(platform.machine())
     vram_gb = _nvidia_vram_gb() if backend == "nvidia" else 0.0
     try:
-        ram_gb = int(env.get("SYSTEM_RAM_GB") or 0) or _system_ram_gb()
+        configured_ram_gb = int(env.get("SYSTEM_RAM_GB") or 0)
     except (TypeError, ValueError):
-        ram_gb = _system_ram_gb()
+        configured_ram_gb = 0
+    live_ram_gb = _system_ram_gb()
+    # Installer detection can record the Windows host's physical RAM while a
+    # WSL runtime is intentionally capped lower. Profile eligibility must use
+    # the memory the host agent can actually address or model activation can
+    # select a profile that is valid for the host but OOMs inside WSL.
+    ram_limits = [value for value in (configured_ram_gb, live_ram_gb) if value > 0]
+    ram_gb = min(ram_limits) if ram_limits else 0
+    if backend == "nvidia" and vram_gb <= 0:
+        needs_vram_probe = any(
+            isinstance(profile, dict)
+            and _normalize_key(profile.get("backend")) in {"", "nvidia"}
+            and (
+                profile.get("vram_min_gb") is not None
+                or profile.get("vram_max_gb") is not None
+            )
+            for profile in profiles
+        )
+        if needs_vram_probe:
+            raise RuntimeError(
+                "NVIDIA VRAM could not be determined; refusing an unprofiled "
+                "model activation"
+            )
     for profile in profiles:
         if not isinstance(profile, dict):
             continue
@@ -12160,28 +12285,32 @@ def _compose_restart_llama_server(env: dict):
                 f"{(result.stderr or '').strip()[:300]}"
             )
 
-    if gpu_backend == "amd":
-        # Lemonade reads models.ini on boot, so stop + up preserves the named
-        # cache volumes while ensuring the fresh config is picked up.
-        if compose_flags:
-            _run(["docker", "compose"] + compose_flags + ["stop", "llama-server"], 120)
-            _run(["docker", "compose"] + compose_flags + ["up", "-d", "llama-server"], 300)
-        else:
-            # A plain start reuses the old container environment and would
-            # silently ignore a newly planned ROCR_VISIBLE_DEVICES subset.
-            logger.warning("No compose flags — using AMD container recreation fallback")
-            _recreate_llama_server(env)
+    if compose_flags:
+        # One forced recreation is idempotent when the candidate container has
+        # already exited, and refreshes Docker Desktop bind-mount inodes after
+        # the transaction atomically replaces models.ini or other config files.
+        # A strict stop followed by a non-forced up can make rollback fail on
+        # an already-stopped candidate or reuse a stale bind mount.
+        _run(
+            ["docker", "compose"]
+            + compose_flags
+            + [
+                "up",
+                "-d",
+                "--force-recreate",
+                "--no-deps",
+                "llama-server",
+            ],
+            300,
+        )
     else:
-        # llama.cpp: recreate to pick up new GGUF_FILE from .env
-        if compose_flags:
-            _run(["docker", "compose"] + compose_flags + ["stop", "llama-server"], 120)
-            _run(["docker", "compose"] + compose_flags + ["up", "-d", "llama-server"], 300)
-        else:
-            # No compose flags — cannot use compose.  Fall back to
-            # inspect-and-recreate, which picks up GGUF_FILE from .env.
-            # docker start alone re-uses the old container command.
-            logger.warning("No .compose-flags file — using container recreation fallback")
-            _recreate_llama_server(env)
+        # No compose flags — cannot use compose. Fall back to the inspected
+        # container recreation path, which applies the current model, context,
+        # GPU assignment, and bind mounts even when the old container exited.
+        logger.warning(
+            "No .compose-flags file — using container recreation fallback"
+        )
+        _recreate_llama_server(env)
 
     logger.info("llama-server restarted via compose (backend: %s)", gpu_backend)
 

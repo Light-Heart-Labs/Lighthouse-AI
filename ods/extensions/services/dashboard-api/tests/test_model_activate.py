@@ -1485,7 +1485,8 @@ class TestPatchHermesModelConfig:
 
 class TestComposeRestartLlamaServer:
 
-    def test_amd_uses_stop_then_up(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("backend", ["amd", "nvidia"])
+    def test_force_recreates_without_strict_stop(self, backend, monkeypatch, tmp_path):
         calls = []
 
         def fake_run(cmd, **kwargs):
@@ -1500,16 +1501,13 @@ class TestComposeRestartLlamaServer:
         )
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        _compose_restart_llama_server({"GPU_BACKEND": "amd"})
+        _compose_restart_llama_server({"GPU_BACKEND": backend})
 
         assert calls == [
             [
                 "docker", "compose", "--env-file", ".env", "-f",
-                "docker-compose.base.yml", "stop", "llama-server",
-            ],
-            [
-                "docker", "compose", "--env-file", ".env", "-f",
-                "docker-compose.base.yml", "up", "-d", "llama-server",
+                "docker-compose.base.yml", "up", "-d", "--force-recreate",
+                "--no-deps", "llama-server",
             ],
         ]
 
@@ -3525,12 +3523,13 @@ def test_managed_pixel_output_budget_preserves_agent_prompt_room(
 @pytest.mark.parametrize(
     ("model", "mode", "expected"),
     [
-        ("qwen3.5-9b", "off", True),
-        ("jamba-reasoning-3b", "none", True),
-        ("deepseek-r1-7b", "false", True),
-        ("NVIDIA-Nemotron3-Nano-4B", "off", True),
+        ("qwen3.5-9b", "off", False),
+        ("jamba-reasoning-3b", "none", False),
+        ("deepseek-r1-7b", "false", False),
+        ("NVIDIA-Nemotron3-Nano-4B", "off", False),
         ("phi-4-mini", "off", False),
         ("phi-4-mini", "deepseek", True),
+        ("qwen3.5-9b", "", False),
     ],
 )
 def test_pixel_reasoning_capability_follows_model_family_and_runtime_mode(
@@ -3692,6 +3691,126 @@ class TestModelActivateRollback:
             ("old-model", 4096, {"max_tokens": 2048, "reasoning": False}),
         ]
         assert _mod.load_env(env_path)["LLM_MODEL"] == "old-model"
+
+    def test_uses_lower_live_ram_limit_instead_of_host_physical_ram(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "_nvidia_vram_gb", lambda: 8.0)
+        monkeypatch.setattr(_mod, "_system_ram_gb", lambda: 15)
+        monkeypatch.setattr(_mod.platform, "machine", lambda: "x86_64")
+        model = {
+            "runtime_profiles": [
+                {
+                    "id": "host-physical-ram-profile",
+                    "backend": "nvidia",
+                    "host_arch": ["amd64"],
+                    "memory_type": "discrete",
+                    "vram_min_gb": 7.5,
+                    "vram_max_gb": 8.5,
+                    "system_ram_min_gb": 31,
+                },
+                {
+                    "id": "wsl-constrained-profile",
+                    "backend": "nvidia",
+                    "host_arch": ["amd64"],
+                    "memory_type": "discrete",
+                    "vram_min_gb": 7.5,
+                    "vram_max_gb": 8.5,
+                    "system_ram_min_gb": 15,
+                },
+            ]
+        }
+
+        profile = _mod._select_runtime_profile(
+            model,
+            {
+                "GPU_BACKEND": "nvidia",
+                "GPU_MEMORY_TYPE": "discrete",
+                "SYSTEM_RAM_GB": "31",
+            },
+        )
+
+        assert profile["id"] == "wsl-constrained-profile"
+
+    def test_nvidia_profile_selection_fails_closed_without_vram_probe(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "_nvidia_vram_gb", lambda: 0.0)
+        monkeypatch.setattr(_mod, "_system_ram_gb", lambda: 15)
+
+        with pytest.raises(RuntimeError, match="VRAM could not be determined"):
+            _mod._select_runtime_profile(
+                {
+                    "runtime_profiles": [
+                        {
+                            "id": "nvidia-profile",
+                            "backend": "nvidia",
+                            "vram_min_gb": 7.5,
+                            "context_length": 32768,
+                        }
+                    ]
+                },
+                {"GPU_BACKEND": "nvidia"},
+            )
+
+    def test_nvidia_vram_probe_uses_wsl_bridge_outside_service_path(
+        self,
+        monkeypatch,
+    ):
+        calls = []
+        real_is_file = Path.is_file
+
+        def fake_is_file(path):
+            if path.as_posix() == "/usr/lib/wsl/lib/nvidia-smi":
+                return True
+            return real_is_file(path)
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="8151\n", stderr="")
+
+        monkeypatch.setattr(_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(Path, "is_file", fake_is_file)
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._nvidia_vram_gb() == pytest.approx(8151 / 1024)
+        assert calls == [[
+            str(Path("/usr/lib/wsl/lib/nvidia-smi")),
+            "--query-gpu=memory.total",
+            "--format=csv,noheader,nounits",
+        ]]
+
+    def test_env_assignment_round_trips_spaces_and_shell_metacharacters(
+        self,
+        tmp_path,
+    ):
+        env_path = tmp_path / ".env"
+        value = "NVIDIA 8GB owner's $HOME `command` profile"
+
+        env_path.write_text(
+            _mod._upsert_env_text("MODEL_RUNTIME_PROFILE_LABEL=old\n", "MODEL_RUNTIME_PROFILE_LABEL", value),
+            encoding="utf-8",
+        )
+
+        persisted = env_path.read_text(encoding="utf-8")
+        assert persisted == f"MODEL_RUNTIME_PROFILE_LABEL={_mod.shlex.quote(value)}\n"
+        assert _mod.load_env(env_path)["MODEL_RUNTIME_PROFILE_LABEL"] == value
+
+    def test_bound_env_update_and_restore_preserve_existing_inode(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_MODEL=old\n", encoding="utf-8")
+        original_inode = env_path.stat().st_ino
+        snapshot = _mod._snapshot_text_file(env_path)
+
+        _mod._write_bound_env_text(env_path, "LLM_MODEL=new\n")
+        assert env_path.stat().st_ino == original_inode
+        assert _mod.load_env(env_path)["LLM_MODEL"] == "new"
+
+        _mod._restore_bound_env_file(env_path, snapshot)
+        assert env_path.stat().st_ino == original_inode
+        assert env_path.read_text(encoding="utf-8") == "LLM_MODEL=old\n"
 
     def test_malformed_model_library_cannot_fall_back_to_unverified_local_model(
         self,
@@ -4462,7 +4581,7 @@ class TestModelActivateRollback:
         assert receipt["tier"] is None
         assert receipt["context_length"] == 32768
         env_text = env_path.read_text(encoding="utf-8")
-        assert "GGUF_FILE=My Custom Model.Q8_0.GGUF" in env_text
+        assert "GGUF_FILE='My Custom Model.Q8_0.GGUF'" in env_text
         assert "LLM_MODEL=My-Custom-Model.Q8_0" in env_text
         assert "[My-Custom-Model.Q8_0]" in models_ini.read_text(encoding="utf-8")
         assert "filename = My Custom Model.Q8_0.GGUF" in models_ini.read_text(encoding="utf-8")
@@ -5665,6 +5784,13 @@ class TestModelActivateRollback:
         install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
             _write_model_activation_fixture(tmp_path)
         )
+        env_path.write_text(
+            env_path.read_text(encoding="utf-8")
+            + "MODEL_RECOMMENDED_MODEL=new-model\n"
+            + "MODEL_RECOMMENDED_GGUF=new-model.gguf\n"
+            + "MODEL_RECOMMENDED_CONTEXT=131072\n",
+            encoding="utf-8",
+        )
         model_library = install_dir / "config" / "model-library.json"
         model_library.write_text(json.dumps({
             "models": [{
@@ -5717,6 +5843,8 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 200
         env_text = env_path.read_text(encoding="utf-8")
+        # A hardware-specific runtime profile is the safety boundary. The
+        # generic installer recommendation must not silently replace it.
         assert "MAX_CONTEXT=65536" in env_text
         assert "MODEL_RUNTIME_PROFILE=nvidia-8gb-test" in env_text
         assert "LLAMA_SERVER_IMAGE=example.test/llama:turbo" in env_text

@@ -655,24 +655,26 @@ normalized_fetch.update({
 normalized_agent_tools["deny"] = [
     item for item in normalized_agent_deny
     if item not in {
-        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list",
+        "pixel_ods_web_extract", "pixel_web_extract"
     }
 ]
-for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"):
+normalized_also_allow = [item for item in normalized_also_allow if item != "pixel_web_extract"]
+normalized_sandbox_allow = [item for item in normalized_sandbox_allow if item != "pixel_web_extract"]
+for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"):
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
 for permitted_tool in (
-    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"
 ):
     if permitted_tool not in normalized_sandbox_allow:
         normalized_sandbox_allow.append(permitted_tool)
 normalized_tools["alsoAllow"] = sorted(set(normalized_also_allow))
 normalized_sandbox_tools["allow"] = sorted(set(normalized_sandbox_allow))
 model_label = f"{model_id} {model_name}".casefold()
-if "qwen" in model_label:
-    normalized_model["reasoning"] = True
+if "qwen" in model_label and contract.get("modelReasoning") is True:
     normalized_model["compat"] = {"thinkingFormat": "qwen-chat-template"}
-    normalized_agent["thinkingDefault"] = "off"
+    normalized_agent["thinkingDefault"] = "low"
 else:
     normalized_model.pop("compat", None)
     normalized_agent.pop("thinkingDefault", None)
@@ -765,20 +767,19 @@ _ods_pixel_refresh_plugin_registry() {
     registry="$(ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
         plugins registry --refresh --json 2>/dev/null)" || return 1
     jq -e --arg root "$plugin_root" '
-        (["pixel_ods_apps_list", "pixel_ods_status", "pixel_web_extract"] | sort) as $tools
-        | .state == "fresh"
-        and (.refreshReasons | type == "array")
-        and all(.persisted, .current;
-            [
-                .plugins[]?
-                | select(
-                    .pluginId == "pixel-ods"
-                    and .enabled == true
-                    and .rootDir == $root
-                    and ((.contributions.contracts.tools // []) | sort) == $tools
-                )
-            ] | length == 1
-        )
+        (["pixel_ods_apps_list", "pixel_ods_status", "pixel_ods_web_extract"] | sort) as $tools
+        | .refreshed == true
+        and .registry.version == 1
+        and .registry.refreshReason == "manual"
+        and ([
+            .registry.plugins[]?
+            | select(
+                .pluginId == "pixel-ods"
+                and .enabled == true
+                and .rootDir == $root
+                and ((.contributions.contracts.tools // []) | sort) == $tools
+            )
+        ] | length == 1)
     ' <<<"$registry" >/dev/null
 }
 
@@ -786,7 +787,7 @@ _ods_pixel_verify_plugin_loaded() {
     local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4"
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
         | jq -e --arg root "$plugin_root" '
-            ["pixel_ods_apps_list", "pixel_ods_status", "pixel_web_extract"] as $tools
+            ["pixel_ods_apps_list", "pixel_ods_status", "pixel_ods_web_extract"] as $tools
             | [
                 .plugins[]?
                 | select(
@@ -903,20 +904,29 @@ if (type(context_window) is not int or type(model_max_tokens) is not int
 # system/tool prompt remains usable, and disable the larger embedded-run floor.
 updated_compaction["reserveTokens"] = model_max_tokens
 updated_compaction["reserveTokensFloor"] = 0
-# The llama.cpp reasoning-output setting controls response parsing, not whether a
-# Qwen chat template generates a thinking-only continuation. Advertise the
-# Qwen capability to OpenClaw, select its supported template control, and keep
-# the ODS-managed Pixel route explicitly in no-think mode. OpenClaw then sends
-# chat_template_kwargs.enable_thinking=false on every model pass, including the
-# continuation after a tool result.
+# OpenClaw 2026.6.33's legacy OpenAI-completions transport coerces the literal
+# reasoning effort "off" with Boolean("off"), which wrongly sends
+# chat_template_kwargs.enable_thinking=true. With llama.cpp's Qwen template
+# that can spend the complete output budget in hidden reasoning after a tool
+# call and leave no user-visible answer. When ODS reasoning is disabled, keep
+# the model non-reasoning and omit the Qwen compatibility knob so llama.cpp's
+# independently pinned no-think default remains authoritative. When the owner
+# explicitly enables reasoning, advertise the capability and use a real
+# non-off effort so both affected and corrected OpenClaw transports agree.
+model_reasoning = updated_model.get("reasoning", False)
+if type(model_reasoning) is not bool:
+    raise SystemExit("OpenClaw model reasoning configuration must be boolean")
+updated_model["reasoning"] = model_reasoning
 model_label = "{} {}".format(updated_model.get("id", ""), updated_model.get("name", "")).casefold()
-if "qwen" in model_label:
+if "qwen" in model_label and model_reasoning:
     model_compat = updated_model.setdefault("compat", {})
     if not isinstance(model_compat, dict):
         raise SystemExit("OpenClaw Qwen compatibility configuration must be an object")
-    updated_model["reasoning"] = True
     model_compat["thinkingFormat"] = "qwen-chat-template"
-    updated_agent["thinkingDefault"] = "off"
+    updated_agent["thinkingDefault"] = "low"
+else:
+    updated_model.pop("compat", None)
+    updated_agent.pop("thinkingDefault", None)
 # A CPU-only model call can emit no progress while evaluating a long prompt.
 # Let the 30-minute provider own its terminal timeout, then retain one minute
 # for the OpenClaw stalled-session recovery before the 32-minute host ingress.
@@ -957,14 +967,17 @@ updated_fetch.update({
 updated_agent_tools["deny"] = [
     item for item in updated_agent_deny
     if item not in {
-        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list",
+        "pixel_ods_web_extract", "pixel_web_extract"
     }
 ]
-for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"):
+updated_also_allow = [item for item in updated_also_allow if item != "pixel_web_extract"]
+updated_sandbox_allow = [item for item in updated_sandbox_allow if item != "pixel_web_extract"]
+for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"):
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
 for permitted_tool in (
-    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"
 ):
     if permitted_tool not in updated_sandbox_allow:
         updated_sandbox_allow.append(permitted_tool)
@@ -1323,7 +1336,7 @@ PY
 
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
-    local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false model_label
+    local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
     if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]]; then
         :
     else
@@ -1331,16 +1344,11 @@ _ods_pixel_write_onboarding() {
         return 1
     fi
     (( context < 32768 )) && max_tokens="$((context / 8))"
-    # modelReasoning describes model capability to OpenClaw. Qwen needs that
-    # capability flag even when ODS defaults it to no-think so OpenClaw can
-    # send chat_template_kwargs.enable_thinking=false explicitly.
-    model_label="${LLM_MODEL:-default}"
-    model_label="${model_label,,}"
-    if [[ ! "${LLAMA_REASONING:-off}" =~ ^(off|none|false|0)$ \
-        || "$model_label" == *qwen* \
-        || "$model_label" == *reasoning* \
-        || "$model_label" == *deepseek-r1* \
-        || "$model_label" == *nemotron* ]]; then
+    # This field controls the active OpenClaw reasoning path, not merely the
+    # model family's theoretical capability. Keep the default no-think setting
+    # false even for reasoning-capable models; an explicit operator setting
+    # enables it and is reconciled transactionally on model swaps.
+    if [[ ! "${LLAMA_REASONING:-off}" =~ ^(off|none|false|0)$ ]]; then
         reasoning=true
     fi
 
@@ -1385,7 +1393,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],

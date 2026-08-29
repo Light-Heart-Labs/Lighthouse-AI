@@ -145,9 +145,12 @@ Open WebUI search-query generation uses the ordinary local model, not Pixel,
 to avoid recursive agent routing. Automatic title, tag, and follow-up
 generation is disabled while Pixel is active because those cosmetic jobs would
 otherwise compete with the agent for the same local inference slot.
-For Qwen models, the managed Pixel route tells OpenClaw to pass
-`chat_template_kwargs.enable_thinking=false` on every model request. That keeps
-tool continuations in the visible answer channel; it does not broaden the tool
+For the default no-think mode, the managed Pixel route omits OpenClaw's Qwen
+thinking compatibility switch and declares reasoning inactive. The independently
+pinned llama.cpp no-think setting then remains authoritative on every model
+request. This avoids an OpenClaw 2026.6.33 compatibility path that treats the
+literal effort `off` as truthy and can otherwise spend the whole output budget
+in hidden reasoning after a tool call. This policy does not broaden the tool
 allowlist or make custom tools replay-safe.
 
 ### Model swapping
@@ -162,8 +165,10 @@ the newly activated ODS model.
 
 If Pixel reconciliation fails, ODS restores and proves both the previous model
 runtime and Pixel route. A stopped or unmanaged Pixel is never adopted. Model
-family changes are supported: Qwen-only no-think compatibility is added for
-Qwen models and removed again when a non-Qwen model is activated. Pixel's
+family changes are supported: an explicitly reasoning-enabled Qwen route gets
+the Qwen chat-template compatibility policy and a real non-off effort; that
+policy is removed for no-think Qwen routes and when a non-Qwen model is
+activated. Pixel's
 managed agent and tool prompt requires a context of at least 16384 tokens; all
 bundled ODS catalog models are at or above that floor. An advanced custom
 activation below it is rejected before any model state changes. At 16K and 24K,
@@ -182,7 +187,7 @@ The default ODS integration exposes three read-only tools to Pixel:
 - `pixel_ods_apps_list` returns the same explicit count and allowlisted
   application inventory in an app-oriented shape. The count avoids asking
   small local models to infer it from the array.
-- `pixel_web_extract` uses OpenClaw's strict public-web network guard to find a
+- `pixel_ods_web_extract` uses OpenClaw's strict public-web network guard to find a
   distinctive literal method or section name anywhere in a long public page.
   A bounded fallback accepts two or three keywords only when they co-occur in
   one evidence window. The tool returns only that bounded, explicitly untrusted

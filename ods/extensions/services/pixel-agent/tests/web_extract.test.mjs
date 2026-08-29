@@ -148,6 +148,18 @@ test("validates the exact bounded query before transport", async () => {
   }
 });
 
+test("keeps URL schemas below llama.cpp's grammar repetition ceiling", async () => {
+  const harness = fixture();
+  assert.equal(harness.tool.parameters.properties.url.maxLength, 1024);
+  const result = await harness.tool.execute("call-long-url", {
+    url: `https://docs.example.org/${"x".repeat(1100)}`,
+    query: "Path.exists",
+  });
+  assert.equal(harness.calls.length, 0);
+  assert.equal(result.details.matched, false);
+  assert.match(result.content[0].text, /public HTTP\(S\) URL is required/);
+});
+
 test("returns an explicit no-evidence result without guessing", async () => {
   const harness = fixture({ body: "This page contains something else." });
   const result = await harness.tool.execute("call-miss", {
