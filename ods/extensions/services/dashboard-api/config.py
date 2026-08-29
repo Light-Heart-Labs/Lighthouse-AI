@@ -279,6 +279,20 @@ def _resolve_public_service_url(
     return ""
 
 
+# --- JSON Schema loading (guarded; optional dependency) ---
+# Validates extension manifests against service-manifest.v1.json when jsonschema
+# is available. Loaded here (not in the Templates section below) because
+# load_extension_manifests() runs at import time and needs these names defined first.
+_MANIFEST_SCHEMA = None
+try:
+    import jsonschema as _jsonschema_mod
+    _manifest_schema_path = Path(__file__).parent.parent.parent / "schema" / "service-manifest.v1.json"
+    if _manifest_schema_path.exists():
+        _MANIFEST_SCHEMA = json.loads(_manifest_schema_path.read_text(encoding="utf-8"))
+except ImportError:
+    _jsonschema_mod = None
+
+
 # --- Manifest Loading ---
 
 
@@ -338,6 +352,14 @@ def load_extension_manifests(
                 errors.append({"file": str(path), "error": "Unsupported schema_version"})
                 continue
 
+            if _MANIFEST_SCHEMA is not None and _jsonschema_mod is not None:
+                try:
+                    _jsonschema_mod.validate(manifest, _MANIFEST_SCHEMA)
+                except _jsonschema_mod.ValidationError as ve:
+                    logger.warning("Skipping manifest %s: schema validation failed: %s", path, ve.message)
+                    errors.append({"file": str(path), "error": f"Schema validation failed: {ve.message}"})
+                    continue
+
             service = manifest.get("service")
             if isinstance(service, dict):
                 service_id = service.get("id")
@@ -353,7 +375,7 @@ def load_extension_manifests(
                             compose_path,
                         )
                         continue
-                supported = service.get("gpu_backends", ["amd", "nvidia", "apple"])
+                supported = service.get("gpu_backends", [])
                 if gpu_backend == "apple":
                     if (
                         service.get("type") == "host-systemd"
