@@ -32,6 +32,9 @@ export const WEB_FETCH_TRUNCATED_PIVOT_REASON =
 export const WEB_FETCH_PUBLIC_ONLY_REASON =
   "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames and must not contact local, private, or raw-IP destinations. Do not call another tool in this turn; explain the boundary to the user.";
 
+export const GITHUB_CANONICAL_SOURCE_PREFIX =
+  "Pixel already has the owner's identified canonical public GitHub source:";
+
 export const EXEC_PRIVATE_NETWORK_REASON =
   "Pixel blocked this command because shell execution cannot be used to contact local, private, or raw-IP HTTP(S) destinations. Do not call another tool in this turn; explain the boundary to the user.";
 
@@ -236,13 +239,68 @@ function messageContentText(content) {
     .join("\n");
 }
 
-export function userMessageRequestsPrivateUrl(messages) {
-  if (!Array.isArray(messages)) return false;
+function currentUserText(messages, prompt = undefined) {
+  if (typeof prompt === "string" && prompt) return prompt;
+  if (!Array.isArray(messages)) return "";
   const userMessage = [...messages]
     .reverse()
     .find((message) => message && message.role === "user");
-  const text = messageContentText(userMessage?.content);
+  return messageContentText(userMessage?.content);
+}
+
+export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
   return textRequestsPrivateUrlAccess(text);
+}
+
+function validGitHubRepository(owner, repository) {
+  return (
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner) &&
+    /^[A-Za-z0-9._-]{1,100}$/.test(repository) &&
+    !repository.endsWith(".")
+  );
+}
+
+export function userMessageGitHubRepositoryUrl(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return undefined;
+  const explicit = text.match(
+    /https?:\/\/github\.com\/([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})(?=[\s/?#),.;\]}]|$)/i
+  );
+  let match = explicit;
+  if (!match) {
+    match = text.match(
+      /\b([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})\b(?=.{0,64}\bGitHub\s+(?:repo(?:sitory)?|project)\b)/i
+    );
+  }
+  if (!match) {
+    match = text.match(
+      /\bGitHub\s+(?:repo(?:sitory)?|project)\b.{0,64}\b([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})\b/i
+    );
+  }
+  if (!match || !validGitHubRepository(match[1], match[2])) return undefined;
+  const repository = match[2].replace(/\.git$/i, "");
+  if (!repository || !validGitHubRepository(match[1], repository)) return undefined;
+  return `https://github.com/${match[1]}/${repository}`;
+}
+
+export function githubReadmeUrl(repositoryUrl) {
+  if (typeof repositoryUrl !== "string") return undefined;
+  try {
+    const target = new URL(repositoryUrl);
+    const parts = target.pathname.split("/").filter(Boolean);
+    if (
+      target.protocol !== "https:" ||
+      target.hostname.toLowerCase() !== "github.com" ||
+      parts.length !== 2 ||
+      !validGitHubRepository(parts[0], parts[1])
+    ) {
+      return undefined;
+    }
+    return `https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/HEAD/README.md`;
+  } catch {
+    return undefined;
+  }
 }
 
 function fetchTargetsNonPublicAddress(event) {
@@ -329,6 +387,10 @@ export function createToolLoopGuard({
         fetchPivots: new Set(),
         targetedExtractPending: undefined,
         targetedExtractBlocks: 0,
+        githubCanonicalUrl: undefined,
+        githubReadmeUrl: undefined,
+        githubCanonicalSatisfied: false,
+        githubCanonicalBlocks: 0,
         failedExec: new Map(),
       };
       runs.set(runId, state);
@@ -396,6 +458,32 @@ export function createToolLoopGuard({
         return { block: true, blockReason: WEB_FETCH_TRUNCATED_PIVOT_REASON };
       } else {
         state.targetedExtractPending = undefined;
+        state.webExhausted = true;
+        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+      }
+    }
+
+    if (
+      state?.githubCanonicalUrl &&
+      !state.githubCanonicalSatisfied &&
+      WEB_TOOLS.has(toolName)
+    ) {
+      const requestedUrl = canonicalFetchUrl(event);
+      if (
+        (toolName === "web_fetch" || toolName === "pixel_ods_web_extract") &&
+        requestedUrl === state.githubReadmeUrl
+      ) {
+        state.githubCanonicalSatisfied = true;
+        state.githubCanonicalBlocks = 0;
+      } else if (state.githubCanonicalBlocks === 0) {
+        state.githubCanonicalBlocks = 1;
+        return {
+          block: true,
+          blockReason:
+            `${GITHUB_CANONICAL_SOURCE_PREFIX} ${state.githubCanonicalUrl}. ` +
+            `Do not search or narrate a retry. Call web_fetch once with exactly ${state.githubReadmeUrl} now.`,
+        };
+      } else {
         state.webExhausted = true;
         return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
       }
@@ -498,9 +586,19 @@ export function createToolLoopGuard({
       runId &&
       typeof sessionId === "string" &&
       sessionId &&
-      userMessageRequestsPrivateUrl(event?.messages)
+      userMessageRequestsPrivateUrl(event?.messages, event?.prompt)
     ) {
       stateFor(runId).privateNetworkPrompt = true;
+    }
+    if (typeof runId === "string" && runId) {
+      const githubUrl = userMessageGitHubRepositoryUrl(event?.messages, event?.prompt);
+      if (githubUrl) {
+        const state = stateFor(runId);
+        if (!state.githubCanonicalUrl) {
+          state.githubCanonicalUrl = githubUrl;
+          state.githubReadmeUrl = githubReadmeUrl(githubUrl);
+        }
+      }
     }
     const prefix = `agent:${agentId}:openai-user:`;
     const sessionKey = context?.sessionKey;

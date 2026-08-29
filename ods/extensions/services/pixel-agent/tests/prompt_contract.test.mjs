@@ -5,6 +5,7 @@ import {
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
+  githubSourceContract,
   needsLoopRecovery,
   promptContractForAgent,
 } from "../plugin/prompt-contract.mjs";
@@ -57,7 +58,10 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /without naming internal guards/);
   assert.match(result.appendSystemContext, /hypothetical shell\/browser workarounds/);
   assert.match(result.appendSystemContext, /never offer or use exec, shell, or another tool to bypass it/);
-  assert.match(result.appendSystemContext, /web_search to locate a promising source/);
+  assert.match(result.appendSystemContext, /explicit public URL, fetch that URL directly/);
+  assert.match(result.appendSystemContext, /public GitHub repository as Owner\/Repo/);
+  assert.match(result.appendSystemContext, /https:\/\/github\.com\/Owner\/Repo/);
+  assert.match(result.appendSystemContext, /without an identified source, use web_search/);
   assert.match(result.appendSystemContext, /never invent a web_browse tool/);
   assert.match(result.appendSystemContext, /use pixel_ods_web_extract once/);
   assert.match(result.appendSystemContext, /not a sentence or search query/);
@@ -133,6 +137,51 @@ test("adds a static no-substitution contract for a private URL request", () => {
   assert.match(result.appendSystemContext, /do not substitute an ODS status lookup/);
   assert.match(result.appendSystemContext, /do not infer whether the target is running/);
   assert.match(result.appendSystemContext, /do not suggest shell or browser workarounds/);
+});
+
+test("adds only a validated exact GitHub repository source to its turn", () => {
+  const messages = [
+    { role: "user", content: "Research the official Osmantic/ODS GitHub repository." },
+  ];
+  const exact =
+    " The owner's exact identified canonical public source for this turn is https://github.com/Osmantic/ODS. Read its default-branch README from https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md. Do not call web_search or fetch the GitHub HTML page. Call web_fetch once with exactly that raw README URL as the first research tool, without narrating the tool choice.";
+  assert.equal(githubSourceContract(messages), exact);
+  assert.deepEqual(
+    promptContractForAgent({ agentId: "pixel" }, "pixel", { messages }),
+    { appendSystemContext: `${ODS_CONVERSATION_CONTRACT}${exact}` }
+  );
+  assert.equal(
+    githubSourceContract([
+      { role: "user", content: "Research docs/setup while reading a GitHub issue." },
+    ]),
+    ""
+  );
+  assert.deepEqual(
+    promptContractForAgent(
+      { agentId: "pixel" },
+      "pixel",
+      {
+        prompt: "Research the official Osmantic/ODS GitHub repository.",
+        messages: [{ role: "user", content: "old unrelated request" }],
+      }
+    ),
+    { appendSystemContext: `${ODS_CONVERSATION_CONTRACT}${exact}` }
+  );
+});
+
+test("uses the current prompt instead of stale session messages for private URLs", () => {
+  const result = promptContractForAgent(
+    { agentId: "pixel" },
+    "pixel",
+    {
+      prompt: "Open http://127.0.0.1:3000 and tell me its title.",
+      messages: [{ role: "user", content: "summarize a public page" }],
+    }
+  );
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_PRIVATE_URL_CONTRACT}`
+  );
 });
 
 test("does not add the contract for another or missing agent", () => {

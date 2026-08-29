@@ -5,6 +5,7 @@ import {
   CODING_RETRY_EXHAUSTED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
+  GITHUB_CANONICAL_SOURCE_PREFIX,
   PRIVATE_URL_REQUEST_REASON,
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
   WEB_BUDGET_EXHAUSTED_REASON,
@@ -14,7 +15,9 @@ import {
   WEB_LOOP_ABORT_REASON,
   createToolLoopGuard,
   createToolLoopGuardRegistry,
+  githubReadmeUrl,
   textRequestsPrivateUrlAccess,
+  userMessageGitHubRepositoryUrl,
   userMessageRequestsPrivateUrl,
 } from "../plugin/tool-loop-guard.mjs";
 
@@ -76,6 +79,83 @@ test("uses a small balanced web budget by default", () => {
   assert.equal(call(guard, "web_fetch"), undefined);
   assert.equal(call(guard, "web_search"), undefined);
   assert.equal(call(guard, "web_fetch"), undefined);
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+});
+
+test("extracts only an explicitly identified public GitHub repository", () => {
+  for (const text of [
+    "Research the official Osmantic/ODS GitHub repository.",
+    "Research the GitHub repo Osmantic/ODS and cite it.",
+    "Read https://github.com/Osmantic/ODS and summarize it.",
+  ]) {
+    assert.equal(
+      userMessageGitHubRepositoryUrl([{ role: "user", content: text }]),
+      "https://github.com/Osmantic/ODS"
+    );
+  }
+  assert.equal(
+    userMessageGitHubRepositoryUrl(
+      [{ role: "user", content: "old request" }],
+      "Research the official Osmantic/ODS GitHub repository."
+    ),
+    "https://github.com/Osmantic/ODS"
+  );
+  assert.equal(
+    userMessageGitHubRepositoryUrl([
+      { role: "user", content: "Open docs/setup while reading a GitHub issue." },
+    ]),
+    undefined
+  );
+  assert.equal(
+    githubReadmeUrl("https://github.com/Osmantic/ODS"),
+    "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md"
+  );
+  assert.equal(githubReadmeUrl("https://example.org/Osmantic/ODS"), undefined);
+});
+
+test("redirects search to an owner-identified canonical GitHub source once", () => {
+  const guard = createToolLoopGuard();
+  const context = {
+    agentId: "pixel",
+    runId: "run-1",
+    sessionId: "session-1",
+  };
+  guard.observeRun(context, "pixel", {
+    prompt: "Research the official Osmantic/ODS GitHub repository.",
+    messages: [{ role: "user", content: "old request" }],
+  });
+  const redirected = call(guard, "web_search");
+  assert.equal(redirected.block, true);
+  assert.match(redirected.blockReason, new RegExp(GITHUB_CANONICAL_SOURCE_PREFIX));
+  assert.match(redirected.blockReason, /https:\/\/github\.com\/Osmantic\/ODS/);
+  assert.match(
+    redirected.blockReason,
+    /https:\/\/raw\.githubusercontent\.com\/Osmantic\/ODS\/HEAD\/README\.md/
+  );
+  assert.equal(
+    call(guard, "web_fetch", {
+      event: {
+        params: {
+          url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
+        },
+      },
+    }),
+    undefined
+  );
+});
+
+test("ends canonical-source research when the model ignores the exact redirect", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      messages: [
+        { role: "user", content: "Use GitHub repository Osmantic/ODS as the source." },
+      ],
+    }
+  );
+  assert.match(call(guard, "web_search").blockReason, /canonical public GitHub source/);
   assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
 });
 
