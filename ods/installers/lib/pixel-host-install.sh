@@ -808,6 +808,8 @@ _ods_pixel_apply_runtime_budget() {
     # OpenClaw's default session watchdogs assume a responsive remote model.
     # Keep the larger CPU-only budgets deterministic and confined to this
     # ODS-owned Pixel route.
+    # macOS Bash 3.2 reparses this command-substitution heredoc; keep the
+    # embedded Python body free of literal apostrophe characters.
     staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
 import copy, json, os, pathlib, re, stat, sys, tempfile
 
@@ -904,12 +906,12 @@ if (type(context_window) is not int or type(model_max_tokens) is not int
 # system/tool prompt remains usable, and disable the larger embedded-run floor.
 updated_compaction["reserveTokens"] = model_max_tokens
 updated_compaction["reserveTokensFloor"] = 0
-# OpenClaw 2026.6.33's legacy OpenAI-completions transport coerces the literal
+# The legacy OpenAI-completions transport in OpenClaw 2026.6.33 coerces the literal
 # reasoning effort "off" with Boolean("off"), which wrongly sends
-# chat_template_kwargs.enable_thinking=true. With llama.cpp's Qwen template
+# chat_template_kwargs.enable_thinking=true. With the llama.cpp Qwen template
 # that can spend the complete output budget in hidden reasoning after a tool
 # call and leave no user-visible answer. When ODS reasoning is disabled, keep
-# the model non-reasoning and omit the Qwen compatibility knob so llama.cpp's
+# the model non-reasoning and omit the Qwen compatibility knob so the llama.cpp
 # independently pinned no-think default remains authoritative. When the owner
 # explicitly enables reasoning, advertise the capability and use a real
 # non-off effort so both affected and corrected OpenClaw transports agree.
