@@ -16,6 +16,9 @@ scripts/ods-support-bundle.sh --output /tmp/ods-support
 # Skip container logs
 scripts/ods-support-bundle.sh --no-logs
 
+# Capture a bounded incident window instead of only the default 200-line tail
+scripts/ods-support-bundle.sh --logs-since 30m --log-tail 1000
+
 # Print machine-readable result JSON
 scripts/ods-support-bundle.sh --json
 ```
@@ -25,7 +28,7 @@ scripts/ods-support-bundle.sh --json
 - ODS Doctor output, when `scripts/ods-doctor.sh` can run
 - Extension audit JSON from `scripts/audit-extensions.py`
 - Compose resolution and compose validation output, when Docker Compose is available
-- Docker version, daemon info, container summary, and short ODS container log tails
+- Docker version, daemon info, container summary, and bounded ODS container logs
 - Platform, git, disk, memory, listening port, manifest, env schema, and redacted `.env` details
 
 The command is best-effort. Missing Docker, an unreachable daemon, or a failing
