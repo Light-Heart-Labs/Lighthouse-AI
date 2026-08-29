@@ -26,6 +26,7 @@ for required in (
     'ENABLE_OPENAI_API: "true"',
     'DEFAULT_MODELS: "pixel/default"',
     'DEFAULT_PINNED_MODELS: "pixel/default"',
+    "DEFAULT_PROMPT_SUGGESTIONS:",
     "TASK_MODEL_EXTERNAL:",
     'ENABLE_TITLE_GENERATION: "false"',
     'ENABLE_TAGS_GENERATION: "false"',
@@ -66,6 +67,11 @@ webui = value["services"]["open-webui"]
 assert webui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
 assert webui["environment"]["OPENAI_API_BASE_URLS"].startswith("http://pixel-edge:9595/v1;")
 assert webui["environment"]["DEFAULT_MODELS"] == "pixel/default"
+suggestions = json.loads(webui["environment"]["DEFAULT_PROMPT_SUGGESTIONS"])
+assert [item["title"][0] for item in suggestions] == [
+    "Check ODS health", "Build something", "Research a topic", "Plan a complex task",
+]
+assert all(len(item["title"]) == 2 and item["content"] for item in suggestions)
 assert webui["environment"]["TASK_MODEL_EXTERNAL"] == "Qwen-Test-Q4_K_M.gguf"
 assert webui["environment"]["ENABLE_TITLE_GENERATION"] == "false"
 assert webui["environment"]["ENABLE_TAGS_GENERATION"] == "false"
