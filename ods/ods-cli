@@ -4747,6 +4747,12 @@ cmd_rollback() {
 
         # Restart services with restored configuration
         log "Restarting services with restored configuration..."
+        # Re-resolve compose flags from the restored .env/overlays so the restarted
+        # stack matches the backup rather than the failed update's flag selection.
+        load_env
+        flags_str=$(get_compose_flags)
+        flags=()
+        read -ra flags <<< "$flags_str"
         if docker compose "${flags[@]}" up -d; then
             success "Rollback complete"
             rm -f "$INSTALL_DIR/.last-backup-id"
