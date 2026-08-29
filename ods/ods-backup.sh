@@ -66,6 +66,8 @@ estimate_backup_bytes() {
             "data/litellm"
             "data/livekit"
             "data/ollama"
+            "data/hermes"
+            "data/persona"
         )
 
         for p in "${user_data_paths[@]}"; do
@@ -334,6 +336,8 @@ backup_user_data() {
         "data/litellm"
         "data/livekit"
         "data/ollama"
+        "data/hermes"
+        "data/persona"
     )
 
     for path in "${user_data_paths[@]}"; do
