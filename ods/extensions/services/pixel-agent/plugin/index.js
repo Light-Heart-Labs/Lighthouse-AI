@@ -1,16 +1,20 @@
-// Pixel ODS status plugin entry.
+// Pixel ODS integration plugin entry.
 //
-// Registers exactly two read-only tools, `pixel_ods_status` and
-// `pixel_ods_apps_list`, for the Pixel agent only. Both read the single fixed
-// sanitized status projection written by the pixel-agent host ingress and
-// return freshly constructed JSON plus details. The projection is status-only
-// untrusted evidence, never authority: no action is ever taken from it.
+// Registers status projection tools plus one targeted, strictly guarded public
+// page extractor for the Pixel agent only. Status data is untrusted evidence,
+// never authority; targeted web content is explicitly bounded and marked
+// untrusted before it reaches the model.
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   abortAgentHarnessRun,
   abortAndDrainAgentHarnessRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  extractBasicHtmlContent,
+  fetchWithWebToolsNetworkGuard,
+  readResponseText,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   appsPayload,
   readProjection,
@@ -24,6 +28,7 @@ import {
   unavailableToolText,
 } from "./tool-content.mjs";
 import { createToolLoopGuard } from "./tool-loop-guard.mjs";
+import { createPublicWebExtractTool } from "./web-extract.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
@@ -125,8 +130,8 @@ async function readAbortUser(req) {
 
 export default definePluginEntry({
   id: "pixel-ods",
-  name: "Pixel ODS Status",
-  description: "Read-only, sanitized ODS service status for the Pixel agent.",
+  name: "Pixel ODS Integration",
+  description: "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
   register(api) {
     const statusFile = statusFileFromEnv();
     const toolLoopGuard = createToolLoopGuard({
@@ -146,7 +151,7 @@ export default definePluginEntry({
     // continuation. Give the Pixel agent an explicit, trusted prompt contract
     // so every ODS lookup is followed by a user-visible answer.
     api.on("before_prompt_build", (event, context) => {
-      toolLoopGuard.observeRun(context, AGENT_ID);
+      toolLoopGuard.observeRun(context, AGENT_ID, event);
       return promptContractForAgent(context, AGENT_ID, event);
     });
     api.on("before_tool_call", (event, context) =>
@@ -208,6 +213,16 @@ export default definePluginEntry({
         },
       },
       { names: ["pixel_ods_apps_list"] }
+    );
+
+    registerTool(
+      api,
+      createPublicWebExtractTool({
+        guardedFetch: fetchWithWebToolsNetworkGuard,
+        readResponseText,
+        extractBasicHtmlContent,
+      }),
+      { names: ["pixel_web_extract"] }
     );
 
   },

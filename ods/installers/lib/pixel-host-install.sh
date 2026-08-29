@@ -597,6 +597,7 @@ normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
 normalized_write_lock = normalized_session.setdefault("writeLock", {})
 normalized_tools = normalized.setdefault("tools", {})
+normalized_also_allow = normalized_tools.setdefault("alsoAllow", [])
 normalized_web = normalized_tools.setdefault("web", {})
 normalized_fetch = normalized_web.setdefault("fetch", {})
 normalized_agent_tools = normalized_agent.setdefault("tools", {})
@@ -607,6 +608,8 @@ if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_diagnostics, dict)
         or not isinstance(normalized_write_lock, dict)
         or not isinstance(normalized_tools, dict)
+        or not isinstance(normalized_also_allow, list)
+        or not all(isinstance(item, str) for item in normalized_also_allow)
         or not isinstance(normalized_web, dict)
         or not isinstance(normalized_fetch, dict)
         or not isinstance(normalized_agent_tools, dict)
@@ -650,11 +653,20 @@ normalized_fetch.update({
     },
 })
 normalized_agent_tools["deny"] = [
-    item for item in normalized_agent_deny if item not in {"web_search", "web_fetch"}
+    item for item in normalized_agent_deny
+    if item not in {
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+    }
 ]
-for web_tool in ("web_search", "web_fetch"):
-    if web_tool not in normalized_sandbox_allow:
-        normalized_sandbox_allow.append(web_tool)
+for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"):
+    if extension_tool not in normalized_also_allow:
+        normalized_also_allow.append(extension_tool)
+for permitted_tool in (
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+):
+    if permitted_tool not in normalized_sandbox_allow:
+        normalized_sandbox_allow.append(permitted_tool)
+normalized_tools["alsoAllow"] = sorted(set(normalized_also_allow))
 normalized_sandbox_tools["allow"] = sorted(set(normalized_sandbox_allow))
 model_label = f"{model_id} {model_name}".casefold()
 if "qwen" in model_label:
@@ -748,10 +760,43 @@ _ods_pixel_secure_plugin_tree() {
     fi
 }
 
+_ods_pixel_refresh_plugin_registry() {
+    local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4" registry
+    registry="$(ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
+        plugins registry --refresh --json 2>/dev/null)" || return 1
+    jq -e --arg root "$plugin_root" '
+        (["pixel_ods_apps_list", "pixel_ods_status", "pixel_web_extract"] | sort) as $tools
+        | .state == "fresh"
+        and (.refreshReasons | type == "array")
+        and all(.persisted, .current;
+            [
+                .plugins[]?
+                | select(
+                    .pluginId == "pixel-ods"
+                    and .enabled == true
+                    and .rootDir == $root
+                    and ((.contributions.contracts.tools // []) | sort) == $tools
+                )
+            ] | length == 1
+        )
+    ' <<<"$registry" >/dev/null
+}
+
 _ods_pixel_verify_plugin_loaded() {
-    local owner="$1" home="$2" openclaw_bin="$3"
+    local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4"
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
-        | jq -e '[.plugins[]? | select(.id == "pixel-ods" and .status == "loaded")] | length == 1' \
+        | jq -e --arg root "$plugin_root" '
+            ["pixel_ods_apps_list", "pixel_ods_status", "pixel_web_extract"] as $tools
+            | [
+                .plugins[]?
+                | select(
+                    .id == "pixel-ods"
+                    and .status == "loaded"
+                    and .rootDir == $root
+                    and ((.contracts.tools // []) | sort) == ($tools | sort)
+                )
+            ] | length == 1
+        ' \
             >/dev/null
 }
 
@@ -807,6 +852,7 @@ updated_diagnostics = updated.setdefault("diagnostics", {})
 updated_compaction = updated_defaults.setdefault("compaction", {})
 write_lock = updated_session.setdefault("writeLock", {})
 updated_tools = updated.setdefault("tools", {})
+updated_also_allow = updated_tools.setdefault("alsoAllow", [])
 updated_web = updated_tools.setdefault("web", {})
 updated_fetch = updated_web.setdefault("fetch", {})
 updated_agent_tools = updated_agent.setdefault("tools", {})
@@ -820,7 +866,10 @@ if not isinstance(write_lock, dict):
     raise SystemExit("OpenClaw session write-lock configuration must be an object")
 if not isinstance(updated_diagnostics, dict):
     raise SystemExit("OpenClaw diagnostics configuration must be an object")
-if (not isinstance(updated_tools, dict) or not isinstance(updated_agent_tools, dict)
+if (not isinstance(updated_tools, dict)
+        or not isinstance(updated_also_allow, list)
+        or not all(isinstance(item, str) for item in updated_also_allow)
+        or not isinstance(updated_agent_tools, dict)
         or not isinstance(updated_agent_deny, list)
         or not all(isinstance(item, str) for item in updated_agent_deny)
         or not isinstance(updated_sandbox, dict)
@@ -888,7 +937,7 @@ updated_tools["loopDetection"] = {
     },
 }
 # Search stays private through loopback-only SearXNG. Page retrieval uses
-# OpenClaw's public-network SSRF guard with deliberately tighter ODS bounds;
+# OpenClaw public-network SSRF guard with deliberately tighter ODS bounds;
 # private/link-local targets and trusted environment proxies remain disabled.
 updated_fetch.update({
     "enabled": True,
@@ -906,11 +955,20 @@ updated_fetch.update({
     },
 })
 updated_agent_tools["deny"] = [
-    item for item in updated_agent_deny if item not in {"web_search", "web_fetch"}
+    item for item in updated_agent_deny
+    if item not in {
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+    }
 ]
-for web_tool in ("web_search", "web_fetch"):
-    if web_tool not in updated_sandbox_allow:
-        updated_sandbox_allow.append(web_tool)
+for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"):
+    if extension_tool not in updated_also_allow:
+        updated_also_allow.append(extension_tool)
+for permitted_tool in (
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"
+):
+    if permitted_tool not in updated_sandbox_allow:
+        updated_sandbox_allow.append(permitted_tool)
+updated_tools["alsoAllow"] = sorted(set(updated_also_allow))
 updated_sandbox_tools["allow"] = sorted(set(updated_sandbox_allow))
 if updated == value:
     print("unchanged")
@@ -1017,7 +1075,7 @@ ods_pixel_reconcile_promoted_model() {
     local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
     local promoted_context="${5:-}" promoted_max_tokens="${6:-}" promoted_reasoning="${7:-}"
     local source_ref source_root pixel_root answers candidate backup contract_sha256 openclaw_bin failed=false
-    local failure_phase=unknown
+    local failure_phase="unknown"
     [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
     source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
     local PIXEL_SOURCE_REF="$source_ref"
@@ -1033,55 +1091,55 @@ ods_pixel_reconcile_promoted_model() {
     if ! _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" \
         "$promoted_context" "$promoted_max_tokens" "$promoted_reasoning"; then
         failed=true
-        failure_phase=onboarding-update
+        failure_phase="onboarding-update"
     fi
     if [[ "$failed" == false ]] \
         && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force; then
         failed=true
-        failure_phase=pixel-configure
+        failure_phase="pixel-configure"
     fi
     if [[ "$failed" == false ]] \
         && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan; then
         failed=true
-        failure_phase=pixel-plan
+        failure_phase="pixel-plan"
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_apply_runtime_budget "$owner" "$home" "$candidate" "$openclaw_bin" >/dev/null; then
         failed=true
-        failure_phase=runtime-budget
+        failure_phase="runtime-budget"
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_candidate_is_managed_runtime_update "$owner" "$home" "$candidate" "$answers"; then
         failed=true
-        failure_phase=managed-update-validation
+        failure_phase="managed-update-validation"
     fi
     if [[ "$failed" == false ]] && ! _ods_pixel_candidate_config_matches_live "$owner" "$home" "$candidate"; then
         if ! _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$candidate" "$home/.openclaw/openclaw.json"; then
             failed=true
-            failure_phase=config-install
+            failure_phase="config-install"
         fi
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
         failed=true
-        failure_phase=gateway-restart-verify
+        failure_phase="gateway-restart-verify"
     fi
     if [[ "$failed" == false ]]; then
         if ! contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"; then
             failed=true
-            failure_phase=contract-hash
+            failure_phase="contract-hash"
         fi
     fi
     if [[ "$failed" == false ]]; then
         if [[ "$final_state" == ready ]]; then
             if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then
                 failed=true
-                failure_phase=ready-marker
+                failure_phase="ready-marker"
             fi
         else
             if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
                 failed=true
-                failure_phase=installing-marker
+                failure_phase="installing-marker"
             fi
         fi
     fi
@@ -1327,7 +1385,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_web_extract"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],
@@ -1547,19 +1605,23 @@ ods_pixel_install_default_agent() {
         return 1
     }
     case "$runtime_budget_status" in
-        changed)
-            ai "Applying Pixel's bounded ODS local-runtime budget..."
-            if ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" >>"$LOG_FILE" 2>&1; then
-                ai_bad "Pixel failed verification after applying the ODS local-runtime budget. See $LOG_FILE."
-                return 1
-            fi
-            ;;
+        changed) ai "Applying Pixel's bounded ODS local-runtime budget..." ;;
         unchanged) ;;
         *)
             ai_bad "Pixel returned an invalid ODS local-runtime budget result."
             return 1
             ;;
     esac
+    # OpenClaw persists plugin descriptors separately from its live config.
+    # Rebuild that registry after any reviewed extension/config update, then
+    # restart once so the gateway loads both the exact descriptor contract and
+    # the final ODS runtime policy. A plain service restart can otherwise keep
+    # stale tool descriptors across same-release extension refreshes.
+    if ! _ods_pixel_refresh_plugin_registry "$owner" "$home" "$openclaw_bin" "$plugin_root/plugin" \
+        || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel could not refresh and load the exact ODS plugin registry. See $LOG_FILE."
+        return 1
+    fi
     # Rebind the exact verified contract and overlaid canonical live config
     # while the marker remains non-ready. If ingress setup is interrupted, a
     # rerun can verify and reuse this same active Pixel release.
@@ -1578,8 +1640,8 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel ingress did not pass its authenticated loopback health check."
         return 1
     fi
-    if ! _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin"; then
-        ai_bad "The reviewed ODS Pixel plugin is not loaded by the active gateway."
+    if ! _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" "$plugin_root/plugin"; then
+        ai_bad "The reviewed ODS Pixel plugin and exact tool contract are not loaded by the active gateway."
         return 1
     fi
     if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then

@@ -73,7 +73,7 @@ Browser
                                                 v
                            Pixel/OpenClaw gateway on 127.0.0.1:18789
                                                 |
-                         exact-digest ODS plugin, two read-only tools
+                         exact-digest ODS plugin, three read-only tools
                                                 v
                          /run/ods-pixel/ods-status.json (mode 0640)
 ```
@@ -89,6 +89,13 @@ bounds request, response, stream, and timeout sizes.
 The edge and host ingress health checks fail closed unless the next hop is
 actually ready. Open WebUI is not allowed to advertise `pixel/default` while
 the private ingress is unavailable.
+
+The dashboard route also handles explicit requests to open private HTTP(S)
+URLs at the edge. It returns one exact local explanation without forwarding the
+request to Pixel or the model, while ordinary conversation, public URLs, and
+text that merely mentions a private development URL continue through normally.
+Private browsing requires a separately reviewed and approved capability; the
+public-web tools and shell cannot be used as substitutes.
 
 ## Install
 
@@ -168,20 +175,29 @@ tool results.
 
 ## Bounded ODS tools
 
-The first slice exposes exactly two read-only tools to Pixel:
+The default ODS integration exposes three read-only tools to Pixel:
 
 - `pixel_ods_status` returns the sanitized overall ODS state, an explicit
   application count, and allowlisted application states.
 - `pixel_ods_apps_list` returns the same explicit count and allowlisted
   application inventory in an app-oriented shape. The count avoids asking
   small local models to infer it from the array.
+- `pixel_web_extract` uses OpenClaw's strict public-web network guard to find a
+  distinctive literal method or section name anywhere in a long public page.
+  A bounded fallback accepts two or three keywords only when they co-occur in
+  one evidence window. The tool returns only that bounded, explicitly untrusted
+  window. It is the targeted fallback when the normal `web_fetch` prefix is
+  truncated before the requested detail; local, private, single-label,
+  credentialed, and raw-IP destinations remain blocked.
 
-The plugin reads only `/run/ods-pixel/ods-status.json`. It does not receive the
-Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS operator
-credentials. The projection accepts only its documented schema, service and
-app enums, owner, mode, size, timestamp freshness, UTF-8, and fixed path. It
-rejects symlinks, replacement races, unknown keys, duplicate apps, stale or
-future timestamps, and group/world-writable files.
+The status tools read only `/run/ods-pixel/ods-status.json`. The plugin does not
+receive the Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS
+operator credentials. The targeted extractor receives only a public URL and
+literal query and delegates transport to OpenClaw's DNS-pinned, redirect-aware
+web guard. The projection accepts only its documented schema, service and app
+enums, owner, mode, size, timestamp freshness, UTF-8, and fixed path. It rejects
+symlinks, replacement races, unknown keys, duplicate apps, stale or future
+timestamps, and group/world-writable files.
 
 Adding an ODS action is a security-boundary change. It requires a new explicit
 tool contract, policy and authorization design, adversarial tests, and fresh
@@ -206,9 +222,11 @@ match exactly, a rerun skips Pixel's
 same-release apply transaction, verifies the exact source, and reinstalls the
 ODS ingress. If only the ODS extension contract changed while the exact
 verified Pixel source and newly planned canonical runtime configuration still
-match the live configuration, ODS restarts and verifies the gateway before
-refreshing the extension. Pixel source drift or runtime-configuration drift
-takes the ordinary configure/plan/apply path and remains fail closed.
+match the live configuration, ODS refreshes OpenClaw's persisted plugin
+registry, verifies the exact plugin root and three-tool descriptor in both the
+persisted and current registry views, then restarts and verifies the gateway.
+Pixel source drift or runtime-configuration drift takes the ordinary
+configure/plan/apply path and remains fail closed.
 
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel

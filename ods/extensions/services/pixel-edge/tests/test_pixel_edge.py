@@ -27,6 +27,7 @@ TOKEN = "test-token-abc123-0123456789abcdef"
 
 async def _upstream_chat(request):
     data = await request.json()
+    request.app["chat_requests"].append(data)
     stream = data.get("stream", False)
 
     if data.get("trigger_error"):
@@ -76,6 +77,7 @@ async def _start_upstream():
     os.close(fd)
     os.unlink(path)
     app = web.Application()
+    app["chat_requests"] = []
     app["cancel_users"] = []
     app.router.add_post("/v1/chat/completions", _upstream_chat)
     app.router.add_post("/v1/chat/cancel", _upstream_cancel)
@@ -544,6 +546,120 @@ class TestResponseRewrite(BaseEdgeTest):
                 data["choices"][0]["message"]["content"],
                 "openclaw/default is assistant text",
             )
+
+
+# ---------------------------------------------------------------------------
+# Private URL boundary
+# ---------------------------------------------------------------------------
+
+class TestPrivateUrlBoundary(BaseEdgeTest):
+    async def test_non_stream_private_url_returns_exact_local_reply(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "Open http://127.0.0.1:3000."}],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            data = await resp.json()
+            self.assertEqual(data["model"], "pixel/default")
+            self.assertEqual(
+                data["choices"][0]["message"]["content"],
+                self.pe._PRIVATE_URL_REPLY,
+            )
+        self.assertEqual(self.up_runner.app["chat_requests"], [])
+
+    async def test_stream_private_url_returns_exact_local_reply(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Tell me what's at "},
+                        {"type": "text", "text": "http://dashboard.local/status"},
+                    ],
+                }],
+                "stream": True,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            body = await resp.text()
+            self.assertIn(self.pe._PRIVATE_URL_REPLY, body)
+            self.assertIn('"model": "pixel/default"', body)
+            self.assertIn('"finish_reason": "stop"', body)
+            self.assertTrue(body.endswith("data: [DONE]\n\n"))
+        self.assertEqual(self.up_runner.app["chat_requests"], [])
+
+    async def test_public_url_forwards_normally(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "Read https://docs.python.org/3/."}],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+
+    async def test_documentation_mention_of_private_url_forwards_normally(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": "Write documentation that mentions http://127.0.0.1:3000.",
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+
+    async def test_coding_request_with_private_url_fixture_forwards_normally(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": "Write a test whose fixture calls http://127.0.0.1:3000.",
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+
+    async def test_draft_then_access_private_url_is_still_blocked(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Write a test for http://127.0.0.1:3000, then open the page "
+                        "and tell me its title."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            data = await resp.json()
+            self.assertEqual(
+                data["choices"][0]["message"]["content"],
+                self.pe._PRIVATE_URL_REPLY,
+            )
+        self.assertEqual(self.up_runner.app["chat_requests"], [])
 
 
 # ---------------------------------------------------------------------------
