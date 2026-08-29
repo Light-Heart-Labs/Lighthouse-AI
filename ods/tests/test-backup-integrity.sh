@@ -91,6 +91,34 @@ if echo "$list_out" | grep -q "my-notes"; then
 fi
 pass "--list shows own-format backup IDs and skips other directories"
 
+info "Listing directory and compressed backups as JSON"
+archive_id="20260601-120000"
+mkdir -p "$LIFECYCLE_DIR/$archive_id"
+cat > "$LIFECYCLE_DIR/$archive_id/manifest.json" <<'JSON'
+{"backup_type":"config","backup_date":"2026-06-01T12:00:00Z","description":"release guard","ods_version":"2.6.0"}
+JSON
+echo 'placeholder' > "$LIFECYCLE_DIR/$archive_id/checksums.sha256"
+tar czf "$LIFECYCLE_DIR/$archive_id.tar.gz" -C "$LIFECYCLE_DIR" "$archive_id"
+rm -rf "$LIFECYCLE_DIR/$archive_id"
+
+json_out=$(ODS_DIR="$FAKE_ODS" "$ODS_BACKUP" --output "$LIFECYCLE_DIR" --list --json)
+jq -e '
+  .schema_version == "ods.backups.v1" and
+  .count == 7 and
+  ([.backups[].id] | index("my-notes") | not) and
+  (.backups[0] | .id == "20260601-120000.tar.gz" and
+    .format == "tar.gz" and
+    .backup_type == "config" and
+    .created_at == "2026-06-01T12:00:00Z" and
+    .description == "release guard" and
+    .ods_version == "2.6.0" and
+    .manifest_status == "available" and
+    .integrity_manifest == "available" and
+    (.size_bytes > 0))
+' <<< "$json_out" >/dev/null || fail "--list --json returned the wrong inventory contract"
+pass "--list --json reports parseable directory and archive metadata"
+rm -f "$LIFECYCLE_DIR/$archive_id.tar.gz"
+
 info "Running backup with RETENTION_COUNT=5"
 ODS_DIR="$FAKE_ODS" RETENTION_COUNT=5 "$ODS_BACKUP" --output "$LIFECYCLE_DIR" --type config >/dev/null
 
