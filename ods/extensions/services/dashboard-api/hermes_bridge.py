@@ -556,33 +556,13 @@ async def submit_prompt(session_key: str, text: str) -> HermesReply:
     return HermesReply(session_id=session_id, text=final_text, status=status, warning=warning)
 
 
-# -------- legacy compat shims (kept so existing tests keep importing OK) --------
-
-_SESSION_IDS: dict[str, str] = {}
-
-
 async def ensure_session(session_key: str) -> str:
-    """Legacy: tests call this to seed _SESSION_IDS before invoking submit_prompt.
+    """Return the managed Hermes session for this Talk cookie.
 
-    The streaming bridge now creates a fresh Hermes session per call, so the
-    stored value is informational only. We still return *something* truthy so
-    tests that assert "ensure_session returned a non-empty string" pass.
+    Session ownership stays with the connection pool used by ``stream_prompt``
+    so the idle sweeper and application shutdown close the connection and evict
+    its cookie key together.
     """
-    existing = _SESSION_IDS.get(session_key)
-    if existing:
-        return existing
-    timeout_seconds = _request_timeout()
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-    async with aiohttp.ClientSession(timeout=timeout) as http_session:
-        ws = await _connect_ws(http_session)
-        async with ws:
-            session_id = await _create_session_on_ws(ws, timeout=30)
-    _SESSION_IDS[session_key] = session_id
-    return session_id
-
-
-def clear_session_for_tests(session_key: str | None = None) -> None:
-    if session_key is None:
-        _SESSION_IDS.clear()
-    else:
-        _SESSION_IDS.pop(session_key, None)
+    _ensure_sweeper_running()
+    conn = await _get_connection(session_key)
+    return conn.session_id
