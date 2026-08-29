@@ -110,6 +110,9 @@ test: ## Run unit and contract tests
 	@echo "=== CLI preset restore user extensions ==="
 	@bash tests/test-cli-preset-restore-user-extensions.sh
 	@echo ""
+	@echo "=== CLI preset list JSON output ==="
+	@bash tests/test-preset-list-json.sh
+	@echo ""
 	@echo "=== bootstrap OpenClaw compose-guard regression ==="
 	@bash tests/test-bootstrap-openclaw-compose-guard.sh
 	@echo ""
