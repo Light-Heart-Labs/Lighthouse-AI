@@ -35,8 +35,17 @@ async def _upstream_chat(request):
 
     if stream:
         async def generate():
-            yield b'data: {"id":"1","model":"openclaw/default","choices":[]}\n\n'
-            yield b'data: {"id":"2","model":"openclaw/default","choices":[{"delta":{"content":"openclaw/default is assistant text"}}]}\n\n'
+            if data.get("trigger_stream_error"):
+                yield b'data: {"error":{"message":"upstream failed"}}\n\n'
+                yield b'data: [DONE]\n\n'
+                return
+            yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+            if data.get("trigger_reserved"):
+                yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{"content":"No response "},"finish_reason":null}]}\n\n'
+                yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{"content":"from OpenClaw."},"finish_reason":null}]}\n\n'
+            else:
+                yield b'data: {"id":"2","model":"openclaw/default","choices":[{"index":0,"delta":{"content":"openclaw/default is assistant text"}}]}\n\n'
+            yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
             yield b'data: [DONE]\n\n'
         resp = web.StreamResponse(
             status=200,
@@ -51,7 +60,11 @@ async def _upstream_chat(request):
     return web.json_response({
         "id": "chat-1",
         "model": "openclaw/default",
-        "choices": [{"message": {"content": "openclaw/default is assistant text"}}],
+        "choices": [{"message": {"content": (
+            "No response from OpenClaw."
+            if data.get("trigger_reserved")
+            else "openclaw/default is assistant text"
+        )}}],
     })
 
 
@@ -547,6 +560,41 @@ class TestResponseRewrite(BaseEdgeTest):
                 "openclaw/default is assistant text",
             )
 
+    async def test_non_stream_reserved_reply_becomes_natural_test_acknowledgement(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "testing 123"}],
+                "trigger_reserved": True,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            data = await resp.json()
+            self.assertEqual(
+                data["choices"][0]["message"]["content"],
+                self.pe._SHORT_TEST_REPLY,
+            )
+            self.assertNotIn("OpenClaw", data["choices"][0]["message"]["content"])
+
+    async def test_non_stream_reserved_reply_is_transparent_for_substantive_work(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "Refactor the parser and test it."}],
+                "trigger_reserved": True,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            data = await resp.json()
+            self.assertEqual(
+                data["choices"][0]["message"]["content"],
+                self.pe._EMPTY_REPLY,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Private URL boundary
@@ -687,6 +735,42 @@ class TestSSE(BaseEdgeTest):
             self.assertIn('data: [DONE]', full)
             self.assertIn('"model": "pixel/default"', full)
             self.assertIn('"content": "openclaw/default is assistant text"', full)
+
+    async def test_fragmented_reserved_stream_becomes_one_visible_reply(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "testing 123"}],
+                "stream": True,
+                "trigger_reserved": True,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            body = await resp.text()
+            self.assertIn(self.pe._SHORT_TEST_REPLY, body)
+            self.assertNotIn("No response from OpenClaw", body)
+            self.assertIn('"model": "pixel/default"', body)
+            self.assertIn('"finish_reason": "stop"', body)
+            self.assertTrue(body.endswith("data: [DONE]\n\n"))
+
+    async def test_stream_error_is_not_masked_by_the_empty_reply_fallback(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "testing 123"}],
+                "stream": True,
+                "trigger_stream_error": True,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            body = await resp.text()
+            self.assertIn("upstream failed", body)
+            self.assertNotIn(self.pe._SHORT_TEST_REPLY, body)
+            self.assertTrue(body.endswith("data: [DONE]\n\n"))
 
 
 # ---------------------------------------------------------------------------

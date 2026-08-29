@@ -91,6 +91,22 @@ _PRIVATE_URL_REPLY = (
     "title or contents. If you paste the page text or HTML here, I can inspect "
     "it; otherwise, use a separately approved private-network or browser capability."
 )
+_RESERVED_ASSISTANT_REPLIES = frozenset({
+    "NO_REPLY",
+    "No response from OpenClaw.",
+})
+_SHORT_TEST_MESSAGE = re.compile(
+    r"^\s*(?:(?:just\s+)?test(?:ing)?(?:\s+[\w.-]+){0,4}|ping|hello|hi|hey)"
+    r"\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+_SHORT_TEST_REPLY = (
+    "Pixel is online and responding. What would you like me to help with?"
+)
+_EMPTY_REPLY = (
+    "I couldn't produce a useful response to that request. Please try again or "
+    "tell me what you'd like me to do differently."
+)
 
 
 def _validate_config() -> str:
@@ -159,6 +175,76 @@ def _rewrite_json_model(raw: bytes) -> bytes:
         return obj
 
     return json.dumps(_walk(parsed)).encode("utf-8")
+
+
+def _latest_user_text(data: dict) -> str:
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return _message_text(message.get("content")).strip()
+    return ""
+
+
+def _empty_reply_fallback(data: dict) -> str:
+    text = _latest_user_text(data)
+    if len(text) <= 160 and _SHORT_TEST_MESSAGE.fullmatch(text):
+        return _SHORT_TEST_REPLY
+    return _EMPTY_REPLY
+
+
+def _reserved_reply(value) -> bool:
+    return isinstance(value, str) and (
+        not value.strip() or value.strip() in _RESERVED_ASSISTANT_REPLIES
+    )
+
+
+def _rewrite_json_response(raw: bytes, fallback: str) -> bytes:
+    """Rewrite model identity and replace only an exact reserved/empty final reply."""
+    try:
+        parsed = json.loads(_rewrite_json_model(raw))
+    except (json.JSONDecodeError, ValueError):
+        return raw
+    choices = parsed.get("choices") if isinstance(parsed, dict) else None
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict) and _reserved_reply(message.get("content")):
+                message["content"] = fallback
+    return json.dumps(parsed).encode("utf-8")
+
+
+def _sse_event(line: bytes):
+    if not line.startswith(b"data: ") or line == b"data: [DONE]":
+        return None, None, None
+    try:
+        event = json.loads(line[6:])
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return None, None, None
+    choices = event.get("choices") if isinstance(event, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return event, None, None
+    choice = choices[0]
+    delta = choice.get("delta")
+    content = delta.get("content") if isinstance(delta, dict) else None
+    return event, content if isinstance(content, str) else None, choice.get("finish_reason")
+
+
+def _fallback_sse_line(template: dict, fallback: str, *, finished: bool) -> bytes:
+    event = {
+        key: template[key]
+        for key in ("id", "object", "created", "model")
+        if key in template
+    }
+    event["choices"] = [{
+        "index": 0,
+        "delta": {} if finished else {"content": fallback},
+        "finish_reason": "stop" if finished else None,
+    }]
+    return b"data: " + json.dumps(event).encode("utf-8")
 
 
 async def _read_bounded(content, limit: int) -> bytes:
@@ -361,6 +447,7 @@ async def handle_chat_completions(request: web.Request):
         return web.json_response({"error": "model not allowed"}, status=400)
     if _private_url_access_requested(data):
         return await _private_url_response(request, data.get("stream") is True)
+    empty_reply_fallback = _empty_reply_fallback(data)
     data["model"] = _UPSTREAM_REWRITE
 
     fwd_headers = _sanitize_headers(dict(request.headers))
@@ -382,7 +469,7 @@ async def handle_chat_completions(request: web.Request):
                     return web.json_response({"error": "pixel request rejected"}, status=status)
 
                 if "text/event-stream" in ctype:
-                    return await _stream_upstream(request, resp)
+                    return await _stream_upstream(request, resp, empty_reply_fallback)
 
                 if "application/json" not in ctype:
                     return web.json_response({"error": "invalid upstream response"}, status=502)
@@ -395,7 +482,7 @@ async def handle_chat_completions(request: web.Request):
                         return web.json_response({"error": "upstream response too large"},
                                                  status=502)
 
-                rewritten = _rewrite_json_model(bytes(resp_body))
+                rewritten = _rewrite_json_response(bytes(resp_body), empty_reply_fallback)
                 return web.Response(status=resp.status, body=rewritten,
                                     content_type="application/json")
     except (ConnectionError, OSError, asyncio.TimeoutError):
@@ -461,14 +548,39 @@ async def handle_chat_cancel(request: web.Request):
         return web.json_response({"error": "pixel cancellation failed"}, status=502)
 
 
-async def _stream_upstream(request: web.Request, resp):
-    """Stream bounded SSE lines while rewriting only exact JSON model fields."""
+async def _stream_upstream(request: web.Request, resp, empty_reply_fallback: str):
+    """Stream bounded SSE while replacing only a reserved/empty final reply."""
     response = web.StreamResponse(
         status=resp.status,
         headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
     )
     await response.prepare(request)
     buffered = bytearray()
+    pending = []
+    pending_text = ""
+    passthrough = False
+
+    async def flush_pending():
+        nonlocal pending
+        for item in pending:
+            await response.write(item[0] + b"\n")
+        pending = []
+
+    async def replace_pending(template: dict, *, synthesize_finish: bool):
+        nonlocal pending
+        # Preserve role/metadata events, but never expose the reserved text.
+        for line, _event, content, finish_reason in pending:
+            if content is None and finish_reason is None:
+                await response.write(line + b"\n")
+        await response.write(
+            _fallback_sse_line(template, empty_reply_fallback, finished=False) + b"\n"
+        )
+        if synthesize_finish:
+            await response.write(
+                _fallback_sse_line(template, empty_reply_fallback, finished=True) + b"\n"
+            )
+        pending = []
+
     try:
         async for chunk in resp.content.iter_any():
             buffered.extend(chunk)
@@ -481,11 +593,75 @@ async def _stream_upstream(request: web.Request, resp):
                     raise ValueError("SSE line exceeded limit")
                 if line.startswith(b"data: ") and line != b"data: [DONE]":
                     line = b"data: " + _rewrite_json_model(line[6:])
-                await response.write(line + b"\n")
+                if passthrough:
+                    await response.write(line + b"\n")
+                    continue
+
+                if line == b"data: [DONE]":
+                    normalized = pending_text.strip()
+                    if not normalized or normalized in _RESERVED_ASSISTANT_REPLIES:
+                        template = next(
+                            (item[1] for item in reversed(pending) if isinstance(item[1], dict)),
+                            {"model": _PIXEL_REWRITE},
+                        )
+                        await replace_pending(template, synthesize_finish=True)
+                    else:
+                        await flush_pending()
+                    await response.write(line + b"\n")
+                    passthrough = True
+                    continue
+
+                event, content, finish_reason = _sse_event(line)
+                if isinstance(event, dict) and "error" in event:
+                    await flush_pending()
+                    await response.write(line + b"\n")
+                    passthrough = True
+                    continue
+                if finish_reason is not None:
+                    normalized = pending_text.strip()
+                    if not normalized or normalized in _RESERVED_ASSISTANT_REPLIES:
+                        template = event if isinstance(event, dict) else next(
+                            (item[1] for item in reversed(pending) if isinstance(item[1], dict)),
+                            {"model": _PIXEL_REWRITE},
+                        )
+                        await replace_pending(template, synthesize_finish=False)
+                    else:
+                        await flush_pending()
+                    await response.write(line + b"\n")
+                    passthrough = True
+                    continue
+
+                pending.append((line, event, content, finish_reason))
+                if content is not None:
+                    pending_text += content
+                    normalized = pending_text.strip()
+                    if normalized and not any(
+                        reserved.startswith(normalized)
+                        for reserved in _RESERVED_ASSISTANT_REPLIES
+                    ):
+                        await flush_pending()
+                        passthrough = True
         if buffered:
             if len(buffered) > _MAX_SSE_LINE:
                 raise ValueError("SSE line exceeded limit")
-            await response.write(bytes(buffered))
+            line = bytes(buffered)
+            if line.startswith(b"data: ") and line != b"data: [DONE]":
+                line = b"data: " + _rewrite_json_model(line[6:])
+            if passthrough:
+                await response.write(line)
+            else:
+                event, content, finish_reason = _sse_event(line)
+                pending.append((line, event, content, finish_reason))
+        if not passthrough and pending:
+            normalized = pending_text.strip()
+            if not normalized or normalized in _RESERVED_ASSISTANT_REPLIES:
+                template = next(
+                    (item[1] for item in reversed(pending) if isinstance(item[1], dict)),
+                    {"model": _PIXEL_REWRITE},
+                )
+                await replace_pending(template, synthesize_finish=False)
+            else:
+                await flush_pending()
     except (ConnectionError, OSError, asyncio.TimeoutError):
         await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
     except Exception:
