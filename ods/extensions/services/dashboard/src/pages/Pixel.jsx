@@ -261,7 +261,7 @@ export default function Pixel({ systemStatus = null }) {
   const isDisabled = sending || status !== 'available'
 
   return (
-    <div className="flex h-full flex-col text-theme-text">
+    <div className="flex h-[100dvh] flex-col overflow-hidden text-theme-text">
       <div className="flex flex-wrap items-center gap-3 border-b border-theme-border bg-theme-card/35 px-4 py-3 sm:px-6">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-theme-accent/30 bg-theme-accent/15 text-theme-accent-light">
           <Bot className="h-5 w-5" />
@@ -316,7 +316,7 @@ export default function Pixel({ systemStatus = null }) {
         </div>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
         {status === 'loading' && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-theme-text-muted">
             <Loader2 className="mb-3 h-8 w-8 animate-spin" />
