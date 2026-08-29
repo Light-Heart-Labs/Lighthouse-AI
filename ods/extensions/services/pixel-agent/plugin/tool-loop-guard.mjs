@@ -278,10 +278,55 @@ export function userMessageGitHubRepositoryUrl(messages, prompt = undefined) {
       /\bGitHub\s+(?:repo(?:sitory)?|project)\b.{0,64}\b([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})\b/i
     );
   }
-  if (!match || !validGitHubRepository(match[1], match[2])) return undefined;
-  const repository = match[2].replace(/\.git$/i, "");
+  if (!match) return undefined;
+  // A sentence-final period is not part of the repository name, but the URL
+  // matcher must otherwise allow dots for legitimate names and the .git form.
+  const repository = match[2].replace(/\.+$/g, "").replace(/\.git$/i, "");
   if (!repository || !validGitHubRepository(match[1], repository)) return undefined;
   return `https://github.com/${match[1]}/${repository}`;
+}
+
+export function userMessageGitHubFileUrl(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  const repositoryUrl = userMessageGitHubRepositoryUrl(messages, prompt);
+  if (!text || !repositoryUrl) return undefined;
+  let repository;
+  try {
+    const target = new URL(repositoryUrl);
+    const parts = target.pathname.split("/").filter(Boolean);
+    if (parts.length !== 2 || !validGitHubRepository(parts[0], parts[1])) {
+      return undefined;
+    }
+    repository = parts;
+  } catch {
+    return undefined;
+  }
+
+  // Accept only a plainly named, repository-relative path. Do not interpret
+  // traversal, URL-encoded text, absolute paths, or the Owner/Repo identifier
+  // itself as a file target. Each accepted segment is safe to place in a raw
+  // GitHub URL after independent encoding.
+  const paths = text.matchAll(
+    /(?:^|[\s"'`(])((?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)(?=[\s"'`,).;:?!\]}]|$)/g
+  );
+  for (const match of paths) {
+    const relative = match[1];
+    if (relative.length > 240) continue;
+    if (relative.toLowerCase() === `${repository[0]}/${repository[1]}`.toLowerCase()) {
+      continue;
+    }
+    const segments = relative.split("/");
+    if (
+      segments.length < 2 ||
+      segments.length > 16 ||
+      segments.some((segment) => !segment || segment === "." || segment === "..")
+    ) {
+      continue;
+    }
+    const encoded = segments.map((segment) => encodeURIComponent(segment)).join("/");
+    return `https://raw.githubusercontent.com/${repository[0]}/${repository[1]}/HEAD/${encoded}`;
+  }
+  return undefined;
 }
 
 export function githubReadmeUrl(repositoryUrl) {
@@ -389,6 +434,7 @@ export function createToolLoopGuard({
         targetedExtractBlocks: 0,
         githubCanonicalUrl: undefined,
         githubReadmeUrl: undefined,
+        githubFileUrl: undefined,
         githubCanonicalSatisfied: false,
         githubCanonicalBlocks: 0,
         failedExec: new Map(),
@@ -447,7 +493,19 @@ export function createToolLoopGuard({
 
     if (state?.targetedExtractPending) {
       const requestedUrl = canonicalFetchUrl(event);
-      if (
+      const exactGitHubFileContinuation =
+        toolName === "web_fetch" &&
+        state.githubFileUrl &&
+        requestedUrl === state.githubFileUrl &&
+        state.targetedExtractPending === state.githubReadmeUrl;
+      if (exactGitHubFileContinuation) {
+        // The owner explicitly named this validated file in the same canonical
+        // repository. A truncated README may already contain the requested
+        // repository description, so allow the exact second source instead of
+        // forcing an irrelevant same-page extraction.
+        state.targetedExtractPending = undefined;
+        state.targetedExtractBlocks = 0;
+      } else if (
         toolName === "pixel_ods_web_extract" &&
         requestedUrl === state.targetedExtractPending
       ) {
@@ -597,6 +655,7 @@ export function createToolLoopGuard({
         if (!state.githubCanonicalUrl) {
           state.githubCanonicalUrl = githubUrl;
           state.githubReadmeUrl = githubReadmeUrl(githubUrl);
+          state.githubFileUrl = userMessageGitHubFileUrl(event?.messages, event?.prompt);
         }
       }
     }

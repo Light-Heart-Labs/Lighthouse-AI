@@ -150,6 +150,17 @@ test("adds only a validated exact GitHub repository source to its turn", () => {
     promptContractForAgent({ agentId: "pixel" }, "pixel", { messages }),
     { appendSystemContext: `${ODS_CONVERSATION_CONTRACT}${exact}` }
   );
+  const exactFile = githubSourceContract(
+    [],
+    "Inspect https://github.com/Osmantic/ODS. Verify whether docs/PIXEL.md exists."
+  );
+  assert.match(
+    exactFile,
+    /After the README, call web_fetch once with exactly https:\/\/raw\.githubusercontent\.com\/Osmantic\/ODS\/HEAD\/docs\/PIXEL\.md/
+  );
+  assert.match(exactFile, /Do not fetch a GitHub HTML page or directory listing/);
+  assert.match(exactFile, /HTTP 200 response from that exact raw URL is sufficient/);
+  assert.match(exactFile, /do not call pixel_ods_web_extract afterward/);
   assert.equal(
     githubSourceContract([
       { role: "user", content: "Research docs/setup while reading a GitHub issue." },

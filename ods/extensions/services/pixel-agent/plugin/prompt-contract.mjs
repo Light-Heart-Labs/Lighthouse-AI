@@ -5,6 +5,7 @@
 
 import {
   githubReadmeUrl,
+  userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageRequestsPrivateUrl,
 } from "./tool-loop-guard.mjs";
@@ -58,10 +59,15 @@ export function githubSourceContract(messages, prompt = undefined) {
   if (!url) return "";
   const readmeUrl = githubReadmeUrl(url);
   if (!readmeUrl) return "";
+  const fileUrl = userMessageGitHubFileUrl(messages, prompt);
+  const exactFile = fileUrl
+    ? ` The owner also named an exact repository-relative file. After the README, call web_fetch once with exactly ${fileUrl} to verify that file directly. An HTTP 200 response from that exact raw URL is sufficient to verify existence; when only existence was requested, do not call pixel_ods_web_extract afterward even if the response is truncated. Do not fetch a GitHub HTML page or directory listing; use only these two raw URLs.`
+    : "";
   return (
     ` The owner's exact identified canonical public source for this turn is ${url}. ` +
     `Read its default-branch README from ${readmeUrl}. ` +
-    "Do not call web_search or fetch the GitHub HTML page. Call web_fetch once with exactly that raw README URL as the first research tool, without narrating the tool choice."
+    "Do not call web_search or fetch the GitHub HTML page. Call web_fetch once with exactly that raw README URL as the first research tool, without narrating the tool choice." +
+    exactFile
   );
 }
 

@@ -17,6 +17,7 @@ import {
   createToolLoopGuardRegistry,
   githubReadmeUrl,
   textRequestsPrivateUrlAccess,
+  userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageRequestsPrivateUrl,
 } from "../plugin/tool-loop-guard.mjs";
@@ -87,6 +88,7 @@ test("extracts only an explicitly identified public GitHub repository", () => {
     "Research the official Osmantic/ODS GitHub repository.",
     "Research the GitHub repo Osmantic/ODS and cite it.",
     "Read https://github.com/Osmantic/ODS and summarize it.",
+    "Read https://github.com/Osmantic/ODS. Then summarize it.",
   ]) {
     assert.equal(
       userMessageGitHubRepositoryUrl([{ role: "user", content: text }]),
@@ -111,6 +113,19 @@ test("extracts only an explicitly identified public GitHub repository", () => {
     "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md"
   );
   assert.equal(githubReadmeUrl("https://example.org/Osmantic/ODS"), undefined);
+  const exactFilePrompt =
+    "Inspect https://github.com/Osmantic/ODS. Verify whether docs/PIXEL.md exists.";
+  assert.equal(
+    userMessageGitHubFileUrl([], exactFilePrompt),
+    "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/docs/PIXEL.md"
+  );
+  assert.equal(
+    userMessageGitHubFileUrl(
+      [],
+      "Inspect https://github.com/Osmantic/ODS. Verify whether docs/../secret exists."
+    ),
+    undefined
+  );
 });
 
 test("redirects search to an owner-identified canonical GitHub source once", () => {
@@ -137,6 +152,43 @@ test("redirects search to an owner-identified canonical GitHub source once", () 
       event: {
         params: {
           url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
+        },
+      },
+    }),
+    undefined
+  );
+});
+
+test("allows an exact named GitHub file after a truncated canonical README", () => {
+  const guard = createToolLoopGuard();
+  const context = {
+    agentId: "pixel",
+    runId: "run-1",
+    sessionId: "session-1",
+  };
+  guard.observeRun(context, "pixel", {
+    prompt:
+      "Inspect https://github.com/Osmantic/ODS. Verify whether docs/PIXEL.md exists.",
+  });
+  assert.equal(
+    call(guard, "web_fetch", {
+      event: {
+        params: { url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md" },
+      },
+    }),
+    undefined
+  );
+  afterCall(guard, "web_fetch", {
+    event: {
+      params: { url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md" },
+      result: { details: { status: 200, truncated: true } },
+    },
+  });
+  assert.equal(
+    call(guard, "web_fetch", {
+      event: {
+        params: {
+          url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/docs/PIXEL.md",
         },
       },
     }),
