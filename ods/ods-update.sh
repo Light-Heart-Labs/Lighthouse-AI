@@ -929,10 +929,10 @@ cmd_health() {
         read -ra compose_args <<< "$compose_flags"
     fi
     
-    local services
-    services=$("${compose_cmd[@]}" "${compose_args[@]}" ps --services 2>/dev/null || echo "")
-    
-    if [[ -z "$services" ]]; then
+    local -a services=()
+    mapfile -t services < <("${compose_cmd[@]}" "${compose_args[@]}" ps --services 2>/dev/null || true)
+
+    if [[ ${#services[@]} -eq 0 ]]; then
         if [[ -n "$compose_flags" ]]; then
             log_warn "No services found for resolved compose stack: ${compose_flags}"
         else
@@ -941,7 +941,7 @@ cmd_health() {
         return 1
     fi
     
-    for service in $services; do
+    for service in "${services[@]}"; do
         local status
         status=$("${compose_cmd[@]}" "${compose_args[@]}" ps --format json "$service" 2>/dev/null \
             | jq -r 'if type == "array" then (.[0].State // "unknown") else (.State // "unknown") end' 2>/dev/null \
