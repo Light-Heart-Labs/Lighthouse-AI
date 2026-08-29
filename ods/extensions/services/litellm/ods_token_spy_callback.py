@@ -164,6 +164,7 @@ class ODSTokenSpyCallback(CustomLogger):
             )
         )
         self.worker: asyncio.Task[None] | None = None
+        self._client: httpx.AsyncClient | None = None
         self.last_warning = 0.0
 
     async def async_log_success_event(
@@ -195,9 +196,12 @@ class ODSTokenSpyCallback(CustomLogger):
         timeout = max(
             0.1, float(os.environ.get("ODS_LITELLM_TELEMETRY_TIMEOUT", "3"))
         )
-        async with httpx.AsyncClient(
-            follow_redirects=False, timeout=timeout
-        ) as client:
+        # Hold the client on the instance and close it in a finally so a
+        # cancelled/restarted worker task never leaks TCP sockets or fds
+        # (the previous async-with form could leave __aexit__ unawaited).
+        client = httpx.AsyncClient(follow_redirects=False, timeout=timeout)
+        self._client = client
+        try:
             while True:
                 event = await self.queue.get()
                 try:
@@ -215,6 +219,10 @@ class ODSTokenSpyCallback(CustomLogger):
                     self._warn(f"Token Spy telemetry unavailable: {exc}")
                 finally:
                     self.queue.task_done()
+        finally:
+            await client.aclose()
+            if self._client is client:
+                self._client = None
 
     def _warn(self, message: str) -> None:
         now = time.monotonic()
