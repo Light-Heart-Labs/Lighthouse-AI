@@ -814,6 +814,13 @@ ODS_VERSION=${VERSION:-2.6.0}
 # 127.0.0.1 = localhost only (secure default)
 # 0.0.0.0   = accessible from LAN (install with --lan or set manually)
 BIND_ADDRESS=${BIND_ADDRESS}
+#=== Host User Mapping ===
+# Real host UID/GID, written to .env so Docker Compose (which interpolates from
+# the environment, not shell state) can remap volume ownership for Hermes/n8n.
+# ${UID}/${GID} are read-only shell vars and are never exported, so they always
+# fall back to the default inside compose; ODS_UID/ODS_GID carry the real value.
+ODS_UID=$(id -u 2>/dev/null || echo 10000)
+ODS_GID=$(id -g 2>/dev/null || echo 10000)
 # Host LAN IP (populated when BIND_ADDRESS=0.0.0.0; empty otherwise).
 # Containers like openclaw read this to advertise the host's LAN address.
 HOST_LAN_IP=${HOST_LAN_IP}
