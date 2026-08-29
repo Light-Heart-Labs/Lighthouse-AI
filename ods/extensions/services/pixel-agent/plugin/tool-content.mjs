@@ -28,20 +28,32 @@ function appList(apps) {
 
 export function statusToolText(projection) {
   const applications = appList(projection.apps);
+  const pixelAvailability = projection.ingress_ready && projection.gateway_reachable
+    ? "available"
+    : "unavailable";
+  const version = projection.ods_version === "unknown"
+    ? "unknown"
+    : projection.ods_version;
+  const runtime = projection.runtime === null
+    ? "Loaded model: unavailable; context length: unavailable."
+    : `Loaded model: ${projection.runtime.model}; context length: ${projection.runtime.context_length} tokens.`;
   return [
-    `ODS status at ${projection.timestamp}: ingress is ${availability(projection.ingress_ready)}, the Pixel gateway is ${reachability(projection.gateway_reachable)}, and Docker is ${projection.docker}.`,
-    `The ${freshness(projection.stale)} projection reports ${projection.app_count} applications${applications ? `: ${applications}.` : "."}`,
+    `Pixel availability: ${pixelAvailability} (ingress ${availability(projection.ingress_ready)}; gateway ${reachability(projection.gateway_reachable)}).`,
+    `ODS version: ${version}.`,
+    runtime,
+    `Applications online: ${projection.online_app_count} of ${projection.app_count}. Docker: ${projection.docker}.`,
+    `This ${freshness(projection.stale)} projection was written at ${projection.timestamp}${applications ? ` and reports: ${applications}.` : "."}`,
     EVIDENCE_BOUNDARY,
   ].join(" ");
 }
 
 export function appsToolText(projection) {
   if (projection.app_count === 0) {
-    return `ODS reports 0 applications in its ${freshness(projection.stale)} projection at ${projection.timestamp}. ${EVIDENCE_BOUNDARY}`;
+    return `ODS reports 0 of 0 applications online in its ${freshness(projection.stale)} projection at ${projection.timestamp}. ${EVIDENCE_BOUNDARY}`;
   }
   const first = projection.apps[0];
   return [
-    `ODS reports ${projection.app_count} applications in its ${freshness(projection.stale)} projection at ${projection.timestamp}.`,
+    `ODS reports ${projection.online_app_count} of ${projection.app_count} applications online in its ${freshness(projection.stale)} projection at ${projection.timestamp}.`,
     `The first is ${first.name} (${first.status}).`,
     `Applications: ${appList(projection.apps)}.`,
     EVIDENCE_BOUNDARY,

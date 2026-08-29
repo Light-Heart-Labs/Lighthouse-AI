@@ -810,6 +810,7 @@ assert installer.index("_ods_pixel_refresh_plugin_registry") < installer.index("
 assert "ods_linux_node_tools_available" in text
 assert "runtime_token_file=\"/run/ods-pixel/openclaw.json\"" in text
 assert "PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file" in text
+assert "PIXEL_ODS_VERSION=$ods_version" in text
 ' "$ROOT/installers/lib/pixel-host-install.sh"
 check python3 -c '
 import pathlib,sys

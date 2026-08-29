@@ -1440,6 +1440,8 @@ _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3"
     local token_file="$home/.openclaw/openclaw.json"
     local runtime_token_file="/run/ods-pixel/openclaw.json"
+    local ods_version="${VERSION:-2.6.0}"
+    [[ "$ods_version" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
     [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
     (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
@@ -1467,6 +1469,7 @@ PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file
 PIXEL_GATEWAY_PORT=18789
 PIXEL_STATUS_FILE=/run/ods-pixel/ods-status.json
 PIXEL_STATUS_INTERVAL_MS=30000
+PIXEL_ODS_VERSION=$ods_version
 EOF
     chmod 0640 "$stage/pixel-agent.env"
     ods_sudo install -d -m 0755 /usr/local/libexec /etc/ods

@@ -36,6 +36,8 @@ const MAX_TOKEN_LEN = 4096;
 const MAX_CANCEL_BODY = 256;
 const MAX_STATUS_INTERVAL_MS = 86400000; // 1 day
 const STATUS_MODE = 0o640; // group-readable, service-owner-writable projection
+const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
 
 // The only request-body fields that may reach the gateway. Everything else is
 // dropped on construction.
@@ -126,10 +128,17 @@ const ALLOWED_SERVICES = new Set([
   "embeddings",
   "ods-opencode",
   "opencode",
+  "ods-ape",
+  "ods-perplexica",
+  "ods-privacy-shield",
+  "ods-remote-provider-egress",
+  "ods-remote-provider-ssh-tunnel",
+  "ods-token-spy",
+  "ods-webui",
 ]);
 
 // Status enum the projection may use. Never raw Docker status strings.
-const STATUS_ENUM = new Set(["running", "healthy", "unhealthy", "starting"]);
+const STATUS_ENUM = new Set(["running", "healthy", "unhealthy", "starting", "stopped"]);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -226,6 +235,9 @@ export function validateConfig(cfg) {
       throw new Error("invalid ingress gid");
     }
   }
+  if (typeof cfg.odsVersion !== "string" || !ODS_VERSION_RE.test(cfg.odsVersion)) {
+    throw new Error("invalid ODS version");
+  }
   for (const [label, value] of [
     ["socket path", cfg.socketPath],
     ["gateway token file", cfg.gatewayTokenFile],
@@ -247,6 +259,7 @@ export function configFromEnv(env = process.env) {
     statusFile: env.PIXEL_STATUS_FILE || "/run/ods-pixel/ods-status.json",
     statusIntervalMs: Number(env.PIXEL_STATUS_INTERVAL_MS || "30000"),
     ingressGid: env.PIXEL_INGRESS_GID ? Number(env.PIXEL_INGRESS_GID) : null,
+    odsVersion: env.PIXEL_ODS_VERSION || "unknown",
   };
   return validateConfig(cfg);
 }
@@ -719,6 +732,15 @@ function normalizedContainerStatus(record) {
   if (raw.includes("health: starting") || raw.includes("starting")) return "starting";
   if (raw.includes("healthy")) return "healthy";
   if (state === "running" || raw.startsWith("up ") || raw === "up") return "running";
+  if (state === "restarting" || state === "created" || raw.startsWith("restarting")) {
+    return "starting";
+  }
+  if (
+    ["exited", "dead", "paused"].includes(state) ||
+    /^(?:exited|dead|created|paused)\b/.test(raw)
+  ) {
+    return "stopped";
+  }
   return null;
 }
 
@@ -726,7 +748,7 @@ export async function dockerApps(deps = defaultDeps) {
   const { stdout } = await execFilePromise(
     deps.execFile,
     "docker",
-    ["ps", "--format", "{{json .}}"],
+    ["ps", "--all", "--format", "{{json .}}"],
     { timeout: DOCKER_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true }
   );
   const apps = [];
@@ -750,6 +772,41 @@ export async function dockerApps(deps = defaultDeps) {
   }
   apps.sort((a, b) => a.name.localeCompare(b.name));
   return apps;
+}
+
+export async function dockerRuntime(deps = defaultDeps) {
+  const { stdout } = await execFilePromise(
+    deps.execFile,
+    "docker",
+    ["inspect", "ods-llama-server", "--format", "{{json .Config.Cmd}}"],
+    { timeout: DOCKER_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true }
+  );
+  let command;
+  try {
+    command = JSON.parse(String(stdout || ""));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(command) || !command.every((item) => typeof item === "string")) {
+    return null;
+  }
+  const modelIndex = command.indexOf("--model");
+  const contextIndex = command.indexOf("--ctx-size");
+  if (modelIndex < 0 || contextIndex < 0) return null;
+  const modelPath = command[modelIndex + 1];
+  const contextLength = Number(command[contextIndex + 1]);
+  if (typeof modelPath !== "string" || !modelPath.startsWith("/models/")) return null;
+  const model = path.posix.basename(modelPath);
+  if (
+    model !== modelPath.slice("/models/".length) ||
+    !MODEL_NAME_RE.test(model) ||
+    !Number.isInteger(contextLength) ||
+    contextLength < 4096 ||
+    contextLength > 1048576
+  ) {
+    return null;
+  }
+  return { model, context_length: contextLength };
 }
 
 export function atomicWriteJson(file, value, fsImpl = fs) {
@@ -776,9 +833,16 @@ export function atomicWriteJson(file, value, fsImpl = fs) {
   }
 }
 
-export async function writeStatus(ingressReady, gatewayPort, statusFile, deps = defaultDeps) {
+export async function writeStatus(
+  ingressReady,
+  gatewayPort,
+  statusFile,
+  odsVersion = "unknown",
+  deps = defaultDeps
+) {
   const gatewayReachable = await checkGatewayReachable(gatewayPort, deps);
   let apps = [];
+  let runtime = null;
   let docker = "unavailable";
   try {
     apps = await dockerApps(deps);
@@ -786,13 +850,24 @@ export async function writeStatus(ingressReady, gatewayPort, statusFile, deps = 
   } catch {
     apps = [];
   }
+  if (docker === "ok") {
+    try {
+      runtime = await dockerRuntime(deps);
+    } catch {
+      runtime = null;
+    }
+  }
+  const onlineApps = apps.filter(({ status }) => status === "healthy" || status === "running").length;
   const projection = {
-    schema_version: 1,
+    schema_version: 2,
     timestamp: new Date().toISOString(),
     service: "pixel-agent",
+    ods_version: odsVersion,
     ingress_ready: Boolean(ingressReady),
     gateway_reachable: gatewayReachable,
     docker,
+    online_apps: onlineApps,
+    runtime,
     apps,
   };
   atomicWriteJson(statusFile, projection);
@@ -960,7 +1035,7 @@ export async function start(cfg = configFromEnv(), opts = {}) {
     startupStage = "runtime-state";
     fs.chmodSync(cfg.socketPath, 0o660);
     if (cfg.ingressGid !== null) fs.chownSync(cfg.socketPath, -1, cfg.ingressGid);
-    await writeStatus(true, cfg.gatewayPort, cfg.statusFile, deps);
+    await writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps);
   } catch (error) {
     if (server?.listening) {
       await new Promise((resolve) => server.close(resolve));
@@ -975,7 +1050,7 @@ export async function start(cfg = configFromEnv(), opts = {}) {
   }
 
   const interval = setInterval(() => {
-    void writeStatus(true, cfg.gatewayPort, cfg.statusFile, deps).catch(() => {});
+    void writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps).catch(() => {});
   }, cfg.statusIntervalMs);
   interval.unref();
   let closed = false;

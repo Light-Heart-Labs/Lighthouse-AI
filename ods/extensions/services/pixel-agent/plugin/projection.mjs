@@ -19,6 +19,8 @@ const MAX_FILE_BYTES = 64 * 1024; // 64 KiB projection cap
 const MAX_STALE_MS = 2 * 60 * 1000; // 2 minute staleness window
 const MAX_APPS = 64;
 const EXPECTED_SERVICE = "pixel-agent";
+const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
 
 // The fixed ODS service allowlist. Must stay in lockstep with the allowlist
 // enforced by the pixel-agent host ingress (host/pixel_ingress.mjs).
@@ -62,9 +64,16 @@ const ALLOWED_SERVICES = new Set([
   "embeddings",
   "ods-opencode",
   "opencode",
+  "ods-ape",
+  "ods-perplexica",
+  "ods-privacy-shield",
+  "ods-remote-provider-egress",
+  "ods-remote-provider-ssh-tunnel",
+  "ods-token-spy",
+  "ods-webui",
 ]);
 
-const STATUS_ENUM = new Set(["running", "healthy", "unhealthy", "starting"]);
+const STATUS_ENUM = new Set(["running", "healthy", "unhealthy", "starting", "stopped"]);
 const DOCKER_ENUM = new Set(["ok", "unavailable"]);
 
 // Top-level keys the projection may carry. Anything else is rejected.
@@ -72,14 +81,18 @@ const ALLOWED_TOP_KEYS = new Set([
   "schema_version",
   "timestamp",
   "service",
+  "ods_version",
   "ingress_ready",
   "gateway_reachable",
   "docker",
+  "online_apps",
+  "runtime",
   "apps",
 ]);
 
 // App object may carry only these keys.
 const ALLOWED_APP_KEYS = new Set(["name", "status"]);
+const ALLOWED_RUNTIME_KEYS = new Set(["model", "context_length"]);
 
 // ---------------------------------------------------------------------------
 // Injectable filesystem primitives (tests substitute fakes). Defaults resolve
@@ -236,14 +249,28 @@ function validApp(app) {
   return true;
 }
 
+function validRuntime(runtime) {
+  if (runtime === null) return true;
+  if (!isPlainObject(runtime) || !onlyKeys(runtime, ALLOWED_RUNTIME_KEYS)) return false;
+  if (typeof runtime.model !== "string" || !MODEL_NAME_RE.test(runtime.model)) return false;
+  return (
+    Number.isInteger(runtime.context_length) &&
+    runtime.context_length >= 4096 &&
+    runtime.context_length <= 1048576
+  );
+}
+
 // Validate a fully parsed projection object against the strict schema.
 // Returns null on success, or a generic message on failure.
 function validateProjection(obj, nowMs) {
   if (!isPlainObject(obj)) return "malformed projection";
   if (!onlyKeys(obj, ALLOWED_TOP_KEYS)) return "malformed projection";
 
-  if (obj.schema_version !== 1) return "malformed projection";
+  if (obj.schema_version !== 2) return "malformed projection";
   if (obj.service !== EXPECTED_SERVICE) return "malformed projection";
+  if (typeof obj.ods_version !== "string" || !ODS_VERSION_RE.test(obj.ods_version)) {
+    return "malformed projection";
+  }
   if (!validTimestamp(obj.timestamp, nowMs)) return "stale or invalid timestamp";
   if (typeof obj.ingress_ready !== "boolean") return "malformed projection";
   if (typeof obj.gateway_reachable !== "boolean") return "malformed projection";
@@ -252,12 +279,23 @@ function validateProjection(obj, nowMs) {
   }
   if (!Array.isArray(obj.apps)) return "malformed projection";
   if (obj.apps.length > MAX_APPS) return "malformed projection";
+  if (!Number.isInteger(obj.online_apps) || obj.online_apps < 0) {
+    return "malformed projection";
+  }
+  if (!validRuntime(obj.runtime)) return "malformed projection";
 
   const seen = new Set();
   for (const app of obj.apps) {
     if (!validApp(app)) return "malformed projection";
     if (seen.has(app.name)) return "malformed projection"; // duplicate
     seen.add(app.name);
+  }
+  const onlineApps = obj.apps.filter(
+    ({ status }) => status === "healthy" || status === "running"
+  ).length;
+  if (obj.online_apps !== onlineApps) return "malformed projection";
+  if (obj.docker === "unavailable" && (obj.apps.length !== 0 || obj.runtime !== null)) {
+    return "malformed projection";
   }
   return null;
 }
@@ -308,13 +346,19 @@ export async function readProjection(file, deps = defaultFs, nowMs = Date.now())
 
   // Build a brand-new object; never return raw values or the parsed object.
   const apps = parsed.apps.map((app) => ({ name: app.name, status: app.status }));
+  const runtime = parsed.runtime === null
+    ? null
+    : { model: String(parsed.runtime.model), context_length: parsed.runtime.context_length };
   return {
-    schema_version: 1,
+    schema_version: 2,
     timestamp: String(parsed.timestamp),
     service: EXPECTED_SERVICE,
+    ods_version: String(parsed.ods_version),
     ingress_ready: parsed.ingress_ready === true,
     gateway_reachable: parsed.gateway_reachable === true,
     docker: String(parsed.docker),
+    online_app_count: parsed.online_apps,
+    runtime,
     app_count: apps.length,
     apps,
     stale: false,
@@ -331,6 +375,9 @@ export function statusPayload(projection) {
     ingress_ready: projection.ingress_ready,
     gateway_reachable: projection.gateway_reachable,
     docker: projection.docker,
+    ods_version: projection.ods_version,
+    online_app_count: projection.online_app_count,
+    runtime: projection.runtime,
     app_count: projection.app_count,
     apps: projection.apps,
     timestamp: projection.timestamp,
@@ -342,6 +389,7 @@ export function statusPayload(projection) {
 export function appsPayload(projection) {
   return {
     app_count: projection.app_count,
+    online_app_count: projection.online_app_count,
     apps: projection.apps,
     timestamp: projection.timestamp,
     stale: projection.stale,

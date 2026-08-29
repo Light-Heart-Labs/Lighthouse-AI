@@ -31,6 +31,7 @@ import {
   configFromEnv,
   validateConfig,
   dockerApps,
+  dockerRuntime,
   writeStatus,
   start,
   gatewayFetch,
@@ -129,17 +130,20 @@ test("configFromEnv applies defaults and overrides", () => {
   assert.equal(d.gatewayTokenFile, "/etc/pixel/openclaw.json");
   assert.equal(d.statusIntervalMs, 30000);
   assert.equal(d.ingressGid, null);
+  assert.equal(d.odsVersion, "unknown");
   const o = configFromEnv({
     PIXEL_INGRESS_SOCKET: "/x.sock",
     PIXEL_GATEWAY_PORT: "19000",
     PIXEL_INGRESS_GID: "1234",
     PIXEL_STATUS_INTERVAL_MS: "5000",
     PIXEL_GATEWAY_TOKEN_FILE: "/custom.json",
+    PIXEL_ODS_VERSION: "2.6.0-beta.1",
   });
   assert.equal(o.socketPath, "/x.sock");
   assert.equal(o.gatewayPort, 19000);
   assert.equal(o.ingressGid, 1234);
   assert.equal(o.statusIntervalMs, 5000);
+  assert.equal(o.odsVersion, "2.6.0-beta.1");
 });
 
 test("config rejects invalid ports, intervals, gids, and relative paths", () => {
@@ -151,6 +155,7 @@ test("config rejects invalid ports, intervals, gids, and relative paths", () => 
     assert.throws(() => validateConfig({ ...base, statusIntervalMs }), /status interval/);
   }
   assert.throws(() => validateConfig({ ...base, ingressGid: -1 }), /ingress gid/);
+  assert.throws(() => validateConfig({ ...base, odsVersion: "2.6.0\nSECRET=x" }), /ODS version/);
   assert.throws(() => validateConfig({ ...base, socketPath: "relative.sock" }), /socket path/);
 });
 
@@ -661,6 +666,7 @@ test("start creates a 0660 socket with the requested gid and closes without exit
     statusFile,
     statusIntervalMs: 60000,
     ingressGid: gid,
+    odsVersion: "2.6.0",
   }, { deps, euid: EUID });
   const socketStat = fs.statSync(socketPath);
   assert.equal(socketStat.mode & 0o777, 0o660);
@@ -676,7 +682,7 @@ test("start creates a 0660 socket with the requested gid and closes without exit
 test("status projection uses fixed docker execFile and allows only allowlisted names", async () => {
   const fakeDocker = (cmd, args, opts, callback) => {
     assert.equal(cmd, "docker");
-    assert.deepEqual(args, ["ps", "--format", "{{json .}}"]);
+    assert.deepEqual(args, ["ps", "--all", "--format", "{{json .}}"]);
     assert.ok(opts.timeout > 0, "must have explicit timeout");
     const lines = [
       { Names: "ods-pixel-edge", Status: "Up 5 minutes" },
@@ -691,12 +697,76 @@ test("status projection uses fixed docker execFile and allows only allowlisted n
   const apps = await dockerApps({ execFile: fakeDocker });
   assert.deepEqual(apps, [
     { name: "ods-dashboard", status: "unhealthy" },
+    { name: "ods-n8n", status: "stopped" },
     { name: "ods-open-webui", status: "healthy" },
     { name: "ods-pixel-edge", status: "running" },
     { name: "ods-qdrant", status: "starting" },
   ]);
   assert.equal(JSON.stringify(apps).includes("evil"), false);
   assert.equal(JSON.stringify(apps).includes("5 minutes"), false);
+});
+
+test("runtime projection uses a fixed inspect command and returns only model basename and context", async () => {
+  const fakeDocker = (cmd, args, opts, callback) => {
+    assert.equal(cmd, "docker");
+    assert.deepEqual(args, [
+      "inspect", "ods-llama-server", "--format", "{{json .Config.Cmd}}",
+    ]);
+    assert.ok(opts.timeout > 0, "must have explicit timeout");
+    callback(
+      null,
+      JSON.stringify(["--model", "/models/Qwen3.5-9B-Q4_K_M.gguf", "--ctx-size", "32768"]),
+      ""
+    );
+  };
+  assert.deepEqual(await dockerRuntime({ execFile: fakeDocker }), {
+    model: "Qwen3.5-9B-Q4_K_M.gguf",
+    context_length: 32768,
+  });
+});
+
+test("runtime projection rejects paths, malformed contexts, and non-JSON output", async () => {
+  for (const command of [
+    ["--model", "/private/model.gguf", "--ctx-size", "32768"],
+    ["--model", "/models/../secret", "--ctx-size", "32768"],
+    ["--model", "/models/model.gguf", "--ctx-size", "0"],
+    "not-json",
+  ]) {
+    const fakeDocker = (_cmd, _args, _opts, callback) => {
+      const output = command === "not-json" ? command : JSON.stringify(command);
+      callback(null, output, "");
+    };
+    assert.equal(await dockerRuntime({ execFile: fakeDocker }), null);
+  }
+});
+
+test("status keeps app health when optional runtime inspection is unavailable", async () => {
+  const statusFile = path.join(DIR, "runtime-unavailable-status.json");
+  const fakeDocker = (_cmd, args, _opts, callback) => {
+    if (args[0] === "ps") {
+      callback(null, `${JSON.stringify({ Names: "ods-dashboard", Status: "Up (healthy)" })}\n`, "");
+      return;
+    }
+    callback(new Error("runtime unavailable"));
+  };
+  const projection = await writeStatus(
+    true,
+    18999,
+    statusFile,
+    "2.6.0",
+    {
+      fetch: async () => ({ status: 503, body: { cancel: async () => {} } }),
+      execFile: fakeDocker,
+      setTimeout,
+      clearTimeout,
+    }
+  );
+  assert.equal(projection.schema_version, 2);
+  assert.equal(projection.ods_version, "2.6.0");
+  assert.equal(projection.docker, "ok");
+  assert.equal(projection.online_apps, 1);
+  assert.equal(projection.runtime, null);
+  assert.deepEqual(projection.apps, [{ name: "ods-dashboard", status: "healthy" }]);
 });
 
 test("start writes a safe status projection when docker is unavailable", async () => {
@@ -715,12 +785,17 @@ test("start writes a safe status projection when docker is unavailable", async (
     statusFile,
     statusIntervalMs: 60000,
     ingressGid: null,
+    odsVersion: "2.6.0",
   }, { deps, euid: EUID });
   const proj = JSON.parse(fs.readFileSync(statusFile, "utf8"));
   assert.ok(proj.timestamp);
   assert.equal(proj.ingress_ready, true);
   assert.equal(proj.gateway_reachable, false);
   assert.equal(proj.docker, "unavailable");
+  assert.equal(proj.schema_version, 2);
+  assert.equal(proj.ods_version, "2.6.0");
+  assert.equal(proj.online_apps, 0);
+  assert.equal(proj.runtime, null);
   assert.deepEqual(proj.apps, []);
   assert.equal(fs.statSync(statusFile).mode & 0o777, 0o640);
   await h.close();

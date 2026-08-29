@@ -68,9 +68,13 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   allowlist** of ODS service names/statuses obtained by running exactly
   `docker ps --format {{json .}}` via `execFile` with an explicit timeout.
   Container names outside the allowlist, raw command output, environment,
-  secrets, image labels, IDs, and mounts are never surfaced. If docker is
-  unavailable, the projection carries an empty `apps` array and a generic
-  `unavailable` state.
+  secrets, image labels, IDs, and mounts are never surfaced. The same fixed,
+  argument-only Docker boundary reports the configured llama-server model
+  basename and context length. The projection also carries the nonsecret ODS
+  version installed by ODS and exact normalized online/deployed-application
+  counts; stopped allowlisted containers remain in the deployed total.
+  If Docker is unavailable, it carries an empty `apps` array, a null runtime,
+  and a generic `unavailable` state.
 - **Visible post-tool replies.** The plugin adds a Pixel-only system prompt
   contract requiring a visible final response after either projection tool.
   The status remains untrusted evidence and never becomes action authority.
@@ -85,6 +89,7 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
 | `PIXEL_GATEWAY_PORT` | `18789` | Fixed loopback gateway port |
 | `PIXEL_STATUS_FILE` | `/run/ods-pixel/ods-status.json` | Status projection path |
 | `PIXEL_STATUS_INTERVAL_MS` | `30000` | Status write interval |
+| `PIXEL_ODS_VERSION` | `unknown` | Nonsecret ODS version exposed in the bounded status projection |
 
 Secrets are never configured here. The token lives only in
 `PIXEL_GATEWAY_TOKEN_FILE`.

@@ -17,19 +17,28 @@ import {
 const GOOD_TS = new Date(Date.now() - 1000).toISOString();
 
 function goodProjection(overrides = {}) {
-  return {
-    schema_version: 1,
+  const projection = {
+    schema_version: 2,
     timestamp: GOOD_TS,
     service: "pixel-agent",
+    ods_version: "2.6.0",
     ingress_ready: true,
     gateway_reachable: true,
     docker: "ok",
+    online_apps: 2,
+    runtime: { model: "Qwen3.5-9B-Q4_K_M.gguf", context_length: 32768 },
     apps: [
       { name: "pixel-agent", status: "healthy" },
       { name: "openclaw", status: "running" },
     ],
     ...overrides,
   };
+  if (!Object.hasOwn(overrides, "online_apps")) {
+    projection.online_apps = projection.apps.filter(
+      ({ status }) => status === "healthy" || status === "running"
+    ).length;
+  }
+  return projection;
 }
 
 // Build a dependency set backed by in-memory files.
@@ -98,12 +107,18 @@ test("reads a good projection and returns a freshly constructed object", async (
   const raw = JSON.stringify(goodProjection());
   const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
   const out = await readProjection(FIXED, fsImpl, Date.now());
-  assert.equal(out.schema_version, 1);
+  assert.equal(out.schema_version, 2);
   assert.equal(out.service, "pixel-agent");
+  assert.equal(out.ods_version, "2.6.0");
   assert.equal(out.ingress_ready, true);
   assert.equal(out.gateway_reachable, true);
   assert.equal(out.docker, "ok");
   assert.equal(out.app_count, 2);
+  assert.equal(out.online_app_count, 2);
+  assert.deepEqual(out.runtime, {
+    model: "Qwen3.5-9B-Q4_K_M.gguf",
+    context_length: 32768,
+  });
   assert.equal(out.stale, false);
   assert.equal(out.boundary, "status-only");
   assert.equal(out.apps.length, 2);
@@ -124,24 +139,78 @@ test("tool payloads expose the validated application count explicitly", async ()
   const apps = appsPayload(projection);
 
   assert.equal(status.app_count, 2);
+  assert.equal(status.online_app_count, 2);
+  assert.equal(status.ods_version, "2.6.0");
+  assert.equal(status.runtime.context_length, 32768);
   assert.equal(status.apps.length, status.app_count);
   assert.equal(apps.app_count, 2);
+  assert.equal(apps.online_app_count, 2);
   assert.equal(apps.apps.length, apps.app_count);
 });
 
-test("docker unavailable enum and starting status are accepted", async () => {
+test("starting application status is accepted", async () => {
   const raw = JSON.stringify(
     goodProjection({
-      docker: "unavailable",
       ingress_ready: false,
+      runtime: null,
       apps: [{ name: "searxng", status: "starting" }],
     })
   );
   const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
   const out = await readProjection(FIXED, fsImpl, Date.now());
-  assert.equal(out.docker, "unavailable");
+  assert.equal(out.docker, "ok");
   assert.equal(out.ingress_ready, false);
   assert.deepEqual(out.apps, [{ name: "searxng", status: "starting" }]);
+});
+
+test("stopped deployed applications remain in the total but not the online count", async () => {
+  const raw = JSON.stringify(goodProjection({
+    apps: [
+      { name: "ods-dashboard", status: "healthy" },
+      { name: "ods-n8n", status: "stopped" },
+    ],
+  }));
+  const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
+  const out = await readProjection(FIXED, fsImpl, Date.now());
+  assert.equal(out.app_count, 2);
+  assert.equal(out.online_app_count, 1);
+  assert.deepEqual(out.apps[1], { name: "ods-n8n", status: "stopped" });
+});
+
+test("docker unavailable requires an empty application and runtime projection", async () => {
+  const raw = JSON.stringify(goodProjection({
+    docker: "unavailable",
+    runtime: null,
+    apps: [],
+  }));
+  const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
+  const out = await readProjection(FIXED, fsImpl, Date.now());
+  assert.equal(out.docker, "unavailable");
+  assert.equal(out.app_count, 0);
+  assert.equal(out.online_app_count, 0);
+  assert.equal(out.runtime, null);
+});
+
+test("accepts unknown version and unavailable runtime without inventing facts", async () => {
+  const raw = JSON.stringify(goodProjection({ ods_version: "unknown", runtime: null }));
+  const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
+  const out = await readProjection(FIXED, fsImpl, Date.now());
+  assert.equal(out.ods_version, "unknown");
+  assert.equal(out.runtime, null);
+});
+
+test("rejects mismatched online count and malformed runtime or version", async () => {
+  for (const bad of [
+    goodProjection({ online_apps: 1 }),
+    goodProjection({ runtime: { model: "../secret", context_length: 32768 } }),
+    goodProjection({ runtime: { model: "model.gguf", context_length: 0 } }),
+    goodProjection({ ods_version: "2.6.0\nsecret" }),
+  ]) {
+    const fsImpl = memoryFs({ [FIXED]: makeEntry(JSON.stringify(bad)) });
+    const err = await asRejected(readProjection(FIXED, fsImpl, Date.now()));
+    assert.ok(err);
+    assert.match(err.message, /unavailable/);
+  }
 });
 
 test("rejects a symlink at the fixed path", async () => {
@@ -351,7 +420,7 @@ test("rejects a non-object root (array)", async () => {
 
 test("rejects wrong schema_version and wrong service", async () => {
   for (const bad of [
-    goodProjection({ schema_version: 2 }),
+    goodProjection({ schema_version: 1 }),
     goodProjection({ service: "other" }),
   ]) {
     const fsImpl = memoryFs({ [FIXED]: makeEntry(JSON.stringify(bad)) });
