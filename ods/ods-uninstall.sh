@@ -1,7 +1,7 @@
 #!/bin/bash
 # ods-uninstall.sh - ODS Clean Uninstaller
 # Removes all ODS components, data, and system modifications.
-# Usage: ./ods-uninstall.sh [--keep-models] [--keep-data] [--force]
+# Usage: ./ods-uninstall.sh [--keep-models] [--keep-data] [--force] [--dry-run [--json]]
 
 set -euo pipefail
 
@@ -48,15 +48,134 @@ resolve_compose_flags() {
     printf '%s\n' "$flags"
 }
 
+emit_uninstall_plan() {
+    local json_mode="$1"
+    local compose_flags containers="" volumes=""
+    local containers_json='[]' volumes_json='[]'
+    compose_flags=$(resolve_compose_flags)
+
+    if command -v docker &>/dev/null; then
+        containers=$(docker ps -a --format '{{.Names}}' 2>/dev/null \
+            | grep -E '^ods-' || true)
+        if [[ "$KEEP_DATA" != "true" ]]; then
+            volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null \
+                | grep -E '^ods[_-]' || true)
+        fi
+    fi
+    containers_json=$(printf '%s\n' "$containers" \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')
+    volumes_json=$(printf '%s\n' "$volumes" \
+        | jq -Rsc 'split("\n") | map(select(length > 0))')
+
+    local install_action="remove" model_action="remove"
+    local preserved_data_path="" model_backup_path=""
+    if [[ "$KEEP_DATA" == "true" ]]; then
+        install_action="preserve-data"
+        preserved_data_path="$INSTALL_DIR/data"
+    fi
+    if [[ "$KEEP_MODELS" == "true" && -d "$INSTALL_DIR/data/models" ]]; then
+        model_action="preserve-separately"
+        model_backup_path="$HOME/.ods-models-backup"
+    elif [[ "$KEEP_DATA" == "true" ]]; then
+        model_action="preserve-with-data"
+    fi
+
+    local plan
+    plan=$(jq -cn \
+        --arg install_dir "$INSTALL_DIR" \
+        --arg compose_flags "$compose_flags" \
+        --argjson keep_data "$KEEP_DATA" \
+        --argjson keep_models "$KEEP_MODELS" \
+        --argjson containers "$containers_json" \
+        --argjson volumes "$volumes_json" \
+        --arg install_action "$install_action" \
+        --arg preserved_data_path "$preserved_data_path" \
+        --arg model_action "$model_action" \
+        --arg model_backup_path "$model_backup_path" \
+        --arg backup_dir "$HOME/.ods" '
+        {
+            schema_version: "ods.uninstall-plan.v1",
+            dry_run: true,
+            mutates: false,
+            install_dir: $install_dir,
+            options: {keep_data: $keep_data, keep_models: $keep_models},
+            compose: {
+                flags: $compose_flags,
+                containers: $containers,
+                volumes: $volumes,
+                remove_volumes: ($keep_data | not)
+            },
+            filesystem: {
+                install_action: $install_action,
+                preserved_data_path: (
+                    if $preserved_data_path == "" then null else $preserved_data_path end
+                ),
+                models: {
+                    action: $model_action,
+                    backup_path: (
+                        if $model_backup_path == "" then null else $model_backup_path end
+                    )
+                },
+                backup_dir: {path: $backup_dir, action: "remove"},
+                cli_symlink_candidates: [
+                    "/usr/local/bin/ods",
+                    ($ENV.HOME + "/.local/bin/ods"),
+                    "/usr/local/bin/ods-cli"
+                ],
+                desktop_file: ($ENV.HOME + "/.local/share/applications/ods.desktop"),
+                opencode_config: ($ENV.HOME + "/.config/opencode/opencode.json")
+            },
+            services: {
+                systemd_user_candidates: [
+                    "opencode-web.service",
+                    "openclaw-session-cleanup.timer",
+                    "memory-shepherd-workspace.timer",
+                    "memory-shepherd-memory.timer",
+                    "openclaw-session-cleanup.service",
+                    "memory-shepherd-workspace.service",
+                    "memory-shepherd-memory.service",
+                    "ods-host-agent.service"
+                ],
+                systemd_system_candidates: ["ods-host-agent.service"],
+                launch_agent_candidates: [
+                    "com.ods.llm-bridge",
+                    "com.ods.host-agent-bridge",
+                    "com.ods.host-agent",
+                    "com.ods.opencode-web",
+                    "com.ods.llama-server",
+                    "com.ods.full-model-download"
+                ]
+            }
+        }')
+
+    if [[ "$json_mode" == "true" ]]; then
+        printf '%s\n' "$plan"
+        return 0
+    fi
+
+    echo "ODS uninstall dry run"
+    echo "Install action:  $install_action ($INSTALL_DIR)"
+    echo "Containers:      $(jq -r '.compose.containers | length' <<< "$plan")"
+    echo "Volumes:         $(jq -r '.compose.volumes | length' <<< "$plan")"
+    echo "Keep data:       $KEEP_DATA"
+    echo "Keep models:     $KEEP_MODELS"
+    echo "Backup dir:      $HOME/.ods (remove)"
+    echo "No changes made. Re-run without --dry-run to uninstall."
+}
+
 KEEP_MODELS=false
 KEEP_DATA=false
 FORCE=false
+DRY_RUN=false
+JSON_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --keep-models) KEEP_MODELS=true; shift ;;
         --keep-data)   KEEP_DATA=true; shift ;;
         --force)       FORCE=true; shift ;;
+        --dry-run)     DRY_RUN=true; shift ;;
+        --json)        JSON_MODE=true; shift ;;
         -h|--help)
             cat << EOF
 ODS Uninstaller
@@ -67,6 +186,8 @@ Options:
     --keep-models   Keep downloaded AI models (saves re-download time)
     --keep-data     Keep user data (chat history, n8n workflows, etc.)
     --force         Skip confirmation prompts
+    --dry-run       Preview uninstall scope without changing the host
+    --json          Emit --dry-run as machine-readable JSON
     -h, --help      Show this help
 
 This will remove:
@@ -84,11 +205,18 @@ EOF
     esac
 done
 
-echo ""
-echo -e "${RED}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║         ODS UNINSTALLER                ║${NC}"
-echo -e "${RED}╚══════════════════════════════════════════════════╝${NC}"
-echo ""
+if [[ "$JSON_MODE" == "true" && "$DRY_RUN" != "true" ]]; then
+    log_error "--json requires --dry-run"
+    exit 1
+fi
+
+if [[ "$JSON_MODE" != "true" ]]; then
+    echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║         ODS UNINSTALLER                ║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════╝${NC}"
+    echo ""
+fi
 
 # Detect install dir
 if [[ -d "$SCRIPT_DIR" && -f "$SCRIPT_DIR/ods-cli" ]]; then
@@ -100,10 +228,12 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
     exit 1
 fi
 
-log_info "Install directory: $INSTALL_DIR"
-$KEEP_MODELS && log_info "Keeping models (--keep-models)"
-$KEEP_DATA && log_info "Keeping user data (--keep-data)"
-echo ""
+if [[ "$JSON_MODE" != "true" ]]; then
+    log_info "Install directory: $INSTALL_DIR"
+    $KEEP_MODELS && log_info "Keeping models (--keep-models)"
+    $KEEP_DATA && log_info "Keeping user data (--keep-data)"
+    echo ""
+fi
 
 if [[ -f "$INSTALL_DIR/.env" ]]; then
     if [[ -f "$INSTALL_DIR/lib/safe-env.sh" ]]; then
@@ -113,6 +243,11 @@ if [[ -f "$INSTALL_DIR/.env" ]]; then
     else
         log_warn "safe-env.sh not found; using uninstall defaults without loading .env"
     fi
+fi
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    emit_uninstall_plan "$JSON_MODE"
+    exit 0
 fi
 
 if [[ "$FORCE" != "true" ]]; then
