@@ -10,6 +10,7 @@ import {
   UserPlus,
   CreditCard,
   Code,
+  Bot,
 } from 'lucide-react'
 
 const Dashboard = lazy(() => import('../pages/Dashboard'))
@@ -21,6 +22,7 @@ const RemoteProvider = lazy(() => import('../pages/RemoteProvider'))
 const ServiceMap = lazy(() => import('../pages/ServiceMap'))
 const Invites = lazy(() => import('../pages/Invites'))
 const Usage = lazy(() => import('../pages/Usage'))
+const AgentMonitor = lazy(() => import('../pages/AgentMonitor'))
 
 export const coreRoutes = [
   {
@@ -83,6 +85,16 @@ export const coreRoutes = [
     getProps: () => ({}),
     sidebar: true,
     order: 3.2,
+  },
+  {
+    id: 'agents',
+    path: '/agents',
+    label: 'Agents',
+    icon: Bot,
+    component: AgentMonitor,
+    getProps: () => ({}),
+    sidebar: true,
+    order: 3.4,
   },
   // Usage + Setup / Owner are reachable from Settings rather than the top-level
   // sidebar. Setup / Owner is a factory/distributor/service-provider flow, not
