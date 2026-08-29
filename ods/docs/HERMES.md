@@ -131,6 +131,43 @@ To bring up Hermes pointing at a different LLM (e.g. OpenRouter, OpenAI, Anthrop
 
 For local backends, keep `model.context_length` and `auxiliary.compression.context_length` aligned with `.env`'s `CTX_SIZE` / `MAX_CONTEXT`. Values below 64000 will make Hermes reject prompts; values above the server's real context can produce `context length exceeded` / `max compression attempts reached` loops.
 
+### A2A v1 interoperability
+
+The dashboard API exposes Hermes through the A2A v1 HTTP+JSON binding. Agent
+discovery is public and contains no credentials:
+
+```bash
+curl http://127.0.0.1:3002/.well-known/agent-card.json
+```
+
+Message execution uses the same bearer token as the protected dashboard API:
+
+```bash
+curl -X POST http://127.0.0.1:3002/a2a/v1/message:send \
+  -H "Authorization: Bearer ${DASHBOARD_API_KEY}" \
+  -H "A2A-Version: 1.0" \
+  -H "Content-Type: application/a2a+json" \
+  -d '{
+    "message": {
+      "messageId": "example-1",
+      "role": "ROLE_USER",
+      "parts": [{"text": "Summarize the health of this ODS node"}]
+    },
+    "configuration": {"acceptedOutputModes": ["text/plain"]}
+  }'
+```
+
+ODS currently returns the A2A direct `Message` response variant and accepts
+text only. Reusing the returned `contextId` keeps later messages on the same
+Hermes conversation while its bridge connection remains alive. Streaming,
+push notifications, durable tasks, and task cancellation are deliberately not
+advertised: the pinned Hermes API cannot yet cancel a submitted prompt safely.
+The adapter rejects those requests instead of reporting a false terminal state.
+
+The default local URLs use HTTP. Put `api.<device>.local` behind an HTTPS/TLS
+endpoint before exposing A2A outside the trusted local network; the A2A v1
+production security contract requires HTTPS.
+
 ## Security posture
 
 - **`--insecure` is enabled inside the container.** Hermes's dashboard refuses non-loopback binds without it. ODS accepts that trade-off only because port 9119 is not host-bound in the default stack; the LAN-facing entry is the magic-link-gated proxy on port 9120. Do not add a public 9119 host binding.
