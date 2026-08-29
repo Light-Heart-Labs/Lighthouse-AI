@@ -179,6 +179,7 @@ export default function Settings() {
   const [envFollowUpPlan, setEnvFollowUpPlan] = useState(() => loadSettingsFollowUp())
   const [statusCache, setStatusCache] = useState(null)
   const [setupStatus, setSetupStatus] = useState(null)
+  const [remoteAccess, setRemoteAccess] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
@@ -237,12 +238,13 @@ export default function Settings() {
       setError(null)
       setNotice(null)
       const today = todayKey()
-      const [summaryResult, storageResult, envResult, usageResult, setupResult] = await Promise.allSettled([
+      const [summaryResult, storageResult, envResult, usageResult, setupResult, remoteAccessResult] = await Promise.allSettled([
         fetchPayload('/api/settings/summary', 10000),
         fetchPayload('/api/storage', 12000),
         fetchPayload('/api/settings/env', 10000),
         fetchPayload(`/api/usage/report?start=${today}&end=${today}`, 10000),
         fetchPayload('/api/setup/status', 8000),
+        fetchPayload('/api/tailscale/status', 8000),
       ])
 
       if (summaryResult.status === 'fulfilled') {
@@ -270,6 +272,9 @@ export default function Settings() {
 
       if (setupResult.status === 'fulfilled') setSetupStatus(setupResult.value)
       else setSetupStatus(null)
+
+      if (remoteAccessResult.status === 'fulfilled') setRemoteAccess(remoteAccessResult.value)
+      else setRemoteAccess(null)
 
       if (failures.length === 3) setError(getErrorText(failures[0]))
       else if (failures.length > 0) setNotice({ type: 'warn', text: 'Some settings details are temporarily unavailable. Showing the data that loaded successfully.' })
@@ -415,6 +420,8 @@ export default function Settings() {
           expanded={routesExpanded}
           onToggleExpanded={() => setRoutesExpanded(current => !current)}
         />
+
+        <RemoteAccessCard remoteAccess={remoteAccess} onOpenEnvironment={handleOpenEnvironmentEditor} />
 
         <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(22rem,0.85fr)]">
           <StorageCard storage={storage} />
@@ -590,6 +597,70 @@ function RemoteSetupCard({ setupStatus, className = '' }) {
         </span>
       </div>
     </PremiumCard>
+  )
+}
+
+function RemoteAccessCard({ remoteAccess, onOpenEnvironment }) {
+  const connected = remoteAccess?.running === true && remoteAccess?.authenticated === true
+  const needsAuthentication = remoteAccess?.running === true && remoteAccess?.authenticated !== true
+  const self = remoteAccess?.self || {}
+  const dnsName = String(self.dns_name || '').replace(/\.$/, '')
+  const addresses = Array.isArray(self.ips) ? self.ips.filter(Boolean) : []
+  const statusLabel = connected ? 'Connected' : needsAuthentication ? 'Needs authentication' : remoteAccess ? 'Not enabled' : 'Status unavailable'
+  const statusTone = connected ? 'bg-emerald-400' : needsAuthentication ? 'bg-amber-400' : 'bg-theme-text-muted'
+
+  return (
+    <UtilityCard icon={Network} title="Remote Access" description="Private Tailscale connectivity for this ODS device.">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)]">
+        <div className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-theme-text">
+            <span className={`h-2 w-2 rounded-full ${statusTone}`} />
+            {statusLabel}
+          </p>
+          {connected ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <RemoteAccessValue label="Tailnet DNS" value={dnsName || 'Unavailable'} />
+              <RemoteAccessValue label="Tailnet" value={remoteAccess.tailnet_name || remoteAccess.magic_dns_suffix || 'Unavailable'} />
+              <RemoteAccessValue label="Device" value={self.hostname || 'Unavailable'} />
+              <RemoteAccessValue label="Tailnet IP" value={addresses[0] || 'Unavailable'} />
+            </div>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-theme-text-muted">
+              {needsAuthentication
+                ? (remoteAccess.reason || 'Tailscale is running but has not joined a tailnet. Add an auth key in Environment, then apply the service change.')
+                : remoteAccess
+                  ? 'Enable the Tailscale extension to reach ODS privately from another device on your tailnet.'
+                  : 'The Tailscale status endpoint is temporarily unavailable. Other Settings data remains usable.'}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col justify-between rounded-lg border border-theme-border bg-theme-bg/20 p-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-theme-text-muted">Reachability prerequisites</p>
+            <p className="mt-2 text-sm leading-6 text-theme-text-muted">Remote HTTP access also requires the proxy extension and a LAN-visible bind address.</p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link to="/extensions/integrations" className="inline-flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+              Manage extension <ChevronRight size={15} />
+            </Link>
+            {needsAuthentication ? (
+              <button type="button" onClick={onOpenEnvironment} className="rounded-lg border border-theme-accent/40 bg-theme-accent/10 px-3 py-2 text-sm text-theme-accent-light hover:bg-theme-accent/20">
+                Open environment
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </UtilityCard>
+  )
+}
+
+function RemoteAccessValue({ label, value }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs text-theme-text-muted">{label}</p>
+      <p className="mt-1 truncate font-mono text-sm text-theme-text" title={value}>{value}</p>
+    </div>
   )
 }
 
