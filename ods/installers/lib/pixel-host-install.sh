@@ -590,18 +590,50 @@ if not isinstance(normalized_defaults, dict) or not isinstance(normalized_sessio
 # other candidate change still fails closed below.
 normalized_provider["timeoutSeconds"] = 1800
 normalized_defaults["timeoutSeconds"] = 1800
+normalized_defaults["bootstrapMaxChars"] = 4000
+normalized_defaults["bootstrapTotalMaxChars"] = 14000
+normalized_defaults["contextInjection"] = "continuation-skip"
 normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
 normalized_write_lock = normalized_session.setdefault("writeLock", {})
+normalized_tools = normalized.setdefault("tools", {})
+normalized_agent_tools = normalized_agent.setdefault("tools", {})
+normalized_agent_deny = normalized_agent_tools.setdefault("deny", [])
+normalized_sandbox_tools = normalized_tools.setdefault("sandbox", {}).setdefault("tools", {})
+normalized_sandbox_allow = normalized_sandbox_tools.setdefault("allow", [])
 if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_diagnostics, dict)
-        or not isinstance(normalized_write_lock, dict)):
+        or not isinstance(normalized_write_lock, dict)
+        or not isinstance(normalized_tools, dict)
+        or not isinstance(normalized_agent_tools, dict)
+        or not isinstance(normalized_agent_deny, list)
+        or not all(isinstance(item, str) for item in normalized_agent_deny)
+        or not isinstance(normalized_sandbox_tools, dict)
+        or not isinstance(normalized_sandbox_allow, list)
+        or not all(isinstance(item, str) for item in normalized_sandbox_allow)):
     raise SystemExit("live Pixel runtime policy is outside the ODS contract")
 normalized_compaction["reserveTokens"] = contract.get("modelMaxTokens")
 normalized_compaction["reserveTokensFloor"] = 0
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
 normalized_write_lock["maxHoldMs"] = 1920000
 normalized_write_lock["staleMs"] = 3600000
+normalized_tools["loopDetection"] = {
+    "enabled": True,
+    "historySize": 12,
+    "warningThreshold": 2,
+    "unknownToolThreshold": 2,
+    "criticalThreshold": 4,
+    "globalCircuitBreakerThreshold": 6,
+    "detectors": {
+        "genericRepeat": True,
+        "knownPollNoProgress": True,
+        "pingPong": True,
+    },
+}
+normalized_agent_tools["deny"] = [item for item in normalized_agent_deny if item != "web_search"]
+if "web_search" not in normalized_sandbox_allow:
+    normalized_sandbox_allow.append("web_search")
+normalized_sandbox_tools["allow"] = sorted(set(normalized_sandbox_allow))
 model_label = f"{model_id} {model_name}".casefold()
 if "qwen" in model_label:
     normalized_model["reasoning"] = True
@@ -709,7 +741,7 @@ _ods_pixel_apply_runtime_budget() {
     # Keep the larger CPU-only budgets deterministic and confined to this
     # ODS-owned Pixel route.
     staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
-import copy, json, os, pathlib, stat, sys, tempfile
+import copy, json, os, pathlib, re, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
 info = path.lstat()
@@ -752,14 +784,40 @@ updated_session = updated["session"]
 updated_diagnostics = updated.setdefault("diagnostics", {})
 updated_compaction = updated_defaults.setdefault("compaction", {})
 write_lock = updated_session.setdefault("writeLock", {})
+updated_tools = updated.setdefault("tools", {})
+updated_agent_tools = updated_agent.setdefault("tools", {})
+updated_agent_deny = updated_agent_tools.setdefault("deny", [])
+updated_sandbox = updated_tools.setdefault("sandbox", {})
+updated_sandbox_tools = updated_sandbox.setdefault("tools", {})
+updated_sandbox_allow = updated_sandbox_tools.setdefault("allow", [])
 if not isinstance(updated_compaction, dict):
     raise SystemExit("OpenClaw compaction configuration must be an object")
 if not isinstance(write_lock, dict):
     raise SystemExit("OpenClaw session write-lock configuration must be an object")
 if not isinstance(updated_diagnostics, dict):
     raise SystemExit("OpenClaw diagnostics configuration must be an object")
+if (not isinstance(updated_tools, dict) or not isinstance(updated_agent_tools, dict)
+        or not isinstance(updated_agent_deny, list)
+        or not all(isinstance(item, str) for item in updated_agent_deny)
+        or not isinstance(updated_sandbox, dict)
+        or not isinstance(updated_sandbox_tools, dict)
+        or not isinstance(updated_sandbox_allow, list)
+        or not all(isinstance(item, str) for item in updated_sandbox_allow)):
+    raise SystemExit("OpenClaw tool policy is outside the ODS Pixel runtime contract")
+search = updated_tools.get("web", {}).get("search", {})
+searxng = updated.get("plugins", {}).get("entries", {}).get("searxng", {})
+search_url = searxng.get("config", {}).get("webSearch", {}).get("baseUrl")
+if (not isinstance(search, dict) or search.get("provider") != "searxng"
+        or searxng.get("enabled") is not True
+        or not isinstance(search_url, str)
+        or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}", search_url)
+        or int(search_url.rsplit(":", 1)[1]) > 65535):
+    raise SystemExit("ODS Pixel private web search is not bound to local SearXNG")
 updated_provider["timeoutSeconds"] = 1800
 updated_defaults["timeoutSeconds"] = 1800
+updated_defaults["bootstrapMaxChars"] = 4000
+updated_defaults["bootstrapTotalMaxChars"] = 14000
+updated_defaults["contextInjection"] = "continuation-skip"
 context_window = updated_model.get("contextWindow")
 model_max_tokens = updated_model.get("maxTokens")
 if (type(context_window) is not int or type(model_max_tokens) is not int
@@ -790,6 +848,26 @@ if "qwen" in model_label:
 updated_diagnostics["stuckSessionAbortMs"] = 1860000
 write_lock["maxHoldMs"] = 1920000
 write_lock["staleMs"] = 3600000
+updated_tools["loopDetection"] = {
+    "enabled": True,
+    "historySize": 12,
+    "warningThreshold": 2,
+    "unknownToolThreshold": 2,
+    "criticalThreshold": 4,
+    "globalCircuitBreakerThreshold": 6,
+    "detectors": {
+        "genericRepeat": True,
+        "knownPollNoProgress": True,
+        "pingPong": True,
+    },
+}
+# ODS ships a loopback-only SearXNG provider. Expose its search tool to Pixel,
+# but retain the generic web_fetch denial so arbitrary URL retrieval still
+# stays behind a separately reviewed broker boundary.
+updated_agent_tools["deny"] = [item for item in updated_agent_deny if item != "web_search"]
+if "web_search" not in updated_sandbox_allow:
+    updated_sandbox_allow.append("web_search")
+updated_sandbox_tools["allow"] = sorted(set(updated_sandbox_allow))
 if updated == value:
     print("unchanged")
     raise SystemExit(0)

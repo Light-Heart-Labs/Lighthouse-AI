@@ -287,7 +287,11 @@ cat > "$runtime_config" <<'JSON'
 {
   "agents": {
     "defaults": {"bootstrapMaxChars": 32000},
-    "list": [{"id": "pixel", "model": "ods-local/qwen-test"}]
+    "list": [{
+      "id": "pixel",
+      "model": "ods-local/qwen-test",
+      "tools": {"deny": ["web_fetch", "web_search"]}
+    }]
   },
   "models": {
     "providers": {
@@ -304,7 +308,20 @@ cat > "$runtime_config" <<'JSON'
       }
     }
   },
-  "session": {"dmScope": "per-account-channel-peer"}
+  "plugins": {
+    "entries": {
+      "searxng": {
+        "enabled": true,
+        "config": {"webSearch": {"baseUrl": "http://127.0.0.1:8888"}}
+      }
+    }
+  },
+  "session": {"dmScope": "per-account-channel-peer"},
+  "tools": {
+    "profile": "coding",
+    "sandbox": {"tools": {"allow": ["exec", "pixel_ods_status"]}},
+    "web": {"search": {"provider": "searxng"}}
+  }
 }
 JSON
 chmod 0600 "$runtime_config"
@@ -316,9 +333,27 @@ python3 - "$OPENCLAW_CONFIG_PATH" <<'PY'
 import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
+assert value["agents"]["defaults"]["bootstrapMaxChars"] == 4000
+assert value["agents"]["defaults"]["bootstrapTotalMaxChars"] == 14000
+assert value["agents"]["defaults"]["contextInjection"] == "continuation-skip"
 assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
 agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
+assert agent["tools"]["deny"] == ["web_fetch"]
+assert "web_search" in value["tools"]["sandbox"]["tools"]["allow"]
+assert value["tools"]["loopDetection"] == {
+    "enabled": True,
+    "historySize": 12,
+    "warningThreshold": 2,
+    "unknownToolThreshold": 2,
+    "criticalThreshold": 4,
+    "globalCircuitBreakerThreshold": 6,
+    "detectors": {
+        "genericRepeat": True,
+        "knownPollNoProgress": True,
+        "pingPong": True,
+    },
+}
 assert value["agents"]["defaults"]["compaction"] == {
     "reserveTokens": model["maxTokens"], "reserveTokensFloor": 0,
 }
@@ -337,7 +372,7 @@ SH
 chmod 0755 "$runtime_validator"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["agents"]["defaults"]["timeoutSeconds"] == 1800; assert v["agents"]["defaults"]["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; assert v["agents"]["list"][0]["thinkingDefault"] == "off"; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert a["thinkingDefault"] == "off" and a["tools"]["deny"] == ["web_fetch"]; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"}; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert "web_search" in v["tools"]["sandbox"]["tools"]["allow"] and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
@@ -402,7 +437,12 @@ answers_path.write_text(json.dumps(answers, indent=2, sort_keys=True) + "\n")
 base = {
     "agents": {
         "defaults": {"bootstrapMaxChars": 32000},
-        "list": [{"id": "pixel", "model": "ods-local/qwen-old", "preserve": 7}],
+        "list": [{
+            "id": "pixel",
+            "model": "ods-local/qwen-old",
+            "preserve": 7,
+            "tools": {"deny": ["web_fetch", "web_search"]},
+        }],
     },
     "gateway": {"bind": "loopback"},
     "models": {"providers": {"ods-local": {
@@ -418,7 +458,16 @@ base = {
             "input": ["text"],
         }],
     }}},
+    "plugins": {"entries": {"searxng": {
+        "enabled": True,
+        "config": {"webSearch": {"baseUrl": "http://127.0.0.1:8888"}},
+    }}},
     "session": {"dmScope": "per-account-channel-peer"},
+    "tools": {
+        "profile": "coding",
+        "sandbox": {"tools": {"allow": ["exec", "pixel_ods_status"]}},
+        "web": {"search": {"provider": "searxng"}},
+    },
 }
 candidate = copy.deepcopy(base)
 candidate["agents"]["list"][0]["model"] = "ods-local/qwen-new"
