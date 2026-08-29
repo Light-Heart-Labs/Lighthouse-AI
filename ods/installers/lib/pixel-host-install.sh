@@ -100,6 +100,41 @@ finally:
 PY
 }
 
+# Return 0 when an exact ODS-managed Pixel deployment must be retired before
+# the installer copies newer source over the installed ownership evidence.
+# Return 1 when no transition is needed, and 2 for unsafe or ambiguous state.
+_ods_pixel_source_transition_required() {
+    local owner="$1" home="$2" requested_ref="$3" marker
+    marker="$home/.config/ods/pixel-managed.json"
+    [[ "$requested_ref" =~ ^[0-9a-f]{40}$ ]] || return 2
+    if [[ ! -e "$marker" && ! -L "$marker" ]]; then
+        return 1
+    fi
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$marker" "${INSTALL_DIR:?}" "$requested_ref" <<'PY'
+import json, os, pathlib, re, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+info = path.lstat()
+if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        or info.st_nlink != 1 or info.st_uid != os.getuid()
+        or info.st_mode & 0o077 or info.st_size > 65536):
+    raise SystemExit(2)
+value = json.loads(path.read_text(encoding="utf-8"))
+source_ref = value.get("pixel_source_ref")
+requested_ref = sys.argv[3]
+if (value.get("schema_version") != 2 or value.get("manager") != "ods"
+        or value.get("initial_active_state") != "absent"
+        or value.get("install_dir") != sys.argv[2]
+        or value.get("state") not in {"ready", "installing", "deactivating"}
+        or not isinstance(source_ref, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", source_ref)
+        or value.get("requested_source_ref") not in {None, source_ref, requested_ref}):
+    raise SystemExit(2)
+raise SystemExit(0 if value.get("state") == "deactivating" or source_ref != requested_ref else 1)
+PY
+}
+
 _ods_pixel_record_verified_state() {
     local owner="$1" home="$2" contract_sha256="$3" state="$4" pixel_root="$5"
     local marker config manifest sandbox_image sandbox_image_id
@@ -1511,7 +1546,7 @@ _ods_pixel_wait_ingress() {
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
     local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256 runtime_budget_status
-    local reuse_active=false same_verified_source=false
+    local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
     _ods_pixel_assert_managed_state "$owner" "$home" || return 1
@@ -1582,7 +1617,33 @@ ods_pixel_install_default_agent() {
         fi
         if [[ "$same_verified_source" == true ]]; then
             if _ods_pixel_candidate_config_matches_live "$owner" "$home" "$pixel_root/dist/openclaw.json"; then
+                same_source_resume=true
                 ai "The exact Pixel release and runtime configuration are unchanged; refreshing the verified ODS extension without reapplying the release..."
+            else
+                # A run from an older installer may have atomically written the
+                # deterministic ODS overlay before it could bind the updated
+                # marker. Recreate that overlay on the reviewed candidate and
+                # require whole-document equality before accepting this narrow
+                # recovery path. Unrelated live changes still fail closed into
+                # the transactional model-reconciliation path below.
+                candidate_runtime_status="$(_ods_pixel_apply_runtime_budget "$owner" "$home" \
+                    "$pixel_root/dist/openclaw.json" "$openclaw_bin")" || {
+                    ai_bad "Could not validate the exact-source Pixel runtime candidate for safe recovery."
+                    return 1
+                }
+                case "$candidate_runtime_status" in
+                    changed|unchanged) ;;
+                    *)
+                        ai_bad "Pixel returned an invalid exact-source runtime recovery result."
+                        return 1
+                        ;;
+                esac
+                if _ods_pixel_candidate_config_matches_live "$owner" "$home" "$pixel_root/dist/openclaw.json"; then
+                    same_source_resume=true
+                    ai "The exact Pixel release and deterministic ODS runtime policy are already active; repairing the interrupted ownership checkpoint..."
+                fi
+            fi
+            if [[ "$same_source_resume" == true ]]; then
                 if ! ods_sudo systemctl restart openclaw-gateway.service \
                     || ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" 60 '.ok == true and .status == "live"' \
                     || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
@@ -1625,6 +1686,15 @@ ods_pixel_install_default_agent() {
             return 1
             ;;
     esac
+    # The runtime overlay above replaces the live configuration atomically.
+    # Bind that exact canonical file before any fallible registry or service
+    # operation. If either later step is interrupted, the next installer run
+    # can prove the managed contract and resume without misclassifying ODS's
+    # own runtime policy as unmanaged drift.
+    if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
+        ai_bad "Could not bind the verified Pixel ODS local-runtime configuration."
+        return 1
+    fi
     # OpenClaw persists plugin descriptors separately from its live config.
     # Rebuild that registry after any reviewed extension/config update, then
     # restart once so the gateway loads both the exact descriptor contract and
@@ -1635,9 +1705,9 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel could not refresh and load the exact ODS plugin registry. See $LOG_FILE."
         return 1
     fi
-    # Rebind the exact verified contract and overlaid canonical live config
-    # while the marker remains non-ready. If ingress setup is interrupted, a
-    # rerun can verify and reuse this same active Pixel release.
+    # Reconfirm the exact verified contract and canonical live config after the
+    # gateway has loaded them while the marker remains non-ready. If ingress
+    # setup is interrupted, a rerun can verify and reuse this same release.
     if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
         ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
         return 1

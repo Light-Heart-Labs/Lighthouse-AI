@@ -65,7 +65,42 @@ else
     # copying new source over an existing install so the fail-closed cleanup can
     # still compare root-owned artifacts with the source that installed them.
     _phase06_pixel_marker="$HOME/.config/ods/pixel-managed.json"
-    if [[ "${ENABLE_PIXEL_RUNTIME:-false}" != "true" \
+    _phase06_pixel_source_transition=0
+    if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" \
+        && -n "${PIXEL_SOURCE_REF:-}" \
+        && ( -e "$_phase06_pixel_marker" || -L "$_phase06_pixel_marker" ) ]]; then
+        _phase06_pixel_owner="$(ods_pixel_install_owner)" || {
+            error "Could not identify the ODS owner for a Pixel source transition."
+            return 1
+        }
+        _phase06_pixel_home="$(ods_pixel_owner_home "$_phase06_pixel_owner")" || {
+            error "Could not resolve the ODS owner home for a Pixel source transition."
+            return 1
+        }
+        _ods_pixel_source_transition_required \
+            "$_phase06_pixel_owner" "$_phase06_pixel_home" "$PIXEL_SOURCE_REF" \
+            || _phase06_pixel_source_transition=$?
+        case "$_phase06_pixel_source_transition" in
+            0)
+                if ! declare -F ods_pixel_uninstall_managed >/dev/null 2>&1; then
+                    # shellcheck source=../../lib/pixel-uninstall.sh
+                    source "$SCRIPT_DIR/lib/pixel-uninstall.sh"
+                fi
+                _phase06_step "rebind-pixel-source"
+                ai "Retiring the verified prior Pixel source before applying the new immutable source..."
+                if ! ods_pixel_uninstall_managed "$INSTALL_DIR" "$_phase06_pixel_home"; then
+                    error "Could not safely retire the prior ODS-managed Pixel source."
+                    return 1
+                fi
+                ;;
+            1) ;;
+            *)
+                error "The existing ODS-managed Pixel state is unsafe for a source transition."
+                return 1
+                ;;
+        esac
+        unset _phase06_pixel_owner _phase06_pixel_home
+    elif [[ "${ENABLE_PIXEL_RUNTIME:-false}" != "true" \
         && ( -e "$_phase06_pixel_marker" || -L "$_phase06_pixel_marker" ) ]]; then
         if ! declare -F ods_pixel_uninstall_managed >/dev/null 2>&1; then
             # shellcheck source=../../lib/pixel-uninstall.sh
@@ -77,7 +112,7 @@ else
             return 1
         fi
     fi
-    unset _phase06_pixel_marker
+    unset _phase06_pixel_marker _phase06_pixel_source_transition
 
     _phase06_rootless=false
     if [[ -f "$SCRIPT_DIR/lib/rootless-ownership.sh" ]]; then
@@ -573,7 +608,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
             error "Existing PIXEL_INGRESS_GID is invalid"
 
         PIXEL_SOURCE_URL_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_URL "https://github.com/Osmantic/Pixel.git")"
-        PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "d2a2b6be552126f294fb30ee5fb46872acf82c89")"
+        PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "2e3b0072b923e8cdebd47992a489ebbbbc734e74")"
         PIXEL_SOURCE_DIR_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_DIR "")"
         # Phase 11 installs Pixel in this same installer shell. Preserve the
         # resolved immutable source contract in that shell as well as in .env;

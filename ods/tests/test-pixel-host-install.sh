@@ -51,6 +51,30 @@ marker="$home/.config/ods/pixel-managed.json"
 check test "$(stat -c '%a' "$marker")" = 600
 check test "$(stat -c '%a' "${marker%/*}")" = 700
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v == {"initial_active_state":"absent","install_dir":sys.argv[2],"manager":"ods","pixel_source_ref":sys.argv[3],"schema_version":2,"state":"installing"}' "$marker" "$INSTALL_DIR" "$PIXEL_SOURCE_REF"
+if _ods_pixel_source_transition_required "$owner" "$home" "$PIXEL_SOURCE_REF"; then
+    fail "matching Pixel source unexpectedly requires retirement"
+else
+    check test "$?" = 1
+fi
+next_source_ref="$(printf 'c%.0s' {1..40})"
+check _ods_pixel_source_transition_required "$owner" "$home" "$next_source_ref"
+python3 - "$marker" "$next_source_ref" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value["requested_source_ref"] = sys.argv[2]
+path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+PY
+chmod 0600 "$marker"
+check _ods_pixel_source_transition_required "$owner" "$home" "$next_source_ref"
+python3 - "$marker" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value.pop("requested_source_ref", None)
+path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+PY
+chmod 0600 "$marker"
 printf '%s\n' '{"gateway":{"http":{"endpoints":{"chatCompletions":{"enabled":true}}}}}' > "$home/.openclaw/openclaw.json"
 chmod 0600 "$home/.openclaw/openclaw.json"
 contract_sha256="$(printf 'c%.0s' {1..64})"
@@ -412,11 +436,16 @@ assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 360000
 PY
 SH
 chmod 0755 "$runtime_validator"
+runtime_recovery_candidate="$runtime_home/.openclaw/recovery-candidate.json"
+cp "$runtime_config" "$runtime_recovery_candidate"
+chmod 0600 "$runtime_recovery_candidate"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_recovery_candidate" "$runtime_validator")" = changed
+check _ods_pixel_candidate_config_matches_live "$owner" "$runtime_home" "$runtime_recovery_candidate"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
 
 runtime_target="$TEST_ROOT/runtime-target.json"
@@ -800,12 +829,23 @@ assert "rollback=failed" in text
 assert installer.index("if _ods_pixel_verified_source_matches") < installer.index("_ods_pixel_mark_installing")
 assert "The exact ODS-managed Pixel contract is already active" in text
 assert "refreshing the verified ODS extension without reapplying the release" in text
+assert "repairing the interrupted ownership checkpoint" in text
+candidate_recovery = installer.index("Could not validate the exact-source Pixel runtime candidate")
+model_reconcile = installer.index("ods_pixel_reconcile_promoted_model", candidate_recovery)
+assert installer.index("_ods_pixel_apply_runtime_budget", candidate_recovery - 1000) < candidate_recovery < model_reconcile
 assert "pixel\" verify >>\"$LOG_FILE\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
 assert "systemctl restart pixel-ingress.service" in text
 assert "if ! _ods_pixel_mark_verified_installing" in text
 assert text.index("_ods_pixel_mark_verified_installing \"$owner\"") < text.index("_ods_pixel_install_ingress \"$owner\"")
 assert "if ! _ods_pixel_mark_ready" in text
+runtime_overlay = installer.index("runtime_budget_status=\"")
+runtime_checkpoint = installer.index(
+    "Could not bind the verified Pixel ODS local-runtime configuration.",
+    runtime_overlay,
+)
+registry_refresh = installer.index("_ods_pixel_refresh_plugin_registry", runtime_overlay)
+assert runtime_overlay < runtime_checkpoint < registry_refresh
 assert installer.index("_ods_pixel_refresh_plugin_registry") < installer.index("_ods_pixel_mark_ready")
 assert "ods_linux_node_tools_available" in text
 assert "runtime_token_file=\"/run/ods-pixel/openclaw.json\"" in text
@@ -821,6 +861,7 @@ handoff = (
 )
 assert handoff in phase
 assert phase.index(handoff) < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
+assert "PIXEL_SOURCE_REF \"2e3b0072b923e8cdebd47992a489ebbbbc734e74\"" in phase
 ' "$ROOT/installers/phases/06-directories.sh"
 check python3 -c '
 import pathlib,sys

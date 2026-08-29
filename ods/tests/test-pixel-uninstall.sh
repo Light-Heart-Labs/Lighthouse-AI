@@ -106,11 +106,14 @@ assert 'source "$SCRIPT_DIR/lib/pixel-uninstall.sh"' in core
 assert '"${ENABLE_PIXEL_RUNTIME:-false}" != "true"' in phase
 assert hook in phase
 assert phase.index(hook) < phase.index('_phase06_step "copy-source"')
+assert '_ods_pixel_source_transition_required' in phase
+assert '_phase06_step "rebind-pixel-source"' in phase
+assert phase.index('_phase06_step "rebind-pixel-source"') < phase.index('_phase06_step "copy-source"')
 PY
 then
-    pass "Pixel-to-Hermes installer rerun deactivates the managed host runtime before source replacement"
+    pass "Pixel reruns retire disabled or superseded managed host runtimes before source replacement"
 else
-    fail "Pixel-to-Hermes installer rerun does not safely deactivate the managed host runtime"
+    fail "Pixel rerun does not safely deactivate managed host runtime before source replacement"
 fi
 
 if logger_output="$(bash -c '
