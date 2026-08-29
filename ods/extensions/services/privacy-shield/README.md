@@ -35,18 +35,27 @@ Privacy Shield sits between your applications and the LLM API, automatically scr
 
 Privacy Shield is included as a core service and starts automatically with the stack.
 
+The Dashboard's **Privacy** page shows shield health, active sessions, active
+PII mappings, cache configuration, and the current runtime route. It is
+read-only; service lifecycle remains in **Extensions**.
+
 **Via Dashboard API:**
 ```bash
+export DASHBOARD_API_KEY="your-dashboard-api-key"
+
 # Check status
-curl http://localhost:3002/api/privacy-shield/status
+curl -H "Authorization: Bearer ${DASHBOARD_API_KEY}" \
+  http://localhost:3002/api/privacy-shield/status
 
 # Enable
 curl -X POST http://localhost:3002/api/privacy-shield/toggle \
+  -H "Authorization: Bearer ${DASHBOARD_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"enable": true}'
 
 # Get stats
-curl http://localhost:3002/api/privacy-shield/stats
+curl -H "Authorization: Bearer ${DASHBOARD_API_KEY}" \
+  http://localhost:3002/api/privacy-shield/stats
 ```
 
 ### Configuration
