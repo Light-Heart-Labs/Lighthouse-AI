@@ -7085,6 +7085,11 @@ class TestModelActivateRollback:
                 f"restart:{name}:{kwargs.get('recreate')}"
             ) or name == "ods-litellm",
         )
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_container_health",
+            lambda name: events.append(f"health:{name}"),
+        )
         monkeypatch.setattr(_mod, "_verify_litellm_route", lambda _env: events.append("litellm-ready"))
         monkeypatch.setattr(
             _mod,
@@ -7097,7 +7102,73 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 200
         assert "restart:ods-litellm:True" in events
+        assert events.index("restart:ods-litellm:True") < events.index("health:ods-litellm")
+        assert events.index("health:ods-litellm") < events.index("litellm-ready")
         assert events.index("litellm-ready") < events.index("opencode-restart")
+
+    def test_rollback_waits_for_restored_litellm_health_before_route_probe(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        events = []
+        states = {
+            "ods-litellm": {"exists": True, "running": True},
+            "ods-hermes": {"exists": False, "running": False},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        route_probes = 0
+
+        def verify_litellm(_env):
+            nonlocal route_probes
+            route_probes += 1
+            events.append(f"litellm-ready:{route_probes}")
+            if route_probes == 1:
+                raise RuntimeError("simulated target LiteLLM route failure")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod,
+            "_capture_managed_opencode_state",
+            lambda: {"system": "Linux", "active": False},
+        )
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: events.append("runtime"))
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None, **kwargs: events.append(
+                f"target-restart:{name}:{kwargs.get('recreate')}"
+            ) or name == "ods-litellm",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restore_container_state",
+            lambda name, _state=None, **kwargs: events.append(
+                f"rollback-restart:{name}:{kwargs.get('recreate')}"
+            ) or name == "ods-litellm",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_container_health",
+            lambda name: events.append(f"health:{name}:{route_probes}"),
+        )
+        monkeypatch.setattr(_mod, "_verify_litellm_route", verify_litellm)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert "simulated target LiteLLM route failure" in response["error"]
+        rollback_restart = events.index("rollback-restart:ods-litellm:True")
+        rollback_health = events.index("health:ods-litellm:1")
+        rollback_probe = events.index("litellm-ready:2")
+        assert rollback_restart < rollback_health < rollback_probe
 
 
 class TestLemonadeYamlRollback:

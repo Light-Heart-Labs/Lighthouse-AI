@@ -8541,6 +8541,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                         f"previous model {previous_gguf} did not pass identity and completion readiness"
                     )
                 if litellm_restarted:
+                    _wait_for_container_health("ods-litellm")
                     _verify_litellm_route(rollback_env)
                 if openclaw_recreated:
                     _verify_openclaw_model_env(previous_hermes_model)
@@ -9144,6 +9145,12 @@ class AgentHandler(BaseHTTPRequestHandler):
                     recreate=True,
                 )
                 if litellm_restarted:
+                    # Recreated LiteLLM images can spend tens of seconds in
+                    # dependency import/startup before accepting HTTP. Wait on
+                    # the bounded health contract first so fast connection
+                    # refusals cannot exhaust the completion probe and roll
+                    # back an otherwise healthy model swap.
+                    _wait_for_container_health("ods-litellm")
                     _verify_litellm_route(env)
                 if hermes_patched:
                     hermes_restart_attempted = container_states["ods-hermes"]["running"]
