@@ -274,11 +274,12 @@ _ods_pixel_contract_sha256() {
     local extension_helper="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/extension_search.py"
     local extension_manager="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/extension_manager.py"
     local extension_manager_unit="${INSTALL_DIR:?}/data/pixel/extension-manager.service"
+    local approval_helper="${INSTALL_DIR:?}/bin/ods-pixel-approve"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" \
-        "$extension_helper" "$extension_manager" "$extension_manager_unit" <<'PY'
+        "$extension_helper" "$extension_manager" "$extension_manager_unit" "$approval_helper" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path, catalog_path, helper_path, manager_path, manager_unit_path = map(pathlib.Path, sys.argv[1:6])
+path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path = map(pathlib.Path, sys.argv[1:7])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -300,7 +301,7 @@ if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_p
 policy_payload = read_private_regular(expected_policy, "Operations policy")
 catalog_payload = read_private_regular(catalog_path, "extension catalog")
 helper_payloads = []
-for helper in (helper_path, manager_path, manager_unit_path):
+for helper in (helper_path, manager_path, manager_unit_path, approval_path):
     helper_info = helper.lstat()
     if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
             or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
@@ -308,7 +309,7 @@ for helper in (helper_path, manager_path, manager_unit_path):
         raise SystemExit("invalid ODS Pixel extension helper")
     helper_payloads.append(helper.read_bytes())
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v4\0")
+digest.update(b"ods-pixel-contract-v5\0")
 for payload in (answers_payload, policy_payload, catalog_payload, *helper_payloads):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)

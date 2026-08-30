@@ -4,7 +4,9 @@ import { Link } from 'react-router-dom'
 import {
   AlertCircle,
   Bot,
+  CheckCircle2,
   Code2,
+  Copy,
   Globe2,
   Loader2,
   Plus,
@@ -12,6 +14,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Terminal,
   Wrench,
 } from 'lucide-react'
 
@@ -42,6 +45,9 @@ const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,128}$/
 const STOPPED_NOTICE = 'Stopped by you. Workspace changes completed before cancellation were preserved.'
 const MODEL_SWITCH_DETAIL = 'Model switch in progress; Pixel will be ready when activation completes'
 const STATUS_POLL_MS = 3000
+const OPS_STATUS_POLL_MS = 3000
+const OPS_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'rejected'])
+const OPS_APPROVAL_RECEIPT = /^Pixel prepared the exact (ods\.extensions\.(?:install|enable|disable|remove)) plan for extension ([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63}), but external approval is required\. No lifecycle change was executed\. Job: (ops-[0-9]{13}-[a-f0-9]{12})\. Plan SHA-256: ([a-f0-9]{64})\.$/
 let fallbackChatSequence = 0
 
 const SUGGESTED_TASKS = [
@@ -87,6 +93,146 @@ export function formatElapsed(value) {
     return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
   }
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+export function parseApprovalReceipt(content) {
+  if (typeof content !== 'string') return null
+  const match = content.trim().match(OPS_APPROVAL_RECEIPT)
+  if (!match) return null
+  return {
+    action: match[1],
+    extensionId: match[2],
+    jobId: match[3],
+    planHash: match[4],
+  }
+}
+
+function OperationsApprovalCard({ content }) {
+  const receipt = parseApprovalReceipt(content)
+  const [projection, setProjection] = useState(null)
+  const [verification, setVerification] = useState(receipt ? 'loading' : 'absent')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!receipt) return undefined
+    setVerification('loading')
+    setProjection(null)
+    const controller = new AbortController()
+    let stopped = false
+    let poll = null
+
+    async function fetchProjection() {
+      try {
+        const response = await fetch(
+          `/api/pixel/ops/${receipt.jobId}?plan_hash=${receipt.planHash}`,
+          { signal: controller.signal }
+        )
+        if (!response.ok) throw new Error('status unavailable')
+        const value = await response.json()
+        if (
+          value?.schemaVersion !== 1
+          || value?.kind !== 'ods-pixel-operations-status'
+          || value?.jobId !== receipt.jobId
+          || value?.planHash !== receipt.planHash
+          || typeof value?.status !== 'string'
+          || typeof value?.approvalRequired !== 'boolean'
+          || typeof value?.riskTier !== 'string'
+          || (value?.approvalCommand !== null && typeof value?.approvalCommand !== 'string')
+        ) throw new Error('invalid status')
+        setProjection(value)
+        setVerification('verified')
+        if (!stopped && !OPS_TERMINAL_STATUSES.has(value.status)) {
+          poll = globalThis.setTimeout(fetchProjection, OPS_STATUS_POLL_MS)
+        }
+      } catch (error) {
+        if (error?.name !== 'AbortError') setVerification('unverified')
+      }
+    }
+
+    fetchProjection()
+    return () => {
+      stopped = true
+      if (poll !== null) globalThis.clearTimeout(poll)
+      controller.abort()
+    }
+  }, [receipt?.jobId, receipt?.planHash])
+
+  if (!receipt) return null
+
+  const copyCommand = async () => {
+    if (!projection?.approvalCommand) return
+    try {
+      await globalThis.navigator?.clipboard?.writeText(projection.approvalCommand)
+      setCopied(true)
+      globalThis.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  if (verification === 'loading' || verification === 'absent') {
+    return (
+      <div role="status" className="mt-3 flex items-center gap-2 rounded-xl border border-theme-border bg-theme-bg/55 px-3 py-2 text-xs text-theme-text-muted">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-accent-light" />
+        Verifying the immutable broker receipt…
+      </div>
+    )
+  }
+  if (verification !== 'verified') {
+    return (
+      <div role="alert" className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+        This approval receipt could not be independently verified. Do not approve it.
+      </div>
+    )
+  }
+
+  const awaiting = projection.status === 'awaiting-approval' && projection.approvalRequired
+  const succeeded = projection.status === 'succeeded'
+  return (
+    <div className={`mt-3 rounded-xl border p-3 ${
+      succeeded
+        ? 'border-emerald-500/30 bg-emerald-500/10'
+        : awaiting
+          ? 'border-amber-500/30 bg-amber-500/10'
+          : 'border-theme-border bg-theme-bg/55'
+    }`}>
+      <div className="flex items-start gap-2.5">
+        {succeeded
+          ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+          : <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />}
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-theme-text">
+            {succeeded ? 'Protected operation completed' : awaiting ? 'Owner approval required' : `Broker status: ${projection.status}`}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-theme-text-muted">
+            The host independently matched this job and plan hash. Approval cannot happen through Pixel or model text.
+          </p>
+          <dl className="mt-2 grid gap-x-3 gap-y-1 font-mono text-[10px] text-theme-text-muted sm:grid-cols-[auto_1fr]">
+            <dt>Requested</dt><dd className="truncate text-theme-text-secondary">{receipt.action} · {receipt.extensionId}</dd>
+            <dt>Risk</dt><dd className="text-theme-text-secondary">{projection.riskTier}</dd>
+            <dt>Job</dt><dd className="truncate text-theme-text-secondary">{receipt.jobId}</dd>
+            <dt>Plan</dt><dd className="truncate text-theme-text-secondary" title={receipt.planHash}>{receipt.planHash}</dd>
+          </dl>
+          {awaiting && projection.approvalCommand && (
+            <>
+              <button
+                type="button"
+                onClick={copyCommand}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-400/15"
+              >
+                {copied ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? 'Copied' : 'Copy secure approval command'}
+              </button>
+              <p className="mt-2 flex items-start gap-1.5 text-[10px] leading-4 text-theme-text-muted">
+                <Terminal className="mt-0.5 h-3 w-3 shrink-0" />
+                Run it in a real terminal. Pixel will require fresh password-backed administrator authentication, show the complete protected plan, and ask for a one-time challenge.
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function workingDetail(elapsedSeconds) {
@@ -598,7 +744,10 @@ export default function Pixel({ systemStatus = null }) {
                 </div>
               )}
               {message.role === 'assistant' && message.content ? (
-                <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
+                <>
+                  <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
+                  <OperationsApprovalCard content={message.content} />
+                </>
               ) : (
                 <span className="break-words whitespace-pre-wrap">{message.content}</span>
               )}

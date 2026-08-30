@@ -82,6 +82,82 @@ class ExtensionManagerTests(unittest.TestCase):
                 ).encode()
             )
 
+    def test_operations_status_request_is_exact_and_hash_bound(self) -> None:
+        job_id = "ops-1788127319657-f3262c99a419"
+        plan_hash = "e" * 64
+        request = json.dumps(
+            {
+                "schemaVersion": 1,
+                "action": "opsStatus",
+                "jobId": job_id,
+                "planHash": plan_hash,
+            }
+        ).encode()
+        self.assertEqual(manager._parse_status_request(request), (job_id, plan_hash))
+        with self.assertRaises(manager.ManagerError):
+            manager._parse_status_request(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "action": "opsStatus",
+                        "jobId": job_id,
+                        "planHash": plan_hash,
+                        "path": "/etc/shadow",
+                    }
+                ).encode()
+            )
+
+    def test_operations_status_projects_only_exact_nonsecret_receipt(self) -> None:
+        results = pathlib.Path(self.temporary.name) / "results"
+        results.mkdir(mode=0o750)
+        job_id = "ops-1788127319657-f3262c99a419"
+        plan_hash = "e" * 64
+        status_path = results / f"{job_id}.json"
+        status_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "jobId": job_id,
+                    "planHash": plan_hash,
+                    "status": "awaiting-approval",
+                    "riskTier": "managed",
+                    "approvalRequired": True,
+                    "updatedAt": "2026-08-30T22:01:59Z",
+                    "authorityReceipt": {"secret": "must-not-project"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(status_path, 0o640)
+        with mock.patch.object(manager, "OPS_RESULTS_DIR", results):
+            projection = manager._read_operations_status(
+                results_dir=results,
+                broker_uid=os.getuid(),
+                job_id=job_id,
+                plan_hash=plan_hash,
+            )
+            with self.assertRaises(manager.ManagerError):
+                manager._read_operations_status(
+                    results_dir=results,
+                    broker_uid=os.getuid(),
+                    job_id=job_id,
+                    plan_hash="f" * 64,
+                )
+        self.assertEqual(
+            set(projection),
+            {
+                "schemaVersion",
+                "kind",
+                "jobId",
+                "planHash",
+                "status",
+                "riskTier",
+                "approvalRequired",
+                "updatedAt",
+            },
+        )
+        self.assertNotIn("must-not-project", json.dumps(projection))
+
     def test_environment_reader_rejects_ambiguity_symlinks_and_weak_permissions(self) -> None:
         self.env_path.write_text(
             "DASHBOARD_API_KEY=" + "a" * 64 + "\nDASHBOARD_API_KEY=" + "b" * 64 + "\n",

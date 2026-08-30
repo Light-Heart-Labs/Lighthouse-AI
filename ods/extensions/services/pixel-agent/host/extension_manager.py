@@ -25,15 +25,31 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 KIND = "ods-pixel-extension-lifecycle"
+OPS_STATUS_KIND = "ods-pixel-operations-status"
 BOUNDARY = (
     "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, "
     "credential, arbitrary HTTP, or data-purge authority."
 )
 SERVICE_ID = re.compile(r"^[a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63}$")
 HEX_KEY = re.compile(r"^[0-9a-f]{64}$")
+JOB_ID = re.compile(r"^ops-[0-9]{13}-[a-f0-9]{12}$")
 ALLOWED_ACTIONS = frozenset({"inspect", "install", "enable", "disable", "remove"})
+OPS_STATUSES = frozenset(
+    {
+        "awaiting-approval",
+        "paused",
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "rejected",
+    }
+)
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_OPS_STATUS_BYTES = 64 * 1024
+OPS_RESULTS_DIR = pathlib.Path("/var/lib/pixel-ops-broker/results")
 TERMINAL_PROGRESS = frozenset({"started", "error", "idle"})
 SUCCESS_STATUS = {
     "install": frozenset({"enabled", "cli_installed"}),
@@ -68,6 +84,128 @@ def _parse_request(payload: bytes) -> tuple[str, str]:
     if not isinstance(extension_id, str) or SERVICE_ID.fullmatch(extension_id) is None:
         raise ManagerError("invalid extension id")
     return action, extension_id
+
+
+def _parse_status_request(payload: bytes) -> tuple[str, str]:
+    if not payload or len(payload) > MAX_REQUEST_BYTES or b"\0" in payload:
+        raise ManagerError("invalid Operations status request")
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ManagerError("invalid Operations status request") from exc
+    value = _exact_object(value, {"schemaVersion", "action", "jobId", "planHash"})
+    job_id = value.get("jobId")
+    plan_hash = value.get("planHash")
+    if (
+        value.get("schemaVersion") != SCHEMA_VERSION
+        or value.get("action") != "opsStatus"
+        or not isinstance(job_id, str)
+        or JOB_ID.fullmatch(job_id) is None
+        or not isinstance(plan_hash, str)
+        or HEX_KEY.fullmatch(plan_hash) is None
+    ):
+        raise ManagerError("invalid Operations status request")
+    return job_id, plan_hash
+
+
+def _read_operations_status(
+    *, results_dir: pathlib.Path, broker_uid: int, job_id: str, plan_hash: str
+) -> dict[str, Any]:
+    """Project one nonsecret broker result without exposing protected plans."""
+    if results_dir != OPS_RESULTS_DIR or JOB_ID.fullmatch(job_id) is None:
+        raise ManagerError("Operations status is unavailable")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        directory = os.open(results_dir, directory_flags)
+    except OSError as exc:
+        raise ManagerError("Operations status is unavailable") from exc
+    descriptor = -1
+    try:
+        directory_info = os.fstat(directory)
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != broker_uid
+            or directory_info.st_mode & 0o022
+        ):
+            raise ManagerError("Operations status is unavailable")
+        descriptor = os.open(
+            f"{job_id}.json",
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid != broker_uid
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= MAX_OPS_STATUS_BYTES
+        ):
+            raise ManagerError("Operations status is unavailable")
+        payload = bytearray()
+        while len(payload) < before.st_size:
+            piece = os.read(descriptor, before.st_size - len(payload))
+            if not piece:
+                raise ManagerError("Operations status is unavailable")
+            payload.extend(piece)
+        if os.read(descriptor, 1):
+            raise ManagerError("Operations status is unavailable")
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise ManagerError("Operations status is unavailable")
+    except OSError as exc:
+        raise ManagerError("Operations status is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory)
+    try:
+        value = json.loads(bytes(payload).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ManagerError("Operations status is unavailable") from exc
+    if not isinstance(value, dict):
+        raise ManagerError("Operations status is unavailable")
+    status = value.get("status")
+    risk_tier = value.get("riskTier")
+    updated_at = value.get("updatedAt")
+    approval_required = value.get("approvalRequired")
+    if (
+        value.get("schemaVersion") != 2
+        or value.get("jobId") != job_id
+        or value.get("planHash") != plan_hash
+        or status not in OPS_STATUSES
+        or not isinstance(risk_tier, str)
+        or re.fullmatch(r"[a-z][a-z-]{0,31}", risk_tier) is None
+        or not isinstance(updated_at, str)
+        or not 1 <= len(updated_at) <= 64
+        or not isinstance(approval_required, bool)
+    ):
+        raise ManagerError("Operations status is unavailable")
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": OPS_STATUS_KIND,
+        "jobId": job_id,
+        "planHash": plan_hash,
+        "status": status,
+        "riskTier": risk_tier,
+        "approvalRequired": approval_required,
+        "updatedAt": updated_at,
+    }
 
 
 def _read_env(env_path: pathlib.Path) -> dict[str, str]:
@@ -503,8 +641,6 @@ def _serve_connection(
     try:
         peer = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
         _pid, uid, _gid = struct.unpack("3i", peer)
-        if uid != expected_uid:
-            raise ManagerError("unauthorized lifecycle peer")
         connection.settimeout(15)
         chunks = bytearray()
         while len(chunks) <= MAX_REQUEST_BYTES:
@@ -516,13 +652,25 @@ def _serve_connection(
                 break
         if b"\n" not in chunks or chunks.count(b"\n") != 1 or not chunks.endswith(b"\n"):
             raise ManagerError("invalid lifecycle request framing")
-        action, extension_id = _parse_request(bytes(chunks[:-1]))
-        result = _execute(
-            env_path=env_path,
-            port=port,
-            action=action,
-            extension_id=extension_id,
-        )
+        request_payload = bytes(chunks[:-1])
+        if uid == expected_uid:
+            action, extension_id = _parse_request(request_payload)
+            result = _execute(
+                env_path=env_path,
+                port=port,
+                action=action,
+                extension_id=extension_id,
+            )
+        elif uid == os.getuid():
+            job_id, plan_hash = _parse_status_request(request_payload)
+            result = _read_operations_status(
+                results_dir=OPS_RESULTS_DIR,
+                broker_uid=expected_uid,
+                job_id=job_id,
+                plan_hash=plan_hash,
+            )
+        else:
+            raise ManagerError("unauthorized lifecycle peer")
     except (ManagerError, OSError, ValueError, TypeError):
         result = _error_result(action, extension_id)
     payload = (json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -606,6 +754,54 @@ def client(socket_path: pathlib.Path, action: str, extension_id: str) -> int:
     return 0
 
 
+def status_client(socket_path: pathlib.Path, job_id: str, plan_hash: str) -> int:
+    if (
+        socket_path != pathlib.Path("/run/ods-pixel-manager/extension-manager.sock")
+        or JOB_ID.fullmatch(job_id) is None
+        or HEX_KEY.fullmatch(plan_hash) is None
+    ):
+        raise ManagerError("invalid Operations status client request")
+    request = {
+        "schemaVersion": SCHEMA_VERSION,
+        "action": "opsStatus",
+        "jobId": job_id,
+        "planHash": plan_hash,
+    }
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(5)
+    try:
+        connection.connect(str(socket_path))
+        connection.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode())
+        chunks = bytearray()
+        while len(chunks) <= MAX_OPS_STATUS_BYTES:
+            piece = connection.recv(min(8192, MAX_OPS_STATUS_BYTES + 1 - len(chunks)))
+            if not piece:
+                break
+            chunks.extend(piece)
+    finally:
+        connection.close()
+    if (
+        len(chunks) > MAX_OPS_STATUS_BYTES
+        or chunks.count(b"\n") != 1
+        or not chunks.endswith(b"\n")
+    ):
+        raise ManagerError("invalid Operations status response")
+    try:
+        value = json.loads(bytes(chunks[:-1]).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ManagerError("invalid Operations status response") from exc
+    if (
+        not isinstance(value, dict)
+        or value.get("schemaVersion") != SCHEMA_VERSION
+        or value.get("kind") != OPS_STATUS_KIND
+        or value.get("jobId") != job_id
+        or value.get("planHash") != plan_hash
+    ):
+        raise ManagerError("invalid Operations status response")
+    sys.stdout.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     try:
         if len(argv) == 5 and argv[1] == "serve":
@@ -613,7 +809,11 @@ def main(argv: list[str]) -> int:
             return serve(pathlib.Path(argv[2]), pathlib.Path(argv[3]), port)
         if len(argv) == 5 and argv[1] == "client":
             return client(pathlib.Path(argv[2]), argv[3], argv[4])
-        raise ManagerError("usage: extension_manager.py serve SOCKET ENV PORT | client SOCKET ACTION ID")
+        if len(argv) == 5 and argv[1] == "status":
+            return status_client(pathlib.Path(argv[2]), argv[3], argv[4])
+        raise ManagerError(
+            "usage: extension_manager.py serve SOCKET ENV PORT | client SOCKET ACTION ID | status SOCKET JOB HASH"
+        )
     except (ManagerError, OSError, ValueError, KeyError):
         # The caller receives only a stable error. Credentials, local paths,
         # upstream bodies, and exception details never cross the boundary.

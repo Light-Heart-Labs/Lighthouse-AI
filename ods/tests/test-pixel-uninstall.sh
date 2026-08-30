@@ -285,8 +285,10 @@ write_ops_fixture() {
     local uid gid contract_sha256
     uid="$(id -u)"
     gid="$(id -g)"
-    mkdir -p "$source/.generated" "$source/deploy/ops-broker" "$INSTALL_DIR/data/pixel" \
+    mkdir -p "$source/.generated" "$source/deploy/ops-broker" "$INSTALL_DIR/bin" "$INSTALL_DIR/data/pixel" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host"
+    cp "$ROOT_DIR/bin/ods-pixel-approve" "$INSTALL_DIR/bin/ods-pixel-approve"
+    chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
     cat >"$INSTALL_DIR/data/pixel/operations-policy.json" <<JSON
 {"schemaVersion":2,"deployment":"ods-default","download":{"stagingRoot":"$OPS_STATE/artifacts"},"targets":{"broker":{"backend":"local","writableRoots":["$OPS_STATE/artifacts"]}},"authority":{"defaultLevel":"propose"}}
 JSON
@@ -383,10 +385,11 @@ PY
         "$INSTALL_DIR/data/pixel/extension-catalog.json" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
-        "$INSTALL_DIR/data/pixel/extension-manager.service" <<'PY'
+        "$INSTALL_DIR/data/pixel/extension-manager.service" \
+        "$INSTALL_DIR/bin/ods-pixel-approve" <<'PY'
 import hashlib, pathlib, sys
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v4\0")
+digest.update(b"ods-pixel-contract-v5\0")
 for raw in sys.argv[1:]:
     payload = pathlib.Path(raw).read_bytes()
     digest.update(len(payload).to_bytes(8, "big"))
@@ -539,7 +542,7 @@ else
 fi
 
 for drift_target in program extension-program extension-catalog extension-manager-client \
-    extension-manager-program extension-manager-unit extension-manager-owner-unit \
+    extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
     unit environment policy; do
     write_ops_fixture
     case "$drift_target" in
@@ -550,6 +553,7 @@ for drift_target in program extension-program extension-catalog extension-manage
         extension-manager-program) printf '%s\n' '# drift' >>"$LIBEXEC_DIR/ods-pixel-extension-manager.py" ;;
         extension-manager-unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-extension-manager.service" ;;
         extension-manager-owner-unit) printf '%s\n' '# drift' >>"$INSTALL_DIR/data/pixel/extension-manager.service" ;;
+        approval-helper) printf '%s\n' '# drift' >>"$INSTALL_DIR/bin/ods-pixel-approve" ;;
         unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
         environment) printf '%s\n' 'UNEXPECTED=1' >>"$OPS_ENV" ;;
         policy) printf '%s\n' ' ' >>"$OPS_POLICY" ;;

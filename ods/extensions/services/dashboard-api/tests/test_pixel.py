@@ -197,6 +197,64 @@ def test_routes_require_dashboard_auth():
     assert client.get("/api/pixel/status").status_code in {401, 403}
     assert client.post("/api/pixel/chat/stream", json={}).status_code in {401, 403}
     assert client.post("/api/pixel/chat/cancel", json={"chat_id": "safe"}).status_code in {401, 403}
+    assert client.get(
+        "/api/pixel/ops/ops-1788127319657-f3262c99a419",
+        params={"plan_hash": "e" * 64},
+    ).status_code in {401, 403}
+
+
+@pytest.mark.asyncio
+async def test_operations_status_returns_only_exact_host_projection(monkeypatch):
+    job_id = "ops-1788127319657-f3262c99a419"
+    plan_hash = "e" * 64
+    secret = "protected-plan-argv-must-not-appear"
+
+    async def exact_projection(method, path, **kwargs):
+        assert method == "GET"
+        assert path == "/v1/pixel/ops-status"
+        assert kwargs["params"] == {"job_id": job_id, "plan_hash": plan_hash}
+        return {
+            "schemaVersion": 1,
+            "kind": "ods-pixel-operations-status",
+            "jobId": job_id,
+            "planHash": plan_hash,
+            "status": "awaiting-approval",
+            "riskTier": "managed",
+            "approvalRequired": True,
+            "updatedAt": "2026-08-30T22:01:59Z",
+            "approvalCommand": f"/opt/ods/bin/ods-pixel-approve {job_id} {plan_hash} --confirm",
+        }
+
+    monkeypatch.setattr(pixel, "request_agent_json", exact_projection)
+    result = await pixel.pixel_operations_status(job_id, plan_hash)
+    assert result["jobId"] == job_id
+    assert result["planHash"] == plan_hash
+    assert result["status"] == "awaiting-approval"
+    assert secret not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_operations_status_rejects_unbound_host_projection(monkeypatch):
+    job_id = "ops-1788127319657-f3262c99a419"
+    plan_hash = "e" * 64
+
+    async def mismatched_projection(*_args, **_kwargs):
+        return {
+            "schemaVersion": 1,
+            "kind": "ods-pixel-operations-status",
+            "jobId": job_id,
+            "planHash": "f" * 64,
+            "status": "awaiting-approval",
+            "riskTier": "managed",
+            "approvalRequired": True,
+            "updatedAt": "2026-08-30T22:01:59Z",
+            "approvalCommand": "unsafe",
+        }
+
+    monkeypatch.setattr(pixel, "request_agent_json", mismatched_projection)
+    with pytest.raises(HTTPException) as exc:
+        await pixel.pixel_operations_status(job_id, plan_hash)
+    assert exc.value.status_code == 502
 
 
 @pytest.mark.asyncio

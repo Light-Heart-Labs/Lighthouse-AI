@@ -30,6 +30,20 @@ _MAX_SSE_LINE_BYTES = 1024 * 1024
 _MAX_MESSAGE_CHARS = 16 * 1024
 _MAX_TOTAL_MESSAGE_BYTES = 256 * 1024
 _SAFE_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_OPS_JOB_ID = re.compile(r"^ops-[0-9]{13}-[a-f0-9]{12}$")
+_OPS_PLAN_HASH = re.compile(r"^[a-f0-9]{64}$")
+_OPS_STATUSES = frozenset(
+    {
+        "awaiting-approval",
+        "paused",
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "rejected",
+    }
+)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _MODEL_SWITCH_DETAIL = "Model switch in progress; Pixel will be ready when activation completes"
 
@@ -192,6 +206,50 @@ async def pixel_status() -> dict[str, object]:
         return {"available": False, "model": None, "detail": "Pixel edge is unavailable"}
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
         return {"available": False, "model": None, "detail": "Pixel edge returned an invalid response"}
+
+
+@router.get("/ops/{job_id}", dependencies=[Depends(verify_api_key)])
+async def pixel_operations_status(job_id: str, plan_hash: str) -> dict[str, object]:
+    """Return only a host-verified, nonsecret Operations status receipt."""
+    if _OPS_JOB_ID.fullmatch(job_id) is None or _OPS_PLAN_HASH.fullmatch(plan_hash) is None:
+        raise HTTPException(status_code=400, detail="Invalid Pixel Operations receipt")
+    try:
+        value = await request_agent_json(
+            "GET",
+            "/v1/pixel/ops-status",
+            params={"job_id": job_id, "plan_hash": plan_hash},
+            timeout=7.0,
+        )
+    except AgentClientError as exc:
+        raise HTTPException(status_code=503, detail="Pixel Operations status is unavailable") from exc
+    expected = {
+        "schemaVersion",
+        "kind",
+        "jobId",
+        "planHash",
+        "status",
+        "riskTier",
+        "approvalRequired",
+        "updatedAt",
+        "approvalCommand",
+    }
+    command = value.get("approvalCommand")
+    if (
+        set(value) != expected
+        or value.get("schemaVersion") != 1
+        or value.get("kind") != "ods-pixel-operations-status"
+        or value.get("jobId") != job_id
+        or value.get("planHash") != plan_hash
+        or value.get("status") not in _OPS_STATUSES
+        or not isinstance(value.get("riskTier"), str)
+        or re.fullmatch(r"[a-z][a-z-]{0,31}", value["riskTier"]) is None
+        or not isinstance(value.get("approvalRequired"), bool)
+        or not isinstance(value.get("updatedAt"), str)
+        or not 1 <= len(value["updatedAt"]) <= 64
+        or (command is not None and (not isinstance(command, str) or not 1 <= len(command) <= 4096))
+    ):
+        raise HTTPException(status_code=502, detail="Pixel Operations returned an invalid status")
+    return {key: value[key] for key in expected}
 
 
 def _error_event(message: str) -> bytes:

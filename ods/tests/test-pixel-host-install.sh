@@ -425,8 +425,10 @@ export LITELLM_PORT=4000
 export LITELLM_KEY=test-litellm-secret
 export ODS_MODEL_SWITCHBOARD=observe
 digest="$(printf 'a%.0s' {1..64})"
-mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/extensions/library/services/notebook" \
+mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
+    "$INSTALL_DIR/extensions/library/services/notebook" \
     "$INSTALL_DIR/extensions/services/pixel-agent/host" "$INSTALL_DIR/data/pixel"
+  cp "$ROOT/bin/ods-pixel-approve" "$INSTALL_DIR/bin/ods-pixel-approve"
   cp "$ROOT/extensions/services/pixel-agent/host/extension_search.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
   cp "$ROOT/extensions/services/pixel-agent/host/extension_manager.py" \
@@ -436,6 +438,7 @@ mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/extensions/library/services/noteboo
   chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+  chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
 printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
 cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
 {"schema_version":"1.0.0","extensions":[{"id":"notebook","name":"Notebook Lab","description":"Private notebooks for data science.","category":"optional","gpu_backends":["nvidia","amd"],"compose_file":"compose.yaml","depends_on":["litellm"],"env_vars":[{"key":"NOTEBOOK_TOKEN","required":true},{"key":"NOTEBOOK_THEME","required":false}],"tags":["notebook","data-science"],"features":[{"name":"Interactive Notebooks"}]},{"id":"reference-only","name":"Reference Only","description":"Not currently deployable.","category":"optional","gpu_backends":[],"compose_file":"compose.yaml","depends_on":[],"env_vars":[],"tags":[],"features":[]}]}
@@ -454,6 +457,8 @@ check grep -F "CapabilityBoundingSet=" "$extension_manager_unit"
 check grep -F "ProtectSystem=strict" "$extension_manager_unit"
 check grep -F "ProtectProc=invisible" "$extension_manager_unit"
 check grep -F "RestrictNamespaces=true" "$extension_manager_unit"
+check grep -F "ReadOnlyPaths=/var/lib/pixel-ops-broker/results" "$extension_manager_unit"
+check grep -F "InaccessiblePaths=/var/lib/pixel-ops-broker/plans" "$extension_manager_unit"
 check python3 -c '
 import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))
@@ -599,6 +604,16 @@ else
 fi
 mv "$TEST_ROOT/extension-manager-unit.original.service" "$extension_manager_unit"
 chmod 0600 "$extension_manager_unit"
+approval_helper="$INSTALL_DIR/bin/ods-pixel-approve"
+cp "$approval_helper" "$TEST_ROOT/ods-pixel-approve.original"
+printf '\n# changed\n' >>"$approval_helper"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds approval helper bytes"
+else
+    pass "managed contract hash binds approval helper bytes"
+fi
+mv "$TEST_ROOT/ods-pixel-approve.original" "$approval_helper"
+chmod 0755 "$approval_helper"
 installed_policy="$TEST_ROOT/installed-operations-policy.json"
 cp "$operations_policy" "$installed_policy"
 chmod 0640 "$installed_policy"
@@ -1359,7 +1374,8 @@ assert "_ods_pixel_write_extension_catalog" in text
 assert "secret-free ODS extension catalog" in text
 assert "_ods_pixel_write_extension_manager_unit" in text
 assert "owner-private ODS Pixel extension manager service" in text
-assert "ods-pixel-contract-v4" in text
+assert "ods-pixel-contract-v5" in text
+assert "bin/ods-pixel-approve" in text
 assert "ods_sudo install -o root -g pixel-ops -m 0640 \"$extension_catalog\" \"$installed_extension_catalog\"" in text
 assert "ods-extension-manager.py" in text
 assert "pixel-extension-manager.service" in text

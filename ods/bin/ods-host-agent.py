@@ -109,6 +109,11 @@ required_model_memory_gb = _model_memory.required_model_memory_gb
 VERSION = "1.0.0"
 ODS_VERSION = VERSION
 SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+PIXEL_OPS_JOB_ID_RE = re.compile(r"^ops-[0-9]{13}-[a-f0-9]{12}$")
+PIXEL_OPS_PLAN_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
+PIXEL_OPS_STATUS_HELPER = Path("/usr/local/libexec/ods-pixel-extension-manager.py")
+PIXEL_OPS_STATUS_SOCKET = "/run/ods-pixel-manager/extension-manager.sock"
+PIXEL_OPS_STATUS_KIND = "ods-pixel-operations-status"
 # backup_id is interpolated into a backup directory name by ods-update.sh
 # (BACKUP_DIR/backup-<backup_id>-<ts>). Restrict it to a plain label so it can
 # never contain a path separator or ".." and escape BACKUP_DIR.
@@ -5342,10 +5347,125 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_update_status()
         elif path == "/v1/remote-provider/ssh-supervisor":
             self._handle_remote_provider_ssh_supervisor_status()
+        elif path == "/v1/pixel/ops-status":
+            self._handle_pixel_ops_status(parse_qs(parsed.query, keep_blank_values=True))
         elif path == "/v1/host/port":
             self._handle_host_port_status(parse_qs(parsed.query))
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_pixel_ops_status(self, query: dict[str, list[str]]):
+        """Return one exact, nonsecret Operations result projection.
+
+        The root-installed lifecycle manager reads Pixel's deliberately
+        protected result directory. The host agent can request only one
+        validated job/hash pair over its authenticated local socket; it never
+        receives plans, credentials, arbitrary file access, or mutation
+        authority.
+        """
+        if not check_auth(self):
+            return
+        if set(query) != {"job_id", "plan_hash"} or any(
+            len(query[key]) != 1 for key in ("job_id", "plan_hash")
+        ):
+            json_response(self, 400, {"error": "exact job_id and plan_hash are required"})
+            return
+        job_id = query["job_id"][0]
+        plan_hash = query["plan_hash"][0]
+        if (
+            PIXEL_OPS_JOB_ID_RE.fullmatch(job_id) is None
+            or PIXEL_OPS_PLAN_HASH_RE.fullmatch(plan_hash) is None
+        ):
+            json_response(self, 400, {"error": "invalid Pixel Operations receipt"})
+            return
+        if platform.system() != "Linux":
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+
+        approval_script = INSTALL_DIR / "bin" / "ods-pixel-approve"
+        try:
+            helper_info = PIXEL_OPS_STATUS_HELPER.lstat()
+            approval_info = approval_script.lstat()
+        except OSError:
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+        if (
+            not stat_mod.S_ISREG(helper_info.st_mode)
+            or stat_mod.S_ISLNK(helper_info.st_mode)
+            or helper_info.st_nlink != 1
+            or helper_info.st_uid != 0
+            or helper_info.st_mode & 0o022
+            or not helper_info.st_mode & 0o111
+            or helper_info.st_size > 2 * 1024 * 1024
+            or not stat_mod.S_ISREG(approval_info.st_mode)
+            or stat_mod.S_ISLNK(approval_info.st_mode)
+            or approval_info.st_nlink != 1
+            or approval_info.st_uid != os.getuid()
+            or approval_info.st_mode & 0o022
+            or not approval_info.st_mode & 0o111
+            or approval_info.st_size > 256 * 1024
+        ):
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+
+        try:
+            result = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    str(PIXEL_OPS_STATUS_HELPER),
+                    "status",
+                    PIXEL_OPS_STATUS_SOCKET,
+                    job_id,
+                    plan_hash,
+                ],
+                cwd="/",
+                env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+        if result.returncode != 0 or not 1 <= len(result.stdout) <= 64 * 1024:
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+        try:
+            value = json.loads(result.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+        expected = {
+            "schemaVersion",
+            "kind",
+            "jobId",
+            "planHash",
+            "status",
+            "riskTier",
+            "approvalRequired",
+            "updatedAt",
+        }
+        if (
+            not isinstance(value, dict)
+            or set(value) != expected
+            or value.get("schemaVersion") != 1
+            or value.get("kind") != PIXEL_OPS_STATUS_KIND
+            or value.get("jobId") != job_id
+            or value.get("planHash") != plan_hash
+        ):
+            json_response(self, 503, {"error": "Pixel Operations status is unavailable"})
+            return
+        command = None
+        if value.get("status") == "awaiting-approval" and value.get("approvalRequired") is True:
+            command = " ".join(
+                (
+                    shlex.quote(str(approval_script)),
+                    job_id,
+                    plan_hash,
+                    "--confirm",
+                )
+            )
+        json_response(self, 200, {**value, "approvalCommand": command})
 
     def _handle_host_port_status(self, query: dict[str, list[str]]):
         """Return whether a host-local TCP port is reachable.

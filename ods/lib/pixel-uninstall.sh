@@ -32,6 +32,7 @@ ods_pixel_uninstall_managed() {
     local extension_manager_program="$libexec_dir/ods-pixel-extension-manager.py"
     local extension_manager_source="$install_dir/extensions/services/pixel-agent/host/extension_manager.py"
     local extension_manager_owner_unit="$install_dir/data/pixel/extension-manager.service"
+    local approval_source="$install_dir/bin/ods-pixel-approve"
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
@@ -107,7 +108,7 @@ ods_pixel_uninstall_managed() {
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
         "$extension_manager_unit" "$extension_manager_program" "$extension_manager_source" \
-        "$extension_manager_owner_unit" \
+        "$extension_manager_owner_unit" "$approval_source" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$ops_extension_source_program" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
@@ -135,6 +136,7 @@ import sys
     extension_manager_program_raw,
     extension_manager_source_raw,
     extension_manager_owner_unit_raw,
+    approval_source_raw,
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
@@ -427,6 +429,7 @@ extension_program_present = (
 )
 extension_manager_source = pathlib.Path(extension_manager_source_raw)
 extension_manager_owner_unit = pathlib.Path(extension_manager_owner_unit_raw)
+approval_source = pathlib.Path(approval_source_raw)
 extension_manager_present = (
     extension_manager_source.exists() or extension_manager_source.is_symlink()
 )
@@ -440,6 +443,11 @@ if extension_manager_present != extension_manager_unit_present:
 if extension_manager_present:
     regular(extension_manager_source, owner_uid, 2 * 1024 * 1024)
     regular(extension_manager_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
+approval_present = approval_source.exists() or approval_source.is_symlink()
+if approval_present:
+    approval_info = regular(approval_source, owner_uid, 256 * 1024)
+    if not approval_info.st_mode & 0o111:
+        raise SystemExit("ODS Pixel approval helper is not executable")
 if extension_catalog_present:
     regular(ops_owner_extension_catalog, owner_uid, 2 * 1024 * 1024, private=True)
     regular(ops_extension_source_program, owner_uid, 2 * 1024 * 1024)
@@ -504,6 +512,21 @@ if onboarding.exists():
                         v4.update(len(payload).to_bytes(8, "big"))
                         v4.update(payload)
                     accepted_contracts.add(v4.hexdigest())
+                    if approval_present:
+                        v5 = hashlib.sha256()
+                        v5.update(b"ods-pixel-contract-v5\0")
+                        for payload in (
+                            onboarding_payload,
+                            policy_payload,
+                            ops_owner_extension_catalog.read_bytes(),
+                            ops_extension_source_program.read_bytes(),
+                            extension_manager_source.read_bytes(),
+                            extension_manager_owner_unit.read_bytes(),
+                            approval_source.read_bytes(),
+                        ):
+                            v5.update(len(payload).to_bytes(8, "big"))
+                            v5.update(payload)
+                        accepted_contracts.add(v5.hexdigest())
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":

@@ -2022,6 +2022,115 @@ class _FakeHandler:
         return json.loads(self.wfile.getvalue().decode("utf-8"))
 
 
+class TestPixelOperationsStatus:
+    @pytest.fixture(autouse=True)
+    def _auth(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+    def test_projects_exact_manager_receipt_and_fixed_approval_command(
+        self, monkeypatch
+    ):
+        job_id = "ops-1788127319657-f3262c99a419"
+        plan_hash = "e" * 64
+
+        class TrustedApproval:
+            def lstat(self):
+                return types.SimpleNamespace(
+                    st_mode=_mod.stat_mod.S_IFREG | 0o755,
+                    st_nlink=1,
+                    st_uid=1000,
+                    st_size=4096,
+                )
+
+            def __str__(self):
+                return "/opt/ods/bin/ods-pixel-approve"
+
+        class TrustedInstall:
+            def __truediv__(self, item):
+                return self if item == "bin" else TrustedApproval()
+
+        class TrustedHelper:
+            def lstat(self):
+                return types.SimpleNamespace(
+                    st_mode=_mod.stat_mod.S_IFREG | 0o755,
+                    st_nlink=1,
+                    st_uid=0,
+                    st_size=4096,
+                )
+
+            def __str__(self):
+                return "/usr/local/libexec/ods-pixel-extension-manager.py"
+
+        projection = {
+            "schemaVersion": 1,
+            "kind": "ods-pixel-operations-status",
+            "jobId": job_id,
+            "planHash": plan_hash,
+            "status": "awaiting-approval",
+            "riskTier": "managed",
+            "approvalRequired": True,
+            "updatedAt": "2026-08-30T22:01:59Z",
+        }
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps(projection).encode("utf-8"),
+                stderr=b"",
+            )
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", TrustedInstall())
+        monkeypatch.setattr(_mod, "PIXEL_OPS_STATUS_HELPER", TrustedHelper())
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(_mod.os, "getuid", lambda: 1000, raising=False)
+        monkeypatch.setattr(_mod.subprocess, "run", run)
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._handle_pixel_ops_status(
+            handler,
+            {"job_id": [job_id], "plan_hash": [plan_hash]},
+        )
+
+        assert handler.response_code == 200
+        body = handler.parse_response()
+        assert body == {
+            **projection,
+            "approvalCommand": f"/opt/ods/bin/ods-pixel-approve {job_id} {plan_hash} --confirm",
+        }
+        assert calls[0][0] == [
+            "/usr/bin/python3",
+            "/usr/local/libexec/ods-pixel-extension-manager.py",
+            "status",
+            "/run/ods-pixel-manager/extension-manager.sock",
+            job_id,
+            plan_hash,
+        ]
+        assert calls[0][1]["cwd"] == "/"
+        assert calls[0][1]["env"] == {
+            "PATH": "/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            {"job_id": ["../../shadow"], "plan_hash": ["e" * 64]},
+            {
+                "job_id": ["ops-1788127319657-f3262c99a419"],
+                "plan_hash": ["e" * 64],
+                "path": ["/etc/shadow"],
+            },
+        ],
+    )
+    def test_rejects_unbounded_status_queries(self, query):
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_pixel_ops_status(handler, query)
+        assert handler.response_code == 400
+
+
 class TestRemoteProviderLifecycle:
     """Direct host-agent tests for remote-provider lifecycle planning/apply."""
 

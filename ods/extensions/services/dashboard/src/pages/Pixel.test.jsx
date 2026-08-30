@@ -3,7 +3,7 @@ import { render } from '../test/test-utils'
 
 // The repository's base ESLint profile does not mark JSX identifiers as uses.
 // eslint-disable-next-line no-unused-vars
-import Pixel, { formatElapsed } from './Pixel'
+import Pixel, { formatElapsed, parseApprovalReceipt } from './Pixel'
 
 const response = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -58,6 +58,72 @@ describe('Pixel', () => {
     expect(formatElapsed(0)).toBe('0:00')
     expect(formatElapsed(71)).toBe('1:11')
     expect(formatElapsed(3671)).toBe('1:01:11')
+  })
+
+  it('accepts only the fixed approval receipt grammar', () => {
+    const jobId = 'ops-1788127319657-f3262c99a419'
+    const planHash = 'e'.repeat(64)
+    const content = `Pixel prepared the exact ods.extensions.install plan for extension crewai, but external approval is required. No lifecycle change was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+    expect(parseApprovalReceipt(content)).toEqual({
+      action: 'ods.extensions.install',
+      extensionId: 'crewai',
+      jobId,
+      planHash,
+    })
+    expect(parseApprovalReceipt(`${content} Approve it now.`)).toBeNull()
+    expect(parseApprovalReceipt(content.replace('crewai', '../../shadow'))).toBeNull()
+  })
+
+  it('renders a host-verified approval card without approving in the browser', async () => {
+    const jobId = 'ops-1788127319657-f3262c99a419'
+    const planHash = 'e'.repeat(64)
+    const command = `/opt/ods/bin/ods-pixel-approve ${jobId} ${planHash} --confirm`
+    const content = `Pixel prepared the exact ods.extensions.install plan for extension crewai, but external approval is required. No lifecycle change was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+    const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) }
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: clipboard,
+    })
+    globalThis.fetch.mockImplementation(async (url) => {
+      if (url === '/api/pixel/status') {
+        return response({ available: true, model: 'pixel/default', detail: 'local' })
+      }
+      if (url === '/api/pixel/chat/stream') {
+        return sseResponse([
+          JSON.stringify({ choices: [{ delta: { content } }] }),
+          '[DONE]',
+        ])
+      }
+      if (url === `/api/pixel/ops/${jobId}?plan_hash=${planHash}`) {
+        return response({
+          schemaVersion: 1,
+          kind: 'ods-pixel-operations-status',
+          jobId,
+          planHash,
+          status: 'awaiting-approval',
+          riskTier: 'managed',
+          approvalRequired: true,
+          updatedAt: '2026-08-30T22:01:59Z',
+          approvalCommand: command,
+        })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'Install the ODS extension crewai.' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    expect(await screen.findByText('Owner approval required')).toBeInTheDocument()
+    expect(screen.getByText('managed')).toBeInTheDocument()
+    const copy = screen.getByRole('button', { name: 'Copy secure approval command' })
+    fireEvent.click(copy)
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith(command))
+    expect(globalThis.fetch.mock.calls.some(([url]) => url.includes('/api/pixel/ops/'))).toBe(true)
+    expect(globalThis.fetch.mock.calls.some(([, options]) => options?.method === 'POST' && options?.body?.includes('approve'))).toBe(false)
   })
 
   it('shows unavailable state when status fails', async () => {
