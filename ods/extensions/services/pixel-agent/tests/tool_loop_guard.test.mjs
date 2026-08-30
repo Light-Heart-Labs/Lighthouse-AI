@@ -50,6 +50,7 @@ import {
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
   userMessageRequiresOperations,
+  userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsExactByteDownload,
 } from "../plugin/tool-loop-guard.mjs";
@@ -566,6 +567,62 @@ test("classifies explicit host evidence as Operations work", () => {
       required: true,
       actions: ["host.identity", "host.kernel", "host.architecture", "host.os-release"],
     }
+  );
+});
+
+test("classifies installable extension catalog work as one exact Operations action", () => {
+  for (const prompt of [
+    "Search the installable ODS extension catalog for workflow automation.",
+    "Which extensions are available for notebooks?",
+    "Call ods.extensions.search with query x; id exactly.",
+  ]) {
+    assert.equal(userMessageRequestsExtensionCatalog([], prompt), true);
+    assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+      required: true,
+      actions: ["ods.extensions.search"],
+    });
+  }
+  assert.equal(
+    userMessageRequestsExtensionCatalog([], "List the installed ODS applications and URLs."),
+    false
+  );
+});
+
+test("routes extension catalog requests only to the exact broker action", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Search the installable ODS extension catalog for notebooks." }
+  );
+  assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  assert.equal(call(guard, "pixel_ops_inventory"), undefined);
+  assert.match(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "host.identity",
+          parameters: {},
+        },
+      },
+    })?.blockReason,
+    new RegExp(OPERATIONS_WRONG_ACTION_REASON)
+  );
+  assert.equal(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "ods.extensions.search",
+          parameters: { query: "notebooks" },
+        },
+      },
+    }),
+    undefined
   );
 });
 

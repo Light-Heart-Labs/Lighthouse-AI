@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ODS_CONVERSATION_CONTRACT,
+  ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
@@ -157,6 +158,23 @@ test("adds an immediate final-answer recovery after a runtime loop block", () =>
     `${ODS_CONVERSATION_CONTRACT} ${ODS_LOOP_RECOVERY_CONTRACT}`
   );
   assert.match(result.appendSystemContext, /Do not call any tool again in this turn/);
+});
+
+test("adds a salient exact-route contract for extension catalog requests", () => {
+  const event = {
+    prompt:
+      "Search the installable ODS extension catalog with query x; id exactly as written.",
+  };
+  const result = promptContractForAgent({ agentId: "pixel" }, "pixel", event);
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_EXTENSION_CATALOG_CONTRACT}`
+  );
+  assert.match(result.appendSystemContext, /first tool step call only pixel_ops_inventory/);
+  assert.match(result.appendSystemContext, /do not call pixel_ods_apps_list/);
+  assert.match(result.appendSystemContext, /action ods\.extensions\.search/);
+  assert.match(result.appendSystemContext, /character-for-character/);
+  assert.match(result.appendSystemContext, /let the external broker reject it/);
 });
 
 test("adds exact pending and failed verification truth constraints", () => {

@@ -1035,6 +1035,17 @@ export function userMessageRequiresOperations(messages, prompt = undefined) {
   return userMessageOperationsRequirements(messages, prompt).required;
 }
 
+export function userMessageRequestsExtensionCatalog(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return false;
+  return (
+    /\bods\.extensions\.search\b/i.test(text) ||
+    /\b(?:extension|extensions)\s+catalog\b/i.test(text) ||
+    /\b(?:installable|supported|available)\b.{0,80}\b(?:ODS\s+)?extensions?\b/i.test(text) ||
+    /\b(?:ODS\s+)?extensions?\b.{0,80}\b(?:installable|supported|available)\b/i.test(text)
+  );
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return { required: false, actions: [] };
@@ -1046,6 +1057,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|os (?:signature|release))\b/i.test(
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
+  const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const actions = [];
   if (/\b(?:hostname|host identity)\b/i.test(text)) actions.push("host.identity");
   if (/\bkernel\b/i.test(text)) actions.push("host.kernel");
@@ -1056,7 +1068,11 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (/\b(?:operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i.test(text)) {
     actions.push("host.os-release");
   }
-  return { required: explicitOperations || hostEvidence, actions: [...new Set(actions)] };
+  if (extensionCatalog) actions.push("ods.extensions.search");
+  return {
+    required: explicitOperations || hostEvidence || extensionCatalog,
+    actions: [...new Set(actions)],
+  };
 }
 
 export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
