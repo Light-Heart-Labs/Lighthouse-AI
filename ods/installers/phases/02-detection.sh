@@ -618,6 +618,17 @@ if [[ -f "$INSTALL_DIR/.env" && "${ODS_RESELECT_MODEL:-false}" != "true" && "${T
                 --host-arch "${HOST_ARCH:-unknown}" \
                 2>>"$LOG_FILE" || true)"
             if [[ -n "$_preserved_model_env" ]] && command -v load_model_selector_env_from_output >/dev/null 2>&1; then
+                # Remove every model-selector runtime value before loading the
+                # preserved active contract. The helper omits inactive optional
+                # LLAMA_* settings intentionally: exporting them as empty makes
+                # Compose pass an empty numeric value to llama.cpp.
+                unset MODEL_RUNTIME_PROFILE MODEL_RUNTIME_PROFILE_LABEL MODEL_RUNTIME_PROFILE_SOURCE
+                unset LLAMA_SERVER_IMAGE LLAMA_SERVER_MEMORY_LIMIT
+                unset LLAMA_CPP_RELEASE_TAG_OVERRIDE LLAMA_CPP_SERVER_BINARY
+                unset LLAMA_ARG_FLASH_ATTN LLAMA_ARG_CACHE_TYPE_K LLAMA_ARG_CACHE_TYPE_V
+                unset LLAMA_ARG_N_CPU_MOE LLAMA_ARG_NO_CACHE_PROMPT
+                unset LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS LLAMA_ARG_SPEC_TYPE
+                unset LLAMA_ARG_SPEC_DRAFT_N_MAX LLAMA_ARG_SPLIT_MODE LLAMA_ARG_TENSOR_SPLIT
                 load_model_selector_env_from_output <<< "$_preserved_model_env"
                 log "Preserved active local model across installer rerun: ${LLM_MODEL} (${GGUF_FILE})"
             fi

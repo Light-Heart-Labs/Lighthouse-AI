@@ -384,6 +384,14 @@ def main() -> int:
     if contract is None:
         return 0
     for key, value in contract.items():
+        # Compose's list-form environment entries inherit exported host values.
+        # Emitting an empty optional LLAMA_* key would therefore turn "unset"
+        # into an explicit empty string inside llama.cpp, where numeric options
+        # such as LLAMA_ARG_N_CPU_MOE fail to parse. The installer clears stale
+        # selector variables before loading this fragment, so omission is the
+        # correct representation of an inactive optional setting.
+        if not value and (key in RUNTIME_KEYS or key == "LLAMA_SERVER_IMAGE"):
+            continue
         print(f"{key}={shell_value(value)}")
     return 0
 

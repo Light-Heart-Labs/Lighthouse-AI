@@ -137,6 +137,16 @@ def test_valid_curated_model_is_preserved() -> None:
         assert values["MODEL_SELECTION_SOURCE"] == "dashboard"
         assert values["MODEL_RUNTIME_PROFILE"] == "nvidia-8gb-64k"
         assert values["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
+        for key in (
+            "LLAMA_ARG_N_CPU_MOE",
+            "LLAMA_ARG_NO_CACHE_PROMPT",
+            "LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS",
+            "LLAMA_ARG_SPEC_TYPE",
+            "LLAMA_ARG_SPEC_DRAFT_N_MAX",
+            "LLAMA_ARG_SPLIT_MODE",
+            "LLAMA_ARG_TENSOR_SPLIT",
+        ):
+            assert key not in values, f"inactive optional runtime key was exported: {key}"
 
 
 def test_valid_dashboard_import_is_preserved() -> None:
@@ -182,6 +192,9 @@ def test_installer_keeps_recommendation_and_active_model_separate() -> None:
     assert "--reselect-model) ODS_RESELECT_MODEL=true" in installer
     assert detection.index('INSTALLER_RECOMMENDED_MODEL="${LLM_MODEL:-}"') < detection.index(
         'preserve-active-model.py'
+    )
+    assert detection.index("unset LLAMA_ARG_N_CPU_MOE") < detection.index(
+        'load_model_selector_env_from_output <<< "$_preserved_model_env"'
     )
     assert "MODEL_RECOMMENDED_MODEL_VALUE=\"${INSTALLER_RECOMMENDED_MODEL:-${LLM_MODEL}}\"" in env_writer
     assert "MODEL_SELECTION_SOURCE=${MODEL_SELECTION_SOURCE_VALUE}" in env_writer
