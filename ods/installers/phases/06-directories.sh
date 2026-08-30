@@ -1305,14 +1305,14 @@ ENV_EOF
             error "Runtime config renderer is unavailable for Lemonade"
             return 1
         fi
-        if ! "$_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
+        if ! ODS_RENDER_LITELLM_KEY="$LITELLM_LEMONADE_API_KEY" \
+            "$_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
             --surface litellm-lemonade \
             --ods-mode lemonade \
             --gpu-backend amd \
             --gguf-file "$_active_gguf" \
             --lemonade-model-id "$_lemonade_model_id" \
             --lemonade-api-base "$LEMONADE_CONTAINER_API_BASE_VALUE" \
-            --litellm-key "$LITELLM_LEMONADE_API_KEY" \
             --output-root "$INSTALL_DIR" \
             --write >> "$LOG_FILE" 2>&1; then
             error "Runtime config renderer failed for Lemonade"
@@ -1346,7 +1346,6 @@ ENV_EOF
         --lemonade-model-id "${LEMONADE_MODEL_VALUE:-}"
         --lemonade-api-base "${LEMONADE_CONTAINER_API_BASE_VALUE:-http://llama-server:8080/api/v1}"
         --llm-base-url "${LLM_API_URL:-http://llama-server:8080/v1}"
-        --litellm-key "${LITELLM_KEY:-}"
         --output-root "$INSTALL_DIR"
         --write
     )
@@ -1355,7 +1354,8 @@ ENV_EOF
         _router_surfaces+=(litellm-switchboard)
     fi
     for _router_surface in "${_router_surfaces[@]}"; do
-        if ! "$_router_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
+        if ! ODS_RENDER_LITELLM_KEY="${LITELLM_KEY:-}" \
+            "$_router_renderer_py" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
             --surface "$_router_surface" "${_router_common_args[@]}" \
             >> "$LOG_FILE" 2>&1; then
             error "Failed to render required ${_router_surface} config"

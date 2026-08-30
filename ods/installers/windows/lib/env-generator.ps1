@@ -346,12 +346,19 @@ function Write-WindowsODSLemonadeLiteLlmConfig {
         "--gpu-backend", "amd",
         "--lemonade-model-id", $ModelId,
         "--lemonade-api-base", $lemonadeApiBase,
-        "--litellm-key", $ApiKey,
         "--output-root", $InstallDir,
         "--write"
     )
-    $renderOutput = & $python.FilePath @renderArgs 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $previousRendererKey = [Environment]::GetEnvironmentVariable("ODS_RENDER_LITELLM_KEY", "Process")
+    try {
+        [Environment]::SetEnvironmentVariable("ODS_RENDER_LITELLM_KEY", $ApiKey, "Process")
+        $renderOutput = & $python.FilePath @renderArgs 2>&1
+        $renderExitCode = $LASTEXITCODE
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable("ODS_RENDER_LITELLM_KEY", $previousRendererKey, "Process")
+    }
+    if ($renderExitCode -ne 0) {
         throw "Runtime config renderer failed for Windows Lemonade route: $($renderOutput -join "`n")"
     }
 

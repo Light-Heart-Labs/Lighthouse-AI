@@ -10475,16 +10475,22 @@ def _render_runtime_config(
         lemonade_api_base,
         "--llm-base-url",
         llm_base_url or "http://llama-server:8080/v1",
-        "--litellm-key",
-        lemonade_api_key,
         "--output-root",
         str(install_dir),
         "--write",
     ]
     if context_length is not None:
         cmd.extend(["--context-length", str(context_length)])
+    renderer_env = os.environ.copy()
+    renderer_env["ODS_RENDER_LITELLM_KEY"] = lemonade_api_key
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=renderer_env,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("Runtime config renderer failed for %s: %s", surface, exc)
         return False

@@ -1829,6 +1829,7 @@ else
     CONTAINER_LLM_URL="$(read_env_value "${INSTALL_DIR}/.env" "LLM_API_URL")"
     [[ -n "$CONTAINER_LLM_URL" ]] || CONTAINER_LLM_URL="http://host.docker.internal:8080"
     _macos_runtime_renderer="${ODS_PYTHON_CMD:-python3}"
+    _macos_renderer_key="$(read_env_value "${INSTALL_DIR}/.env" "LITELLM_KEY")"
     if [[ ! -f "${INSTALL_DIR}/scripts/render-runtime-configs.py" ]] \
         || ! command -v "$_macos_runtime_renderer" >/dev/null 2>&1; then
         ai_err "Model router config renderer is unavailable"
@@ -1841,13 +1842,13 @@ else
         --model "${LLM_MODEL:-}"
         --gguf-file "${GGUF_FILE:-}"
         --llm-base-url "${CONTAINER_LLM_URL}"
-        --litellm-key "$(read_env_value "${INSTALL_DIR}/.env" "LITELLM_KEY")"
         --context-length "${MAX_CONTEXT:-65536}"
         --output-root "$INSTALL_DIR"
         --write
     )
     for _macos_router_surface in model-router-endpoints; do
-        if ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
+        if ! ODS_RENDER_LITELLM_KEY="$_macos_renderer_key" \
+            "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
             --surface "$_macos_router_surface" "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
             ai_err "Failed to render required ${_macos_router_surface} config"
             exit 1
@@ -1855,12 +1856,13 @@ else
     done
     if [[ "$_macos_switchboard_mode" == "enabled" ]] \
        && [[ "$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODE")" != "cloud" ]] \
-       && ! "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
+       && ! ODS_RENDER_LITELLM_KEY="$_macos_renderer_key" \
+            "$_macos_runtime_renderer" "${INSTALL_DIR}/scripts/render-runtime-configs.py" \
             --surface litellm-switchboard "${_macos_router_args[@]}" >> "$ODS_LOG_FILE" 2>&1; then
         ai_err "Failed to render required litellm-switchboard config"
         exit 1
     fi
-    unset _macos_runtime_renderer _macos_router_args _macos_router_surface
+    unset _macos_runtime_renderer _macos_renderer_key _macos_router_args _macos_router_surface
     if $env_existed && ! $FORCE; then
         ai_ok "Preserved existing .env (use --force to regenerate secrets)"
     else

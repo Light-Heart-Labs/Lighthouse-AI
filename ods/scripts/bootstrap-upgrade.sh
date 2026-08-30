@@ -1692,14 +1692,14 @@ refresh_windows_lemonade_litellm_after_swap() {
         log "ERROR: runtime config renderer is unavailable for Windows Lemonade"
         return 1
     fi
-    if ! "$renderer_py" "$renderer_script" \
+    if ! ODS_RENDER_LITELLM_KEY="$lemonade_api_key" \
+        "$renderer_py" "$renderer_script" \
         --surface litellm-lemonade \
         --ods-mode lemonade \
         --gpu-backend amd \
         --gguf-file "$FULL_GGUF_FILE" \
         --lemonade-model-id "$model_id" \
         --lemonade-api-base "$lemonade_api_base" \
-        --litellm-key "$lemonade_api_key" \
         --output-root "$INSTALL_DIR" \
         --write >/dev/null 2>&1; then
         log "ERROR: runtime config renderer failed for Windows Lemonade"
@@ -2929,14 +2929,14 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
             fi
             if [[ ! -f "$_renderer_script" ]] \
                 || ! command -v "$_renderer_py" >/dev/null 2>&1 \
-                || ! "$_renderer_py" "$_renderer_script" \
+                || ! ODS_RENDER_LITELLM_KEY="$LITELLM_LEMONADE_API_KEY" \
+                    "$_renderer_py" "$_renderer_script" \
                     --surface litellm-lemonade \
                     --ods-mode lemonade \
                     --gpu-backend amd \
                     --gguf-file "$FULL_GGUF_FILE" \
                     --lemonade-model-id "$_lemonade_model_id" \
                     --lemonade-api-base "$_lemonade_api_base" \
-                    --litellm-key "$LITELLM_LEMONADE_API_KEY" \
                     --output-root "$INSTALL_DIR" \
                     --write >/dev/null 2>&1; then
                 log "ERROR: runtime config renderer failed for the Lemonade route"

@@ -502,6 +502,8 @@ def test_write_mode_writes_under_output_root() -> None:
                 "--output-root",
                 tmp,
                 "--write",
+                "--format",
+                "json",
             ],
             cwd=ROOT,
             text=True,
@@ -517,6 +519,41 @@ def test_write_mode_writes_under_output_root() -> None:
         if os.name != "nt":
             assert target.stat().st_mode & 0o777 == 0o644
         assert not list(target.parent.glob(f".{target.name}.*.tmp"))
+
+
+def test_write_cli_defaults_to_secret_free_paths() -> None:
+    secret = "renderer-secret-must-not-reach-output"
+    with tempfile.TemporaryDirectory() as tmp:
+        env = os.environ.copy()
+        env["ODS_RENDER_LITELLM_KEY"] = secret
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--surface",
+                "litellm-lemonade",
+                "--ods-mode",
+                "lemonade",
+                "--gpu-backend",
+                "amd",
+                "--gguf-file",
+                "Private.gguf",
+                "--output-root",
+                tmp,
+                "--write",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        combined = proc.stdout + proc.stderr
+        target = Path(tmp) / "config" / "litellm" / "lemonade.yaml"
+        assert secret not in combined
+        assert proc.stdout.strip() == "config/litellm/lemonade.yaml"
+        assert secret in target.read_text(encoding="utf-8")
 
 
 def test_atomic_write_failure_preserves_known_good_config() -> None:
@@ -571,6 +608,7 @@ def main() -> int:
         test_hermes_uses_lemonade_model_id_for_amd,
         test_perplexica_default_model_matches_route,
         test_write_mode_writes_under_output_root,
+        test_write_cli_defaults_to_secret_free_paths,
         test_atomic_write_failure_preserves_known_good_config,
     ]
     for test in tests:

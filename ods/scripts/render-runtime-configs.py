@@ -648,7 +648,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--gpu-backend", choices=["amd", "apple", "cpu", "nvidia"], default="nvidia")
     parser.add_argument("--ods-mode", choices=["local", "cloud", "hybrid", "lemonade"], default="local")
     parser.add_argument("--llm-base-url", default="http://llama-server:8080/v1")
-    parser.add_argument("--litellm-key", default=DEFAULT_LITELLM_KEY)
+    parser.add_argument(
+        "--litellm-key",
+        default=os.environ.get("ODS_RENDER_LITELLM_KEY", DEFAULT_LITELLM_KEY),
+        help=(
+            "LiteLLM credential used in generated private config. Production callers "
+            "should use ODS_RENDER_LITELLM_KEY so the value is not exposed in argv."
+        ),
+    )
     parser.add_argument("--opencode-port", type=int, default=3003)
     parser.add_argument("--context-length", type=int, default=DEFAULT_CONTEXT)
     parser.add_argument(
@@ -669,7 +676,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--remote-llm-model",
         default=os.environ.get("REMOTE_LLM_MODEL", ""),
     )
-    parser.add_argument("--format", choices=["json", "paths"], default="json")
+    parser.add_argument(
+        "--format",
+        choices=["json", "paths"],
+        default=None,
+        help=(
+            "Output format. Defaults to json for dry runs and secret-free paths "
+            "for --write."
+        ),
+    )
     parser.add_argument("--output-root", default=".", help="Root directory used with --write")
     parser.add_argument("--write", action="store_true", help="Write rendered files under --output-root")
     return parser.parse_args(argv)
@@ -784,7 +799,8 @@ def main(argv: list[str]) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    if args.format == "paths":
+    output_format = args.format or ("paths" if args.write else "json")
+    if output_format == "paths":
         for item in payload["files"]:
             print(item["path"])
     else:
