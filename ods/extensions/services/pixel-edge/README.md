@@ -5,7 +5,7 @@
 The trust chain is deliberately split:
 
 1. Open WebUI authenticates here with the generated, ODS-scoped `PIXEL_OPENWEBUI_KEY`.
-2. This container accepts only `GET /v1/models` and `POST /v1/chat/completions`, fixes the model to `pixel/default`, strips browser credentials and every `x-openclaw-*` header, and connects to a mounted Unix socket.
+2. This container accepts only `GET /v1/models`, `GET /v1/activity`, `POST /v1/chat/completions`, and `POST /v1/chat/cancel`; fixes the model to `pixel/default`; strips browser credentials and every `x-openclaw-*` header; and connects to a mounted Unix socket. The activity route exposes only an authenticated count so ODS can refuse a model switch while Dashboard or Open WebUI Pixel work is active.
 3. The host `pixel-agent` integration owns that socket and is the only component that reads and injects Pixel's full gateway credential.
 
 Pixel is a single-owner agent runtime. The default route is therefore intended for the ODS owner surface, not an untrusted multi-user Open WebUI deployment. Hermes and OpenCode remain available as explicit rollback paths.

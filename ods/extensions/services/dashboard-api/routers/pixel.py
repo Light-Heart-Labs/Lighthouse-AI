@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from host_agent_client import AgentClientError, async_request_json as request_agent_json
+from pixel_runtime_state import begin_pixel_stream, end_pixel_stream
 from security import verify_api_key
 
 
@@ -29,6 +31,7 @@ _MAX_MESSAGE_CHARS = 16 * 1024
 _MAX_TOTAL_MESSAGE_BYTES = 256 * 1024
 _SAFE_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_MODEL_SWITCH_DETAIL = "Model switch in progress; Pixel will be ready when activation completes"
 
 
 def _validate_edge_url(raw: str) -> str:
@@ -107,6 +110,23 @@ class ChatStreamRequest(BaseModel):
 router = APIRouter(prefix="/api/pixel", tags=["pixel"])
 
 
+async def _model_activation_in_progress() -> bool:
+    """Project an explicit model activation without coupling Pixel to model internals.
+
+    A failed lifecycle probe does not falsely take down an otherwise healthy
+    Pixel edge. The edge readiness check remains authoritative in that case.
+    """
+    try:
+        status = await request_agent_json("GET", "/v1/model/status", timeout=2.0)
+    except AgentClientError:
+        return False
+    return (
+        isinstance(status, dict)
+        and status.get("activeOperation") == "model_activation"
+        and bool(status.get("lifecycleActive") or status.get("activeOperation"))
+    )
+
+
 async def _bounded_response_bytes(response: httpx.Response, limit: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
@@ -124,6 +144,13 @@ async def pixel_status() -> dict[str, object]:
     config = _pixel_config()
     if config is None:
         return {"available": False, "model": None, "detail": "Pixel is not enabled"}
+    if await _model_activation_in_progress():
+        return {
+            "available": False,
+            "model": None,
+            "state": "model_switching",
+            "detail": _MODEL_SWITCH_DETAIL,
+        }
     edge_url, key = config
     try:
         timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
@@ -242,6 +269,8 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
     config = _pixel_config()
     if config is None:
         raise HTTPException(status_code=503, detail="Pixel is not enabled")
+    if await _model_activation_in_progress():
+        raise HTTPException(status_code=409, detail=_MODEL_SWITCH_DETAIL)
     edge_url, key = config
     edge_body = {
         "model": _MODEL,
@@ -278,6 +307,8 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         await upstream_context.__aexit__(None, None, None)
         await client.aclose()
         raise HTTPException(status_code=502, detail="Pixel returned an invalid stream")
+
+    begin_pixel_stream()
 
     async def stream() -> AsyncIterator[bytes]:
         done_seen = False
@@ -325,6 +356,7 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
                     pass
             await upstream_context.__aexit__(None, None, None)
             await client.aclose()
+            end_pixel_stream()
         if not done_seen:
             yield b"data: [DONE]\n\n"
 

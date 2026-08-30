@@ -3,6 +3,7 @@
 Routes:
   GET  /health                — unauthenticated liveness
   GET  /v1/models             — bearer-auth, synthetic listing only
+  GET  /v1/activity           — bearer-auth, content-free active-turn count
   POST /v1/chat/completions   — bearer-auth, model rewrite, SSE passthrough
 
 All other paths/methods return 404 (catch-all).
@@ -108,6 +109,7 @@ _EMPTY_REPLY = (
     "tell me what you'd like me to do differently."
 )
 _CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
+_ACTIVE_REQUESTS_KEY = web.AppKey("pixel_active_requests", set)
 
 
 def _validate_config() -> str:
@@ -415,6 +417,15 @@ async def handle_models(request: web.Request):
     return web.json_response({"object": "list", "data": data})
 
 
+async def handle_activity(request: web.Request):
+    """Return only the number of in-flight turns for safe model coordination."""
+    fail = _check_auth(request)
+    if fail is not None:
+        return fail
+    streams = len(request.app[_ACTIVE_REQUESTS_KEY])
+    return web.json_response({"active": streams > 0, "streams": streams})
+
+
 async def handle_chat_completions(request: web.Request):
     fail = _check_auth(request)
     if fail is not None:
@@ -449,6 +460,8 @@ async def handle_chat_completions(request: web.Request):
     if _private_url_access_requested(data):
         return await _private_url_response(request, data.get("stream") is True)
     empty_reply_fallback = _empty_reply_fallback(data)
+    request_token = object()
+    request.app[_ACTIVE_REQUESTS_KEY].add(request_token)
     chat_id = data.get("user")
     cancel_event = None
     if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
@@ -498,6 +511,7 @@ async def handle_chat_completions(request: web.Request):
     except Exception:
         return web.json_response({"error": "bad gateway"}, status=502)
     finally:
+        request.app[_ACTIVE_REQUESTS_KEY].discard(request_token)
         if cancel_event is not None:
             active = request.app[_CANCEL_EVENTS_KEY].get(chat_id)
             if active is not None:
@@ -617,7 +631,6 @@ async def _stream_upstream(
                     pending = []
                     await response.write(b"data: [DONE]\n\n")
                     passthrough = True
-                    await response.write_eof()
                     return response
                 if len(line) > _MAX_SSE_LINE:
                     raise ValueError("SSE line exceeded limit")
@@ -674,7 +687,6 @@ async def _stream_upstream(
         if cancel_event is not None and cancel_event.is_set():
             pending = []
             await response.write(b"data: [DONE]\n\n")
-            await response.write_eof()
             return response
         if buffered:
             if len(buffered) > _MAX_SSE_LINE:
@@ -707,7 +719,6 @@ async def _stream_upstream(
             await response.write(b"data: [DONE]\n\n")
         else:
             await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
-    await response.write_eof()
     return response
 
 
@@ -722,8 +733,10 @@ async def handle_not_found(_request: web.Request):
 def create_app() -> web.Application:
     app = web.Application()
     app[_CANCEL_EVENTS_KEY] = {}
+    app[_ACTIVE_REQUESTS_KEY] = set()
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
+    app.router.add_get("/v1/activity", handle_activity)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_post("/v1/chat/cancel", handle_chat_cancel)
     # Catch-all registered last: unmatched paths AND unmatched methods → 404.

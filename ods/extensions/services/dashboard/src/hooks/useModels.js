@@ -388,6 +388,13 @@ export function useModels() {
 
         const body = await responseJson(response)
         if (response.status === 409) {
+          if (body?.detail?.code === 'pixel_chat_active') {
+            activationError = errorMessageFromPayload(
+              body,
+              'Pixel is working. Stop the active response before changing models.'
+            )
+            return
+          }
           const activeModelId = conflictActiveModelId(body)
           if (activeModelId === modelId && !requestedContextLength) return
 

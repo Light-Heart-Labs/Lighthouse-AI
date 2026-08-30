@@ -298,6 +298,17 @@ class TestAuth(BaseEdgeTest):
                                    headers=self.auth()) as resp:
             self.assertEqual(resp.status, 200)
 
+    async def test_activity_requires_auth(self):
+        async with self.client.get("http://localhost/v1/activity") as resp:
+            self.assertEqual(resp.status, 401)
+
+    async def test_activity_is_content_free_when_idle(self):
+        async with self.client.get(
+            "http://localhost/v1/activity", headers=self.auth()
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(await resp.json(), {"active": False, "streams": 0})
+
     async def test_chat_missing_auth(self):
         async with self.client.post("http://localhost/v1/chat/completions",
                                     json={"model": "pixel/default", "messages": []}) as resp:
@@ -360,6 +371,32 @@ class TestContentType(BaseEdgeTest):
 
 
 class TestCancellation(BaseEdgeTest):
+    async def test_activity_counts_an_openwebui_stream_without_a_cancellable_chat_id(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "long task"}],
+                "stream": True,
+                "trigger_cancel_wait": True,
+            },
+        ) as stream_response:
+            await asyncio.wait_for(self.up_runner.app["stream_started"].wait(), timeout=1)
+            async with self.client.get(
+                "http://localhost/v1/activity", headers=self.auth()
+            ) as activity_response:
+                self.assertEqual(activity_response.status, 200)
+                activity = await activity_response.json()
+                self.assertEqual(activity, {"active": True, "streams": 1})
+            self.up_runner.app["release_stream"].set()
+            await stream_response.text()
+
+        async with self.client.get(
+            "http://localhost/v1/activity", headers=self.auth()
+        ) as activity_response:
+            self.assertEqual(await activity_response.json(), {"active": False, "streams": 0})
+
     async def test_cancel_forwards_only_the_validated_chat_id(self):
         async with self.client.post(
             "http://localhost/v1/chat/cancel",

@@ -1635,6 +1635,32 @@ def test_load_model_rejects_external_backend_before_lookup_or_agent_call(
     assert detail["requestedModelId"] == "downloaded-model"
 
 
+def test_load_model_refuses_to_interrupt_an_active_pixel_stream(monkeypatch):
+    import routers.models as models_router
+
+    monkeypatch.setattr(models_router, "_model_activation_mode_denial", lambda *_args: None)
+    monkeypatch.setattr(models_router, "_find_loadable_model", lambda _model_id: {"id": "next-model"})
+    monkeypatch.setattr(models_router, "_already_active_model", lambda *_args: (False, None))
+    monkeypatch.setattr(models_router, "pixel_stream_active", lambda: True)
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("active Pixel turn reached host-agent activation")
+        ),
+    )
+
+    with pytest.raises(models_router.HTTPException) as exc_info:
+        models_router.load_model("next-model", body=None)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "code": "pixel_chat_active",
+        "message": "Pixel is working. Stop the active response before changing models.",
+        "requestedModelId": "next-model",
+    }
+
+
 def _gpu():
     return GPUInfo(
         name="NVIDIA GeForce RTX 4060",

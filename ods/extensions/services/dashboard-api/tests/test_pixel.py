@@ -26,6 +26,8 @@ DASHBOARD_API_DIR = str(pathlib.Path(__file__).resolve().parent.parent)
 sys.path.insert(0, DASHBOARD_API_DIR)
 
 from routers import pixel  # noqa: E402
+import pixel_runtime_state  # noqa: E402
+from pixel_runtime_state import pixel_stream_active  # noqa: E402
 
 
 EDGE_KEY = "e" * 64
@@ -122,6 +124,11 @@ def pixel_env(monkeypatch):
     monkeypatch.setenv("PIXEL_OPENWEBUI_KEY", EDGE_KEY)
     monkeypatch.setenv("PIXEL_EDGE_URL", "http://pixel-edge:9595")
 
+    async def idle_model_lifecycle(*_args, **_kwargs):
+        return {"status": "idle", "lifecycleActive": False, "activeOperation": None}
+
+    monkeypatch.setattr(pixel, "request_agent_json", idle_model_lifecycle)
+
 
 @pytest.mark.parametrize(
     "value",
@@ -209,6 +216,42 @@ async def test_status_returns_only_fixed_projection():
 
 
 @pytest.mark.asyncio
+async def test_status_projects_active_model_switch_without_touching_edge(monkeypatch):
+    async def active_model_lifecycle(*_args, **_kwargs):
+        return {
+            "status": "idle",
+            "lifecycleActive": True,
+            "activeOperation": "model_activation",
+            "activeTarget": "secret-model-name",
+        }
+
+    monkeypatch.setattr(pixel, "request_agent_json", active_model_lifecycle)
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        side_effect=AssertionError("model switch readiness reached Pixel edge"),
+    ):
+        result = await pixel.pixel_status()
+
+    assert result == {
+        "available": False,
+        "model": None,
+        "state": "model_switching",
+        "detail": pixel._MODEL_SWITCH_DETAIL,
+    }
+    assert "secret-model-name" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_probe_failure_does_not_falsely_disable_pixel(monkeypatch):
+    async def failed_model_lifecycle(*_args, **_kwargs):
+        raise pixel.AgentClientError("unreachable")
+
+    monkeypatch.setattr(pixel, "request_agent_json", failed_model_lifecycle)
+    assert await pixel._model_activation_in_progress() is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
     [
@@ -250,6 +293,92 @@ async def test_chat_forwards_exact_body_and_narrow_edge_key_only():
     }
     assert capture["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
     assert "dashboard-test-key" not in json.dumps(capture)
+    assert pixel_runtime_state._local_pixel_stream_active() is False
+
+
+@pytest.mark.asyncio
+async def test_chat_is_rejected_before_edge_during_model_activation(monkeypatch):
+    async def active_model_lifecycle(*_args, **_kwargs):
+        return {"lifecycleActive": True, "activeOperation": "model_activation"}
+
+    monkeypatch.setattr(pixel, "request_agent_json", active_model_lifecycle)
+    body = pixel.ChatStreamRequest.model_validate(
+        {"chat_id": "c1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        side_effect=AssertionError("model switch turn reached Pixel edge"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await pixel.pixel_chat_stream(ConnectedRequest(), body)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == pixel._MODEL_SWITCH_DETAIL
+
+
+@pytest.mark.asyncio
+async def test_accepted_chat_marks_runtime_active_until_stream_closes():
+    upstream = FakeResponse(
+        content_type="text/event-stream",
+        chunks=[b"data: [DONE]\n\n"],
+    )
+    body = pixel.ChatStreamRequest.model_validate(
+        {"chat_id": "c1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(upstream)):
+        response = await pixel.pixel_chat_stream(ConnectedRequest(), body)
+        assert pixel_stream_active() is True
+        assert await stream_body(response) == b"data: [DONE]\n\n"
+    assert pixel_runtime_state._local_pixel_stream_active() is False
+
+
+def test_pixel_runtime_activity_accepts_only_exact_content_free_projection(monkeypatch):
+    class ActivityResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        content = b'{"active":true,"streams":2}'
+
+        def json(self):
+            return {"active": True, "streams": 2}
+
+    class ActivityClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, url, **kwargs):
+            assert url == "http://pixel-edge:9595/v1/activity"
+            assert kwargs["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
+            return ActivityResponse()
+
+    monkeypatch.setattr(pixel_runtime_state.httpx, "Client", lambda **_kwargs: ActivityClient())
+    assert pixel_runtime_state._pixel_edge_stream_active() is True
+
+
+def test_pixel_runtime_activity_fails_open_on_ambiguous_projection(monkeypatch):
+    class ActivityResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        content = b'{"active":true,"streams":1,"chat":"secret"}'
+
+        def json(self):
+            return {"active": True, "streams": 1, "chat": "secret"}
+
+    class ActivityClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return ActivityResponse()
+
+    monkeypatch.setattr(pixel_runtime_state.httpx, "Client", lambda **_kwargs: ActivityClient())
+    assert pixel_runtime_state._pixel_edge_stream_active() is False
 
 
 @pytest.mark.asyncio

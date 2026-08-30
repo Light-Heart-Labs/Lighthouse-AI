@@ -40,6 +40,8 @@ const MAX_TOTAL_MESSAGE_BYTES = 256 * 1024
 const CHAT_STORAGE_KEY = 'ods.pixel.chat.v1'
 const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,128}$/
 const STOPPED_NOTICE = 'Stopped by you. Workspace changes completed before cancellation were preserved.'
+const MODEL_SWITCH_DETAIL = 'Model switch in progress; Pixel will be ready when activation completes'
+const STATUS_POLL_MS = 3000
 let fallbackChatSequence = 0
 
 const SUGGESTED_TASKS = [
@@ -167,22 +169,34 @@ export default function Pixel({ systemStatus = null }) {
 
   useEffect(() => {
     const controller = new AbortController()
+    let stopped = false
+    let poll = null
     async function fetchStatus() {
       try {
         const response = await fetch('/api/pixel/status', { signal: controller.signal })
         if (!response.ok) throw new Error('status unavailable')
         const data = await response.json()
-        setStatus(data.available === true ? 'available' : 'unavailable')
+        setStatus(data.available === true
+          ? 'available'
+          : data.state === 'model_switching'
+            ? 'switching'
+            : 'unavailable')
         setStatusDetail(typeof data.detail === 'string' ? data.detail : '')
       } catch (error) {
         if (error?.name !== 'AbortError') {
           setStatus('unavailable')
           setStatusDetail('Could not reach Pixel backend')
         }
+      } finally {
+        if (!stopped) poll = globalThis.setTimeout(fetchStatus, STATUS_POLL_MS)
       }
     }
     fetchStatus()
-    return () => controller.abort()
+    return () => {
+      stopped = true
+      if (poll !== null) globalThis.clearTimeout(poll)
+      controller.abort()
+    }
   }, [])
 
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -243,6 +257,22 @@ export default function Pixel({ systemStatus = null }) {
         body: JSON.stringify({ chat_id: chatIdRef.current, messages: conversation }),
         signal: controller.signal,
       })
+      if (response.status === 409) {
+        let detail = MODEL_SWITCH_DETAIL
+        if (typeof response.json === 'function') {
+          try {
+            const payload = await response.json()
+            if (typeof payload?.detail === 'string' && payload.detail.trim()) detail = payload.detail
+          } catch {
+            // The fixed local fallback remains safe and actionable.
+          }
+        }
+        setStatus('switching')
+        setStatusDetail(detail)
+        setInput(trimmed)
+        setMessages(messages)
+        return
+      }
       if (!response.ok) throw new Error('chat unavailable')
 
       reader = response.body?.getReader()
@@ -343,6 +373,8 @@ export default function Pixel({ systemStatus = null }) {
     ? 'Working'
     : status === 'available'
       ? 'Available'
+      : status === 'switching'
+        ? 'Switching model...'
       : status === 'loading'
         ? 'Connecting...'
         : 'Degraded'
@@ -396,7 +428,7 @@ export default function Pixel({ systemStatus = null }) {
               : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
           }`}
           >
-            {sending || status === 'loading' ? (
+            {sending || status === 'loading' || status === 'switching' ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <span className={`h-1.5 w-1.5 rounded-full ${
@@ -423,6 +455,13 @@ export default function Pixel({ systemStatus = null }) {
             <p className="font-medium text-theme-text">Pixel is currently unavailable</p>
             {statusDetail && <p className="mt-1 text-sm">{statusDetail}</p>}
             <p className="mt-4 text-xs">Your other ODS applications remain available while the agent reconnects.</p>
+          </div>
+        )}
+        {status === 'switching' && messages.length === 0 && (
+          <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center text-theme-text-muted">
+            <Loader2 className="mb-4 h-9 w-9 animate-spin text-theme-accent-light" />
+            <p className="font-medium text-theme-text">Pixel is switching models</p>
+            <p className="mt-1 text-sm">Your draft is safe. Pixel will reconnect automatically when activation completes.</p>
           </div>
         )}
         {status === 'available' && messages.length === 0 && (
@@ -512,7 +551,11 @@ export default function Pixel({ systemStatus = null }) {
                 sendMessage()
               }
             }}
-            placeholder={status !== 'available' ? 'Pixel is unavailable' : 'Message Pixel...'}
+            placeholder={status === 'available'
+              ? 'Message Pixel...'
+              : status === 'switching'
+                ? 'Waiting for model switch...'
+                : 'Pixel is unavailable'}
             disabled={isDisabled}
             rows={1}
             className={`min-h-11 flex-1 resize-none rounded-xl border bg-theme-card px-4 py-2.5 text-sm text-theme-text outline-none transition placeholder:text-theme-text-muted/70 focus:ring-2 focus:ring-theme-accent/30 disabled:opacity-50 ${

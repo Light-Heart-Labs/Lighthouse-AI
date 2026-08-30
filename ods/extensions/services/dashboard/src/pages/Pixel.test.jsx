@@ -75,6 +75,42 @@ describe('Pixel', () => {
     })
   })
 
+  it('shows a model-switching state and keeps the composer disabled', async () => {
+    globalThis.fetch.mockResolvedValue(response({
+      available: false,
+      model: null,
+      state: 'model_switching',
+      detail: 'Model switch in progress; Pixel will be ready when activation completes',
+    }))
+
+    render(<Pixel />)
+
+    await waitFor(() => expect(screen.getByText('Switching model...')).toBeInTheDocument())
+    expect(screen.getByText('Pixel is switching models')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Waiting for model switch...')).toBeDisabled()
+  })
+
+  it('restores an unsent draft when model activation wins the chat race', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(response({
+      detail: 'Model switch in progress; Pixel will be ready when activation completes',
+    }, 409))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText('Message Pixel...')
+    fireEvent.change(textarea, { target: { value: 'keep this exact draft' } })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    await waitFor(() => expect(screen.getByText('Switching model...')).toBeInTheDocument())
+    expect(textarea).toHaveValue('keep this exact draft')
+    expect(screen.queryByText('Request failed')).not.toBeInTheDocument()
+    expect(JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1')).messages).toEqual([])
+  })
+
   it('keeps send disabled until the draft has non-whitespace content', async () => {
     globalThis.fetch.mockResolvedValue(
       response({ available: true, model: 'pixel/default', detail: 'local' })

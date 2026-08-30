@@ -46,6 +46,7 @@ from host_agent_client import (
     request_json as request_agent_json,
 )
 from models import ModelLibraryGpu, ModelLibraryResponse
+from pixel_runtime_state import pixel_stream_active
 from performance_oracle import (
     build_models_payload,
     build_sample_signature,
@@ -2020,6 +2021,16 @@ def load_model(
         if configured_context is not None:
             response["context_length"] = configured_context
         return response
+
+    if pixel_stream_active():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pixel_chat_active",
+                "message": "Pixel is working. Stop the active response before changing models.",
+                "requestedModelId": model_id,
+            },
+        )
 
     bootstrap_conflict = _bootstrap_upgrade_download_conflict()
     if bootstrap_conflict is not None:
