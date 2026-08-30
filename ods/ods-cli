@@ -3719,22 +3719,30 @@ cmd_model() {
 }
 
 _agent_probe_host() {
-    local bind_addr="" gateway=""
+    local bind_addr="" gateway="" kernel_release=""
     bind_addr="$(_env_get_raw ODS_AGENT_BIND)"
     bind_addr="${bind_addr#\"}"; bind_addr="${bind_addr%\"}"
     bind_addr="${bind_addr#\'}"; bind_addr="${bind_addr%\'}"
     bind_addr="$(printf '%s' "$bind_addr" | tr -d '[:space:]')"
 
-    if [[ -z "$bind_addr" && "$(uname -s)" == "Linux" ]] && command -v docker >/dev/null 2>&1; then
-        gateway="$(docker network inspect ods-network \
-            --format '{{range .IPAM.Config}}{{if .Gateway}}{{println .Gateway}}{{end}}{{end}}' \
-            2>/dev/null | sed '/^[[:space:]]*$/d' | head -n1 | tr -d '[:space:]' || true)"
-        if [[ -z "$gateway" ]]; then
-            gateway="$(docker network inspect bridge \
+    if [[ -z "$bind_addr" && "$(uname -s)" == "Linux" ]]; then
+        kernel_release="$(uname -r 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+        if [[ "$kernel_release" == *microsoft* ]]; then
+            # The host agent deliberately binds loopback under WSL because
+            # Docker Desktop forwards host.docker.internal there; its compose
+            # gateway is not a locally bindable host-agent address.
+            bind_addr="127.0.0.1"
+        elif command -v docker >/dev/null 2>&1; then
+            gateway="$(docker network inspect ods-network \
                 --format '{{range .IPAM.Config}}{{if .Gateway}}{{println .Gateway}}{{end}}{{end}}' \
                 2>/dev/null | sed '/^[[:space:]]*$/d' | head -n1 | tr -d '[:space:]' || true)"
+            if [[ -z "$gateway" ]]; then
+                gateway="$(docker network inspect bridge \
+                    --format '{{range .IPAM.Config}}{{if .Gateway}}{{println .Gateway}}{{end}}{{end}}' \
+                    2>/dev/null | sed '/^[[:space:]]*$/d' | head -n1 | tr -d '[:space:]' || true)"
+            fi
+            bind_addr="$gateway"
         fi
-        bind_addr="$gateway"
     fi
 
     case "$bind_addr" in
