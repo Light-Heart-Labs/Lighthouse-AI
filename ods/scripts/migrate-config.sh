@@ -237,13 +237,8 @@ cmd_migrate() {
     local failed=0
     local ls_exit=0
     local migrations
-    migrations=$(ls -1 "$MIGRATIONS_DIR"/migrate-v*.sh 2>&1 | sort) || ls_exit=$?
-    if [[ $ls_exit -ne 0 ]]; then
-        log_success "No migration scripts found"
-        return 0
-    fi
-
-    for migration in $migrations; do
+    # Use a while loop with read to handle spaces in paths
+    while read -r migration; do
         if [[ -f "$migration" ]]; then
             local migration_version
             migration_version=$(basename "$migration" | sed 's/migrate-v//;s/.sh//')
@@ -264,7 +259,7 @@ cmd_migrate() {
                 fi
             fi
         fi
-    done
+    done <<< "$(ls -1 "$MIGRATIONS_DIR"/migrate-v*.sh 2>&1 | sort)"
     
     if [[ $failed -eq 0 ]]; then
         set_last_migrated_version "$current_version"
