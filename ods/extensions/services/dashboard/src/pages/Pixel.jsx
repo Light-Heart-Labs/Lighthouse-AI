@@ -35,6 +35,10 @@ const MARKDOWN_COMPONENTS = {
 }
 
 const MAX_INPUT_LEN = 16 * 1024
+const MAX_REQUEST_MESSAGES = 50
+const MAX_TOTAL_MESSAGE_BYTES = 256 * 1024
+const CHAT_STORAGE_KEY = 'ods.pixel.chat.v1'
+const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,128}$/
 let fallbackChatSequence = 0
 
 const SUGGESTED_TASKS = [
@@ -91,15 +95,60 @@ function replaceLastAssistant(messages, update) {
   return next
 }
 
+function loadStoredChat() {
+  try {
+    const stored = JSON.parse(globalThis.localStorage?.getItem(CHAT_STORAGE_KEY) || 'null')
+    if (
+      stored?.schema !== 1
+      || !SAFE_CHAT_ID.test(stored.chatId || '')
+      || !Array.isArray(stored.messages)
+      || stored.messages.length > MAX_REQUEST_MESSAGES
+    ) return null
+
+    let totalBytes = 0
+    const messages = stored.messages.map((message) => {
+      if (
+        !message
+        || !['user', 'assistant'].includes(message.role)
+        || typeof message.content !== 'string'
+        || message.content.length > MAX_INPUT_LEN
+      ) throw new Error('invalid stored Pixel message')
+      totalBytes += new TextEncoder().encode(message.content).byteLength
+      if (totalBytes > MAX_TOTAL_MESSAGE_BYTES) throw new Error('stored Pixel chat is too large')
+      return { role: message.role, content: message.content }
+    })
+    return { chatId: stored.chatId, messages }
+  } catch {
+    return null
+  }
+}
+
+function boundedHistory(messages, nextUserContent) {
+  const encoder = new TextEncoder()
+  const budget = MAX_TOTAL_MESSAGE_BYTES - encoder.encode(nextUserContent).byteLength
+  const selected = []
+  let bytes = 0
+  for (let index = messages.length - 1; index >= 0 && selected.length < MAX_REQUEST_MESSAGES - 2; index -= 1) {
+    const { role, content } = messages[index]
+    const size = encoder.encode(content).byteLength
+    if (bytes + size > budget) break
+    selected.unshift({ role, content })
+    bytes += size
+  }
+  while (selected[0]?.role === 'assistant') selected.shift()
+  return selected
+}
+
 export default function Pixel({ systemStatus = null }) {
+  const [initialChat] = useState(loadStoredChat)
   const [status, setStatus] = useState('loading')
   const [statusDetail, setStatusDetail] = useState('')
-  const [messages, setMessages] = useState([])
+  const [messages, setMessages] = useState(() => initialChat?.messages || [])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
 
   const abortRef = useRef(null)
-  const chatIdRef = useRef(makeChatId())
+  const chatIdRef = useRef(initialChat?.chatId || makeChatId())
   const inputRef = useRef(null)
   const scrollRef = useRef(null)
 
@@ -134,6 +183,31 @@ export default function Pixel({ systemStatus = null }) {
     scrollRef.current?.scrollIntoView?.({ behavior: 'smooth' })
   }, [messages])
 
+  useEffect(() => {
+    const field = inputRef.current
+    if (!field) return
+    field.style.height = 'auto'
+    field.style.height = `${Math.min(field.scrollHeight, 160)}px`
+  }, [input])
+
+  useEffect(() => {
+    if (sending) return
+    try {
+      const storedMessages = boundedHistory(messages, '')
+      globalThis.localStorage?.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+        schema: 1,
+        chatId: chatIdRef.current,
+        messages: storedMessages.map(({ role, content }) => ({
+          role,
+          content,
+        })),
+      }))
+    } catch {
+      // Conversation persistence is a convenience; chat remains usable when
+      // storage is unavailable, full, or blocked by the browser.
+    }
+  }, [messages, sending])
+
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim()
     if (!trimmed || sending || status !== 'available' || trimmed.length > MAX_INPUT_LEN) return
@@ -142,10 +216,7 @@ export default function Pixel({ systemStatus = null }) {
     // Local assistant messages carry UI-only status metadata. Keep the API
     // boundary exact so a completed or failed first turn cannot make the next
     // request fail the dashboard API's extra="forbid" contract.
-    const conversation = [
-      ...messages.map(({ role, content }) => ({ role, content })),
-      userMessage,
-    ]
+    const conversation = [...boundedHistory(messages, trimmed), userMessage]
     setMessages([...conversation, { role: 'assistant', content: '', status: 'streaming' }])
     setInput('')
     setSending(true)
@@ -239,7 +310,7 @@ export default function Pixel({ systemStatus = null }) {
     abortRef.current = null
     setMessages(previous => replaceLastAssistant(previous, {
       content: previous.at(-1)?.content || 'Response stopped',
-      status: 'error',
+      status: 'stopped',
     }))
     setSending(false)
   }, [])
@@ -258,6 +329,7 @@ export default function Pixel({ systemStatus = null }) {
   }, [])
 
   const inputOver = input.length > MAX_INPUT_LEN
+  const inputEmpty = !input.trim()
   const isDisabled = sending || status !== 'available'
 
   return (
@@ -407,6 +479,7 @@ export default function Pixel({ systemStatus = null }) {
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
+                if (event.nativeEvent?.isComposing) return
                 event.preventDefault()
                 sendMessage()
               }
@@ -429,7 +502,7 @@ export default function Pixel({ systemStatus = null }) {
           ) : (
             <button
               onClick={sendMessage}
-              disabled={isDisabled || inputOver}
+              disabled={isDisabled || inputOver || inputEmpty}
               className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-theme-accent text-white shadow-[0_0_22px_rgba(157,0,255,0.18)] transition hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               title="Send"
             >

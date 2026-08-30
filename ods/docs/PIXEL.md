@@ -168,6 +168,11 @@ Open WebUI search-query generation uses the ordinary local model, not Pixel,
 to avoid recursive agent routing. Automatic title, tag, and follow-up
 generation is disabled while Pixel is active because those cosmetic jobs would
 otherwise compete with the agent for the same local inference slot.
+The dedicated Dashboard keeps the current bounded conversation and opaque chat
+ID in that browser's local storage so a reload or Dashboard restart resumes the
+same Pixel session. It stores no gateway credential. **New chat** replaces that
+local pointer with a fresh opaque ID; older OpenClaw session files remain under
+the owner's normal Pixel lifecycle and are not exposed to the browser.
 For the default no-think mode, the managed Pixel route omits OpenClaw's Qwen
 thinking compatibility switch and declares reasoning inactive. The independently
 pinned llama.cpp no-think setting then remains authoritative on every model

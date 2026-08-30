@@ -47,6 +47,7 @@ const sseResponse = (frames, { status = 200, chunks } = {}) => {
 describe('Pixel', () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn()
+    globalThis.localStorage.clear()
   })
 
   afterEach(() => {
@@ -72,6 +73,60 @@ describe('Pixel', () => {
     await waitFor(() => {
       expect(screen.getByText('Available')).toBeInTheDocument()
     })
+  })
+
+  it('keeps send disabled until the draft has non-whitespace content', async () => {
+    globalThis.fetch.mockResolvedValue(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+
+    const textarea = screen.getByPlaceholderText('Message Pixel...')
+    const send = screen.getByTitle('Send')
+    expect(send).toBeDisabled()
+    fireEvent.change(textarea, { target: { value: '   ' } })
+    expect(send).toBeDisabled()
+    fireEvent.change(textarea, { target: { value: 'ready' } })
+    expect(send).toBeEnabled()
+  })
+
+  it('restores the bounded local chat and reuses its opaque session after reload', async () => {
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1,
+      chatId: 'persisted-chat-42',
+      messages: [
+        { role: 'user', content: 'remember this' },
+        { role: 'assistant', content: 'remembered' },
+      ],
+    }))
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'still remembered' } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('remembered')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'what did I say?' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByText('still remembered')).toBeInTheDocument())
+
+    const chatCall = globalThis.fetch.mock.calls.find(call => call[0] === '/api/pixel/chat/stream')
+    const body = JSON.parse(chatCall[1].body)
+    expect(body.chat_id).toBe('persisted-chat-42')
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'remember this' },
+      { role: 'assistant', content: 'remembered' },
+      { role: 'user', content: 'what did I say?' },
+    ])
   })
 
   it('orients the owner with live runtime identity and editable starter tasks', async () => {
@@ -327,6 +382,36 @@ describe('Pixel', () => {
       const ta = screen.getByPlaceholderText('Message Pixel...')
       expect(ta).toBeDisabled()
     })
+  })
+
+  it('renders an owner-stopped response as a neutral terminal state', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => new Promise(() => {}),
+          releaseLock: () => {},
+        }),
+      },
+      headers: new Map([['content-type', 'text/event-stream']]),
+    })
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'long task' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByTitle('Stop')).toBeInTheDocument())
+    fireEvent.click(screen.getByTitle('Stop'))
+
+    const stopped = await screen.findByText('Response stopped')
+    expect(stopped.closest('div')).not.toHaveClass('bg-red-500/10')
+    expect(screen.getByTitle('Send')).toBeDisabled()
   })
 
   it('enforces input limit', async () => {
