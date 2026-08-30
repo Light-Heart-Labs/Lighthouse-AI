@@ -153,9 +153,25 @@ to completion, repair failures, and report only verified truth.
   precheck before any model or tool action because the preserved chat no longer
   fit in 32K. The UI reported `Context overflow` and recommended a reset or a
   larger-context model.
-- Verdict: `not_agent_viable` on `windows-laptop` for the tested 24K and 32K
-  profiles. The artifact remains suitable for direct chat; a 64K-or-larger
-  profile may be revalidated separately.
+- Fresh 64K revalidation session
+  `b54637ca-feff-42fe-9a0e-d99c607d1438` used the same exact artifact with
+  llama.cpp and OpenClaw both confirmed at 65,536 tokens, 4,096 maximum output
+  tokens, about 6.0/8.0 GB live GPU use, and a healthy post-activation runtime.
+  The first full Pixel turn reached tools and repeatedly ran the required
+  background unittest command, but spent six failed verification cycles
+  editing fragile `MagicMock.side_effect` sequences instead of correcting the
+  required cache semantics. The bounded guard then denied further coding tools,
+  and the candidate ingress settled the dashboard back to `Available` with the
+  host-authoritative failure message.
+- Independent exact replay at the preserved 64K workspace ran seven authored
+  tests with two failures. Eight stable-clock hidden tests found two additional
+  semantic failures: an expired non-LRU entry survived lazy cleanup, and adding
+  a key evicted a live key while that expired entry remained. A focused hidden
+  test also proved that updating the most-recent key at capacity wrongly evicted
+  the other live key.
+- Verdict: `not_agent_viable` on `windows-laptop` for the tested 24K, 32K, and
+  64K profiles. The artifact remains suitable for direct chat, but additional
+  context did not produce a verified Pixel-agent workflow on this host.
 
 ## Revalidation
 

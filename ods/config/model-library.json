@@ -1792,10 +1792,10 @@
       "app_compatibility": {
         "pixel_agent": {
           "status": "not_agent_viable",
-          "label": "Pixel repair loop exhausted 32K context on Windows",
-          "reason": "A real Pixel coding turn at 24K created and exercised a workspace but failed verification. After atomically reconfiguring the same model to the NVIDIA 8GB 32K profile, a focused continuation still left four of seven tests failing, extended TTL on get contrary to the owner contract, and inverted exact-boundary assertions. The next evidence-guided continuation was rejected by OpenClaw's context precheck because the preserved session no longer fit in 32K. Independent replay reproduced the four failures, so direct chat and structured tool support do not establish Pixel-agent viability for this profile.",
+          "label": "Pixel repair loop failed at 64K context on Windows",
+          "reason": "Real Pixel coding turns at 24K and 32K created and exercised a workspace but failed verification, and a fresh 64K revalidation also exhausted the bounded six-failure repair budget. At 64K the model repeatedly rewrote brittle mock call sequences instead of correcting cache semantics; independent replay still had two of seven authored tests failing, while hidden stable-clock tests exposed expired non-LRU retention, live-key eviction before expired reclamation, and update-at-capacity eviction. The ODS ingress correctly surfaced the host-observed failure instead of false success, so direct chat, structured tool support, and additional context do not establish Pixel-agent viability on this host.",
           "evidence": "docs/pixel/model-capability-qualification.md#qwen-35-9b",
-          "recordedAt": "2026-08-30T08:36:00Z",
+          "recordedAt": "2026-08-30T09:00:00Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
           "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
