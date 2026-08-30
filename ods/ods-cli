@@ -4772,22 +4772,44 @@ cmd_agent() {
     local log_file="$INSTALL_DIR/data/ods-host-agent.log"
     local agent_script="$INSTALL_DIR/bin/ods-host-agent.py"
 
-    # Detect daemon type
+    _agent_process_owned() {
+        local candidate_pid="${1:-}" command_line=""
+        [[ "$candidate_pid" =~ ^[0-9]+$ ]] || return 1
+        kill -0 "$candidate_pid" 2>/dev/null || return 1
+        command_line=$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)
+        [[ -n "$command_line" && "$command_line" == *"$agent_script"* ]]
+    }
+
+    _agent_health_ready() {
+        local bind_addr health_payload
+        bind_addr="$(_agent_probe_host)"
+        health_payload=$(curl -sf --max-time 2 "http://${bind_addr}:${port}/health" 2>/dev/null) || return 1
+        grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' <<<"$health_payload" && \
+            grep -Eq '"version"[[:space:]]*:' <<<"$health_payload"
+    }
+
+    # Installer phases can explicitly request the per-session fallback when
+    # sudo is unavailable, even if an older system unit remains on disk.
     local daemon_type="none"
-    case "$(uname -s)" in
-        Darwin) daemon_type="launchd" ;;
-        Linux)
-            if systemctl status >/dev/null 2>&1 || [[ -d /run/systemd/system ]]; then
-                daemon_type="systemd"
-            fi
-            ;;
-    esac
+    if [[ "${ODS_AGENT_FORCE_SESSION:-false}" != "true" ]]; then
+        case "$(uname -s)" in
+            Darwin)
+                if [[ -f "$HOME/Library/LaunchAgents/com.ods.host-agent.plist" ]]; then
+                    daemon_type="launchd"
+                fi
+                ;;
+            Linux)
+                if command -v systemctl >/dev/null 2>&1 && \
+                   systemctl cat ods-host-agent.service >/dev/null 2>&1; then
+                    daemon_type="systemd"
+                fi
+                ;;
+        esac
+    fi
 
     case "$action" in
         status)
-            local bind_addr
-            bind_addr="$(_agent_probe_host)"
-            if curl -sf --max-time 2 "http://${bind_addr}:${port}/health" > /dev/null 2>&1; then
+            if _agent_health_ready; then
                 success "ODS host agent: running (port ${port}, ${daemon_type})"
             else
                 warn "ODS host agent: not responding (port ${port})"
@@ -4806,17 +4828,45 @@ cmd_agent() {
                     ;;
                 *)
                     # Fallback: nohup + PID file
+                    if _agent_health_ready; then
+                        success "ODS host agent: already running (port ${port})"
+                        return 0
+                    fi
                     if [[ -f "$pid_file" ]]; then
-                        kill "$(cat "$pid_file")" 2>/dev/null || true
+                        local stale_pid
+                        stale_pid=$(tr -d '[:space:]' < "$pid_file")
+                        if _agent_process_owned "$stale_pid"; then
+                            kill "$stale_pid" 2>/dev/null || true
+                        elif [[ -n "$stale_pid" ]]; then
+                            warn "Ignoring stale host-agent PID file; process $stale_pid is not owned by ODS"
+                        fi
                         rm -f "$pid_file"
                     fi
                     if ! command -v python3 &>/dev/null; then
                         error "python3 not found in PATH"
                         return 1
                     fi
+                    if [[ ! -f "$agent_script" ]]; then
+                        error "ODS host agent script not found: $agent_script"
+                        return 1
+                    fi
                     nohup python3 "$agent_script" --pid-file "$pid_file" \
-                        >> "$log_file" 2>&1 &disown
-                    success "Agent started (background, PID $!)"
+                        >> "$log_file" 2>&1 &
+                    local agent_pid=$!
+                    disown "$agent_pid" 2>/dev/null || true
+                    local attempt
+                    for attempt in {1..20}; do
+                        if _agent_health_ready; then
+                            success "Agent started (background, PID $agent_pid)"
+                            return 0
+                        fi
+                        kill -0 "$agent_pid" 2>/dev/null || break
+                        sleep 0.5
+                    done
+                    _agent_process_owned "$agent_pid" && kill "$agent_pid" 2>/dev/null || true
+                    rm -f "$pid_file"
+                    error "Agent did not become healthy on port ${port}; check $log_file"
+                    return 1
                     ;;
             esac
             ;;
@@ -4832,8 +4882,16 @@ cmd_agent() {
                     ;;
                 *)
                     if [[ -f "$pid_file" ]]; then
-                        kill "$(cat "$pid_file")" 2>/dev/null && \
-                            success "Agent stopped" || warn "Agent process not found"
+                        local agent_pid
+                        agent_pid=$(tr -d '[:space:]' < "$pid_file")
+                        if _agent_process_owned "$agent_pid"; then
+                            kill "$agent_pid" 2>/dev/null && \
+                                success "Agent stopped" || warn "Agent process not found"
+                        elif [[ -n "$agent_pid" ]]; then
+                            warn "Refusing to stop process $agent_pid because it is not owned by ODS"
+                        else
+                            warn "Agent PID file is empty"
+                        fi
                         rm -f "$pid_file"
                     else
                         warn "Agent not running (no PID file)"
@@ -4842,7 +4900,7 @@ cmd_agent() {
             esac
             ;;
         restart)
-            cmd_agent stop
+            cmd_agent stop || return 1
             sleep 1
             cmd_agent start
             ;;
