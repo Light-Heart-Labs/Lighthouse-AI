@@ -316,6 +316,13 @@ for sid in "${SERVICE_IDS[@]}"; do
         fail "Missing health endpoint: $sid"
     fi
 
+    health_source="${SERVICE_HEALTH_SOURCES[$sid]:-}"
+    if [[ "$health_source" == "http" || "$health_source" == "container" ]]; then
+        pass "Valid health source: $sid → $health_source"
+    else
+        fail "Invalid/missing health source: $sid → '$health_source'"
+    fi
+
     # Every service should have a runtime port. SERVICE_PORTS is the
     # user-facing external port; internal-only services may intentionally set
     # it to 0 when a proxy owns the LAN entry point. Host-network and
@@ -335,6 +342,17 @@ for sid in "${SERVICE_IDS[@]}"; do
         fi
     fi
 done
+
+if [[ "${SERVICE_HEALTH_SOURCES[model-router]:-}" == "container" ]]; then
+    pass "Internal model-router uses its Docker healthcheck"
+else
+    fail "Internal model-router must not be probed through an unpublished host port"
+fi
+if [[ "${SERVICE_PORTS[model-router]:-}" == "0" ]]; then
+    pass "Internal model-router publishes no host port"
+else
+    fail "Internal model-router must expose port 9099 only inside Compose"
+fi
 
 # ============================================
 # TEST 6: Compose Fragment Consistency
