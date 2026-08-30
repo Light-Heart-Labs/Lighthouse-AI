@@ -382,17 +382,31 @@ dry_run_preview() {
 # Stop running containers
 stop_containers() {
     log_step "Stopping containers..."
-
+    
     if ! docker compose ls --quiet 2>/dev/null | grep -q "$(basename "$ODS_DIR")"; then
         log_info "No running containers found"
         return 0
     fi
-
+    
     cd "$ODS_DIR"
-    if docker compose down; then
-        log_success "Containers stopped"
+    # Resolve current compose stack flags to ensure the correct stack is stopped
+    local compose_flags=""
+    if [[ -f "$ODS_DIR/.compose-flags" ]]; then
+        compose_flags=$(cat "$ODS_DIR/.compose-flags")
+    fi
+    
+    if [[ -n "$compose_flags" ]]; then
+        if docker compose $compose_flags down; then
+            log_success "Containers stopped"
+        else
+            log_warn "Some containers may not have stopped cleanly"
+        fi
     else
-        log_warn "Some containers may not have stopped cleanly"
+        if docker compose down; then
+            log_success "Containers stopped"
+        else
+            log_warn "Some containers may not have stopped cleanly"
+        fi
     fi
 }
 
