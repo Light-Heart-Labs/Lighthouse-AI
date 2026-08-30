@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -27,14 +29,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["remote-provider"])
 
 ROUTE_STATE_SCHEMA = "ods.remote-routing-state.v1"
+ACTIVATION_STATE_SCHEMA = "ods.remote-provider-activation-state.v1"
 EGRESS_URL = os.environ.get("REMOTE_PROVIDER_EGRESS_URL", "http://remote-provider-egress:8091")
 EGRESS_TIMEOUT_SECONDS = 3.0
+EGRESS_PROBE_TIMEOUT_SECONDS = 60.0
+LIFECYCLE_APPLY_TIMEOUT_SECONDS = 1800.0
 PEER_PROXY_TIMEOUT_SECONDS = 30.0
 PEER_PROXY_LOAD_TIMEOUT_SECONDS = 2700.0
 PEER_PROXY_RESPONSE_MAX_BYTES = 2_000_000
 PEER_REDACTED = "[REDACTED]"
 
-_SAFE_PROVIDER_KEYS = {"capability", "baseUrl", "model", "transport"}
+_SAFE_PROVIDER_KEYS = {
+    "capability", "baseUrl", "model", "transport",
+    "contextLength", "maxTokens", "reasoning",
+}
 _SAFE_PROJECTION_KEYS = {"publicModel", "gateway", "egressBaseUrl", "consumerRoute"}
 _SSH_SUPERVISOR_SCHEMA = "ods.remote-provider-ssh-supervisor-plan.v1"
 _EGRESS_PROBE_SCHEMA = "ods.remote-provider-egress-probe.v1"
@@ -70,19 +78,113 @@ def _state_path() -> Path:
     return Path(DATA_DIR) / "remote-provider" / "routing-state.json"
 
 
+def _activation_path() -> Path:
+    override = os.environ.get("ODS_REMOTE_PROVIDER_ACTIVATION_PATH")
+    if override:
+        return Path(override)
+    return Path(DATA_DIR) / "remote-provider" / "activation-public.json"
+
+
+def _route_fingerprint(route_state: Mapping[str, Any]) -> str:
+    provider = route_state.get("provider")
+    provider = provider if isinstance(provider, Mapping) else {}
+    identity = {
+        key: provider.get(key)
+        for key in (
+            "transport", "baseUrl", "model", "contextLength", "maxTokens", "reasoning",
+        )
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _read_activation() -> dict[str, Any]:
+    path = _activation_path()
+    try:
+        if path.is_symlink() or not path.is_file():
+            return {"valid": False, "active": False, "proven": False, "reason": "unsafe"}
+        metadata = path.stat()
+        if metadata.st_size > 65536:
+            return {"valid": False, "active": False, "proven": False, "reason": "oversized"}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"valid": True, "active": False, "proven": False, "reason": "not_activated"}
+    except (OSError, ValueError):
+        return {"valid": False, "active": False, "proven": False, "reason": "unreadable"}
+    if not isinstance(value, Mapping) or value.get("schema") != ACTIVATION_STATE_SCHEMA:
+        return {"valid": False, "active": False, "proven": False, "reason": "invalid"}
+    model = _safe_text(value.get("model"), max_length=256)
+    route_fingerprint = _safe_text(value.get("routeFingerprint"), max_length=64)
+    context_length = _safe_int(value.get("contextLength"))
+    max_tokens = _safe_int(value.get("maxTokens"))
+    reasoning = value.get("reasoning") if type(value.get("reasoning")) is bool else None
+    gateway = _safe_text(value.get("gateway"), max_length=64)
+    public_model = _safe_text(value.get("publicModel"), max_length=64)
+    pixel = _safe_text(value.get("pixel"), max_length=64)
+    active = value.get("active") is True
+    proven = active and value.get("proven") is True
+    contract_valid = bool(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", model)
+        and type(context_length) is int
+        and 16384 <= context_length <= 10_000_000
+        and type(max_tokens) is int
+        and 1 <= max_tokens <= context_length
+        and type(reasoning) is bool
+        and gateway == "litellm-cloud"
+        and public_model == "ods/current"
+        and pixel in {"reconciled", "not_installed"}
+        and re.fullmatch(r"[a-f0-9]{64}", route_fingerprint)
+    )
+    if not active or not proven or not contract_valid:
+        return {
+            "valid": False,
+            "active": active,
+            "proven": False,
+            "reason": "invalid_activation_contract",
+        }
+    return {
+        "valid": True,
+        "active": active,
+        "proven": proven,
+        "reason": "active_and_proven",
+        "gateway": gateway,
+        "publicModel": public_model,
+        "model": model,
+        "routeFingerprint": route_fingerprint,
+        "contextLength": context_length,
+        "maxTokens": max_tokens,
+        "reasoning": reasoning,
+        "pixel": pixel,
+        "updatedAt": _safe_text(value.get("updatedAt"), max_length=64),
+    }
+
+
 def _peer_token_path() -> Path:
     return Path(DATA_DIR) / "remote-provider" / "secrets" / "peer-token"
+
+
+def _safe_provider(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    clean: dict[str, Any] = {}
+    for key in _SAFE_PROVIDER_KEYS:
+        item = value.get(key)
+        if isinstance(item, str):
+            clean[key] = item
+        elif key in {"contextLength", "maxTokens"} and type(item) is int:
+            clean[key] = item
+        elif key == "reasoning" and type(item) is bool:
+            clean[key] = item
+    return clean
 
 
 def _safe_string_map(value: Any, keys: set[str]) -> dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
-    clean: dict[str, str] = {}
-    for key in keys:
-        item = value.get(key)
-        if isinstance(item, str):
-            clean[key] = item
-    return clean
+    return {
+        key: item for key in keys
+        if isinstance((item := value.get(key)), str)
+    }
 
 
 def _safe_peer_metadata(value: Any) -> dict[str, str]:
@@ -165,7 +267,7 @@ def _state_response(
         "valid": valid,
         "enabled": enabled,
         "mode": mode,
-        "provider": _safe_string_map(provider, _SAFE_PROVIDER_KEYS) if enabled else None,
+        "provider": _safe_provider(provider) if enabled else None,
         "peer": _safe_peer_metadata(peer) if enabled else None,
         "projection": _safe_string_map(projection, _SAFE_PROJECTION_KEYS),
         "status": _safe_route_status(status),
@@ -665,12 +767,23 @@ def _safe_proof_record(payload: Any) -> dict[str, Any]:
     schema = _safe_text(payload.get("schema"), max_length=80)
     if schema != _PROOF_RECORD_SCHEMA or payload.get("recorded") is not True:
         return _proof_record_failure("invalid_host_agent_response", reachable=True)
-    return {
+    result = {
         "recorded": True,
         "reachable": True,
         "schema": schema,
         "status": _safe_route_status(payload.get("status")),
     }
+    activation = payload.get("activation")
+    if isinstance(activation, Mapping):
+        result["activation"] = {
+            "active": activation.get("active") is True,
+            "proven": activation.get("proven") is True,
+            "gateway": _safe_text(activation.get("gateway"), max_length=64),
+            "publicModel": _safe_text(activation.get("publicModel"), max_length=64),
+            "model": _safe_text(activation.get("model"), max_length=256),
+            "pixel": _safe_text(activation.get("pixel"), max_length=64),
+        }
+    return result
 
 
 async def _record_egress_probe_proof(probe_response: Mapping[str, Any]) -> dict[str, Any]:
@@ -679,7 +792,7 @@ async def _record_egress_probe_proof(probe_response: Mapping[str, Any]) -> dict[
             "POST",
             "/v1/remote-provider/proof",
             payload=dict(probe_response),
-            timeout=5,
+            timeout=LIFECYCLE_APPLY_TIMEOUT_SECONDS,
         )
     except AgentHTTPError as exc:
         logger.debug(
@@ -748,7 +861,7 @@ async def _fetch_egress_health() -> dict[str, Any]:
 async def _post_egress_probe() -> dict[str, Any]:
     url = f"{EGRESS_URL.rstrip('/')}/probe"
     try:
-        async with httpx.AsyncClient(timeout=EGRESS_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=EGRESS_PROBE_TIMEOUT_SECONDS) as client:
             response = await client.post(url)
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
         logger.debug("remote-provider-egress probe unavailable: %s", exc)
@@ -909,12 +1022,20 @@ async def _peer_model_json_request(
     return _peer_response_json(response, token)
 
 
-def _overall_status(route_state: Mapping[str, Any], egress: Mapping[str, Any]) -> str:
+def _overall_status(
+    route_state: Mapping[str, Any],
+    egress: Mapping[str, Any],
+    activation: Mapping[str, Any],
+) -> str:
     if not route_state.get("valid"):
         return "invalid"
     if route_state.get("enabled") is not True:
         return "disabled"
     if not egress.get("reachable") or not egress.get("ready"):
+        return "degraded"
+    if not activation.get("valid") or not activation.get("proven"):
+        return "degraded"
+    if activation.get("routeFingerprint") != _route_fingerprint(route_state):
         return "degraded"
     return "ready"
 
@@ -923,17 +1044,20 @@ def _overall_status(route_state: Mapping[str, Any], egress: Mapping[str, Any]) -
 async def remote_provider_status() -> dict[str, Any]:
     """Return sanitized remote-provider status without mutating configuration."""
     route_state = _read_route_state()
+    activation = _read_activation()
     egress = await _fetch_egress_health()
     ssh_supervisor = await _fetch_ssh_supervisor_status()
     peer = _peer_status(route_state, ssh_supervisor)
+    overall = _overall_status(route_state, egress, activation)
     return {
-        "status": _overall_status(route_state, egress),
+        "status": overall,
         "routeState": route_state,
+        "activation": activation,
         "sshSupervisor": ssh_supervisor,
         "peer": peer,
         "egress": egress,
         "capabilities": {
-            "inference": bool(route_state.get("enabled")),
+            "inference": overall == "ready",
             "odsPeerLifecycle": bool(peer.get("ready")),
         },
         "availableActions": {
@@ -1040,7 +1164,7 @@ async def remote_provider_apply(payload: dict[str, Any]) -> dict[str, Any]:
             "POST",
             "/v1/remote-provider/apply",
             payload=payload,
-            timeout=10,
+            timeout=LIFECYCLE_APPLY_TIMEOUT_SECONDS,
         )
     except AgentHTTPError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

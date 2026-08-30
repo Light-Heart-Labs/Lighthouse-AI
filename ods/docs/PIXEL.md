@@ -222,6 +222,16 @@ the same alias without teaching Pixel a provider-specific endpoint. The Pixel
 gateway is restarted and verified before the transaction commits. The public
 Open WebUI identity remains `pixel/default` throughout.
 
+The Dashboard Remote Provider page uses that same stable alias. A direct
+provider becomes active only after its egress probe, a real LiteLLM completion,
+and Pixel reconciliation all succeed. An SSH-backed provider remains visibly
+staged until the managed tunnel proof completes. The operator supplies the
+provider's context window, output limit, and reasoning capability so broad
+model swaps update Pixel's runtime policy rather than inheriting stale local
+limits. Repeated route tests verify the live LiteLLM and Pixel consumers; they
+do not trust an old readiness marker. Disabling or removing the provider
+restores the exact pre-provider ODS mode and Pixel contract.
+
 If Pixel reconciliation fails, ODS restores and proves both the previous model
 runtime and Pixel route. The first upgrade from the legacy direct
 `ods-local`/llama.cpp binding is also transactional: the rollback contract

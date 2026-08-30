@@ -912,6 +912,10 @@ _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$gateway_answers"
     qwen-gateway-next 131072 8192 true
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-gateway" and v["modelId"] == "ods/current" and v["modelName"] == "ODS Current (qwen-gateway-next)" and v["modelContextWindow"] == 131072 and v["modelMaxTokens"] == 8192 and v["modelReasoning"] is True' \
     "$gateway_answers"
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$gateway_answers" \
+    'org/qwen+tools:remote' 131072 8192 true
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "ods/current" and v["modelName"] == "ODS Current (org/qwen+tools:remote)"' \
+    "$gateway_answers"
 
 linked_answers="$TEST_ROOT/onboarding-linked.json"
 printf '%s\n' 'sentinel' > "$TEST_ROOT/onboarding-link-target"

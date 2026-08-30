@@ -51,12 +51,108 @@ def _patch_state_path(monkeypatch, path):
     from routers import remote_provider_status as rps
 
     monkeypatch.setattr(rps, "_state_path", lambda: path)
+    activation_path = path.with_name("activation-public.json")
+    monkeypatch.setattr(rps, "_activation_path", lambda: activation_path)
+    if path.exists():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            state = {}
+        provider = state.get("provider") if isinstance(state.get("provider"), dict) else {}
+        if state.get("enabled") is True:
+            activation_path.write_text(
+                json.dumps({
+                    "schema": "ods.remote-provider-activation-state.v1",
+                    "active": True,
+                    "proven": True,
+                    "gateway": "litellm-cloud",
+                    "publicModel": "ods/current",
+                    "model": provider.get("model", "qwen/remote:latest"),
+                    "routeFingerprint": rps._route_fingerprint(state),
+                    "contextLength": provider.get("contextLength", 32768),
+                    "maxTokens": provider.get("maxTokens", 4096),
+                    "reasoning": provider.get("reasoning", False),
+                    "pixel": "reconciled",
+                    "updatedAt": "2026-07-26T00:00:00+00:00",
+                }),
+                encoding="utf-8",
+            )
     return rps
 
 
 def test_remote_provider_status_requires_auth(test_client):
     resp = test_client.get("/api/remote-provider/status")
     assert resp.status_code == 401
+
+
+def test_overall_status_requires_a_proven_consumer_activation():
+    from routers import remote_provider_status as rps
+
+    route = {
+        "valid": True,
+        "enabled": True,
+        "provider": {
+            "transport": "direct",
+            "baseUrl": "https://gpu.example.test/v1",
+            "model": "qwen/remote:latest",
+            "contextLength": 32768,
+            "maxTokens": 4096,
+            "reasoning": False,
+        },
+    }
+    egress = {"reachable": True, "ready": True}
+    assert rps._overall_status(
+        route,
+        egress,
+        {"valid": True, "active": False, "proven": False},
+    ) == "degraded"
+    assert rps._overall_status(
+        route,
+        egress,
+        {
+            "valid": True,
+            "active": True,
+            "proven": True,
+            "routeFingerprint": rps._route_fingerprint(route),
+        },
+    ) == "ready"
+    assert rps._overall_status(
+        route,
+        egress,
+        {
+            "valid": True,
+            "active": True,
+            "proven": True,
+            "routeFingerprint": "0" * 64,
+        },
+    ) == "degraded"
+
+
+def test_activation_status_rejects_incomplete_ready_claim(monkeypatch, tmp_path):
+    from routers import remote_provider_status as rps
+
+    path = tmp_path / "activation-public.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "ods.remote-provider-activation-state.v1",
+                "active": True,
+                "proven": True,
+                "gateway": "litellm-cloud",
+                "publicModel": "ods/current",
+                "model": "org/qwen:remote",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rps, "_activation_path", lambda: path)
+
+    assert rps._read_activation() == {
+        "valid": False,
+        "active": True,
+        "proven": False,
+        "reason": "invalid_activation_contract",
+    }
 
 
 def test_remote_provider_status_missing_state_is_disabled(
@@ -1122,7 +1218,7 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
         },
     }
     assert calls == [
-        ("timeout", 3.0),
+        ("timeout", 60.0),
         ("post", "http://egress.internal:8091/probe"),
     ]
     assert agent_calls == [
@@ -1151,7 +1247,7 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
                     "process": {"status": "running", "pid": 4242},
                 },
             },
-            5,
+            1800.0,
         )
     ]
     assert "unit-test-provider-token" not in dumped
@@ -1320,7 +1416,12 @@ def test_remote_provider_apply_proxies_to_host_agent(
     assert body["action"] == "configure"
     assert body["mutated"] is True
     assert "unit-test-provider-token" not in dumped
-    assert calls == [("POST", "/v1/remote-provider/apply", payload, 10)]
+    assert calls == [(
+        "POST",
+        "/v1/remote-provider/apply",
+        payload,
+        rps.LIFECYCLE_APPLY_TIMEOUT_SECONDS,
+    )]
 
 
 def test_remote_provider_apply_preserves_host_agent_validation_errors(

@@ -536,7 +536,7 @@ import json, os, pathlib, re, stat, sys, tempfile
 path = pathlib.Path(sys.argv[1])
 model = sys.argv[2]
 context_raw, max_tokens_raw, reasoning_raw = sys.argv[3:6]
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", model):
     raise SystemExit("invalid promoted Pixel model id")
 info = path.lstat()
 if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
@@ -566,7 +566,7 @@ elif provider == "ods-gateway":
     if (model_id not in {"default", "ods/current"}
             or not isinstance(model_name, str)
             or not re.fullmatch(
-                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/+-]{{0,255}}\)",
                 model_name,
             )
             or not isinstance(api_key, str) or not api_key or len(api_key) > 4096
@@ -1706,7 +1706,7 @@ if gateway_alias not in {"default", "ods/current"}:
     raise SystemExit("invalid ODS Pixel gateway alias")
 if gateway_label not in {"Default", "Current"}:
     raise SystemExit("invalid ODS Pixel gateway label")
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", model):
     raise SystemExit("invalid ODS Pixel model id")
 if (not gateway_port.isdigit() or not 1 <= int(gateway_port) <= 65535
         or not gateway_key or len(gateway_key) > 4096

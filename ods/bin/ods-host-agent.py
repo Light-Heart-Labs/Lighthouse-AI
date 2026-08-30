@@ -150,6 +150,7 @@ _REMOTE_PROVIDER_EGRESS_UID = 10778
 _REMOTE_PROVIDER_EGRESS_GID = 10778
 _REMOTE_PROVIDER_EGRESS_PROBE_SCHEMA = "ods.remote-provider-egress-probe.v1"
 _REMOTE_PROVIDER_PROOF_RECORD_SCHEMA = "ods.remote-provider-proof-record.v1"
+_REMOTE_PROVIDER_ACTIVATION_STATE_SCHEMA = "ods.remote-provider-activation-state.v1"
 _REMOTE_PROVIDER_SECRET_FIELD_TO_REF = {
     "apiKey": "REMOTE_LLM_API_KEY",
     "peerToken": "REMOTE_ODS_PEER_TOKEN",
@@ -2340,7 +2341,7 @@ def _reconcile_ods_managed_pixel_model(
     identity = _ods_managed_pixel_identity()
     if identity is None:
         return "not_installed"
-    if not _valid_local_model_name(model):
+    if not _valid_pixel_model_name(model):
         raise RuntimeError("The promoted Pixel model identity is invalid")
     if not isinstance(context_length, int) or isinstance(context_length, bool) \
             or not 4096 <= context_length <= 10_000_000:
@@ -2437,6 +2438,14 @@ def _remote_provider_root() -> Path:
 
 def _remote_provider_route_state_path() -> Path:
     return _remote_provider_root() / "routing-state.json"
+
+
+def _remote_provider_activation_state_path() -> Path:
+    return _remote_provider_root() / "activation-state.json"
+
+
+def _remote_provider_activation_public_path() -> Path:
+    return _remote_provider_root() / "activation-public.json"
 
 
 def _remote_provider_secret_path(ref: str) -> Path:
@@ -2617,6 +2626,8 @@ def _read_remote_provider_route_state_for_update() -> dict:
 def _record_remote_provider_egress_probe(payload: dict) -> dict:
     probe_receipt = _remote_provider_probe_receipt_from_egress(payload)
     state = _read_remote_provider_route_state_for_update()
+    state_path = _remote_provider_route_state_path()
+    state_snapshot = _snapshot_text_file(state_path)
     provider = state.get("provider") if isinstance(state.get("provider"), dict) else {}
     payload_transport = _remote_provider_safe_text(payload.get("transport"), max_length=32)
     active_transport = str(provider.get("transport") or "direct")
@@ -2626,15 +2637,29 @@ def _record_remote_provider_egress_probe(payload: dict) -> dict:
         enabled=True,
         probe_receipt=probe_receipt,
     )
-    _atomic_write_text(
-        _remote_provider_route_state_path(),
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
-        0o644,
-    )
+    _atomic_write_text(state_path, json.dumps(state, indent=2, sort_keys=True) + "\n", 0o644)
+    try:
+        runtime = _remote_provider_runtime_contract(state)
+        activation_state = _read_remote_provider_activation_state()
+        activation_current = (
+            isinstance(activation_state, dict)
+            and activation_state.get("phase") == "active"
+            and activation_state.get("remote") == runtime
+            and activation_state.get("routeFingerprint")
+            == _remote_provider_route_fingerprint(state)
+        )
+        activation = _verify_current_remote_provider_consumers(state, runtime) \
+            if activation_current else None
+        if activation is None:
+            activation = _activate_remote_provider_route(state)
+    except Exception:
+        _restore_text_file(state_path, state_snapshot)
+        raise
     return {
         "schema": _REMOTE_PROVIDER_PROOF_RECORD_SCHEMA,
         "recorded": True,
         "status": state["status"],
+        "activation": activation,
     }
 
 
@@ -2715,6 +2740,447 @@ def _remote_provider_secret_values(payload: dict, plan: dict) -> dict[str, str]:
     return values
 
 
+def _remote_provider_runtime_contract(route: dict) -> dict[str, object]:
+    provider = route.get("provider") if isinstance(route.get("provider"), dict) else {}
+    model = str(provider.get("model") or "")
+    context_length = provider.get("contextLength")
+    max_tokens = provider.get("maxTokens")
+    reasoning = provider.get("reasoning")
+    if not _valid_pixel_model_name(model):
+        raise RuntimeError("Remote provider model identity is invalid for managed agents")
+    if type(context_length) is not int or not 16384 <= context_length <= 10_000_000:
+        raise RuntimeError("Remote provider context must be between 16384 and 10000000 tokens")
+    if type(max_tokens) is not int or not 1 <= max_tokens <= context_length:
+        raise RuntimeError("Remote provider output limit must fit its context window")
+    if type(reasoning) is not bool:
+        raise RuntimeError("Remote provider reasoning capability must be boolean")
+    return {
+        "model": model,
+        "contextLength": context_length,
+        "maxTokens": max_tokens,
+        "reasoning": reasoning,
+    }
+
+
+def _remote_provider_route_fingerprint(route: dict) -> str:
+    provider = route.get("provider") if isinstance(route.get("provider"), dict) else {}
+    identity = {
+        key: provider.get(key)
+        for key in (
+            "transport", "baseUrl", "model", "contextLength", "maxTokens", "reasoning",
+        )
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _serializable_text_snapshot(snapshot: dict) -> dict[str, object]:
+    return {
+        "exists": bool(snapshot.get("exists")),
+        "text": str(snapshot.get("text") or "") if snapshot.get("exists") else None,
+        "mode": snapshot.get("mode"),
+        "uid": snapshot.get("uid"),
+        "gid": snapshot.get("gid"),
+    }
+
+
+def _valid_serializable_text_snapshot(value: object) -> bool:
+    if not isinstance(value, dict) or type(value.get("exists")) is not bool:
+        return False
+    exists = value["exists"]
+    text = value.get("text")
+    mode = value.get("mode")
+    uid = value.get("uid")
+    gid = value.get("gid")
+    if exists:
+        if not isinstance(text, str) or len(text.encode("utf-8")) > 2 * 1024 * 1024:
+            return False
+        if type(mode) is not int or not 0 <= mode <= 0o7777:
+            return False
+        if type(uid) is not int or uid < 0 or type(gid) is not int or gid < 0:
+            return False
+    elif any(item is not None for item in (text, mode, uid, gid)):
+        return False
+    return True
+
+
+def _valid_managed_pixel_runtime_contract(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict) or not _valid_pixel_model_name(value.get("model")):
+        return False
+    context_length = value.get("contextLength")
+    max_tokens = value.get("maxTokens")
+    reasoning = value.get("reasoning")
+    return bool(
+        type(context_length) is int
+        and 4096 <= context_length <= 10_000_000
+        and type(max_tokens) is int
+        and 1 <= max_tokens <= context_length
+        and type(reasoning) is bool
+    )
+
+
+def _valid_remote_provider_runtime_contract(value: object) -> bool:
+    return bool(
+        _valid_managed_pixel_runtime_contract(value)
+        and isinstance(value, dict)
+        and value.get("contextLength", 0) >= 16384
+    )
+
+
+def _read_remote_provider_activation_state() -> dict | None:
+    path = _remote_provider_activation_state_path()
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError(f"Could not inspect remote-provider activation state: {exc}") from exc
+    if (
+        stat_mod.S_ISLNK(metadata.st_mode)
+        or not stat_mod.S_ISREG(metadata.st_mode)
+        or (os.name != "nt" and stat_mod.S_IMODE(metadata.st_mode) & 0o077)
+        or metadata.st_size > 2 * 1024 * 1024
+    ):
+        raise RuntimeError("Remote-provider activation state is unsafe")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read remote-provider activation state: {exc}") from exc
+    previous = value.get("previous") if isinstance(value, dict) else None
+    remote = value.get("remote") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != _REMOTE_PROVIDER_ACTIVATION_STATE_SCHEMA
+        or value.get("phase") not in {"staging", "active"}
+        or not isinstance(previous, dict)
+        or not isinstance(previous.get("odsMode"), str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", previous["odsMode"])
+        or not isinstance(previous.get("llmApiUrl"), str)
+        or not previous["llmApiUrl"]
+        or len(previous["llmApiUrl"]) > 2048
+        or any(character in previous["llmApiUrl"] for character in "\r\n\x00")
+        or not _valid_serializable_text_snapshot(previous.get("cloudConfig"))
+        or not _valid_managed_pixel_runtime_contract(previous.get("pixel"))
+        or not _valid_remote_provider_runtime_contract(remote)
+        or not isinstance(value.get("routeFingerprint"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", value["routeFingerprint"])
+    ):
+        raise RuntimeError("Remote-provider activation state contract is invalid")
+    return value
+
+
+def _write_remote_provider_activation_state(value: dict) -> None:
+    _atomic_write_text(
+        _remote_provider_activation_state_path(),
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        0o600,
+    )
+
+
+def _write_remote_provider_activation_public(value: dict) -> None:
+    safe = {
+        "schema": _REMOTE_PROVIDER_ACTIVATION_STATE_SCHEMA,
+        "active": value.get("active") is True,
+        "gateway": str(value.get("gateway") or ""),
+        "publicModel": str(value.get("publicModel") or ""),
+        "model": str(value.get("model") or ""),
+        "routeFingerprint": str(value.get("routeFingerprint") or ""),
+        "contextLength": value.get("contextLength"),
+        "maxTokens": value.get("maxTokens"),
+        "reasoning": value.get("reasoning"),
+        "pixel": str(value.get("pixel") or ""),
+        "proven": value.get("proven") is True,
+        "updatedAt": _iso_now(),
+    }
+    _atomic_write_text(
+        _remote_provider_activation_public_path(),
+        json.dumps(safe, indent=2, sort_keys=True) + "\n",
+        0o644,
+    )
+
+
+def _managed_pixel_runtime_contract() -> dict[str, object] | None:
+    if _ods_managed_pixel_identity() is None:
+        return None
+    path = INSTALL_DIR / "data" / "pixel" / "onboarding.json"
+    snapshot = _snapshot_text_file(path)
+    if not snapshot.get("exists") or int(snapshot.get("mode") or 0o777) & 0o077:
+        raise RuntimeError("ODS-managed Pixel onboarding contract is missing or unsafe")
+    try:
+        value = json.loads(str(snapshot.get("text") or ""))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("ODS-managed Pixel onboarding contract is invalid") from exc
+    provider = value.get("modelProvider")
+    model_id = value.get("modelId")
+    model_name = value.get("modelName")
+    if provider == "ods-local":
+        if not _valid_pixel_model_name(model_id) or model_name != f"ODS Local {model_id}":
+            raise RuntimeError("ODS-managed Pixel local model identity is invalid")
+        concrete_model = model_id
+    elif provider == "ods-gateway":
+        alias_label = "Current" if model_id == "ods/current" else "Default"
+        display = re.fullmatch(
+            rf"ODS {alias_label} \(([A-Za-z0-9][A-Za-z0-9._:/+-]{{0,255}})\)",
+            model_name if isinstance(model_name, str) else "",
+        )
+        if model_id not in {"default", "ods/current"} or display is None:
+            raise RuntimeError("ODS-managed Pixel gateway model identity is invalid")
+        concrete_model = display.group(1)
+    else:
+        raise RuntimeError("ODS-managed Pixel provider identity is invalid")
+    contract = {
+        "model": concrete_model,
+        "contextLength": value.get("modelContextWindow"),
+        "maxTokens": value.get("modelMaxTokens"),
+        "reasoning": value.get("modelReasoning"),
+    }
+    if not _valid_managed_pixel_runtime_contract(contract):
+        raise RuntimeError("ODS-managed Pixel onboarding runtime contract is invalid")
+    return contract
+
+
+def _reconcile_managed_pixel_contract(contract: dict[str, object] | None) -> str:
+    if contract is None:
+        return "not_installed"
+    return _reconcile_ods_managed_pixel_model(
+        str(contract["model"]),
+        int(contract["contextLength"]),
+        max_tokens=int(contract["maxTokens"]),
+        reasoning=bool(contract["reasoning"]),
+    )
+
+
+def _verify_current_remote_provider_consumers(
+    route: dict,
+    runtime: dict[str, object],
+) -> dict[str, object] | None:
+    """Return a fresh receipt only when persisted consumers still match."""
+    env = load_env(INSTALL_DIR / ".env")
+    if (
+        str(env.get("ODS_MODE") or "") != "cloud"
+        or str(env.get("LLM_API_URL") or "").rstrip("/") != "http://litellm:4000"
+    ):
+        return None
+    pixel = _managed_pixel_runtime_contract()
+    if pixel is not None and pixel != runtime:
+        return None
+    try:
+        _verify_litellm_route(env, model="ods/current")
+    except RuntimeError:
+        return None
+    activation = {
+        "active": True,
+        "gateway": "litellm-cloud",
+        "publicModel": "ods/current",
+        "model": runtime["model"],
+        "routeFingerprint": _remote_provider_route_fingerprint(route),
+        "contextLength": runtime["contextLength"],
+        "maxTokens": runtime["maxTokens"],
+        "reasoning": runtime["reasoning"],
+        "pixel": "reconciled" if pixel is not None else "not_installed",
+        "proven": True,
+        "unchanged": True,
+    }
+    _write_remote_provider_activation_public(activation)
+    return activation
+
+
+def _render_remote_provider_cloud_config(route: dict, env: dict[str, str]) -> None:
+    provider = route.get("provider") if isinstance(route.get("provider"), dict) else {}
+    api_key = str(env.get("LITELLM_KEY") or env.get("LITELLM_MASTER_KEY") or "")
+    if not _render_runtime_config(
+        INSTALL_DIR,
+        "litellm-cloud",
+        model=str(env.get("LLM_MODEL") or "default"),
+        gguf_file=str(env.get("GGUF_FILE") or "model.gguf"),
+        lemonade_model_id=str(env.get("LEMONADE_MODEL") or ""),
+        lemonade_api_key=api_key,
+        lemonade_api_base=_runtime_lemonade_api_base(env),
+        llm_base_url=_runtime_llama_api_base(env),
+        ods_mode="cloud",
+        gpu_backend=str(env.get("GPU_BACKEND") or "nvidia"),
+        switchboard_mode=_normal_switchboard_mode(env),
+        remote_llm_enabled=True,
+        remote_llm_transport=str(provider.get("transport") or ""),
+        remote_llm_base_url=str(provider.get("baseUrl") or ""),
+        remote_llm_model=str(provider.get("model") or ""),
+    ):
+        raise RuntimeError("Could not render the remote-provider LiteLLM route")
+
+
+def _activate_remote_provider_route(route: dict) -> dict[str, object]:
+    """Commit a proven egress route to LiteLLM and managed Pixel, or roll back."""
+    runtime = _remote_provider_runtime_contract(route)
+    env_path = INSTALL_DIR / ".env"
+    cloud_path = INSTALL_DIR / "config" / "litellm" / "cloud.yaml"
+    env_snapshot = _snapshot_text_file(env_path)
+    cloud_snapshot = _snapshot_text_file(cloud_path)
+    activation_path = _remote_provider_activation_state_path()
+    activation_public_path = _remote_provider_activation_public_path()
+    activation_snapshot = _snapshot_text_file(activation_path)
+    activation_public_snapshot = _snapshot_text_file(activation_public_path)
+    pixel_before = _managed_pixel_runtime_contract()
+    container_state = _capture_container_state("ods-litellm")
+    if not container_state.get("running"):
+        raise RuntimeError("LiteLLM must be running before a remote provider can become active")
+
+    existing = _read_remote_provider_activation_state()
+    previous = existing.get("previous") if isinstance(existing, dict) else None
+    if not isinstance(previous, dict):
+        env = load_env(env_path)
+        previous = {
+            "odsMode": str(env.get("ODS_MODE") or "local"),
+            "llmApiUrl": str(env.get("LLM_API_URL") or "http://llama-server:8080"),
+            "cloudConfig": _serializable_text_snapshot(cloud_snapshot),
+            "pixel": pixel_before,
+        }
+    candidate_state = {
+        "schema": _REMOTE_PROVIDER_ACTIVATION_STATE_SCHEMA,
+        "phase": "staging",
+        "previous": previous,
+        "remote": runtime,
+        "routeFingerprint": _remote_provider_route_fingerprint(route),
+        "updatedAt": _iso_now(),
+    }
+    pixel_attempted = False
+    litellm_recreated = False
+    try:
+        _write_remote_provider_activation_state(candidate_state)
+        raw_env = str(env_snapshot.get("text") or "")
+        raw_env = _upsert_env_text(raw_env, "ODS_MODE", "cloud")
+        raw_env = _upsert_env_text(raw_env, "LLM_API_URL", "http://litellm:4000")
+        _write_bound_env_text(env_path, raw_env)
+        env = load_env(env_path)
+        _render_remote_provider_cloud_config(route, env)
+        litellm_recreated = _restart_existing_container(
+            "ods-litellm", container_state, recreate=True,
+        )
+        if not litellm_recreated:
+            raise RuntimeError("LiteLLM route could not be recreated")
+        _wait_for_container_health("ods-litellm")
+        _verify_litellm_route(env, model="ods/current")
+        pixel_attempted = pixel_before is not None
+        pixel_status = _reconcile_managed_pixel_contract(runtime)
+        activation_public = {
+            "active": True,
+            "gateway": "litellm-cloud",
+            "publicModel": "ods/current",
+            "model": runtime["model"],
+            "routeFingerprint": candidate_state["routeFingerprint"],
+            "contextLength": runtime["contextLength"],
+            "maxTokens": runtime["maxTokens"],
+            "reasoning": runtime["reasoning"],
+            "pixel": pixel_status,
+            "proven": True,
+        }
+        candidate_state["phase"] = "active"
+        candidate_state["updatedAt"] = _iso_now()
+        _write_remote_provider_activation_state(candidate_state)
+        # Publish readiness only after the private recovery record commits.
+        # A crash between these writes therefore degrades status safely.
+        _write_remote_provider_activation_public(activation_public)
+        return activation_public
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        try:
+            _restore_bound_env_file(env_path, env_snapshot)
+            _restore_text_file(cloud_path, cloud_snapshot)
+            _restore_text_file(activation_path, activation_snapshot)
+            _restore_text_file(activation_public_path, activation_public_snapshot)
+        except Exception as rollback_exc:
+            rollback_errors.append(f"configuration: {rollback_exc}")
+        if litellm_recreated:
+            try:
+                _restore_container_state("ods-litellm", container_state, recreate=True)
+                _wait_for_container_health("ods-litellm")
+            except Exception as rollback_exc:
+                rollback_errors.append(f"LiteLLM: {rollback_exc}")
+        if pixel_attempted:
+            try:
+                _reconcile_managed_pixel_contract(pixel_before)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"Pixel: {rollback_exc}")
+        detail = f"Remote provider consumer activation failed: {exc}"
+        if rollback_errors:
+            detail += "; rollback failed: " + "; ".join(rollback_errors)
+        raise RuntimeError(detail) from exc
+
+
+def _deactivate_remote_provider_route() -> dict[str, object]:
+    """Restore the pre-remote gateway and Pixel route from private state."""
+    activation = _read_remote_provider_activation_state()
+    if activation is None:
+        return {"active": False, "restored": False, "reason": "not_activated"}
+    previous = activation["previous"]
+    env_path = INSTALL_DIR / ".env"
+    cloud_path = INSTALL_DIR / "config" / "litellm" / "cloud.yaml"
+    activation_path = _remote_provider_activation_state_path()
+    activation_public_path = _remote_provider_activation_public_path()
+    env_snapshot = _snapshot_text_file(env_path)
+    cloud_snapshot = _snapshot_text_file(cloud_path)
+    activation_snapshot = _snapshot_text_file(activation_path)
+    activation_public_snapshot = _snapshot_text_file(activation_public_path)
+    pixel_before = _managed_pixel_runtime_contract()
+    container_state = _capture_container_state("ods-litellm")
+    litellm_recreated = False
+    pixel_attempted = False
+    try:
+        raw_env = str(env_snapshot.get("text") or "")
+        raw_env = _upsert_env_text(raw_env, "ODS_MODE", str(previous["odsMode"]))
+        raw_env = _upsert_env_text(raw_env, "LLM_API_URL", str(previous["llmApiUrl"]))
+        _write_bound_env_text(env_path, raw_env)
+        cloud_config = previous.get("cloudConfig")
+        if not isinstance(cloud_config, dict):
+            raise RuntimeError("Remote-provider rollback is missing the prior cloud config")
+        _restore_text_file(cloud_path, cloud_config)
+        litellm_recreated = _restart_existing_container(
+            "ods-litellm", container_state, recreate=True,
+        )
+        if not litellm_recreated:
+            raise RuntimeError("LiteLLM route could not be restored")
+        _wait_for_container_health("ods-litellm")
+        restored_env = load_env(env_path)
+        _verify_litellm_route(restored_env, model="ods/current")
+        previous_pixel = previous.get("pixel")
+        pixel_attempted = previous_pixel is not None
+        pixel_status = _reconcile_managed_pixel_contract(previous_pixel)
+        _remove_remote_provider_file(activation_path)
+        _remove_remote_provider_file(activation_public_path)
+        return {
+            "active": False,
+            "restored": True,
+            "mode": previous["odsMode"],
+            "pixel": pixel_status,
+            "proven": True,
+        }
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        try:
+            _restore_bound_env_file(env_path, env_snapshot)
+            _restore_text_file(cloud_path, cloud_snapshot)
+            _restore_text_file(activation_path, activation_snapshot)
+            _restore_text_file(activation_public_path, activation_public_snapshot)
+        except Exception as rollback_exc:
+            rollback_errors.append(f"configuration: {rollback_exc}")
+        if litellm_recreated:
+            try:
+                _restore_container_state("ods-litellm", container_state, recreate=True)
+                _wait_for_container_health("ods-litellm")
+            except Exception as rollback_exc:
+                rollback_errors.append(f"LiteLLM: {rollback_exc}")
+        if pixel_attempted:
+            try:
+                _reconcile_managed_pixel_contract(pixel_before)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"Pixel: {rollback_exc}")
+        detail = f"Remote provider deactivation failed: {exc}"
+        if rollback_errors:
+            detail += "; rollback failed: " + "; ".join(rollback_errors)
+        raise RuntimeError(detail) from exc
+
+
 def _remote_provider_probe_lifecycle_test(payload: dict, plan: dict) -> dict:
     if _probe_remote_provider_direct is None:
         raise RuntimeError("Remote provider probe helper is unavailable")
@@ -2766,7 +3232,10 @@ def _remove_remote_provider_file(path: Path) -> None:
 
 
 def _remote_provider_mutation_paths(action: str) -> list[Path]:
-    paths = [_remote_provider_route_state_path()]
+    paths = [
+        _remote_provider_route_state_path(),
+        _remote_provider_activation_public_path(),
+    ]
     if action == "remove":
         paths.extend(
             _remote_provider_secret_path(ref)
@@ -2783,7 +3252,8 @@ def _restore_remote_provider_snapshots(snapshots: dict[Path, dict]) -> None:
 def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dict:
     action = str(plan.get("action") or "")
     result = json.loads(json.dumps(plan))
-    result["applied"] = True
+    result["applied"] = False
+    result["staged"] = False
     result["mutated"] = action in {"configure", "disable", "remove"}
     result["rollback"] = {"attempted": False, "ok": None}
     probe_receipt = None
@@ -2810,7 +3280,10 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
 
     if action == "configure":
         secret_values = _remote_provider_secret_values(payload, plan)
-        mutation_paths = [_remote_provider_route_state_path()]
+        mutation_paths = [
+            _remote_provider_route_state_path(),
+            _remote_provider_activation_public_path(),
+        ]
         mutation_paths.extend(_remote_provider_secret_path(ref) for ref in secret_values)
         mutation_paths = list(dict.fromkeys(mutation_paths))
     else:
@@ -2821,19 +3294,32 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     mutation_started = False
     try:
         snapshots = {path: _snapshot_text_file(path) for path in mutation_paths}
+        # A prior receipt must never describe a route while that route is being
+        # replaced, disabled, or removed. Outer rollback restores it on error.
+        _remove_remote_provider_file(_remote_provider_activation_public_path())
+        mutation_started = True
         if action == "configure":
             for ref, secret in secret_values.items():
                 _write_remote_provider_secret(ref, secret)
                 mutation_started = True
             _write_remote_provider_route_state(plan, probe_receipt=probe_receipt)
             mutation_started = True
+            if ssh_configure:
+                result["staged"] = True
+            else:
+                result["activation"] = _activate_remote_provider_route(route)
+                result["applied"] = True
         elif action == "disable":
             _write_remote_provider_route_state(plan)
             mutation_started = True
+            result["activation"] = _deactivate_remote_provider_route()
+            result["applied"] = True
         elif action == "remove":
             for path in mutation_paths:
                 _remove_remote_provider_file(path)
                 mutation_started = True
+            result["activation"] = _deactivate_remote_provider_route()
+            result["applied"] = True
     except Exception as exc:
         rollback = {"attempted": False, "ok": None}
         if mutation_started and snapshots:
@@ -4100,6 +4586,14 @@ def _valid_local_model_name(value: object) -> bool:
     )
 
 
+def _valid_pixel_model_name(value: object) -> bool:
+    """Return true for a bounded provider model identity safe in Pixel JSON."""
+    return bool(
+        isinstance(value, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", value)
+    )
+
+
 def _valid_gguf_filename(value: object) -> bool:
     """Return true for a single safe GGUF filename."""
     return bool(
@@ -5261,8 +5755,17 @@ class AgentHandler(BaseHTTPRequestHandler):
                 {"error": "Remote provider lifecycle planner is unavailable"},
             )
             return
+        lock_acquired = False
         try:
             plan = _plan_remote_provider_lifecycle_operation(body)
+            if not _model_activate_lock.acquire(blocking=False):
+                json_response(
+                    self,
+                    409,
+                    {"error": "A model or remote-provider activation is already in progress"},
+                )
+                return
+            lock_acquired = True
             result = _apply_remote_provider_lifecycle_operation(body, plan)
         except (_RemoteProviderLifecycleError, _RemoteProviderPolicyError) as exc:
             json_response(self, 400, {"error": str(exc)})
@@ -5285,6 +5788,9 @@ class AgentHandler(BaseHTTPRequestHandler):
             logger.exception("remote-provider lifecycle apply failed")
             json_response(self, 500, {"error": f"Remote provider apply failed: {exc}"})
             return
+        finally:
+            if lock_acquired:
+                _model_activate_lock.release()
         json_response(self, 200, result)
 
     def _handle_remote_provider_proof(self):
@@ -5294,7 +5800,16 @@ class AgentHandler(BaseHTTPRequestHandler):
         body = read_optional_json_body(self)
         if body is None:
             return
+        lock_acquired = False
         try:
+            if not _model_activate_lock.acquire(blocking=False):
+                json_response(
+                    self,
+                    409,
+                    {"error": "A model or remote-provider activation is already in progress"},
+                )
+                return
+            lock_acquired = True
             result = _record_remote_provider_egress_probe(body)
         except ValueError as exc:
             json_response(self, 400, {"error": str(exc)})
@@ -5306,6 +5821,9 @@ class AgentHandler(BaseHTTPRequestHandler):
             logger.exception("remote-provider proof recording failed")
             json_response(self, 500, {"error": f"Remote provider proof recording failed: {exc}"})
             return
+        finally:
+            if lock_acquired:
+                _model_activate_lock.release()
         json_response(self, 200, result)
 
     def _handle_remote_provider_ssh_supervisor_status(self):
@@ -10450,6 +10968,10 @@ def _render_runtime_config(
     gpu_backend: str,
     context_length: int | None = None,
     switchboard_mode: str = "observe",
+    remote_llm_enabled: bool = False,
+    remote_llm_transport: str = "",
+    remote_llm_base_url: str = "",
+    remote_llm_model: str = "",
 ) -> bool:
     renderer = install_dir / "scripts" / "render-runtime-configs.py"
     if not renderer.exists():
@@ -10479,6 +11001,13 @@ def _render_runtime_config(
         str(install_dir),
         "--write",
     ]
+    if remote_llm_enabled:
+        cmd.extend([
+            "--remote-llm-enabled", "true",
+            "--remote-llm-transport", remote_llm_transport,
+            "--remote-llm-base-url", remote_llm_base_url,
+            "--remote-llm-model", remote_llm_model,
+        ])
     if context_length is not None:
         cmd.extend(["--context-length", str(context_length)])
     renderer_env = os.environ.copy()
@@ -11753,17 +12282,21 @@ def _recreate_openclaw_if_present(
     return True
 
 
-def _verify_litellm_route(env: dict) -> None:
-    """Prove the active LiteLLM default route can serve a completion."""
+def _verify_litellm_route(env: dict, *, model: str = "default") -> None:
+    """Prove one active LiteLLM public route can serve a completion."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+        raise RuntimeError("LiteLLM verification model alias is invalid")
     host = "ods-litellm" if os.environ.get("ODS_HOST_INSTALL_DIR") else "127.0.0.1"
     port = str(env.get("LITELLM_PORT") or "4000")
     api_key = str(env.get("LITELLM_KEY") or env.get("LITELLM_MASTER_KEY") or "")
     for attempt in range(12):
-        if _chat_completion_ready(host, port, "default", "/v1", api_key):
+        if _chat_completion_ready(host, port, model, "/v1", api_key):
             return
         if attempt < 11:
             time.sleep(2)
-    raise RuntimeError("LiteLLM did not serve a completion through the active model route")
+    raise RuntimeError(
+        f"LiteLLM did not serve a completion through the active {model} route"
+    )
 
 
 def _verify_openclaw_model_env(expected_model: str) -> None:

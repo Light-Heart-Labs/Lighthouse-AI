@@ -2171,6 +2171,17 @@ class TestRemoteProviderLifecycle:
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
         probes = self._patch_successful_probe(monkeypatch)
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {
+                "active": True,
+                "proven": True,
+                "publicModel": "ods/current",
+                "model": route["provider"]["model"],
+                "pixel": "reconciled",
+            },
+        )
         payload = self._configure_payload()
         handler = _FakeHandler(json.dumps(payload).encode("utf-8"))
 
@@ -2183,6 +2194,7 @@ class TestRemoteProviderLifecycle:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert handler.response_code == 200
         assert body["applied"] is True
+        assert body["staged"] is False
         assert body["mutated"] is True
         assert body["rollback"] == {"attempted": False, "ok": None}
         assert body["probe"]["schema"] == "ods.remote-provider-probe-receipt.v1"
@@ -2242,7 +2254,8 @@ class TestRemoteProviderLifecycle:
         secret_dir = root / "secrets"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert handler.response_code == 200
-        assert body["applied"] is True
+        assert body["applied"] is False
+        assert body["staged"] is True
         assert body["mutated"] is True
         assert body["proof"] == {
             "required": True,
@@ -2289,6 +2302,17 @@ class TestRemoteProviderLifecycle:
         plan = _mod._plan_remote_provider_lifecycle_operation(payload)
         state = _mod._remote_provider_route_state_from_plan(plan)
         (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {
+                "active": True,
+                "proven": True,
+                "publicModel": "ods/current",
+                "model": route["provider"]["model"],
+                "pixel": "reconciled",
+            },
+        )
         handler = _FakeHandler(b"")
 
         _mod.AgentHandler._handle_remote_provider_ssh_supervisor_status(handler)
@@ -2320,6 +2344,18 @@ class TestRemoteProviderLifecycle:
         plan = _mod._plan_remote_provider_lifecycle_operation(payload)
         state = _mod._remote_provider_route_state_from_plan(plan)
         (root / "routing-state.json").write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {
+                "active": True,
+                "proven": True,
+                "publicModel": "ods/current",
+                "model": route["provider"]["model"],
+                "routeFingerprint": _mod._remote_provider_route_fingerprint(route),
+                "pixel": "reconciled",
+            },
+        )
         handler = _FakeHandler(
             json.dumps(self._egress_probe_response()).encode("utf-8")
         )
@@ -2350,6 +2386,14 @@ class TestRemoteProviderLifecycle:
             "schema": "ods.remote-provider-proof-record.v1",
             "recorded": True,
             "status": expected_status,
+            "activation": {
+                "active": True,
+                "proven": True,
+                "publicModel": "ods/current",
+                "model": "qwen/remote:latest",
+                "routeFingerprint": _mod._remote_provider_route_fingerprint(state),
+                "pixel": "reconciled",
+            },
         }
         assert recorded_state["provider"]["transport"] == "ssh"
         assert recorded_state["ssh"]["host"] == "gpu.example.test"
@@ -2435,7 +2479,7 @@ class TestRemoteProviderLifecycle:
         body = handler.parse_response()
         dumped = json.dumps(body, sort_keys=True)
         assert handler.response_code == 200
-        assert body["applied"] is True
+        assert body["applied"] is False
         assert body["mutated"] is False
         assert body["probe"]["ok"] is True
         assert body["probe"]["verifiedAt"] == "2026-07-26T00:00:00+00:00"
@@ -2512,6 +2556,11 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": False, "reason": "not_activated"},
+        )
         root = tmp_path / "remote-provider"
         secret_path = root / "secrets" / "provider-api-key"
         secret_path.parent.mkdir(parents=True)
@@ -2536,6 +2585,11 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": False, "reason": "not_activated"},
+        )
         root = tmp_path / "remote-provider"
         secret_dir = root / "secrets"
         secret_dir.mkdir(parents=True)
@@ -2572,6 +2626,8 @@ class TestRemoteProviderLifecycle:
             "provider": {"baseUrl": "https://old.example.test/v1"},
         }
         (root / "routing-state.json").write_text(json.dumps(old_state), encoding="utf-8")
+        activation_public = root / "activation-public.json"
+        activation_public.write_text("known-good-activation\n", encoding="utf-8")
         secret_path.write_text("old-provider-token\n", encoding="utf-8")
         real_atomic_write = _mod._atomic_write_text
         failed_once = {"value": False}
@@ -2593,8 +2649,263 @@ class TestRemoteProviderLifecycle:
         assert handler.response_code == 500
         assert body["rollback"] == {"attempted": True, "ok": True}
         assert state == old_state
+        assert activation_public.read_text(encoding="utf-8") == "known-good-activation\n"
         assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
         assert "unit-test-provider-token" not in dumped
+
+    def test_managed_pixel_runtime_recovers_concrete_gateway_model(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        install_dir = tmp_path / "ods"
+        onboarding = install_dir / "data" / "pixel" / "onboarding.json"
+        onboarding.parent.mkdir(parents=True)
+        onboarding.write_text(
+            json.dumps(
+                {
+                    "modelProvider": "ods-gateway",
+                    "modelId": "ods/current",
+                    "modelName": "ODS Current (org/qwen+tools:remote)",
+                    "modelContextWindow": 131072,
+                    "modelMaxTokens": 8192,
+                    "modelReasoning": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        onboarding.chmod(0o600)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_ods_managed_pixel_identity",
+            lambda: ("pixel-owner", tmp_path / "home"),
+        )
+        real_snapshot = _mod._snapshot_text_file
+        monkeypatch.setattr(
+            _mod,
+            "_snapshot_text_file",
+            lambda path: {
+                **real_snapshot(path),
+                "mode": 0o600,
+            },
+        )
+
+        assert _mod._managed_pixel_runtime_contract() == {
+            "model": "org/qwen+tools:remote",
+            "contextLength": 131072,
+            "maxTokens": 8192,
+            "reasoning": True,
+        }
+
+        value = json.loads(onboarding.read_text(encoding="utf-8"))
+        value["modelName"] = "ODS Current (forged) trailing"
+        onboarding.write_text(json.dumps(value), encoding="utf-8")
+        onboarding.chmod(0o600)
+        with pytest.raises(RuntimeError, match="gateway model identity"):
+            _mod._managed_pixel_runtime_contract()
+
+    def test_activation_state_rejects_incomplete_previous_contract(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        path = tmp_path / "remote-provider" / "activation-state.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "ods.remote-provider-activation-state.v1",
+                    "phase": "active",
+                    "previous": {"odsMode": "local"},
+                    "remote": {
+                        "model": "org/qwen:remote",
+                        "contextLength": 32768,
+                        "maxTokens": 4096,
+                        "reasoning": False,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+
+        with pytest.raises(RuntimeError, match="contract is invalid"):
+            _mod._read_remote_provider_activation_state()
+
+    def test_consumer_activation_and_deactivation_restore_exact_prior_route(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        install_dir = tmp_path / "ods"
+        data_dir = install_dir / "data"
+        cloud_path = install_dir / "config" / "litellm" / "cloud.yaml"
+        cloud_path.parent.mkdir(parents=True)
+        data_dir.mkdir(parents=True)
+        env_path = install_dir / ".env"
+        original_env = (
+            "ODS_MODE=local\n"
+            "LLM_API_URL=http://llama-server:8080\n"
+            "LITELLM_KEY=unit-test-litellm-key\n"
+        )
+        original_cloud = "model_list:\n  - model_name: previous-cloud\n"
+        env_path.write_text(original_env, encoding="utf-8")
+        cloud_path.write_text(original_cloud, encoding="utf-8")
+        env_path.chmod(0o600)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "DATA_DIR", data_dir)
+
+        local_pixel = {
+            "model": "qwen-local",
+            "contextLength": 65536,
+            "maxTokens": 4096,
+            "reasoning": False,
+        }
+        remote_pixel = {
+            "model": "qwen/remote:latest",
+            "contextLength": 32768,
+            "maxTokens": 4096,
+            "reasoning": False,
+        }
+        current_pixel = {"value": local_pixel}
+        reconciled = []
+        verified = []
+        monkeypatch.setattr(
+            _mod, "_managed_pixel_runtime_contract", lambda: current_pixel["value"]
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_capture_container_state",
+            lambda _name: {"exists": True, "running": True},
+        )
+        monkeypatch.setattr(_mod, "_restart_existing_container", lambda *a, **k: True)
+        monkeypatch.setattr(_mod, "_restore_container_state", lambda *a, **k: True)
+        monkeypatch.setattr(_mod, "_wait_for_container_health", lambda _name: None)
+        monkeypatch.setattr(
+            _mod,
+            "_verify_litellm_route",
+            lambda env, *, model="default": verified.append((env["ODS_MODE"], model)),
+        )
+
+        def fake_render(route, env):
+            assert route["provider"]["model"] == "qwen/remote:latest"
+            assert env["ODS_MODE"] == "cloud"
+            cloud_path.write_text("model_list:\n  - model_name: ods/current\n", encoding="utf-8")
+
+        def fake_reconcile(contract):
+            reconciled.append(contract)
+            current_pixel["value"] = contract
+            return "reconciled"
+
+        monkeypatch.setattr(_mod, "_render_remote_provider_cloud_config", fake_render)
+        monkeypatch.setattr(_mod, "_reconcile_managed_pixel_contract", fake_reconcile)
+        private_writes = []
+        real_private_write = _mod._write_remote_provider_activation_state
+        real_public_write = _mod._write_remote_provider_activation_public
+
+        def track_private(value):
+            private_writes.append(("private", value["phase"]))
+            real_private_write(value)
+
+        def track_public(value):
+            private_writes.append(("public", value["proven"]))
+            real_public_write(value)
+
+        monkeypatch.setattr(_mod, "_write_remote_provider_activation_state", track_private)
+        monkeypatch.setattr(_mod, "_write_remote_provider_activation_public", track_public)
+        route = self._configure_payload()
+        plan = _mod._plan_remote_provider_lifecycle_operation(route)
+
+        activation = _mod._activate_remote_provider_route(plan["route"])
+
+        assert activation["active"] is True
+        assert activation["proven"] is True
+        assert _mod.load_env(env_path)["ODS_MODE"] == "cloud"
+        assert _mod.load_env(env_path)["LLM_API_URL"] == "http://litellm:4000"
+        assert cloud_path.read_text(encoding="utf-8") == (
+            "model_list:\n  - model_name: ods/current\n"
+        )
+        assert reconciled[-1] == remote_pixel
+        assert verified[-1] == ("cloud", "ods/current")
+        public = json.loads(
+            (data_dir / "remote-provider" / "activation-public.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert public["active"] is True
+        assert public["model"] == "qwen/remote:latest"
+        assert "unit-test-litellm-key" not in json.dumps(public)
+        assert private_writes[:3] == [
+            ("private", "staging"),
+            ("private", "active"),
+            ("public", True),
+        ]
+
+        current = _mod._verify_current_remote_provider_consumers(plan["route"], remote_pixel)
+        assert current["unchanged"] is True
+        assert current["pixel"] == "reconciled"
+        assert current_pixel["value"] == remote_pixel
+
+        deactivation = _mod._deactivate_remote_provider_route()
+
+        assert deactivation["restored"] is True
+        assert env_path.read_text(encoding="utf-8") == original_env
+        assert cloud_path.read_text(encoding="utf-8") == original_cloud
+        assert reconciled[-1] == local_pixel
+        assert verified[-1] == ("local", "ods/current")
+        assert not (data_dir / "remote-provider" / "activation-state.json").exists()
+        assert not (data_dir / "remote-provider" / "activation-public.json").exists()
+
+    def test_consumer_activation_failure_restores_config_and_never_claims_ready(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        install_dir = tmp_path / "ods"
+        data_dir = install_dir / "data"
+        cloud_path = install_dir / "config" / "litellm" / "cloud.yaml"
+        cloud_path.parent.mkdir(parents=True)
+        data_dir.mkdir(parents=True)
+        env_path = install_dir / ".env"
+        original_env = "ODS_MODE=local\nLLM_API_URL=http://llama-server:8080\n"
+        original_cloud = "known-good-cloud\n"
+        env_path.write_text(original_env, encoding="utf-8")
+        cloud_path.write_text(original_cloud, encoding="utf-8")
+        env_path.chmod(0o600)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "DATA_DIR", data_dir)
+        monkeypatch.setattr(_mod, "_managed_pixel_runtime_contract", lambda: None)
+        monkeypatch.setattr(
+            _mod,
+            "_capture_container_state",
+            lambda _name: {"exists": True, "running": True},
+        )
+        monkeypatch.setattr(_mod, "_restart_existing_container", lambda *a, **k: True)
+        monkeypatch.setattr(_mod, "_restore_container_state", lambda *a, **k: True)
+        monkeypatch.setattr(_mod, "_wait_for_container_health", lambda _name: None)
+        monkeypatch.setattr(
+            _mod,
+            "_render_remote_provider_cloud_config",
+            lambda route, env: cloud_path.write_text("candidate-cloud\n", encoding="utf-8"),
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_verify_litellm_route",
+            lambda env, *, model="default": (_ for _ in ()).throw(
+                RuntimeError("simulated consumer proof failure")
+            ) if env.get("ODS_MODE") == "cloud" else None,
+        )
+        plan = _mod._plan_remote_provider_lifecycle_operation(self._configure_payload())
+
+        with pytest.raises(RuntimeError, match="simulated consumer proof failure"):
+            _mod._activate_remote_provider_route(plan["route"])
+
+        assert env_path.read_text(encoding="utf-8") == original_env
+        assert cloud_path.read_text(encoding="utf-8") == original_cloud
+        assert not (data_dir / "remote-provider" / "activation-state.json").exists()
+        assert not (data_dir / "remote-provider" / "activation-public.json").exists()
 
 
 class TestTailscaleStatus:

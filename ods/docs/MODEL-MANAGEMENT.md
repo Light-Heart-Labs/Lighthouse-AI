@@ -152,6 +152,32 @@ This selector applies to local inference in `local`, `hybrid`, and `lemonade`
 modes. In `cloud` mode, the remote provider owns its context policy, so ODS
 does not rewrite local runtime or application context from the Models page.
 
+### Activating a remote provider for agents
+
+The Dashboard **Remote Provider** page can move the stable `ods/current` route
+to an OpenAI-compatible provider without giving Pixel a provider URL or
+credential. Enter the provider model ID, context window, maximum output tokens,
+and whether that route supports reasoning. Those limits become Pixel's managed
+runtime contract, so model-family and context changes are explicit instead of
+being guessed from a provider response.
+
+For a direct HTTPS provider, **Configure** first performs a bounded provider
+probe. ODS then writes the private egress credential, renders the cloud
+LiteLLM route, recreates and health-checks LiteLLM, serves a real completion
+through `ods/current`, and reconciles the ODS-managed Pixel gateway. For an SSH
+provider, Configure stages the route; **Test route** completes the same
+consumer activation only after the managed tunnel and egress proof succeed.
+The Dashboard reports the provider as Ready only when the egress path and the
+actual consumer route are both active and proven.
+
+The operation is transactional. ODS retains the exact prior mode, LiteLLM
+config, and Pixel model contract in a private recovery record. A failed render,
+container health check, completion, or Pixel restart restores that state.
+**Disable** and **Remove** likewise restore and prove the pre-provider route
+before reporting success. Provider credentials remain in the host-owned egress
+secret store and never enter generated LiteLLM YAML, Pixel state, Dashboard
+responses, or browser logs.
+
 ### Multi-GPU assignment replanning
 
 On Linux NVIDIA and managed Linux AMD/ROCm installations with more than one

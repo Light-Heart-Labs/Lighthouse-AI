@@ -21,6 +21,9 @@ const statusPayload = {
       baseUrl: 'http://127.0.0.1:8000/v1',
       model: 'qwen/remote:latest',
       transport: 'ssh',
+      contextLength: 32768,
+      maxTokens: 4096,
+      reasoning: false,
     },
     projection: {
       publicModel: 'ods/current',
@@ -42,6 +45,19 @@ const statusPayload = {
       },
     },
     errors: [],
+  },
+  activation: {
+    valid: true,
+    active: true,
+    proven: true,
+    reason: 'active_and_proven',
+    gateway: 'litellm-cloud',
+    publicModel: 'ods/current',
+    model: 'qwen/remote:latest',
+    contextLength: 32768,
+    maxTokens: 4096,
+    reasoning: false,
+    pixel: 'reconciled',
   },
   peer: {
     configured: false,
@@ -186,6 +202,9 @@ const configurePlanPayload = {
       baseUrl: 'https://gpu.example.test/v1',
       model: 'qwen/remote:latest',
       transport: 'direct',
+      contextLength: 32768,
+      maxTokens: 4096,
+      reasoning: false,
     },
   },
   writes: {
@@ -206,6 +225,13 @@ const configureApplyPayload = {
   applied: true,
   mutated: true,
   rollback: { attempted: false, ok: null },
+  activation: {
+    active: true,
+    proven: true,
+    publicModel: 'ods/current',
+    model: 'qwen/remote:latest',
+    pixel: 'reconciled',
+  },
   probe: {
     ok: true,
     endpoint: '/v1/models',
@@ -342,6 +368,9 @@ test('plans direct provider configuration without rendering secret material', as
       transport: 'direct',
       baseUrl: 'https://gpu.example.test/v1',
       model: 'qwen/remote:latest',
+      contextLength: 32768,
+      maxTokens: 4096,
+      reasoning: false,
     },
     secrets: {
       apiKey: 'unit-test-provider-token',
