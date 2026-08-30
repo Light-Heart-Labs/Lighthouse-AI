@@ -199,7 +199,11 @@ async def _authorize_request(
             headers=exc.headers,
         )
 
-    version = (request.headers.get("A2A-Version") or "0.3").strip()
+    version = (
+        request.headers.get("A2A-Version")
+        or request.query_params.get("A2A-Version")
+        or "0.3"
+    ).strip()
     if version != A2A_VERSION:
         return None, _error_response(
             400,
@@ -348,6 +352,20 @@ def _task_not_found(task_id: str) -> JSONResponse:
     )
 
 
+@router.get("/a2a/v1/tasks/{task_id}:subscribe")
+async def subscribe_to_task(
+    task_id: str,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(security_scheme),
+) -> JSONResponse:
+    return await _unsupported_capability(
+        request,
+        credentials,
+        message=f"ODS A2A does not support streaming task {task_id!r}.",
+        reason="UNSUPPORTED_OPERATION",
+    )
+
+
 @router.get("/a2a/v1/tasks/{task_id}")
 async def get_task(
     task_id: str,
@@ -370,20 +388,6 @@ async def cancel_task(
     if auth_error is not None:
         return auth_error
     return _task_not_found(task_id)
-
-
-@router.post("/a2a/v1/tasks/{task_id}:subscribe")
-async def subscribe_to_task(
-    task_id: str,
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Security(security_scheme),
-) -> JSONResponse:
-    return await _unsupported_capability(
-        request,
-        credentials,
-        message=f"ODS A2A does not support streaming task {task_id!r}.",
-        reason="UNSUPPORTED_OPERATION",
-    )
 
 
 @router.api_route(

@@ -223,6 +223,28 @@ def test_send_message_rejects_unsupported_protocol_version(test_client):
     assert response.json()["error"]["details"][0]["reason"] == "VERSION_NOT_SUPPORTED"
 
 
+def test_send_message_accepts_protocol_version_query_parameter(test_client, monkeypatch):
+    monkeypatch.setattr(
+        "routers.a2a.hermes_bridge.submit_prompt",
+        AsyncMock(return_value=HermesReply(session_id="hermes-1", text="ok")),
+    )
+
+    response = test_client.post(
+        "/a2a/v1/message:send?A2A-Version=1.0",
+        headers=test_client.auth_headers,
+        json={
+            "message": {
+                "messageId": "msg-query-version",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"]["parts"][0]["text"] == "ok"
+
+
 def test_task_operations_are_truthful_for_a_direct_message_agent(test_client):
     headers = _a2a_headers(test_client)
 
@@ -258,7 +280,7 @@ def test_streaming_operation_matches_the_agent_card_capability(test_client):
 def test_optional_capability_routes_return_protocol_errors(test_client):
     headers = _a2a_headers(test_client)
     responses = (
-        test_client.post("/a2a/v1/tasks/task-1:subscribe", headers=headers),
+        test_client.get("/a2a/v1/tasks/task-1:subscribe", headers=headers),
         test_client.post(
             "/a2a/v1/tasks/task-1/pushNotificationConfigs",
             headers=headers,
