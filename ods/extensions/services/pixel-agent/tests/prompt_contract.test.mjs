@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
+  ODS_EXTENSION_LIFECYCLE_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
@@ -175,6 +176,20 @@ test("adds a salient exact-route contract for extension catalog requests", () =>
   assert.match(result.appendSystemContext, /action ods\.extensions\.search/);
   assert.match(result.appendSystemContext, /character-for-character/);
   assert.match(result.appendSystemContext, /let the external broker reject it/);
+});
+
+test("adds a sequential approval-aware contract for extension lifecycle requests", () => {
+  const event = { prompt: "Install the ODS extension crewai." };
+  const result = promptContractForAgent({ agentId: "pixel" }, "pixel", event);
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_EXTENSION_LIFECYCLE_CONTRACT}`
+  );
+  assert.match(result.appendSystemContext, /action ods\.extensions\.inspect/);
+  assert.match(result.appendSystemContext, /Do not combine inspection and mutation/);
+  assert.match(result.appendSystemContext, /missing required configuration/);
+  assert.match(result.appendSystemContext, /never approve it yourself/);
+  assert.match(result.appendSystemContext, /later succeeded receipt proves it/);
 });
 
 test("adds exact pending and failed verification truth constraints", () => {

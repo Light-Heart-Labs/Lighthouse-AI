@@ -119,11 +119,17 @@ export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
 export const OPERATIONS_WRONG_ACTION_REASON =
   "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
 
+export const OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON =
+  "Pixel blocked an extension lifecycle shortcut. Submit exactly one ods.extensions.inspect action for the owner's extension ID and wait for its terminal receipt before submitting the requested lifecycle action. Do not combine lifecycle actions in a workflow or continue when inspection reports missing configuration.";
+
 export const OPERATIONS_HOST_EVIDENCE_PREFIX =
   "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
 
 export const OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension catalog result through a structurally matched terminal Operations Broker receipt:";
+
+export const OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX =
+  "Pixel verified this ODS extension lifecycle result through structurally matched Operations Broker receipts:";
 
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
@@ -912,6 +918,205 @@ function extensionCatalogResult(step, submittedParameters) {
   return { ...value, query, matches };
 }
 
+const EXTENSION_LIFECYCLE_BOUNDARY =
+  "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, credential, arbitrary HTTP, or data-purge authority.";
+const EXTENSION_LIFECYCLE_STATUSES = new Set([
+  "enabled", "cli_installed", "disabled", "stopped", "unhealthy",
+  "installing", "setting_up", "error", "not_installed", "incompatible",
+]);
+const EXTENSION_LIFECYCLE_SUCCESS = new Map([
+  ["install", new Set(["enabled", "cli_installed"])],
+  ["enable", new Set(["enabled", "cli_installed"])],
+  ["disable", new Set(["disabled"])],
+  ["remove", new Set(["not_installed"])],
+]);
+
+function sortedConfigurationKeys(value) {
+  const result = boundedCatalogList(value, /^[A-Z][A-Z0-9_]{0,127}$/, 128, 128);
+  if (!result || result.some((entry, index) => index > 0 && result[index - 1] >= entry)) {
+    return undefined;
+  }
+  return result;
+}
+
+function extensionLifecycleResult(step, submittedAction) {
+  const expectedAction = submittedAction?.action?.replace(/^ods\.extensions\./, "");
+  const submittedParameters = submittedAction?.parameters;
+  if (
+    !step ||
+    step.target !== "ods-host" ||
+    step.action !== submittedAction?.action ||
+    step.stderr.trim() ||
+    step.riskSignals.length > 0 ||
+    typeof step.stdout !== "string" ||
+    step.stdout.length > 256 * 1024 ||
+    !["inspect", "install", "enable", "disable", "remove"].includes(expectedAction) ||
+    !exactKeys(submittedParameters, ["serviceId"]) ||
+    boundedCatalogString(submittedParameters.serviceId, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64) === undefined
+  ) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  const topKeys = [
+    "schemaVersion", "kind", "action", "extensionId", "outcome",
+    "previousStatus", "currentStatus", "changed", "externalEffectOccurred",
+    "requiredConfiguration", "optionalConfiguration", "missingConfiguration",
+    "rollback", "boundary",
+  ];
+  if (
+    !exactKeys(value, topKeys) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-pixel-extension-lifecycle" ||
+    value.boundary !== EXTENSION_LIFECYCLE_BOUNDARY ||
+    value.action !== expectedAction ||
+    value.extensionId !== submittedParameters.serviceId ||
+    !["ready", "blocked", "noop", "succeeded", "failed"].includes(value.outcome) ||
+    !EXTENSION_LIFECYCLE_STATUSES.has(value.previousStatus) ||
+    !EXTENSION_LIFECYCLE_STATUSES.has(value.currentStatus) ||
+    typeof value.changed !== "boolean" ||
+    typeof value.externalEffectOccurred !== "boolean" ||
+    !exactKeys(value.rollback, ["attempted", "succeeded"]) ||
+    typeof value.rollback.attempted !== "boolean" ||
+    ![true, false, null].includes(value.rollback.succeeded)
+  ) {
+    return undefined;
+  }
+  const required = sortedConfigurationKeys(value.requiredConfiguration);
+  const optional = sortedConfigurationKeys(value.optionalConfiguration);
+  const missing = sortedConfigurationKeys(value.missingConfiguration);
+  if (
+    !required || !optional || !missing ||
+    required.some((key) => optional.includes(key)) ||
+    missing.some((key) => !required.includes(key)) ||
+    (value.rollback.attempted === false && value.rollback.succeeded !== null) ||
+    (value.rollback.attempted === true && typeof value.rollback.succeeded !== "boolean")
+  ) {
+    return undefined;
+  }
+  if (expectedAction === "inspect") {
+    if (
+      !["ready", "blocked"].includes(value.outcome) ||
+      value.currentStatus !== value.previousStatus ||
+      value.changed ||
+      value.externalEffectOccurred ||
+      value.rollback.attempted ||
+      (value.outcome === "ready") !== (missing.length === 0)
+    ) {
+      return undefined;
+    }
+  } else if (["blocked", "noop"].includes(value.outcome)) {
+    if (
+      value.currentStatus !== value.previousStatus ||
+      value.changed ||
+      value.externalEffectOccurred ||
+      value.rollback.attempted
+    ) {
+      return undefined;
+    }
+  } else if (value.outcome === "succeeded") {
+    if (
+      value.changed !== true ||
+      value.externalEffectOccurred !== true ||
+      missing.length > 0 ||
+      value.rollback.attempted ||
+      !EXTENSION_LIFECYCLE_SUCCESS.get(expectedAction)?.has(value.currentStatus)
+    ) {
+      return undefined;
+    }
+  } else if (value.outcome === "failed") {
+    if (
+      value.changed && !value.externalEffectOccurred ||
+      (value.externalEffectOccurred && expectedAction !== "remove" && !value.rollback.attempted) ||
+      (expectedAction === "remove" && value.rollback.attempted)
+    ) {
+      return undefined;
+    }
+  } else {
+    return undefined;
+  }
+  return { ...value, requiredConfiguration: required, optionalConfiguration: optional, missingConfiguration: missing };
+}
+
+function lifecycleOutcomeForAction(terminalJobs, action) {
+  if (!(terminalJobs instanceof Map)) return undefined;
+  const matches = [...terminalJobs.values()].filter(
+    (outcome) => outcome.actions?.length === 1 && outcome.actions[0]?.action === action
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function parsedLifecycleOutcome(terminalJobs, action) {
+  const outcome = lifecycleOutcomeForAction(terminalJobs, action);
+  if (!outcome || outcome.status !== "succeeded" || outcome.steps.length !== 1) {
+    return undefined;
+  }
+  const result = extensionLifecycleResult(outcome.steps[0], outcome.actions[0]);
+  return result ? { outcome, result } : undefined;
+}
+
+function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
+  const mutationActions = [...requiredActions].filter(
+    (action) => action.startsWith("ods.extensions.") && action !== "ods.extensions.inspect"
+  );
+  if (
+    requiredActions.size !== 2 ||
+    !requiredActions.has("ods.extensions.inspect") ||
+    mutationActions.length !== 1
+  ) {
+    return undefined;
+  }
+  const inspectionOutcome = lifecycleOutcomeForAction(terminalJobs, "ods.extensions.inspect");
+  if (!inspectionOutcome) return undefined;
+  if (inspectionOutcome.status !== "succeeded") {
+    const plan = typeof inspectionOutcome.planHash === "string" && SHA256.test(inspectionOutcome.planHash)
+      ? ` Plan SHA-256: ${inspectionOutcome.planHash}.`
+      : "";
+    return `Pixel's ODS extension inspection job reached terminal status ${inspectionOutcome.status}. No lifecycle change was accepted. Job: ${inspectionOutcome.jobId}.${plan}`;
+  }
+  const inspection = parsedLifecycleOutcome(terminalJobs, "ods.extensions.inspect");
+  if (!inspection || !["ready", "blocked"].includes(inspection.result.outcome)) return undefined;
+  if (inspection.result.outcome === "blocked") {
+    if (terminalJobs.size !== 1) return undefined;
+    return [
+      OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+      `- Extension: \`${inspection.result.extensionId}\`.`,
+      `- Inspection: blocked in state \`${inspection.result.currentStatus}\`; no change or external effect occurred.`,
+      `- Missing required configuration keys: ${inspection.result.missingConfiguration.map((key) => `\`${key}\``).join(", ")}.`,
+      `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
+      `- Inspection job: \`${inspection.outcome.jobId}\`.`,
+    ].join("\n");
+  }
+  const mutationAction = mutationActions[0];
+  const mutationOutcome = lifecycleOutcomeForAction(terminalJobs, mutationAction);
+  if (!mutationOutcome) return undefined;
+  if (mutationOutcome.status === "awaiting-approval") {
+    return `Pixel prepared the exact ${mutationAction} plan for extension ${inspection.result.extensionId}, but external approval is required. No lifecycle change was executed. Job: ${mutationOutcome.jobId}. Plan SHA-256: ${mutationOutcome.planHash}.`;
+  }
+  if (mutationOutcome.status !== "succeeded") {
+    return `Pixel's ODS extension lifecycle job reached terminal status ${mutationOutcome.status}. No successful lifecycle result was accepted. Job: ${mutationOutcome.jobId}.`;
+  }
+  const mutation = parsedLifecycleOutcome(terminalJobs, mutationAction);
+  if (!mutation || mutation.result.extensionId !== inspection.result.extensionId) return undefined;
+  const result = mutation.result;
+  const lines = [
+    OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+    `- Extension: \`${result.extensionId}\`.`,
+    `- Requested action: \`${result.action}\`; verified outcome: \`${result.outcome}\`.`,
+    `- State: \`${result.previousStatus}\` -> \`${result.currentStatus}\`.`,
+    `- Change observed: ${result.changed ? "yes" : "no"}; external effect attempted: ${result.externalEffectOccurred ? "yes" : "no"}.`,
+    `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+    `- Rollback: ${result.rollback.attempted ? (result.rollback.succeeded ? "succeeded" : "failed") : "not required"}.`,
+    `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
+    `- Inspection job: \`${inspection.outcome.jobId}\`; lifecycle job: \`${mutation.outcome.jobId}\`.`,
+  ];
+  return lines.join("\n");
+}
+
 function operationsEvidenceText(requiredActions, terminalJobs) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
@@ -919,6 +1124,9 @@ function operationsEvidenceText(requiredActions, terminalJobs) {
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
     return operationsHostEvidenceText(requiredActions, terminalJobs);
+  }
+  if (requiredActions.has("ods.extensions.inspect")) {
+    return extensionLifecycleEvidenceText(requiredActions, terminalJobs);
   }
   if (requiredActions.size !== 1 || !requiredActions.has("ods.extensions.search")) {
     return undefined;
@@ -1208,6 +1416,20 @@ export function userMessageExtensionCatalogExactQuery(messages, prompt = undefin
   return value;
 }
 
+export function userMessageExtensionLifecycleIntent(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return undefined;
+  const match = text.match(
+    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:ODS\s+)?extension\s+[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
+  );
+  if (!match) return undefined;
+  const requested = match[1].toLowerCase();
+  return {
+    action: requested === "uninstall" ? "remove" : requested,
+    serviceId: match[2].toLowerCase(),
+  };
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return { required: false, actions: [] };
@@ -1220,6 +1442,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
+  const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const actions = [];
   if (/\b(?:hostname|host identity)\b/i.test(text)) actions.push("host.identity");
   if (/\bkernel\b/i.test(text)) actions.push("host.kernel");
@@ -1231,8 +1454,12 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("host.os-release");
   }
   if (extensionCatalog) actions.push("ods.extensions.search");
+  if (extensionLifecycle) {
+    actions.push("ods.extensions.inspect");
+    actions.push(`ods.extensions.${extensionLifecycle.action}`);
+  }
   return {
-    required: explicitOperations || hostEvidence || extensionCatalog,
+    required: explicitOperations || hostEvidence || extensionCatalog || Boolean(extensionLifecycle),
     actions: [...new Set(actions)],
   };
 }
@@ -1456,6 +1683,7 @@ export function createToolLoopGuard({
         operationsRequired: false,
         operationsRequiredActions: new Set(),
         operationsExpectedQuery: undefined,
+        operationsExpectedExtensionLifecycle: undefined,
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
@@ -1542,7 +1770,53 @@ export function createToolLoopGuard({
       state?.operationsRequiredActions?.size > 0 &&
       OPERATIONS_SUBMISSION_TOOLS.has(toolName)
     ) {
-      const params = normalizedParams ?? event?.params;
+      let params = normalizedParams ?? event?.params;
+      const lifecycle = state.operationsExpectedExtensionLifecycle;
+      if (lifecycle && toolName === "pixel_ops_workflow_submit") {
+        return {
+          block: true,
+          blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
+        };
+      }
+      if (lifecycle && toolName === "pixel_ops_run") {
+        const permittedLifecycleActions = new Set([
+          "ods.extensions.inspect",
+          `ods.extensions.${lifecycle.action}`,
+        ]);
+        if (permittedLifecycleActions.has(params?.action)) {
+          params = {
+            target: "ods-host",
+            action: params.action,
+            parameters: { serviceId: lifecycle.serviceId },
+          };
+          normalizedParams = params;
+          const alreadySubmitted = [...state.operationsSubmittedJobs.values()].some(
+            (submission) => submission.actions?.some((entry) => entry.action === params.action)
+          );
+          if (alreadySubmitted) {
+            return {
+              block: true,
+              blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
+            };
+          }
+          if (params.action !== "ods.extensions.inspect") {
+            const inspection = parsedLifecycleOutcome(
+              state.operationsTerminalJobs,
+              "ods.extensions.inspect"
+            );
+            if (
+              !inspection ||
+              inspection.result.outcome !== "ready" ||
+              inspection.result.extensionId !== lifecycle.serviceId
+            ) {
+              return {
+                block: true,
+                blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
+              };
+            }
+          }
+        }
+      }
       let actions = [];
       if (toolName === "pixel_ops_run") {
         actions = [{ target: params?.target, action: params?.action }];
@@ -1580,6 +1854,7 @@ export function createToolLoopGuard({
           },
         };
       }
+      if (normalizedParams !== undefined) return { params: normalizedParams };
     }
 
     if (
@@ -1879,6 +2154,9 @@ export function createToolLoopGuard({
         state.operationsExpectedQuery = state.operationsRequired
           ? userMessageExtensionCatalogExactQuery(event?.messages, event?.prompt)
           : undefined;
+        state.operationsExpectedExtensionLifecycle = state.operationsRequired
+          ? userMessageExtensionLifecycleIntent(event?.messages, event?.prompt)
+          : undefined;
       }
       if (!state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
@@ -2131,7 +2409,8 @@ export function createToolLoopGuard({
         return {
           status:
             evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
-            evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX)
+            evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX) ||
+            evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX)
             ? "passed"
             : "failed",
           text: evidenceText,

@@ -24,6 +24,8 @@ import {
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
+  OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+  OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
   OPERATIONS_LOOP_ABORT_REASON,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
@@ -51,6 +53,7 @@ import {
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
   userMessageExtensionCatalogExactQuery,
+  userMessageExtensionLifecycleIntent,
   userMessageRequiresOperations,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
@@ -121,6 +124,40 @@ function reply(guard, overrides = {}) {
     ...(overrides.event ?? {}),
   };
   return guard.replyPayloadSending(event);
+}
+
+function lifecycleResult(action, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    kind: "ods-pixel-extension-lifecycle",
+    action,
+    extensionId: "crewai",
+    outcome: action === "inspect" ? "ready" : "succeeded",
+    previousStatus: "not_installed",
+    currentStatus: action === "inspect" ? "not_installed" : "enabled",
+    changed: action !== "inspect",
+    externalEffectOccurred: action !== "inspect",
+    requiredConfiguration: [],
+    optionalConfiguration: [],
+    missingConfiguration: [],
+    rollback: { attempted: false, succeeded: null },
+    boundary:
+      "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, credential, arbitrary HTTP, or data-purge authority.",
+    ...overrides,
+  };
+}
+
+function lifecycleStep(action, result = lifecycleResult(action)) {
+  return {
+    stepId: `step-${action}`,
+    target: "ods-host",
+    action: `ods.extensions.${action}`,
+    exitCode: 0,
+    stdout: `${JSON.stringify(result)}\n`,
+    stderr: "",
+    outputTruncated: { stdout: false, stderr: false },
+    riskSignals: [],
+  };
 }
 
 test("allows bounded web research then returns a terminal final-answer instruction", () => {
@@ -745,6 +782,263 @@ test("renders a strictly validated extension catalog receipt instead of host evi
   assert.match(text, /Required configuration keys: `N8N_ENCRYPTION_KEY`/);
   assert.match(text, /no installation or configuration authority/);
   assert.doesNotMatch(text, /host facts/);
+});
+
+test("classifies one exact extension lifecycle action and owner extension ID", () => {
+  assert.deepEqual(
+    userMessageExtensionLifecycleIntent([], "Install the ODS extension CrewAI."),
+    { action: "install", serviceId: "crewai" }
+  );
+  assert.deepEqual(
+    userMessageExtensionLifecycleIntent([], "Uninstall extension n8n"),
+    { action: "remove", serviceId: "n8n" }
+  );
+  assert.deepEqual(
+    userMessageExtensionLifecycleIntent([], "Enable ODS extension vendor.crewai."),
+    { action: "enable", serviceId: "vendor.crewai" }
+  );
+  assert.equal(
+    userMessageExtensionLifecycleIntent([], `Install ODS extension ${"a".repeat(65)}`),
+    undefined
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "Install the ODS extension CrewAI."),
+    {
+      required: true,
+      actions: ["ods.extensions.inspect", "ods.extensions.install"],
+    }
+  );
+});
+
+test("forces extension lifecycle inspection, exact IDs, and sequential submissions", () => {
+  const guard = createToolLoopGuard();
+  const inspectJob = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Install the ODS extension crewai." }
+  );
+  assert.equal(
+    call(guard, "pixel_ops_workflow_submit", { event: { params: { steps: [] } } })
+      ?.blockReason,
+    OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON
+  );
+  assert.equal(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "ods.extensions.install",
+          parameters: { serviceId: "different" },
+        },
+      },
+    })?.blockReason,
+    OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "invented",
+          action: "ods.extensions.inspect",
+          parameters: { serviceId: "different", command: "id" },
+        },
+      },
+    }),
+    {
+      params: {
+        target: "ods-host",
+        action: "ods.extensions.inspect",
+        parameters: { serviceId: "crewai" },
+      },
+    }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: {
+        target: "ods-host",
+        action: "ods.extensions.inspect",
+        parameters: { serviceId: "crewai" },
+      },
+      result: { details: { jobId: inspectJob, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: inspectJob },
+      result: {
+        details: {
+          jobId: inspectJob,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [lifecycleStep("inspect")],
+        },
+      },
+    },
+  });
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "wrong",
+          action: "ods.extensions.install",
+          parameters: { serviceId: "n8n", extra: true },
+        },
+      },
+    }),
+    {
+      params: {
+        target: "ods-host",
+        action: "ods.extensions.install",
+        parameters: { serviceId: "crewai" },
+      },
+    }
+  );
+});
+
+test("renders missing extension configuration as a verified no-effect result", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const parameters = { serviceId: "crewai" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Install the ODS extension crewai." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.inspect", parameters },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+            outcome: "blocked",
+            requiredConfiguration: ["CREWAI_API_KEY"],
+            missingConfiguration: ["CREWAI_API_KEY"],
+          }))],
+        },
+      },
+    },
+  });
+  assert.equal(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: { target: "ods-host", action: "ods.extensions.install", parameters },
+      },
+    })?.blockReason,
+    OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON
+  );
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+  assert.match(text, /Missing required configuration keys: `CREWAI_API_KEY`/);
+  assert.match(text, /no change or external effect occurred/);
+});
+
+test("reports an immutable lifecycle approval without claiming completion", () => {
+  const guard = createToolLoopGuard();
+  const inspectJob = "ops-1234567890123-abcdef123456";
+  const installJob = "ops-1234567890124-fedcba654321";
+  const planHash = "d".repeat(64);
+  const parameters = { serviceId: "crewai" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Install the ODS extension crewai." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.inspect", parameters },
+      result: { details: { jobId: inspectJob, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: inspectJob },
+      result: {
+        details: {
+          jobId: inspectJob,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [lifecycleStep("inspect")],
+        },
+      },
+    },
+  });
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.install", parameters },
+      result: { details: { jobId: installJob, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: installJob },
+      result: {
+        details: {
+          jobId: installJob,
+          status: "awaiting-approval",
+          waitTimedOut: false,
+          approvalRequired: true,
+          planHash,
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /external approval is required/);
+  assert.match(text, new RegExp(installJob));
+  assert.match(text, new RegExp(planHash));
+  assert.match(text, /No lifecycle change was executed/);
+  assert.doesNotMatch(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+});
+
+test("accepts only a structurally bound extension lifecycle success receipt", () => {
+  const guard = createToolLoopGuard();
+  const inspectJob = "ops-1234567890123-abcdef123456";
+  const installJob = "ops-1234567890124-fedcba654321";
+  const parameters = { serviceId: "crewai" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Install the ODS extension crewai." }
+  );
+  for (const [action, jobId, step] of [
+    ["ods.extensions.inspect", inspectJob, lifecycleStep("inspect")],
+    ["ods.extensions.install", installJob, lifecycleStep("install")],
+  ]) {
+    afterCall(guard, "pixel_ops_run", {
+      event: {
+        params: { target: "ods-host", action, parameters },
+        result: { details: { jobId, status: "submitted", kind: "action" } },
+      },
+    });
+    afterCall(guard, "pixel_ops_job_wait", {
+      event: {
+        params: { jobId },
+        result: {
+          details: {
+            jobId,
+            status: "succeeded",
+            waitTimedOut: false,
+            steps: [step],
+          },
+        },
+      },
+    });
+  }
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+  assert.match(text, /Requested action: `install`; verified outcome: `succeeded`/);
+  assert.match(text, /State: `not_installed` -> `enabled`/);
+  assert.match(text, /external effect attempted: yes/);
 });
 
 test("routes host evidence through Operations and requires a matching terminal job", () => {

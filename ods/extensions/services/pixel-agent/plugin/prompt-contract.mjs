@@ -7,6 +7,7 @@ import {
   githubReadmeUrl,
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
+  userMessageExtensionLifecycleIntent,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
 } from "./tool-loop-guard.mjs";
@@ -75,6 +76,9 @@ export const ODS_VERIFICATION_FAILED_CONTRACT =
 
 export const ODS_EXTENSION_CATALOG_CONTRACT =
   "The owner's current request is specifically about the installable ODS extension catalog. In the first tool step call only pixel_ops_inventory and wait for its result; do not call pixel_ods_apps_list, status, exec, web, memory, or any other tool in parallel. Then call pixel_ops_run with target ods-host, action ods.extensions.search, and parameters containing only query, and wait for that submitted job with pixel_ops_job_wait before answering. Copy an explicitly labeled or quoted query value character-for-character; never shorten, normalize, split, correct, or sanitize it. If the copied query violates policy, let the external broker reject it and report that rejection instead of substituting a different query. Inventory describes the action but is not a catalog search result.";
+
+export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
+  "The owner's current request is specifically one ODS extension lifecycle action. First call only pixel_ops_inventory and wait for its result. Then call pixel_ops_run with target ods-host, action ods.extensions.inspect, and parameters containing only the owner's exact extension ID; wait for that job with pixel_ops_job_wait. Do not combine inspection and mutation in a workflow. If inspection reports missing required configuration, report only the missing key names and verified unchanged state; do not submit a mutation. Otherwise submit only the owner's requested ods.extensions.install, ods.extensions.enable, ods.extensions.disable, or ods.extensions.remove action for that same exact ID and wait for its terminal result. An awaiting-approval receipt is not completed work: report the job and immutable plan hash, never approve it yourself, and never claim a change until a later succeeded receipt proves it. Do not call apps, status, exec, web, memory, or any unrelated tool during this lifecycle route.";
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
@@ -155,6 +159,12 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXTENSION_CATALOG_CONTRACT}`
     : "";
+  const extensionLifecycle = userMessageExtensionLifecycleIntent(
+    event?.messages,
+    event?.prompt
+  )
+    ? ` ${ODS_EXTENSION_LIFECYCLE_CONTRACT}`
+    : "";
   const verification =
     verificationStatus === "pending"
       ? ` ${ODS_VERIFICATION_PENDING_CONTRACT}`
@@ -163,6 +173,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${recovery}${verification}${privateUrl}`,
+      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${recovery}${verification}${privateUrl}`,
   };
 }

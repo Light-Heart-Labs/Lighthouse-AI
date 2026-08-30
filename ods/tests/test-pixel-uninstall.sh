@@ -297,7 +297,21 @@ JSON
     chmod 0600 "$INSTALL_DIR/data/pixel/extension-catalog.json"
     cp "$ROOT_DIR/extensions/services/pixel-agent/host/extension_search.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
-    chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+    cp "$ROOT_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
+    python3 - "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
+        "$INSTALL_DIR/data/pixel/extension-manager.service" "$INSTALL_DIR" "$(id -un)" <<'PY'
+import pathlib, sys
+source, target, install_dir, owner = sys.argv[1:]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+text = (text.replace("__PIXEL_SERVICE_USER__", owner)
+            .replace("__ODS_INSTALL_DIR__", install_dir)
+            .replace("__ODS_DASHBOARD_PORT__", "3002"))
+pathlib.Path(target).write_text(text, encoding="utf-8")
+PY
+    chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
+    chmod 0600 "$INSTALL_DIR/data/pixel/extension-manager.service"
     cat >"$source/.generated/pixel-ops-broker.service" <<UNIT
 [Unit]
 Description=Pixel Operations Broker - isolated fleet execution and workflow service
@@ -329,11 +343,19 @@ ENV
         "$OPS_INSTALL/ods-extension-search.py"
     cp "$INSTALL_DIR/data/pixel/extension-catalog.json" \
         "$OPS_INSTALL/ods-extension-catalog.json"
+    cp "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
+        "$OPS_INSTALL/ods-extension-manager.py"
+    cp "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
+        "$LIBEXEC_DIR/ods-pixel-extension-manager.py"
+    cp "$INSTALL_DIR/data/pixel/extension-manager.service" \
+        "$SYSTEMD_DIR/pixel-extension-manager.service"
     cp "$INSTALL_DIR/data/pixel/operations-policy.json" "$OPS_POLICY"
     chmod 0644 "$SYSTEMD_DIR/pixel-ops-broker.service"
     chmod 0640 "$OPS_ENV" "$OPS_POLICY"
     chmod 0755 "$OPS_INSTALL" "$OPS_INSTALL/broker.py" \
-        "$OPS_INSTALL/ods-extension-search.py" "$OPS_POLICY_DIR"
+        "$OPS_INSTALL/ods-extension-search.py" "$OPS_INSTALL/ods-extension-manager.py" \
+        "$LIBEXEC_DIR/ods-pixel-extension-manager.py" "$OPS_POLICY_DIR"
+    chmod 0644 "$SYSTEMD_DIR/pixel-extension-manager.service"
     chmod 0640 "$OPS_INSTALL/ods-extension-catalog.json"
     chmod 0750 "$OPS_STATE"
     mkdir -m 2770 "$OPS_STATE/requests" "$OPS_STATE/cancel"
@@ -359,10 +381,12 @@ PY
     contract_sha256="$(python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" \
         "$INSTALL_DIR/data/pixel/operations-policy.json" \
         "$INSTALL_DIR/data/pixel/extension-catalog.json" \
-        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" <<'PY'
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
+        "$INSTALL_DIR/data/pixel/extension-manager.service" <<'PY'
 import hashlib, pathlib, sys
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v3\0")
+digest.update(b"ods-pixel-contract-v4\0")
 for raw in sys.argv[1:]:
     payload = pathlib.Path(raw).read_bytes()
     digest.update(len(payload).to_bytes(8, "big"))
@@ -492,14 +516,18 @@ fi
 write_ops_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     if [[ ! -e "$SYSTEMD_DIR/pixel-ops-broker.service" \
+        && ! -e "$SYSTEMD_DIR/pixel-extension-manager.service" \
+        && ! -e "$LIBEXEC_DIR/ods-pixel-extension-manager.py" \
         && ! -e "$OPS_ENV" && ! -e "$OPS_POLICY_DIR" \
         && ! -e "$OPS_INSTALL" && ! -e "$OPS_STATE" \
         && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
         && ! -e "$INSTALL_DIR/data/pixel/extension-catalog.json" \
+        && ! -e "$INSTALL_DIR/data/pixel/extension-manager.service" \
         && ! -e "$OPS_PASSWD_STATE" && ! -e "$OPS_GROUP_STATE" \
         && "$(sed -n '1p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ingress.service" \
-        && "$(sed -n '2p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
-        && "$(sed -n '3p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ops-broker.service" \
+        && "$(sed -n '2p' "$SYSTEMCTL_LOG")" == "disable --now pixel-extension-manager.service" \
+        && "$(sed -n '3p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
+        && "$(sed -n '4p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ops-broker.service" \
         && "$(sed -n '1p' "$OPS_IDENTITY_LOG")" == "userdel pixel-ops-broker" \
         && "$(sed -n '2p' "$OPS_IDENTITY_LOG")" == "groupdel pixel-ops" ]]; then
         pass "verified Operations Broker service, authority state, and identities are removed in bounded order"
@@ -510,12 +538,18 @@ else
     fail "verified Operations Broker deployment could not be removed"
 fi
 
-for drift_target in program extension-program extension-catalog unit environment policy; do
+for drift_target in program extension-program extension-catalog extension-manager-client \
+    extension-manager-program extension-manager-unit extension-manager-owner-unit \
+    unit environment policy; do
     write_ops_fixture
     case "$drift_target" in
         program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
         extension-program) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-search.py" ;;
         extension-catalog) printf '%s\n' ' ' >>"$OPS_INSTALL/ods-extension-catalog.json" ;;
+        extension-manager-client) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-manager.py" ;;
+        extension-manager-program) printf '%s\n' '# drift' >>"$LIBEXEC_DIR/ods-pixel-extension-manager.py" ;;
+        extension-manager-unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-extension-manager.service" ;;
+        extension-manager-owner-unit) printf '%s\n' '# drift' >>"$INSTALL_DIR/data/pixel/extension-manager.service" ;;
         unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
         environment) printf '%s\n' 'UNEXPECTED=1' >>"$OPS_ENV" ;;
         policy) printf '%s\n' ' ' >>"$OPS_POLICY" ;;
@@ -565,7 +599,8 @@ fi
 write_ops_fixture
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
     "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
-    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
+    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_INSTALL/ods-extension-manager.py" \
+    "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
 rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
@@ -589,7 +624,8 @@ PY
 chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
     "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
-    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_PASSWD_STATE"
+    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_INSTALL/ods-extension-manager.py" \
+    "$OPS_PASSWD_STATE"
 rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then

@@ -377,16 +377,33 @@ export ODS_MODEL_SWITCHBOARD=observe
 digest="$(printf 'a%.0s' {1..64})"
 mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/extensions/library/services/notebook" \
     "$INSTALL_DIR/extensions/services/pixel-agent/host" "$INSTALL_DIR/data/pixel"
-cp "$ROOT/extensions/services/pixel-agent/host/extension_search.py" \
-    "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
-chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/extension_search.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/extension_manager.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+  chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service"
 printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
 cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
 {"schema_version":"1.0.0","extensions":[{"id":"notebook","name":"Notebook Lab","description":"Private notebooks for data science.","category":"optional","gpu_backends":["nvidia","amd"],"compose_file":"compose.yaml","depends_on":["litellm"],"env_vars":[{"key":"NOTEBOOK_TOKEN","required":true},{"key":"NOTEBOOK_THEME","required":false}],"tags":["notebook","data-science"],"features":[{"name":"Interactive Notebooks"}]},{"id":"reference-only","name":"Reference Only","description":"Not currently deployable.","category":"optional","gpu_backends":[],"compose_file":"compose.yaml","depends_on":[],"env_vars":[],"tags":[],"features":[]}]}
 JSON
 extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
+extension_manager_unit="$INSTALL_DIR/data/pixel/extension-manager.service"
 _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"
+_ods_pixel_write_extension_manager_unit "$owner" "$home" "$extension_manager_unit"
 check test "$(stat -c '%a' "$extension_catalog")" = 600
+check test "$(stat -c '%a' "$extension_manager_unit")" = 600
+check grep -F "User=$owner" "$extension_manager_unit"
+check grep -F "Group=pixel-ops" "$extension_manager_unit"
+check grep -F "${INSTALL_DIR}/.env" "$extension_manager_unit"
+check grep -F " 3002" "$extension_manager_unit"
+check grep -F "CapabilityBoundingSet=" "$extension_manager_unit"
+check grep -F "ProtectSystem=strict" "$extension_manager_unit"
+check grep -F "ProtectProc=invisible" "$extension_manager_unit"
+check grep -F "RestrictNamespaces=true" "$extension_manager_unit"
 check python3 -c '
 import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))
@@ -404,6 +421,15 @@ if _ods_pixel_write_extension_catalog "$owner" "$home" "$TEST_ROOT/linked-extens
 else
     pass "symlink extension catalog rejected"
 fi
+printf '%s\n' 'unsafe' >"$TEST_ROOT/extension-manager-unit-target.service"
+ln -s "$TEST_ROOT/extension-manager-unit-target.service" \
+    "$TEST_ROOT/linked-extension-manager.service"
+if _ods_pixel_write_extension_manager_unit "$owner" "$home" \
+    "$TEST_ROOT/linked-extension-manager.service" >/dev/null 2>&1; then
+    fail "symlink extension manager unit rejected"
+else
+    pass "symlink extension manager unit rejected"
+fi
 operations_policy="$TEST_ROOT/operations-policy.json"
 _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"
 check test "$(stat -c '%a' "$operations_policy")" = 600
@@ -418,14 +444,16 @@ target=v["targets"]["ods-host"]
 assert target["backend"] == "local" and target["expectedHostname"] == socket.gethostname()
 assert target["allowRaw"] is False and target["writableRoots"] == [sys.argv[3]]
 assert target["defaultCwd"] == "/var/lib/pixel-ops-broker"
-assert target["allowedRoots"] == [sys.argv[2],sys.argv[3],"/var/lib/pixel-ops-broker"]
+assert target["allowedRoots"] == [sys.argv[2],sys.argv[3],"/var/lib/pixel-ops-broker","/run/ods-pixel-manager"]
+assert set(target["capabilities"]) == {"inspect","manage-extensions","stage-download"}
 broker=v["targets"]["broker"]
 assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search"}
-assert all(action["tier"] == "read" and action["defaultAuthority"] == "observe" for action in v["actions"].values())
+assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
+for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search","ods.extensions.inspect"}:
+    assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
 assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
 assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
 assert v["actions"]["host.architecture"]["argv"] == ["/usr/bin/uname", "-m"]
@@ -434,6 +462,18 @@ assert v["actions"]["host.os-release"]["argv"] == ["/usr/bin/cat", "/etc/os-rele
 extension_search=v["actions"]["ods.extensions.search"]
 assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
 assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]
+parameter={"serviceId":{"pattern":"^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$","maxLength":64}}
+for action in ("inspect","install","enable","disable","remove"):
+    item=v["actions"][f"ods.extensions.{action}"]
+    assert item["parameters"] == parameter
+    assert item["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-manager.py","client","/run/ods-pixel-manager/extension-manager.sock",action,"{serviceId}"]
+assert v["actions"]["ods.extensions.install"] | {"tier":"managed","effect":"manage","defaultAuthority":"propose","idempotent":True,"reversible":True,"rollbackAction":"ods.extensions.remove","verificationAction":"ods.extensions.inspect","timeoutSeconds":900,"exclusiveTarget":True} == v["actions"]["ods.extensions.install"]
+assert v["actions"]["ods.extensions.enable"]["rollbackAction"] == "ods.extensions.disable"
+assert v["actions"]["ods.extensions.disable"]["rollbackAction"] == "ods.extensions.enable"
+assert v["actions"]["ods.extensions.remove"]["tier"] == "change"
+assert v["actions"]["ods.extensions.remove"]["effect"] == "change"
+assert v["actions"]["ods.extensions.remove"]["defaultAuthority"] == "propose"
+assert v["actions"]["ods.extensions.remove"]["reversible"] is False
 assert v["authority"]["defaultLevel"] == "propose"
 assert v["authority"]["grants"] == [{"id":"ods-approved-downloads","level":"bounded-auto","actions":["download.stage"],"targets":["broker"],"tiers":["staging"],"environments":["lab"],"maxExecutions":100,"windowSeconds":86400,"maxConcurrent":2,"maxRuntimeSeconds":600,"maxFailures":10,"maxArtifactBytes":536870912}]
 ' "$operations_policy" "$INSTALL_DIR" "$home/.openclaw/workspace-pixel"
@@ -490,6 +530,25 @@ else
 fi
 mv "$TEST_ROOT/extension-search.original.py" "$extension_helper"
 chmod 0644 "$extension_helper"
+extension_manager="$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
+cp "$extension_manager" "$TEST_ROOT/extension-manager.original.py"
+printf '\n# changed\n' >>"$extension_manager"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds extension manager bytes"
+else
+    pass "managed contract hash binds extension manager bytes"
+fi
+mv "$TEST_ROOT/extension-manager.original.py" "$extension_manager"
+chmod 0644 "$extension_manager"
+cp "$extension_manager_unit" "$TEST_ROOT/extension-manager-unit.original.service"
+printf '\n# changed\n' >>"$extension_manager_unit"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds rendered extension manager unit bytes"
+else
+    pass "managed contract hash binds rendered extension manager unit bytes"
+fi
+mv "$TEST_ROOT/extension-manager-unit.original.service" "$extension_manager_unit"
+chmod 0600 "$extension_manager_unit"
 installed_policy="$TEST_ROOT/installed-operations-policy.json"
 cp "$operations_policy" "$installed_policy"
 chmod 0640 "$installed_policy"
@@ -1248,8 +1307,13 @@ assert "_ods_pixel_write_operations_policy" in text
 assert "Could not write the owner-private ODS Pixel Operations policy" in text
 assert "_ods_pixel_write_extension_catalog" in text
 assert "secret-free ODS extension catalog" in text
-assert "ods-pixel-contract-v3" in text
+assert "_ods_pixel_write_extension_manager_unit" in text
+assert "owner-private ODS Pixel extension manager service" in text
+assert "ods-pixel-contract-v4" in text
 assert "ods_sudo install -o root -g pixel-ops -m 0640 \"$extension_catalog\" \"$installed_extension_catalog\"" in text
+assert "ods-extension-manager.py" in text
+assert "pixel-extension-manager.service" in text
+assert "manage-extensions" in text
 assert "ods_sudo -u pixel-ops-broker /usr/bin/python3" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
@@ -1320,6 +1384,14 @@ assert "RestrictNamespaces=true" in text
 assert "RuntimeDirectoryPreserve=restart" in text
 assert "BindReadOnlyPaths=__PIXEL_GATEWAY_TOKEN_SOURCE__:__PIXEL_GATEWAY_TOKEN_FILE__" in text
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-ingress.service"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "ProtectHome=tmpfs" in text
+assert "BindReadOnlyPaths=\"__ODS_INSTALL_DIR__\"" in text
+assert "IPAddressDeny=any" in text and "IPAddressAllow=localhost" in text
+assert "RestrictAddressFamilies=AF_UNIX AF_INET" in text
+' "$ROOT/extensions/services/pixel-agent/host/pixel-extension-manager.service"
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()

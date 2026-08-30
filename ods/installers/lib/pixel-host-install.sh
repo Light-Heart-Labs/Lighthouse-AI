@@ -272,10 +272,13 @@ _ods_pixel_contract_sha256() {
     local owner="$1" home="$2" answers="$3"
     local extension_catalog="${INSTALL_DIR:?}/data/pixel/extension-catalog.json"
     local extension_helper="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/extension_search.py"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" "$extension_helper" <<'PY'
+    local extension_manager="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/extension_manager.py"
+    local extension_manager_unit="${INSTALL_DIR:?}/data/pixel/extension-manager.service"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" \
+        "$extension_helper" "$extension_manager" "$extension_manager_unit" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path, catalog_path, helper_path = map(pathlib.Path, sys.argv[1:4])
+path, catalog_path, helper_path, manager_path, manager_unit_path = map(pathlib.Path, sys.argv[1:6])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -296,15 +299,17 @@ if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_p
     raise SystemExit("ODS Pixel Operations policy is outside the managed contract")
 policy_payload = read_private_regular(expected_policy, "Operations policy")
 catalog_payload = read_private_regular(catalog_path, "extension catalog")
-helper_info = helper_path.lstat()
-if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
-        or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
-        or helper_info.st_mode & 0o022 or helper_info.st_size > 2 * 1024 * 1024):
-    raise SystemExit("invalid ODS Pixel extension helper")
-helper_payload = helper_path.read_bytes()
+helper_payloads = []
+for helper in (helper_path, manager_path, manager_unit_path):
+    helper_info = helper.lstat()
+    if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
+            or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
+            or helper_info.st_mode & 0o022 or helper_info.st_size > 2 * 1024 * 1024):
+        raise SystemExit("invalid ODS Pixel extension helper")
+    helper_payloads.append(helper.read_bytes())
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v3\0")
-for payload in (answers_payload, policy_payload, catalog_payload, helper_payload):
+digest.update(b"ods-pixel-contract-v4\0")
+for payload in (answers_payload, policy_payload, catalog_payload, *helper_payloads):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
 print(digest.hexdigest())
@@ -1763,7 +1768,7 @@ for item in raw_extensions:
         raise SystemExit("invalid ODS extension catalog entry")
     extension_id = item.get("id")
     if (not isinstance(extension_id, str)
-            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", extension_id) is None
+            or re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63}", extension_id) is None
             or extension_id in seen):
         raise SystemExit("invalid or duplicate ODS extension id")
     seen.add(extension_id)
@@ -1861,6 +1866,67 @@ finally:
 PY
 }
 
+_ods_pixel_write_extension_manager_unit() {
+    local owner="$1" home="$2" output="$3"
+    local source="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+    local dashboard_port="${DASHBOARD_API_PORT:-3002}"
+
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${output%/*}" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$source" "$output" \
+        "$owner" "${INSTALL_DIR:?}" "$dashboard_port" <<'PY'
+import os, pathlib, re, stat, sys, tempfile
+
+source_path, output_path = map(pathlib.Path, sys.argv[1:3])
+owner, install_dir, port = sys.argv[3:6]
+if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", owner) is None:
+    raise SystemExit("unsafe Pixel manager service user")
+if not port.isdigit() or not 1 <= int(port) <= 65535:
+    raise SystemExit("unsafe ODS dashboard port")
+if (not install_dir.startswith("/") or len(install_dir) > 1024
+        or any(character in install_dir for character in '\n\r\0"\\%')):
+    raise SystemExit("unsafe ODS install directory for systemd")
+source_info = source_path.lstat()
+if (not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode)
+        or source_info.st_nlink != 1 or source_info.st_uid != os.getuid()
+        or source_info.st_mode & 0o022 or source_info.st_size > 1024 * 1024):
+    raise SystemExit("unsafe Pixel manager service template")
+parent_info = output_path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o077):
+    raise SystemExit("unsafe Pixel manager service output directory")
+if output_path.is_symlink():
+    raise SystemExit("Pixel manager service output cannot be a symlink")
+if output_path.exists():
+    output_info = output_path.lstat()
+    if (not stat.S_ISREG(output_info.st_mode) or output_info.st_nlink != 1
+            or output_info.st_uid != os.getuid() or output_info.st_mode & 0o077
+            or output_info.st_size > 1024 * 1024):
+        raise SystemExit("unsafe existing Pixel manager service output")
+text = source_path.read_text(encoding="utf-8")
+text = (text.replace("__PIXEL_SERVICE_USER__", owner)
+            .replace("__ODS_INSTALL_DIR__", install_dir)
+            .replace("__ODS_DASHBOARD_PORT__", port))
+if "__PIXEL_" in text or "__ODS_" in text:
+    raise SystemExit("unresolved Pixel manager systemd placeholder")
+descriptor, temporary = tempfile.mkstemp(prefix=".extension-manager.", dir=output_path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, output_path)
+    directory = os.open(output_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 _ods_pixel_write_operations_policy() {
     local owner="$1" home="$2" policy="$3" install_root="${INSTALL_DIR:?}"
     local workspace="$home/.openclaw/workspace-pixel"
@@ -1898,6 +1964,9 @@ def normalized_root(value, label):
 
 install_root = normalized_root(install_root, "ODS install root")
 workspace = normalized_root(workspace, "Pixel workspace")
+manager_socket_root = "/run/ods-pixel-manager"
+manager_socket = manager_socket_root + "/extension-manager.sock"
+manager_program = "/opt/pixel-ops-broker/ods-extension-manager.py"
 python_binary = str(pathlib.Path("/usr/bin/python3").resolve(strict=True))
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
@@ -1948,12 +2017,14 @@ payload = {
             # inside the broker's root-custodied state tree instead of making
             # /home visible to the privileged execution service.
             "defaultCwd": "/var/lib/pixel-ops-broker",
-            "allowedRoots": [install_root, workspace, "/var/lib/pixel-ops-broker"],
+            "allowedRoots": [
+                install_root, workspace, "/var/lib/pixel-ops-broker", manager_socket_root,
+            ],
             "writableRoots": [workspace],
             "shell": "/bin/bash",
             "allowRaw": False,
             "labels": ["ods-host"],
-            "capabilities": ["inspect", "stage-download"],
+            "capabilities": ["inspect", "manage-extensions", "stage-download"],
         },
         "broker": {
             "enabled": True,
@@ -2052,6 +2123,113 @@ payload = {
             ],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
+        },
+        "ods.extensions.inspect": {
+            "description": "Inspect one ODS extension's installed state and configuration prerequisites through the scoped lifecycle proxy.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "inspect", "{serviceId}",
+            ],
+            "timeoutSeconds": 30,
+            "exclusiveTarget": False,
+        },
+        "ods.extensions.install": {
+            "description": "Install and verify one cataloged ODS extension through the scoped lifecycle proxy. Exact-plan owner approval is required.",
+            "tier": "managed",
+            "effect": "manage",
+            "defaultAuthority": "propose",
+            "idempotent": True,
+            "reversible": True,
+            "rollbackAction": "ods.extensions.remove",
+            "verificationAction": "ods.extensions.inspect",
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "install", "{serviceId}",
+            ],
+            "timeoutSeconds": 900,
+            "exclusiveTarget": True,
+        },
+        "ods.extensions.enable": {
+            "description": "Enable and verify one installed ODS extension through the scoped lifecycle proxy. Exact-plan owner approval is required.",
+            "tier": "managed",
+            "effect": "manage",
+            "defaultAuthority": "propose",
+            "idempotent": True,
+            "reversible": True,
+            "rollbackAction": "ods.extensions.disable",
+            "verificationAction": "ods.extensions.inspect",
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "enable", "{serviceId}",
+            ],
+            "timeoutSeconds": 300,
+            "exclusiveTarget": True,
+        },
+        "ods.extensions.disable": {
+            "description": "Disable and verify one ODS extension while preserving its data. Exact-plan owner approval is required.",
+            "tier": "managed",
+            "effect": "manage",
+            "defaultAuthority": "propose",
+            "idempotent": True,
+            "reversible": True,
+            "rollbackAction": "ods.extensions.enable",
+            "verificationAction": "ods.extensions.inspect",
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "disable", "{serviceId}",
+            ],
+            "timeoutSeconds": 300,
+            "exclusiveTarget": True,
+        },
+        "ods.extensions.remove": {
+            "description": "Remove one disabled user-installed ODS extension definition while preserving its data. Exact-plan owner approval is required.",
+            "tier": "change",
+            "effect": "change",
+            "defaultAuthority": "propose",
+            "idempotent": True,
+            "reversible": False,
+            "verificationAction": "ods.extensions.inspect",
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "remove", "{serviceId}",
+            ],
+            "timeoutSeconds": 300,
+            "exclusiveTarget": True,
         },
     },
     "authority": {
@@ -2242,18 +2420,23 @@ PY
 
 _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3" extension_catalog="$4"
+    local rendered_extension_manager_unit="$5"
     local token_file="$home/.openclaw/openclaw.json"
     local runtime_token_file="/run/ods-pixel/openclaw.json"
     local extension_helper="$plugin_root/host/extension_search.py"
     local installed_extension_helper="/opt/pixel-ops-broker/ods-extension-search.py"
     local installed_extension_catalog="/opt/pixel-ops-broker/ods-extension-catalog.json"
+    local extension_manager="$plugin_root/host/extension_manager.py"
+    local installed_extension_manager="/opt/pixel-ops-broker/ods-extension-manager.py"
+    local system_extension_manager="/usr/local/libexec/ods-pixel-extension-manager.py"
     local ods_version="${VERSION:-2.6.0}"
     [[ "$ods_version" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
     [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
     (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
     local projection_source kind uid mode size
-    for projection_source in "$extension_helper" "$extension_catalog"; do
+    for projection_source in "$extension_helper" "$extension_catalog" \
+        "$extension_manager" "$rendered_extension_manager_unit"; do
         [[ -f "$projection_source" && ! -L "$projection_source" ]] || return 1
         IFS='|' read -r kind uid mode size < <(stat -c '%F|%u|%a|%s' -- "$projection_source")
         [[ "$kind" == "regular file" && "$uid" == "$(id -u "$owner")" \
@@ -2319,8 +2502,12 @@ EOF
     ods_sudo test ! -L /opt/pixel-ops-broker
     ods_sudo install -o root -g root -m 0755 "$extension_helper" "$installed_extension_helper"
     ods_sudo install -o root -g pixel-ops -m 0640 "$extension_catalog" "$installed_extension_catalog"
+    ods_sudo install -o root -g root -m 0755 "$extension_manager" "$installed_extension_manager"
+    ods_sudo install -o root -g root -m 0755 "$extension_manager" "$system_extension_manager"
     ods_sudo cmp -s -- "$extension_helper" "$installed_extension_helper"
     ods_sudo cmp -s -- "$extension_catalog" "$installed_extension_catalog"
+    ods_sudo cmp -s -- "$extension_manager" "$installed_extension_manager"
+    ods_sudo cmp -s -- "$extension_manager" "$system_extension_manager"
     extension_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
         "$installed_extension_helper" "$installed_extension_catalog" all)" || return 1
     jq -e '.schemaVersion == 1 and .kind == "ods-pixel-extension-search"
@@ -2330,16 +2517,38 @@ EOF
     ods_sudo install -o root -g root -m 0755 "$plugin_root/host/pixel_ingress.mjs" /usr/local/libexec/ods-pixel-ingress.mjs
     ods_sudo install -o root -g ods-pixel -m 0640 "$stage/pixel-agent.env" /etc/ods/pixel-agent.env
     ods_sudo install -o root -g root -m 0644 "$stage/pixel-ingress.service" /etc/systemd/system/pixel-ingress.service
+    ods_sudo install -o root -g root -m 0644 "$rendered_extension_manager_unit" \
+        /etc/systemd/system/pixel-extension-manager.service
+    ods_sudo cmp -s -- "$rendered_extension_manager_unit" \
+        /etc/systemd/system/pixel-extension-manager.service
     rm -f -- "$stage/pixel-agent.env" "$stage/pixel-ingress.service"
     rmdir -- "$stage"
     ods_sudo systemctl daemon-reload || return 1
-    ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service || return 1
+    ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service \
+        pixel-extension-manager.service || return 1
     ods_sudo systemctl start openclaw-gateway.service || return 1
+    ods_sudo systemctl restart pixel-extension-manager.service || return 1
     # `enable --now` does not refresh an already-running ingress after its
     # reviewed program or environment changes. Restart only the ingress here;
     # the Pixel gateway was already verified above and need not be disturbed.
     ods_sudo systemctl restart pixel-ingress.service || return 1
-    ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service
+    ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service \
+        pixel-extension-manager.service || return 1
+    local extension_id manager_probe
+    extension_id="$(jq -er '.matches[0].id | select(type == "string")' \
+        <<<"$extension_probe")" || return 1
+    [[ "$extension_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ && "$extension_id" != *. ]] || return 1
+    manager_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
+        "$installed_extension_manager" client \
+        /run/ods-pixel-manager/extension-manager.sock inspect "$extension_id")" || return 1
+    jq -e --arg id "$extension_id" '.schemaVersion == 1
+        and .kind == "ods-pixel-extension-lifecycle"
+        and .action == "inspect" and .extensionId == $id
+        and (.outcome == "ready" or .outcome == "blocked")
+        and .changed == false and .externalEffectOccurred == false
+        and (.requiredConfiguration | type == "array")
+        and (.missingConfiguration | type == "array")
+        and (.boundary | type == "string")' <<<"$manager_probe" >/dev/null
 }
 
 _ods_pixel_wait_ingress() {
@@ -2362,7 +2571,7 @@ _ods_pixel_wait_ingress() {
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
+    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog extension_manager_unit openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -2376,6 +2585,8 @@ ods_pixel_install_default_agent() {
     [[ -f "$plugin_root/plugin/openclaw.plugin.json" \
         && -f "$plugin_root/host/pixel_ingress.mjs" \
         && -f "$plugin_root/host/extension_search.py" \
+        && -f "$plugin_root/host/extension_manager.py" \
+        && -f "$plugin_root/host/pixel-extension-manager.service" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
     if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then
@@ -2416,12 +2627,17 @@ ods_pixel_install_default_agent() {
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
     operations_policy="$INSTALL_DIR/data/pixel/operations-policy.json"
     extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
+    extension_manager_unit="$INSTALL_DIR/data/pixel/extension-manager.service"
     if ! _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"; then
         ai_bad "Could not write Pixel's secret-free ODS extension catalog."
         return 1
     fi
     if ! _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"; then
         ai_bad "Could not write the owner-private ODS Pixel Operations policy."
+        return 1
+    fi
+    if ! _ods_pixel_write_extension_manager_unit "$owner" "$home" "$extension_manager_unit"; then
+        ai_bad "Could not write the owner-private ODS Pixel extension manager service."
         return 1
     fi
     if ! _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"; then
@@ -2581,7 +2797,8 @@ ods_pixel_install_default_agent() {
         ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
         return 1
     fi
-    if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root" "$extension_catalog"; then
+    if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root" \
+        "$extension_catalog" "$extension_manager_unit"; then
         ai_bad "Could not install and start the private Pixel ingress."
         return 1
     fi

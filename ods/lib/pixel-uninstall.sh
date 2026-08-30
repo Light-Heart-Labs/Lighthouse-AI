@@ -28,6 +28,10 @@ ods_pixel_uninstall_managed() {
     local ingress_env="$etc_dir/pixel-agent.env"
     local ingress_program="$libexec_dir/ods-pixel-ingress.mjs"
     local source_program="$install_dir/extensions/services/pixel-agent/host/pixel_ingress.mjs"
+    local extension_manager_unit="$systemd_dir/pixel-extension-manager.service"
+    local extension_manager_program="$libexec_dir/ods-pixel-extension-manager.py"
+    local extension_manager_source="$install_dir/extensions/services/pixel-agent/host/extension_manager.py"
+    local extension_manager_owner_unit="$install_dir/data/pixel/extension-manager.service"
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
@@ -38,6 +42,7 @@ ods_pixel_uninstall_managed() {
     local ops_program="$ops_install/broker.py"
     local ops_extension_program="$ops_install/ods-extension-search.py"
     local ops_extension_catalog="$ops_install/ods-extension-catalog.json"
+    local ops_extension_manager="$ops_install/ods-extension-manager.py"
     local ops_state="${ODS_PIXEL_UNINSTALL_OPS_STATE_DIR:-/var/lib/pixel-ops-broker}"
     local ops_owner_policy="$install_dir/data/pixel/operations-policy.json"
     local ops_owner_extension_catalog="$install_dir/data/pixel/extension-catalog.json"
@@ -70,7 +75,8 @@ ods_pixel_uninstall_managed() {
     }
     [[ "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]] || return 1
     for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
-        "$ops_extension_program" "$ops_extension_catalog" "$ops_state"; do
+        "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" "$ops_state" \
+        "$extension_manager_unit" "$extension_manager_program"; do
         [[ "$path" == /* && "$path" != / ]] || {
             log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
             return 1
@@ -100,6 +106,8 @@ ods_pixel_uninstall_managed() {
     if ! cleanup_plan="$(python3 - \
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
+        "$extension_manager_unit" "$extension_manager_program" "$extension_manager_source" \
+        "$extension_manager_owner_unit" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$ops_extension_source_program" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
@@ -123,6 +131,10 @@ import sys
     ingress_env_raw,
     ingress_program_raw,
     source_program_raw,
+    extension_manager_unit_raw,
+    extension_manager_program_raw,
+    extension_manager_source_raw,
+    extension_manager_owner_unit_raw,
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
@@ -413,8 +425,21 @@ extension_catalog_present = (
 extension_program_present = (
     ops_extension_source_program.exists() or ops_extension_source_program.is_symlink()
 )
+extension_manager_source = pathlib.Path(extension_manager_source_raw)
+extension_manager_owner_unit = pathlib.Path(extension_manager_owner_unit_raw)
+extension_manager_present = (
+    extension_manager_source.exists() or extension_manager_source.is_symlink()
+)
+extension_manager_unit_present = (
+    extension_manager_owner_unit.exists() or extension_manager_owner_unit.is_symlink()
+)
 if extension_catalog_present and not extension_program_present:
     raise SystemExit("ODS Pixel extension projection source is incomplete")
+if extension_manager_present != extension_manager_unit_present:
+    raise SystemExit("ODS Pixel extension lifecycle source is incomplete")
+if extension_manager_present:
+    regular(extension_manager_source, owner_uid, 2 * 1024 * 1024)
+    regular(extension_manager_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
 if extension_catalog_present:
     regular(ops_owner_extension_catalog, owner_uid, 2 * 1024 * 1024, private=True)
     regular(ops_extension_source_program, owner_uid, 2 * 1024 * 1024)
@@ -465,6 +490,20 @@ if onboarding.exists():
                     v3.update(len(payload).to_bytes(8, "big"))
                     v3.update(payload)
                 accepted_contracts.add(v3.hexdigest())
+                if extension_manager_present:
+                    v4 = hashlib.sha256()
+                    v4.update(b"ods-pixel-contract-v4\0")
+                    for payload in (
+                        onboarding_payload,
+                        policy_payload,
+                        ops_owner_extension_catalog.read_bytes(),
+                        ops_extension_source_program.read_bytes(),
+                        extension_manager_source.read_bytes(),
+                        extension_manager_owner_unit.read_bytes(),
+                    ):
+                        v4.update(len(payload).to_bytes(8, "big"))
+                        v4.update(payload)
+                    accepted_contracts.add(v4.hexdigest())
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
@@ -475,14 +514,27 @@ ingress_unit = pathlib.Path(ingress_unit_raw)
 ingress_env = pathlib.Path(ingress_env_raw)
 ingress_program = pathlib.Path(ingress_program_raw)
 source_program = pathlib.Path(source_program_raw)
+extension_manager_unit = pathlib.Path(extension_manager_unit_raw)
+extension_manager_program = pathlib.Path(extension_manager_program_raw)
 for path, maximum in (
     (gateway_unit, 256 * 1024),
     (ingress_unit, 256 * 1024),
     (ingress_env, 64 * 1024),
     (ingress_program, 2 * 1024 * 1024),
+    (extension_manager_unit, 256 * 1024),
+    (extension_manager_program, 2 * 1024 * 1024),
 ):
     if path.exists() or path.is_symlink():
         regular(path, root_uid, maximum)
+
+manager_root_present = extension_manager_unit.exists() or extension_manager_unit.is_symlink()
+manager_program_present = extension_manager_program.exists() or extension_manager_program.is_symlink()
+if manager_root_present != manager_program_present:
+    raise SystemExit("ODS-managed Pixel extension manager system artifacts are partial")
+if state == "ready" and extension_manager_present != manager_root_present:
+    raise SystemExit("ready ODS-managed Pixel extension lifecycle deployment is partial")
+if manager_root_present and not extension_manager_present:
+    raise SystemExit("Pixel extension manager system artifacts lack an ODS contract")
 
 if gateway_unit.exists():
     text = gateway_unit.read_text(encoding="utf-8")
@@ -497,6 +549,18 @@ if ingress_unit.exists():
         or "Description=Pixel Agent host ingress" not in text
     ):
         raise SystemExit("ingress unit is not the ODS-managed Pixel unit")
+
+if extension_manager_unit.exists():
+    if not extension_manager_owner_unit.exists():
+        raise SystemExit("ODS-managed Pixel extension manager unit source is missing")
+    if extension_manager_unit.read_bytes() != extension_manager_owner_unit.read_bytes():
+        raise SystemExit("installed Pixel extension manager unit drifted from this ODS install")
+
+if extension_manager_program.exists():
+    if not extension_manager_source.exists():
+        raise SystemExit("ODS-managed Pixel extension manager source is missing")
+    if extension_manager_program.read_bytes() != extension_manager_source.read_bytes():
+        raise SystemExit("installed Pixel extension manager program drifted from this ODS install")
 
 if ingress_env.exists():
     entries = {}
@@ -559,7 +623,8 @@ PY
         ops_artifacts_present=true
     fi
     for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" \
-        "$ops_owner_policy" "$ops_owner_extension_catalog"; do
+        "$ops_owner_policy" "$ops_owner_extension_catalog" "$ops_extension_manager" \
+        "$extension_manager_owner_unit"; do
         if [[ -e "$path" || -L "$path" ]]; then
             ops_artifacts_present=true
         fi
@@ -575,7 +640,9 @@ PY
             "${ODS_PIXEL_UNINSTALL_OPS_UID:-}" "${ODS_PIXEL_UNINSTALL_OPS_GID:-}" \
             "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state" \
             "$ops_owner_policy" "$ops_extension_program" "$ops_extension_catalog" \
-            "$ops_extension_source_program" "$ops_owner_extension_catalog" \
+            "$ops_extension_manager" "$ops_extension_source_program" \
+            "$ops_owner_extension_catalog" "$extension_manager_source" \
+            "$extension_manager_owner_unit" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/pixel-ops-broker.service" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/ops-broker.env" \
             "$install_dir/data/pixel/source-$pixel_source_ref/deploy/ops-broker/broker.py" <<'PY'
@@ -606,8 +673,11 @@ import sys
     owner_policy_raw,
     extension_program_raw,
     extension_catalog_raw,
+    extension_manager_raw,
     expected_extension_program_raw,
     owner_extension_catalog_raw,
+    expected_extension_manager_raw,
+    owner_extension_manager_unit_raw,
     expected_unit_raw,
     expected_env_raw,
     expected_program_raw,
@@ -625,8 +695,11 @@ state_dir = pathlib.Path(state_raw)
 owner_policy = pathlib.Path(owner_policy_raw)
 extension_program = pathlib.Path(extension_program_raw)
 extension_catalog = pathlib.Path(extension_catalog_raw)
+extension_manager = pathlib.Path(extension_manager_raw)
 expected_extension_program = pathlib.Path(expected_extension_program_raw)
 owner_extension_catalog = pathlib.Path(owner_extension_catalog_raw)
+expected_extension_manager = pathlib.Path(expected_extension_manager_raw)
+owner_extension_manager_unit = pathlib.Path(owner_extension_manager_unit_raw)
 expected_unit = pathlib.Path(expected_unit_raw)
 expected_env = pathlib.Path(expected_env_raw)
 expected_program = pathlib.Path(expected_program_raw)
@@ -686,6 +759,9 @@ if group:
 projection_source_present = exists(owner_extension_catalog)
 if projection_source_present and not exists(expected_extension_program):
     raise SystemExit("Pixel extension projection source is partial")
+lifecycle_source_present = exists(owner_extension_manager_unit)
+if lifecycle_source_present and not exists(expected_extension_manager):
+    raise SystemExit("Pixel extension lifecycle source is partial")
 
 paths = (unit, environment, policy, install_dir, state_dir)
 present = [exists(path) for path in paths]
@@ -733,6 +809,8 @@ if exists(install_dir):
     expected_contents = {"broker.py"}
     if projection_source_present:
         expected_contents.update({"ods-extension-search.py", "ods-extension-catalog.json"})
+    if lifecycle_source_present:
+        expected_contents.add("ods-extension-manager.py")
     contents_valid = (
         contents.issubset(expected_contents)
         if marker_state in {"installing", "deactivating"}
@@ -758,7 +836,12 @@ if exists(install_dir):
         owner_source(owner_extension_catalog, 2 * 1024 * 1024, private=True)
         if extension_catalog.read_bytes() != owner_extension_catalog.read_bytes():
             raise SystemExit("Pixel extension catalog drifted from the ODS private projection")
-elif exists(program) or exists(extension_program) or exists(extension_catalog):
+    if exists(extension_manager):
+        exact_file(extension_manager, root_uid, root_gid, 0o755, 2 * 1024 * 1024)
+        owner_source(expected_extension_manager, 2 * 1024 * 1024)
+        if extension_manager.read_bytes() != expected_extension_manager.read_bytes():
+            raise SystemExit("Pixel extension manager client drifted from the exact ODS source")
+elif exists(program) or exists(extension_program) or exists(extension_catalog) or exists(extension_manager):
     raise SystemExit("Pixel Operations Broker program escaped its install directory")
 
 policy_parent = policy.parent
@@ -918,6 +1001,8 @@ PY
         || -e "$ingress_unit" || -L "$ingress_unit" \
         || -e "$ingress_env" || -L "$ingress_env" \
         || -e "$ingress_program" || -L "$ingress_program" \
+        || -e "$extension_manager_unit" || -L "$extension_manager_unit" \
+        || -e "$extension_manager_program" || -L "$extension_manager_program" \
         || "$ops_artifacts_present" == true ]]; then
         root_artifacts_present=true
         command -v sudo >/dev/null 2>&1 || {
@@ -926,7 +1011,8 @@ PY
         }
     fi
 
-    if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ops_unit" ]]; then
+    if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$extension_manager_unit" \
+        || -e "$ops_unit" ]]; then
         # Stop the ingress before the gateway it proxies to. Keep these as
         # separate calls so the shutdown order is an enforced contract rather
         # than an argument-order hint to systemctl. An interrupted first install
@@ -934,6 +1020,11 @@ PY
         # systemd to disable unit files whose exact reviewed artifacts exist.
         if [[ -e "$ingress_unit" ]] \
             && ! timeout 30s sudo systemctl disable --now pixel-ingress.service; then
+            log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
+            return 1
+        fi
+        if [[ -e "$extension_manager_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now pixel-extension-manager.service; then
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
@@ -949,6 +1040,7 @@ PY
         fi
         if systemctl is-active --quiet openclaw-gateway.service \
             || systemctl is-active --quiet pixel-ingress.service \
+            || systemctl is-active --quiet pixel-extension-manager.service \
             || systemctl is-active --quiet pixel-ops-broker.service; then
             log_error "ODS-managed Pixel system services are still active; no Pixel files were removed"
             return 1
@@ -1168,7 +1260,7 @@ PY
             return 1
         fi
         if ! sudo rm -f -- "$ops_unit" "$ops_env" "$ops_policy" "$ops_program" \
-            "$ops_extension_program" "$ops_extension_catalog" \
+            "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" \
             || ! { [[ ! -e "$ops_install" && ! -L "$ops_install" ]] || sudo rmdir -- "$ops_install"; } \
             || ! { [[ ! -e "$ops_policy_dir" && ! -L "$ops_policy_dir" ]] || sudo rmdir -- "$ops_policy_dir"; }; then
             log_error "Could not remove the verified Pixel Operations Broker artifacts"
@@ -1206,11 +1298,14 @@ PY
 
     if [[ "$root_artifacts_present" == "true" ]]; then
         if ! sudo rm -f -- "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" \
+            "$extension_manager_unit" "$extension_manager_program" \
             || ! sudo systemctl daemon-reload; then
             log_error "Could not remove ODS-managed Pixel system artifacts"
             return 1
         fi
-        if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ingress_env" || -e "$ingress_program" ]]; then
+        if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ingress_env" \
+            || -e "$ingress_program" || -e "$extension_manager_unit" \
+            || -e "$extension_manager_program" ]]; then
             log_error "ODS-managed Pixel system artifact cleanup was incomplete"
             return 1
         fi
@@ -1245,10 +1340,11 @@ root.rmdir()
 PY
     fi
     rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy" \
-        "$ops_owner_extension_catalog"
+        "$ops_owner_extension_catalog" "$extension_manager_owner_unit"
     if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
         || -e "$ops_owner_policy" || -L "$ops_owner_policy" \
         || -e "$ops_owner_extension_catalog" || -L "$ops_owner_extension_catalog" \
+        || -e "$extension_manager_owner_unit" || -L "$extension_manager_owner_unit" \
         || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1
