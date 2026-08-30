@@ -416,6 +416,56 @@ _ods_pixel_write_onboarding "$owner" "$home" "$answers" /usr/bin/openclaw /opt/o
 observed_contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"
 check test "$observed_contract_sha256" = "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"
 check test "${#observed_contract_sha256}" = 64
+cp "$operations_policy" "$TEST_ROOT/operations-policy.original.json"
+python3 - "$operations_policy" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value["targets"]["ods-host"]["defaultCwd"] = "/var/lib/pixel-ops-broker/runtime"
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+chmod 0600 "$operations_policy"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds Operations policy bytes"
+else
+    pass "managed contract hash binds Operations policy bytes"
+fi
+mv "$TEST_ROOT/operations-policy.original.json" "$operations_policy"
+chmod 0600 "$operations_policy"
+installed_policy="$TEST_ROOT/installed-operations-policy.json"
+cp "$operations_policy" "$installed_policy"
+chmod 0640 "$installed_policy"
+if (
+    ods_sudo() { "$@"; }
+    _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy" \
+        "$installed_policy" "$(id -u)"
+); then
+    pass "matching root-custodied Operations policy accepted"
+else
+    fail "matching root-custodied Operations policy accepted"
+fi
+printf '\n' >> "$installed_policy"
+if (
+    ods_sudo() { "$@"; }
+    _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy" \
+        "$installed_policy" "$(id -u)"
+) >/dev/null 2>&1; then
+    fail "stale root-custodied Operations policy rejected"
+else
+    pass "stale root-custodied Operations policy rejected"
+fi
+rm -f "$installed_policy"
+ln -s "$operations_policy" "$installed_policy"
+if (
+    ods_sudo() { "$@"; }
+    _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy" \
+        "$installed_policy" "$(id -u)"
+) >/dev/null 2>&1; then
+    fail "symlink root-custodied Operations policy rejected"
+else
+    pass "symlink root-custodied Operations policy rejected"
+fi
+rm -f "$installed_policy"
 check python3 -c '
 import json,sys
 v=json.load(open(sys.argv[1]))
@@ -1133,6 +1183,7 @@ assert "pixel\" configure --answers \"$answers\" --force" in text
 assert "pixel\" plan" in text
 assert text.count("pixel\" ops-broker --confirm") == 2
 assert "Pixel could not install and verify the isolated Operations Broker" in text
+assert text.count("_ods_pixel_verify_operations_policy_custody \"$owner\" \"$home\" \"$operations_policy\"") == 2
 assert "PATH=\"$home/.openclaw/.ods-exec-control:$PATH\"" in text
 assert "pixel\" apply --confirm </dev/null &&" in text
 assert "_ods_pixel_write_operations_policy" in text

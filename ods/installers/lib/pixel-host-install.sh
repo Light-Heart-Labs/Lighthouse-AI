@@ -271,16 +271,49 @@ _ods_pixel_mark_ready() {
 _ods_pixel_contract_sha256() {
     local owner="$1" home="$2" answers="$3"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" <<'PY'
-import hashlib, os, pathlib, stat, sys
+import hashlib, json, os, pathlib, stat, sys
 
 path = pathlib.Path(sys.argv[1])
-info = path.lstat()
-if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid()
-        or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024):
-    raise SystemExit("invalid ODS Pixel onboarding contract")
-payload = path.read_bytes()
-print(hashlib.sha256(b"ods-pixel-contract-v1\0" + payload).hexdigest())
+
+def read_private_regular(candidate, label):
+    info = candidate.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit(f"invalid ODS Pixel {label}")
+    return candidate.read_bytes()
+
+answers_payload = read_private_regular(path, "onboarding contract")
+try:
+    answers_value = json.loads(answers_payload)
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit("invalid ODS Pixel onboarding contract") from exc
+policy_value = answers_value.get("operationsPolicyFile") if isinstance(answers_value, dict) else None
+expected_policy = path.parent / "operations-policy.json"
+if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_policy:
+    raise SystemExit("ODS Pixel Operations policy is outside the managed contract")
+policy_payload = read_private_regular(expected_policy, "Operations policy")
+digest = hashlib.sha256()
+digest.update(b"ods-pixel-contract-v2\0")
+for payload in (answers_payload, policy_payload):
+    digest.update(len(payload).to_bytes(8, "big"))
+    digest.update(payload)
+print(digest.hexdigest())
 PY
+}
+
+_ods_pixel_verify_operations_policy_custody() {
+    local owner="$1" home="$2" source_policy="$3"
+    local installed_policy="${4:-/etc/pixel-ops-broker/policy.json}" expected_uid="${5:-0}"
+    local metadata kind uid mode size
+    [[ "$source_policy" == /* && "$installed_policy" == /* && "$expected_uid" =~ ^[0-9]+$ ]] || return 1
+    ods_pixel_run_as_owner "$owner" "$home" test -f "$source_policy" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" test ! -L "$source_policy" || return 1
+    metadata="$(ods_sudo stat -c '%F|%u|%a|%s' -- "$installed_policy")" || return 1
+    IFS='|' read -r kind uid mode size <<<"$metadata"
+    [[ "$kind" == "regular file" && "$uid" == "$expected_uid" && "$mode" == 640
+        && "$size" =~ ^[0-9]+$ && "$size" -le 2097152 ]] || return 1
+    ods_sudo cmp -s -- "$source_policy" "$installed_policy"
 }
 
 _ods_pixel_managed_contract_matches() {
@@ -2192,6 +2225,10 @@ ods_pixel_install_default_agent() {
             ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
             return 1
         fi
+        if ! _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy"; then
+            ai_bad "Pixel's root-custodied Operations policy does not match the ODS-managed policy."
+            return 1
+        fi
         if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
             ai_bad "The existing ODS-managed Pixel contract failed exact-source verification. See $LOG_FILE."
             return 1
@@ -2204,6 +2241,10 @@ ods_pixel_install_default_agent() {
         fi
         if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
             ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
+            return 1
+        fi
+        if ! _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy"; then
+            ai_bad "Pixel's root-custodied Operations policy does not match the ODS-managed policy."
             return 1
         fi
         if [[ "$same_verified_source" == true ]]; then

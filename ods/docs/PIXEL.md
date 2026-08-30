@@ -130,6 +130,13 @@ and cancellation records and read sanitized inventory, event, and result
 projections, but it cannot read broker policy, approvals, credentials, plans,
 leases, private state, or SSH material.
 
+The ODS management marker binds both the onboarding document and the exact
+Operations-policy bytes. A policy change therefore forces Pixel to regenerate
+and reinstall its broker configuration even when the immutable Pixel release
+itself is unchanged. Installation fails unless the resulting root-owned,
+mode-`0640` broker policy is byte-for-byte equal to the owner-private source;
+an installer success message is never treated as sufficient custody evidence.
+
 The default policy provides five read-only named actions: `host.identity`,
 `host.kernel`, `host.architecture`, `host.platform`, and `host.os-release`.
 These observations execute from the broker's protected state directory so the
