@@ -173,6 +173,7 @@ test("uses a small balanced web budget by default", () => {
     fetch: 2,
     total: 4,
     failedExecRetries: 3,
+    failedVerificationAttempts: 6,
   });
   const guard = createToolLoopGuard();
   assert.equal(call(guard, "web_search"), undefined);
@@ -652,6 +653,62 @@ test("a successful workspace mutation restarts identical verification retries", 
     call(guard, "exec", { event: { params } }).blockReason,
     CODING_RETRY_EXHAUSTED_REASON
   );
+});
+
+test("bounds a failed verification loop across successful edits and harmless shell variants", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const first = {
+    command: "cd /workspace && python3 -m unittest pixel_capability.test_slugify",
+  };
+  const second = {
+    command: "python3 -m unittest pixel_capability.test_slugify 2>&1",
+    workdir: "/workspace",
+  };
+  for (const params of [first, second]) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: { params, result: { isError: true, details: { exitCode: 1 } } },
+    });
+    afterCall(guard, "edit", {
+      event: {
+        params: { path: "pixel_capability/slugify.py" },
+        result: { isError: false, details: { changed: true } },
+      },
+    });
+  }
+  assert.equal(
+    call(guard, "exec", { event: { params: second } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
+test("a passing verification clears the run-wide failed-verification count", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const params = { command: "python3 -m unittest", workdir: "/workspace" };
+  for (const exitCode of [1, 0, 1]) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: {
+        params,
+        result: { isError: exitCode !== 0, details: { exitCode } },
+      },
+    });
+    if (exitCode !== 0) {
+      afterCall(guard, "edit", {
+        event: {
+          params: { path: "probe.py" },
+          result: { isError: false, details: { changed: true } },
+        },
+      });
+    }
+  }
+  assert.deepEqual(call(guard, "exec", { event: { params } }), {
+    params: { command: params.command },
+  });
 });
 
 test("a failed workspace mutation preserves identical verification failures", () => {

@@ -107,6 +107,7 @@ test("recognizes private-boundary tool results as loop recovery triggers", () =>
     "Pixel stopped this response because a private-network boundary was enforced.",
     "Pixel's web-research budget is exhausted for this response.",
     "Pixel stopped repeating the same failing command after three attempts.",
+    "Pixel stopped a no-progress coding repair loop after its bounded failed-verification limit.",
   ]) {
     assert.equal(needsLoopRecovery([{ role: "toolResult", content: text }]), true);
   }

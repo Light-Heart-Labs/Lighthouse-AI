@@ -19,6 +19,7 @@ export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
   fetch: 2,
   total: 4,
   failedExecRetries: 3,
+  failedVerificationAttempts: 6,
 });
 
 export const WEB_BUDGET_EXHAUSTED_REASON =
@@ -49,7 +50,7 @@ export const PRIVATE_URL_REQUEST_REASON =
   "This request contains a private URL that Pixel cannot open from this chat. Do not call or substitute any tool, including ODS status or shell tools. Reply concisely that the private page was not accessed and ask the user to provide its content or use a separately approved private-access capability.";
 
 export const CODING_RETRY_EXHAUSTED_REASON =
-  "Pixel stopped repeating the same failing command after three attempts. Do not call another tool in this turn. Give the user a visible summary of the verified failure, the changes attempted, and the most useful next step.";
+  "Pixel stopped a no-progress coding repair loop after its bounded failed-verification limit. Do not call another tool in this turn. Give the user a visible summary of the verified failure, the changes attempted, and the most useful next step.";
 
 export const CODING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another coding tool after the repeated-command limit was reached. Start a fresh message to continue from the preserved workspace with a different approach.";
@@ -175,6 +176,10 @@ function normalizedLimits(limits = {}) {
       limits.failedExecRetries,
       DEFAULT_WEB_TOOL_LIMITS.failedExecRetries
     ),
+    failedVerificationAttempts: validLimit(
+      limits.failedVerificationAttempts,
+      DEFAULT_WEB_TOOL_LIMITS.failedVerificationAttempts
+    ),
   };
 }
 
@@ -228,6 +233,24 @@ function execFingerprint(params) {
   const normalizedWorkdir = normalizeExecWorkdir(params.workdir);
   const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
   return JSON.stringify([command.trim(), typeof workdir === "string" ? workdir : ""]);
+}
+
+function verificationExecFingerprint(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
+  if (typeof params.command !== "string" || !params.command.trim()) return undefined;
+  const command = params.command
+    .trim()
+    .replace(/^cd\s+\/workspace\s*&&\s*/i, "")
+    .replace(/\s+2>&1\s*$/i, "")
+    .replace(/\s+/g, " ");
+  if (
+    !/^(?:python(?:3(?:\.\d+)?)?\s+-m\s+(?:unittest|pytest)\b|pytest\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn(?:w)?\s+test\b|gradle(?:w)?\s+test\b)/i.test(command)
+  ) {
+    return undefined;
+  }
+  const normalizedWorkdir = normalizeExecWorkdir(params.workdir);
+  const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
+  return JSON.stringify([command, typeof workdir === "string" ? workdir : ""]);
 }
 
 function execFailed(event) {
@@ -572,7 +595,9 @@ export function createToolLoopGuard({
         odsRoutingExhausted: false,
         odsRoutingTerminalBlocks: 0,
         failedExec: new Map(),
+        failedVerification: new Map(),
         execOriginalByWrapped: new Map(),
+        verificationOriginalByWrapped: new Map(),
       };
       runs.set(runId, state);
     }
@@ -773,9 +798,15 @@ export function createToolLoopGuard({
 
     if (toolName === "exec") {
       const fingerprint = execFingerprint(normalizedParams ?? event?.params);
+      const verificationFingerprint = verificationExecFingerprint(
+        normalizedParams ?? event?.params
+      );
       if (
-        fingerprint &&
-        (state.failedExec.get(fingerprint) ?? 0) >= effective.failedExecRetries
+        (fingerprint &&
+          (state.failedExec.get(fingerprint) ?? 0) >= effective.failedExecRetries) ||
+        (verificationFingerprint &&
+          (state.failedVerification.get(verificationFingerprint) ?? 0) >=
+            effective.failedVerificationAttempts)
       ) {
         state.codingExhausted = true;
         return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
@@ -786,6 +817,7 @@ export function createToolLoopGuard({
       if (toolName === "exec" && execControl) {
         const params = { ...(normalizedParams ?? event?.params) };
         const originalFingerprint = execFingerprint(params);
+        const originalVerificationFingerprint = verificationExecFingerprint(params);
         try {
           params.command = execControl.prepare(runId, params.command);
         } catch (error) {
@@ -795,6 +827,12 @@ export function createToolLoopGuard({
         const wrappedFingerprint = execFingerprint(params);
         if (originalFingerprint && wrappedFingerprint) {
           state.execOriginalByWrapped.set(wrappedFingerprint, originalFingerprint);
+        }
+        if (originalVerificationFingerprint && wrappedFingerprint) {
+          state.verificationOriginalByWrapped.set(
+            wrappedFingerprint,
+            originalVerificationFingerprint
+          );
         }
         return { params };
       }
@@ -927,10 +965,9 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
-    // A successful file mutation changes the program under test, so an
-    // identical verification command is no longer an identical attempt. Drop
-    // stale failures across all command fingerprints while retaining them when
-    // the mutation itself failed.
+    // A successful file mutation permits another identical command, but does
+    // not erase the run-wide failed-verification count. This distinguishes a
+    // useful repair cycle from unbounded edit/test churn.
     if (WORKSPACE_MUTATION_TOOLS.has(toolName) && !toolCallFailed(event)) {
       state.failedExec.clear();
     }
@@ -945,12 +982,27 @@ export function createToolLoopGuard({
     if (toolName !== "exec") return;
     const observedFingerprint = execFingerprint(event?.params);
     const fingerprint = state.execOriginalByWrapped.get(observedFingerprint) ?? observedFingerprint;
+    const verificationFingerprint =
+      state.verificationOriginalByWrapped.get(observedFingerprint) ??
+      verificationExecFingerprint(event?.params);
     if (observedFingerprint) state.execOriginalByWrapped.delete(observedFingerprint);
-    if (!fingerprint) return;
+    if (observedFingerprint) {
+      state.verificationOriginalByWrapped.delete(observedFingerprint);
+    }
+    if (!fingerprint && !verificationFingerprint) return;
     if (execFailed(event)) {
-      state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);
+      if (fingerprint) {
+        state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);
+      }
+      if (verificationFingerprint) {
+        state.failedVerification.set(
+          verificationFingerprint,
+          (state.failedVerification.get(verificationFingerprint) ?? 0) + 1
+        );
+      }
     } else {
-      state.failedExec.delete(fingerprint);
+      if (fingerprint) state.failedExec.delete(fingerprint);
+      if (verificationFingerprint) state.failedVerification.delete(verificationFingerprint);
     }
   }
 

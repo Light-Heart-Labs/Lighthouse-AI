@@ -85,6 +85,7 @@ const LOOP_BLOCK_MARKERS = [
   "compaction_loop_persisted",
   "web-research budget is exhausted",
   "stopped repeating the same failing command",
+  "stopped a no-progress coding repair loop",
   "web_fetch is restricted to public http(s) hostnames",
   "shell execution cannot be used to contact local, private, or raw-ip",
   "private-network boundary was enforced",
