@@ -15,6 +15,23 @@ import {
 } from "../plugin/projection.mjs";
 
 const GOOD_TS = new Date(Date.now() - 1000).toISOString();
+const APP_PORTS = {
+  dashboard: 3001,
+  webui: 3000,
+  searxng: 8888,
+  perplexica: 3004,
+  whisper: 9001,
+  tts: 8880,
+  n8n: 5678,
+  qdrant: 6333,
+  embeddings: 8090,
+  litellm: 4000,
+  llama: 11434,
+  privacy_shield: 8085,
+  token_spy: 3005,
+  ape: 7890,
+  hermes_proxy: 9120,
+};
 
 function goodProjection(overrides = {}) {
   const projection = {
@@ -26,6 +43,7 @@ function goodProjection(overrides = {}) {
     gateway_reachable: true,
     docker: "ok",
     online_apps: 2,
+    app_ports: APP_PORTS,
     runtime: { model: "Qwen3.5-9B-Q4_K_M.gguf", context_length: 32768 },
     apps: [
       { name: "pixel-agent", status: "healthy" },
@@ -115,6 +133,7 @@ test("reads a good projection and returns a freshly constructed object", async (
   assert.equal(out.docker, "ok");
   assert.equal(out.app_count, 2);
   assert.equal(out.online_app_count, 2);
+  assert.deepEqual(out.app_ports, APP_PORTS);
   assert.deepEqual(out.runtime, {
     model: "Qwen3.5-9B-Q4_K_M.gguf",
     context_length: 32768,
@@ -148,6 +167,34 @@ test("tool payloads expose the validated application count explicitly", async ()
   assert.equal(apps.apps.length, apps.app_count);
 });
 
+test("application payloads expose allowlisted purposes and configured local URLs", async () => {
+  const raw = JSON.stringify(goodProjection({
+    apps: [
+      { name: "ods-n8n", status: "healthy" },
+      { name: "ods-whisper", status: "healthy" },
+    ],
+  }));
+  const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
+  const projection = await readProjection(FIXED, fsImpl, Date.now());
+
+  assert.deepEqual(appsPayload(projection).apps, [
+    {
+      name: "ods-n8n",
+      status: "healthy",
+      display_name: "n8n",
+      purpose: "workflow automation",
+      url: "http://localhost:5678/",
+    },
+    {
+      name: "ods-whisper",
+      status: "healthy",
+      display_name: "Whisper",
+      purpose: "speech-to-text API",
+      url: "http://localhost:9001/docs",
+    },
+  ]);
+});
+
 test("starting application status is accepted", async () => {
   const raw = JSON.stringify(
     goodProjection({
@@ -160,7 +207,13 @@ test("starting application status is accepted", async () => {
   const out = await readProjection(FIXED, fsImpl, Date.now());
   assert.equal(out.docker, "ok");
   assert.equal(out.ingress_ready, false);
-  assert.deepEqual(out.apps, [{ name: "searxng", status: "starting" }]);
+  assert.deepEqual(out.apps, [{
+    name: "searxng",
+    status: "starting",
+    display_name: "SearXNG",
+    purpose: "private web search",
+    url: "http://localhost:8888/",
+  }]);
 });
 
 test("stopped deployed applications remain in the total but not the online count", async () => {
@@ -174,7 +227,13 @@ test("stopped deployed applications remain in the total but not the online count
   const out = await readProjection(FIXED, fsImpl, Date.now());
   assert.equal(out.app_count, 2);
   assert.equal(out.online_app_count, 1);
-  assert.deepEqual(out.apps[1], { name: "ods-n8n", status: "stopped" });
+  assert.deepEqual(out.apps[1], {
+    name: "ods-n8n",
+    status: "stopped",
+    display_name: "n8n",
+    purpose: "workflow automation",
+    url: "http://localhost:5678/",
+  });
 });
 
 test("docker unavailable requires an empty application and runtime projection", async () => {
@@ -205,6 +264,8 @@ test("rejects mismatched online count and malformed runtime or version", async (
     goodProjection({ runtime: { model: "../secret", context_length: 32768 } }),
     goodProjection({ runtime: { model: "model.gguf", context_length: 0 } }),
     goodProjection({ ods_version: "2.6.0\nsecret" }),
+    goodProjection({ app_ports: { ...APP_PORTS, n8n: 0 } }),
+    goodProjection({ app_ports: { ...APP_PORTS, extra: 1234 } }),
   ]) {
     const fsImpl = memoryFs({ [FIXED]: makeEntry(JSON.stringify(bad)) });
     const err = await asRejected(readProjection(FIXED, fsImpl, Date.now()));

@@ -21,6 +21,39 @@ const MAX_APPS = 64;
 const EXPECTED_SERVICE = "pixel-agent";
 const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
 const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
+const APP_PORT_KEYS = Object.freeze([
+  "dashboard", "webui", "searxng", "perplexica", "whisper", "tts", "n8n",
+  "qdrant", "embeddings", "litellm", "llama", "privacy_shield", "token_spy",
+  "ape", "hermes_proxy",
+]);
+const APP_PORT_KEY_SET = new Set(APP_PORT_KEYS);
+
+const APP_DIRECTORY = new Map();
+function registerApp(names, displayName, purpose, portKey, urlPath = "/") {
+  for (const name of names) {
+    APP_DIRECTORY.set(name, { display_name: displayName, purpose, port_key: portKey, url_path: urlPath });
+  }
+}
+registerApp(["ods-dashboard", "dashboard"], "Dashboard", "ODS control center", "dashboard");
+registerApp(
+  ["ods-open-webui", "open-webui", "openwebui", "ods-webui"],
+  "Open WebUI",
+  "default chat interface",
+  "webui"
+);
+registerApp(["ods-searxng", "searxng"], "SearXNG", "private web search", "searxng");
+registerApp(["ods-perplexica"], "Perplexica", "deep research", "perplexica");
+registerApp(["ods-n8n", "n8n"], "n8n", "workflow automation", "n8n");
+registerApp(["ods-qdrant", "qdrant"], "Qdrant", "vector database", "qdrant", "/dashboard");
+registerApp(["ods-tts", "tts"], "Kokoro", "text-to-speech API", "tts", "/docs");
+registerApp(["ods-whisper", "whisper"], "Whisper", "speech-to-text API", "whisper", "/docs");
+registerApp(["ods-embeddings", "embeddings"], "TEI", "embeddings API", "embeddings", "/info");
+registerApp(["ods-litellm", "litellm"], "LiteLLM", "model gateway", "litellm");
+registerApp(["ods-llama-server", "llama-server"], "llama-server", "local model API", "llama");
+registerApp(["ods-privacy-shield"], "Privacy Shield", "PII protection API", "privacy_shield", "/docs");
+registerApp(["ods-token-spy"], "Token Spy", "usage monitor", "token_spy", "/dashboard");
+registerApp(["ods-ape"], "APE", "agent policy engine", "ape");
+registerApp(["ods-hermes-proxy", "hermes-proxy"], "Hermes Auth Proxy", "Hermes authentication proxy", "hermes_proxy");
 
 // The fixed ODS service allowlist. Must stay in lockstep with the allowlist
 // enforced by the pixel-agent host ingress (host/pixel_ingress.mjs).
@@ -86,6 +119,7 @@ const ALLOWED_TOP_KEYS = new Set([
   "gateway_reachable",
   "docker",
   "online_apps",
+  "app_ports",
   "runtime",
   "apps",
 ]);
@@ -260,6 +294,26 @@ function validRuntime(runtime) {
   );
 }
 
+function validAppPorts(value) {
+  if (!isPlainObject(value) || !onlyKeys(value, APP_PORT_KEY_SET)) return false;
+  if (Object.keys(value).length !== APP_PORT_KEYS.length) return false;
+  return APP_PORT_KEYS.every((key) => (
+    Number.isInteger(value[key]) && value[key] >= 1 && value[key] <= 65535
+  ));
+}
+
+function enrichApp(app, appPorts) {
+  const metadata = APP_DIRECTORY.get(app.name);
+  if (!metadata) return { name: app.name, status: app.status };
+  return {
+    name: app.name,
+    status: app.status,
+    display_name: metadata.display_name,
+    purpose: metadata.purpose,
+    url: `http://localhost:${appPorts[metadata.port_key]}${metadata.url_path}`,
+  };
+}
+
 // Validate a fully parsed projection object against the strict schema.
 // Returns null on success, or a generic message on failure.
 function validateProjection(obj, nowMs) {
@@ -282,6 +336,7 @@ function validateProjection(obj, nowMs) {
   if (!Number.isInteger(obj.online_apps) || obj.online_apps < 0) {
     return "malformed projection";
   }
+  if (!validAppPorts(obj.app_ports)) return "malformed projection";
   if (!validRuntime(obj.runtime)) return "malformed projection";
 
   const seen = new Set();
@@ -345,7 +400,8 @@ export async function readProjection(file, deps = defaultFs, nowMs = Date.now())
   if (reason) return fail("status projection unavailable");
 
   // Build a brand-new object; never return raw values or the parsed object.
-  const apps = parsed.apps.map((app) => ({ name: app.name, status: app.status }));
+  const appPorts = Object.fromEntries(APP_PORT_KEYS.map((key) => [key, parsed.app_ports[key]]));
+  const apps = parsed.apps.map((app) => enrichApp(app, appPorts));
   const runtime = parsed.runtime === null
     ? null
     : { model: String(parsed.runtime.model), context_length: parsed.runtime.context_length };
@@ -358,6 +414,7 @@ export async function readProjection(file, deps = defaultFs, nowMs = Date.now())
     gateway_reachable: parsed.gateway_reachable === true,
     docker: String(parsed.docker),
     online_app_count: parsed.online_apps,
+    app_ports: appPorts,
     runtime,
     app_count: apps.length,
     apps,

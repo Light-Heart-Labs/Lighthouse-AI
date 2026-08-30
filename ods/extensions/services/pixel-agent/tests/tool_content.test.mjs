@@ -17,16 +17,28 @@ const projection = {
   app_count: 2,
   online_app_count: 2,
   apps: [
-    { name: "ods-dashboard", status: "healthy" },
-    { name: "ods-searxng", status: "healthy" },
+    {
+      name: "ods-dashboard",
+      status: "healthy",
+      display_name: "Dashboard",
+      purpose: "ODS control center",
+      url: "http://localhost:3001/",
+    },
+    {
+      name: "ods-searxng",
+      status: "healthy",
+      display_name: "SearXNG",
+      purpose: "private web search",
+      url: "http://localhost:8888/",
+    },
   ],
 };
 
 test("apps result states the count and first application without JSON parsing", () => {
   const text = appsToolText(projection);
   assert.match(text, /reports 2 of 2 applications online/);
-  assert.match(text, /first is ods-dashboard \(healthy\)/);
-  assert.match(text, /ods-dashboard \(healthy\), ods-searxng \(healthy\)/);
+  assert.match(text, /first is Dashboard \[ods-dashboard\] \(healthy; ODS control center; http:\/\/localhost:3001\/\)/);
+  assert.match(text, /SearXNG \[ods-searxng\] \(healthy; private web search; http:\/\/localhost:8888\/\)/);
   assert.match(text, /status-only untrusted evidence/);
   assert.ok(!text.startsWith("{"));
 });

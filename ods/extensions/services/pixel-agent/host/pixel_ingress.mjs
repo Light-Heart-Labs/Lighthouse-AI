@@ -39,6 +39,37 @@ const STATUS_MODE = 0o640; // group-readable, service-owner-writable projection
 const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
 const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
 
+// Only nonsecret, user-facing ODS ports are projected. Values are captured by
+// the installer after port resolution so Pixel does not guess default ports
+// when an installation has been customized or automatically remapped.
+const APP_PORT_ENV = Object.freeze({
+  dashboard: ["PIXEL_ODS_DASHBOARD_PORT", 3001],
+  webui: ["PIXEL_ODS_WEBUI_PORT", 3000],
+  searxng: ["PIXEL_ODS_SEARXNG_PORT", 8888],
+  perplexica: ["PIXEL_ODS_PERPLEXICA_PORT", 3004],
+  whisper: ["PIXEL_ODS_WHISPER_PORT", 9000],
+  tts: ["PIXEL_ODS_TTS_PORT", 8880],
+  n8n: ["PIXEL_ODS_N8N_PORT", 5678],
+  qdrant: ["PIXEL_ODS_QDRANT_PORT", 6333],
+  embeddings: ["PIXEL_ODS_EMBEDDINGS_PORT", 8090],
+  litellm: ["PIXEL_ODS_LITELLM_PORT", 4000],
+  llama: ["PIXEL_ODS_LLAMA_PORT", 11434],
+  privacy_shield: ["PIXEL_ODS_PRIVACY_SHIELD_PORT", 8085],
+  token_spy: ["PIXEL_ODS_TOKEN_SPY_PORT", 3005],
+  ape: ["PIXEL_ODS_APE_PORT", 7890],
+  hermes_proxy: ["PIXEL_ODS_HERMES_PROXY_PORT", 9120],
+});
+
+function appPortsFromEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(APP_PORT_ENV).map(([key, [envName, fallback]]) => {
+    const value = Number(env[envName] || fallback);
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+      throw new Error(`invalid ODS application port: ${key}`);
+    }
+    return [key, value];
+  }));
+}
+
 // The only request-body fields that may reach the gateway. Everything else is
 // dropped on construction.
 const ALLOWED_FIELDS = {
@@ -238,6 +269,21 @@ export function validateConfig(cfg) {
   if (typeof cfg.odsVersion !== "string" || !ODS_VERSION_RE.test(cfg.odsVersion)) {
     throw new Error("invalid ODS version");
   }
+  const appPorts = cfg.appPorts ?? appPortsFromEnv({});
+  if (
+    !appPorts ||
+    typeof appPorts !== "object" ||
+    Array.isArray(appPorts) ||
+    Object.keys(appPorts).length !== Object.keys(APP_PORT_ENV).length
+  ) {
+    throw new Error("invalid ODS application ports");
+  }
+  for (const key of Object.keys(APP_PORT_ENV)) {
+    const value = appPorts[key];
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+      throw new Error(`invalid ODS application port: ${key}`);
+    }
+  }
   for (const [label, value] of [
     ["socket path", cfg.socketPath],
     ["gateway token file", cfg.gatewayTokenFile],
@@ -260,6 +306,7 @@ export function configFromEnv(env = process.env) {
     statusIntervalMs: Number(env.PIXEL_STATUS_INTERVAL_MS || "30000"),
     ingressGid: env.PIXEL_INGRESS_GID ? Number(env.PIXEL_INGRESS_GID) : null,
     odsVersion: env.PIXEL_ODS_VERSION || "unknown",
+    appPorts: appPortsFromEnv(env),
   };
   return validateConfig(cfg);
 }
@@ -838,7 +885,8 @@ export async function writeStatus(
   gatewayPort,
   statusFile,
   odsVersion = "unknown",
-  deps = defaultDeps
+  deps = defaultDeps,
+  appPorts = appPortsFromEnv({})
 ) {
   const gatewayReachable = await checkGatewayReachable(gatewayPort, deps);
   let apps = [];
@@ -867,6 +915,7 @@ export async function writeStatus(
     gateway_reachable: gatewayReachable,
     docker,
     online_apps: onlineApps,
+    app_ports: { ...appPorts },
     runtime,
     apps,
   };
@@ -1035,7 +1084,7 @@ export async function start(cfg = configFromEnv(), opts = {}) {
     startupStage = "runtime-state";
     fs.chmodSync(cfg.socketPath, 0o660);
     if (cfg.ingressGid !== null) fs.chownSync(cfg.socketPath, -1, cfg.ingressGid);
-    await writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps);
+    await writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps, cfg.appPorts);
   } catch (error) {
     if (server?.listening) {
       await new Promise((resolve) => server.close(resolve));
@@ -1050,7 +1099,14 @@ export async function start(cfg = configFromEnv(), opts = {}) {
   }
 
   const interval = setInterval(() => {
-    void writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps).catch(() => {});
+    void writeStatus(
+      true,
+      cfg.gatewayPort,
+      cfg.statusFile,
+      cfg.odsVersion,
+      deps,
+      cfg.appPorts
+    ).catch(() => {});
   }, cfg.statusIntervalMs);
   interval.unref();
   let closed = false;

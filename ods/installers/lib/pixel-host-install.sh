@@ -1566,6 +1566,17 @@ _ods_pixel_install_ingress() {
     [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
     (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
 
+    local app_port
+    for app_port in \
+        "${DASHBOARD_PORT:-3001}" "${WEBUI_PORT:-3000}" "${SEARXNG_PORT:-8888}" \
+        "${PERPLEXICA_PORT:-3004}" "${WHISPER_PORT:-9000}" "${TTS_PORT:-8880}" \
+        "${N8N_PORT:-5678}" "${QDRANT_PORT:-6333}" "${EMBEDDINGS_PORT:-8090}" \
+        "${LITELLM_PORT:-4000}" "${OLLAMA_PORT:-11434}" "${SHIELD_PORT:-8085}" \
+        "${TOKEN_SPY_PORT:-3005}" "${APE_PORT:-7890}" "${HERMES_PROXY_PORT:-9120}"; do
+        [[ "$app_port" =~ ^[0-9]+$ ]] || return 1
+        (( app_port >= 1 && app_port <= 65535 )) || return 1
+    done
+
     local stage
     stage="$(mktemp -d)" || return 1
     python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$token_file" "$runtime_token_file" <<'PY'
@@ -1590,6 +1601,21 @@ PIXEL_GATEWAY_PORT=18789
 PIXEL_STATUS_FILE=/run/ods-pixel/ods-status.json
 PIXEL_STATUS_INTERVAL_MS=30000
 PIXEL_ODS_VERSION=$ods_version
+PIXEL_ODS_DASHBOARD_PORT=${DASHBOARD_PORT:-3001}
+PIXEL_ODS_WEBUI_PORT=${WEBUI_PORT:-3000}
+PIXEL_ODS_SEARXNG_PORT=${SEARXNG_PORT:-8888}
+PIXEL_ODS_PERPLEXICA_PORT=${PERPLEXICA_PORT:-3004}
+PIXEL_ODS_WHISPER_PORT=${WHISPER_PORT:-9000}
+PIXEL_ODS_TTS_PORT=${TTS_PORT:-8880}
+PIXEL_ODS_N8N_PORT=${N8N_PORT:-5678}
+PIXEL_ODS_QDRANT_PORT=${QDRANT_PORT:-6333}
+PIXEL_ODS_EMBEDDINGS_PORT=${EMBEDDINGS_PORT:-8090}
+PIXEL_ODS_LITELLM_PORT=${LITELLM_PORT:-4000}
+PIXEL_ODS_LLAMA_PORT=${OLLAMA_PORT:-11434}
+PIXEL_ODS_PRIVACY_SHIELD_PORT=${SHIELD_PORT:-8085}
+PIXEL_ODS_TOKEN_SPY_PORT=${TOKEN_SPY_PORT:-3005}
+PIXEL_ODS_APE_PORT=${APE_PORT:-7890}
+PIXEL_ODS_HERMES_PROXY_PORT=${HERMES_PROXY_PORT:-9120}
 EOF
     chmod 0640 "$stage/pixel-agent.env"
     ods_sudo install -d -m 0755 /usr/local/libexec /etc/ods

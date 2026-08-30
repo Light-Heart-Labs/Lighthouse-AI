@@ -23,7 +23,10 @@ function freshness(value) {
 }
 
 function appList(apps) {
-  return apps.map(({ name, status }) => `${name} (${status})`).join(", ");
+  return apps.map(({ name, status, display_name: displayName, purpose, url }) => {
+    if (!displayName || !purpose || !url) return `${name} (${status})`;
+    return `${displayName} [${name}] (${status}; ${purpose}; ${url})`;
+  }).join(", ");
 }
 
 export function statusToolText(projection) {
@@ -52,9 +55,12 @@ export function appsToolText(projection) {
     return `ODS reports 0 of 0 applications online in its ${freshness(projection.stale)} projection at ${projection.timestamp}. ${EVIDENCE_BOUNDARY}`;
   }
   const first = projection.apps[0];
+  const firstDescription = first.display_name
+    ? `${first.display_name} [${first.name}] (${first.status}; ${first.purpose}; ${first.url})`
+    : `${first.name} (${first.status})`;
   return [
     `ODS reports ${projection.online_app_count} of ${projection.app_count} applications online in its ${freshness(projection.stale)} projection at ${projection.timestamp}.`,
-    `The first is ${first.name} (${first.status}).`,
+    `The first is ${firstDescription}.`,
     `Applications: ${appList(projection.apps)}.`,
     EVIDENCE_BOUNDARY,
   ].join(" ");

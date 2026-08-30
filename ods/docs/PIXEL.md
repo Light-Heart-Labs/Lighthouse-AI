@@ -213,8 +213,10 @@ The default ODS integration exposes three read-only tools to Pixel:
 - `pixel_ods_status` returns the sanitized overall ODS state, an explicit
   application count, and allowlisted application states.
 - `pixel_ods_apps_list` returns the same explicit count and allowlisted
-  application inventory in an app-oriented shape. The count avoids asking
-  small local models to infer it from the array.
+  application inventory in an app-oriented shape. User-facing entries include
+  an allowlisted purpose and the configured localhost URL, so Pixel can name
+  and link ODS applications without guessing default ports. The count avoids
+  asking small local models to infer it from the array.
 - `pixel_ods_web_extract` uses OpenClaw's strict public-web network guard to find a
   distinctive literal method or section name anywhere in a long public page.
   A bounded fallback accepts two or three keywords only when they co-occur in

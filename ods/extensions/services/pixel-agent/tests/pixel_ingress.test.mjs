@@ -131,6 +131,8 @@ test("configFromEnv applies defaults and overrides", () => {
   assert.equal(d.statusIntervalMs, 30000);
   assert.equal(d.ingressGid, null);
   assert.equal(d.odsVersion, "unknown");
+  assert.equal(d.appPorts.n8n, 5678);
+  assert.equal(d.appPorts.whisper, 9000);
   const o = configFromEnv({
     PIXEL_INGRESS_SOCKET: "/x.sock",
     PIXEL_GATEWAY_PORT: "19000",
@@ -138,12 +140,16 @@ test("configFromEnv applies defaults and overrides", () => {
     PIXEL_STATUS_INTERVAL_MS: "5000",
     PIXEL_GATEWAY_TOKEN_FILE: "/custom.json",
     PIXEL_ODS_VERSION: "2.6.0-beta.1",
+    PIXEL_ODS_N8N_PORT: "15678",
+    PIXEL_ODS_WHISPER_PORT: "19000",
   });
   assert.equal(o.socketPath, "/x.sock");
   assert.equal(o.gatewayPort, 19000);
   assert.equal(o.ingressGid, 1234);
   assert.equal(o.statusIntervalMs, 5000);
   assert.equal(o.odsVersion, "2.6.0-beta.1");
+  assert.equal(o.appPorts.n8n, 15678);
+  assert.equal(o.appPorts.whisper, 19000);
 });
 
 test("config rejects invalid ports, intervals, gids, and relative paths", () => {
@@ -156,6 +162,10 @@ test("config rejects invalid ports, intervals, gids, and relative paths", () => 
   }
   assert.throws(() => validateConfig({ ...base, ingressGid: -1 }), /ingress gid/);
   assert.throws(() => validateConfig({ ...base, odsVersion: "2.6.0\nSECRET=x" }), /ODS version/);
+  assert.throws(
+    () => validateConfig({ ...base, appPorts: { ...base.appPorts, n8n: 0 } }),
+    /application port/
+  );
   assert.throws(() => validateConfig({ ...base, socketPath: "relative.sock" }), /socket path/);
 });
 
@@ -765,6 +775,7 @@ test("status keeps app health when optional runtime inspection is unavailable", 
   assert.equal(projection.ods_version, "2.6.0");
   assert.equal(projection.docker, "ok");
   assert.equal(projection.online_apps, 1);
+  assert.equal(projection.app_ports.n8n, 5678);
   assert.equal(projection.runtime, null);
   assert.deepEqual(projection.apps, [{ name: "ods-dashboard", status: "healthy" }]);
 });
@@ -795,6 +806,7 @@ test("start writes a safe status projection when docker is unavailable", async (
   assert.equal(proj.schema_version, 2);
   assert.equal(proj.ods_version, "2.6.0");
   assert.equal(proj.online_apps, 0);
+  assert.equal(proj.app_ports.n8n, 5678);
   assert.equal(proj.runtime, null);
   assert.deepEqual(proj.apps, []);
   assert.equal(fs.statSync(statusFile).mode & 0o777, 0o640);

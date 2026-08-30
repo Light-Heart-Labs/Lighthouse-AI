@@ -72,7 +72,11 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   argument-only Docker boundary reports the configured llama-server model
   basename and context length. The projection also carries the nonsecret ODS
   version installed by ODS and exact normalized online/deployed-application
-  counts; stopped allowlisted containers remain in the deployed total.
+  counts; stopped allowlisted containers remain in the deployed total. A
+  fixed set of nonsecret `PIXEL_ODS_*_PORT` values mirrors the resolved ODS
+  `.env` ports. The gateway validates those values as TCP ports and combines
+  them only with an allowlisted application directory to produce localhost
+  URLs and purposes; neither arbitrary hosts nor arbitrary paths are accepted.
   If Docker is unavailable, it carries an empty `apps` array, a null runtime,
   and a generic `unavailable` state.
 - **Visible post-tool replies.** The plugin adds a Pixel-only system prompt
@@ -90,6 +94,7 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
 | `PIXEL_STATUS_FILE` | `/run/ods-pixel/ods-status.json` | Status projection path |
 | `PIXEL_STATUS_INTERVAL_MS` | `30000` | Status write interval |
 | `PIXEL_ODS_VERSION` | `unknown` | Nonsecret ODS version exposed in the bounded status projection |
+| `PIXEL_ODS_*_PORT` | ODS service default | Installer-generated, validated user-facing port mirror (for example `PIXEL_ODS_N8N_PORT` and `PIXEL_ODS_WHISPER_PORT`) |
 
 Secrets are never configured here. The token lives only in
 `PIXEL_GATEWAY_TOKEN_FILE`.
