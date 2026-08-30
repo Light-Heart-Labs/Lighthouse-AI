@@ -372,6 +372,10 @@ test("replaces GitHub repository claims when the model skipped the canonical REA
   );
   const terminal = reply(guard);
   assert.equal(terminal.payload.text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
+  });
   assert.deepEqual(terminal.payload.metadata, { preserved: true });
 });
 
@@ -394,6 +398,10 @@ test("fails closed after the canonical GitHub README fetch fails", () => {
     GITHUB_CANONICAL_FETCH_FAILED_REASON
   );
   assert.equal(reply(guard).payload.text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
+  });
 });
 
 test("allows an exact named GitHub file after a truncated canonical README", () => {

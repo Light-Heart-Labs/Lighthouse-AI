@@ -227,8 +227,8 @@ export default definePluginEntry({
     });
     // The OpenAI-compatible gateway route does not dispatch channel delivery
     // hooks. Give the private host ingress a narrow, authenticated way to ask
-    // for the host-observed terminal verification state before it releases a
-    // response to the dashboard.
+    // for host-observed verification and source-evidence truth before it
+    // releases a response to the dashboard.
     api.registerHttpRoute({
       path: "/pixel-ods/verification",
       auth: "gateway",

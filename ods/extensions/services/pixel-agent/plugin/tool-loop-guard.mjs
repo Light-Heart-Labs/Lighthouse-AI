@@ -1275,6 +1275,9 @@ export function createToolLoopGuard({
     if (state.latestVerificationStatus === "failed") {
       return { status: "failed", text: VERIFICATION_FAILED_DELIVERY_PREFIX };
     }
+    if (state.githubCanonicalUrl && !state.githubCanonicalSatisfied) {
+      return { status: "failed", text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX };
+    }
     if (state.latestVerificationStatus === "passed") return { status: "passed" };
     return { status: "none" };
   }
@@ -1282,12 +1285,7 @@ export function createToolLoopGuard({
   function replyPayloadSending(event) {
     if (event?.kind !== "final") return undefined;
     const verification = verificationForRun(event?.runId);
-    const state = runs.get(event?.runId);
-    const sourceUnverified = Boolean(
-      state?.githubCanonicalUrl && !state.githubCanonicalSatisfied
-    );
-    const authoritativeText = verification.text ??
-      (sourceUnverified ? GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX : undefined);
+    const authoritativeText = verification.text;
     if (!authoritativeText) return undefined;
     return {
       payload: {
