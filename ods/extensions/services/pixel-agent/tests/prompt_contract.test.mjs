@@ -196,7 +196,7 @@ test("adds only a validated exact GitHub repository source to its turn", () => {
     { role: "user", content: "Research the official Osmantic/ODS GitHub repository." },
   ];
   const exact =
-    " The owner's exact identified canonical public source for this turn is https://github.com/Osmantic/ODS. Read its default-branch README from https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md. Do not call web_search or fetch the GitHub HTML page. Call web_fetch once with exactly that raw README URL as the first research tool, without narrating the tool choice.";
+    " The owner's exact identified canonical public source for this turn is https://github.com/Osmantic/ODS. Read its default-branch README from https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md. Do not call web_search or fetch the GitHub HTML page. Call web_fetch once with exactly that raw README URL as the first research tool, without narrating the tool choice. Do not answer repository facts unless that exact fetch succeeds.";
   assert.equal(githubSourceContract(messages), exact);
   assert.deepEqual(
     promptContractForAgent({ agentId: "pixel" }, "pixel", { messages }),
@@ -213,6 +213,7 @@ test("adds only a validated exact GitHub repository source to its turn", () => {
   assert.match(exactFile, /Do not fetch a GitHub HTML page or directory listing/);
   assert.match(exactFile, /HTTP 200 response from that exact raw URL is sufficient/);
   assert.match(exactFile, /do not call pixel_ods_web_extract afterward/);
+  assert.match(ODS_CONVERSATION_CONTRACT, /no-tool or failed-fetch answer is unverified/);
   assert.equal(
     githubSourceContract([
       { role: "user", content: "Research docs/setup while reading a GitHub issue." },

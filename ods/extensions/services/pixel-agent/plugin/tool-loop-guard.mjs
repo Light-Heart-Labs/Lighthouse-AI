@@ -41,6 +41,12 @@ export const WEB_FETCH_PUBLIC_ONLY_REASON =
 export const GITHUB_CANONICAL_SOURCE_PREFIX =
   "Pixel already has the owner's identified canonical public GitHub source:";
 
+export const GITHUB_CANONICAL_FETCH_FAILED_REASON =
+  "Pixel could not fetch the owner's identified canonical GitHub README. Do not call another tool in this turn or answer repository facts from memory; state that the requested source could not be verified.";
+
+export const GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel could not verify the requested GitHub repository because its identified canonical README was not successfully fetched in this response. No repository claims are verified; please retry.";
+
 export const EXEC_PRIVATE_NETWORK_REASON =
   "Pixel blocked this command because shell execution cannot be used to contact local, private, or raw-IP HTTP(S) destinations. Do not call another tool in this turn; explain the boundary to the user.";
 
@@ -370,6 +376,29 @@ function webFetchWasTruncated(event) {
     }
   }
   return false;
+}
+
+function canonicalWebFetchSucceeded(event) {
+  if (toolCallFailed(event)) return false;
+  const statuses = [];
+  const details = event?.result?.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    statuses.push(details.status);
+  }
+  const content = event?.result?.content;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (!part || typeof part !== "object" || typeof part.text !== "string") continue;
+      try {
+        statuses.push(JSON.parse(part.text)?.status);
+      } catch {
+        // Plain-text source content has no independently inspectable HTTP status.
+      }
+    }
+  }
+  return statuses.some(
+    (status) => Number.isInteger(status) && status >= 200 && status < 300
+  );
 }
 
 function runIdentity(event, context) {
@@ -736,6 +765,7 @@ export function createToolLoopGuard({
         githubReadmeUrl: undefined,
         githubFileUrl: undefined,
         githubCanonicalSatisfied: false,
+        githubCanonicalFailed: false,
         githubCanonicalBlocks: 0,
         odsRoutingInitialized: false,
         odsRequiredTools: new Set(),
@@ -896,12 +926,15 @@ export function createToolLoopGuard({
       !state.githubCanonicalSatisfied &&
       WEB_TOOLS.has(toolName)
     ) {
+      if (state.githubCanonicalFailed) {
+        state.webExhausted = true;
+        return { block: true, blockReason: GITHUB_CANONICAL_FETCH_FAILED_REASON };
+      }
       const requestedUrl = canonicalFetchUrl(event);
       if (
-        (toolName === "web_fetch" || toolName === "pixel_ods_web_extract") &&
+        toolName === "web_fetch" &&
         requestedUrl === state.githubReadmeUrl
       ) {
-        state.githubCanonicalSatisfied = true;
         state.githubCanonicalBlocks = 0;
       } else if (state.githubCanonicalBlocks === 0) {
         state.githubCanonicalBlocks = 1;
@@ -1140,6 +1173,14 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    if (
+      state.githubReadmeUrl &&
+      toolName === "web_fetch" &&
+      canonicalFetchUrl(event) === state.githubReadmeUrl
+    ) {
+      state.githubCanonicalSatisfied = canonicalWebFetchSucceeded(event);
+      state.githubCanonicalFailed = !state.githubCanonicalSatisfied;
+    }
     if (toolName === "process") {
       const completion = completedProcessResult(event);
       if (!completion) return;
@@ -1241,13 +1282,20 @@ export function createToolLoopGuard({
   function replyPayloadSending(event) {
     if (event?.kind !== "final") return undefined;
     const verification = verificationForRun(event?.runId);
-    if (!verification.text) return undefined;
+    const state = runs.get(event?.runId);
+    const sourceUnverified = Boolean(
+      state?.githubCanonicalUrl && !state.githubCanonicalSatisfied
+    );
+    const authoritativeText = verification.text ??
+      (sourceUnverified ? GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX : undefined);
+    if (!authoritativeText) return undefined;
     return {
       payload: {
         ...(event.payload ?? {}),
-        text: verification.text,
+        text: authoritativeText,
       },
-      reason: "Pixel replaced an unverified terminal reply with host-authoritative verification truth.",
+      reason:
+        "Pixel replaced an unverified terminal reply with host-authoritative evidence truth.",
     };
   }
 

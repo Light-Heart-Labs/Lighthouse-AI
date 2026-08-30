@@ -11,7 +11,9 @@ import {
   CLIENT_CANCELLED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
+  GITHUB_CANONICAL_FETCH_FAILED_REASON,
   GITHUB_CANONICAL_SOURCE_PREFIX,
+  GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   PRIVATE_URL_REQUEST_REASON,
@@ -340,6 +342,58 @@ test("redirects search to an owner-identified canonical GitHub source once", () 
     }),
     undefined
   );
+  afterCall(guard, "web_fetch", {
+    event: {
+      params: {
+        url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
+      },
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: 200,
+              text: "Turn your computer into a private AI server.",
+            }),
+          },
+        ],
+      },
+    },
+  });
+  assert.equal(reply(guard), undefined);
+});
+
+test("replaces GitHub repository claims when the model skipped the canonical README", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Research the official Osmantic/ODS GitHub repository." }
+  );
+  const terminal = reply(guard);
+  assert.equal(terminal.payload.text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
+  assert.deepEqual(terminal.payload.metadata, { preserved: true });
+});
+
+test("fails closed after the canonical GitHub README fetch fails", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Research the official Osmantic/ODS GitHub repository." }
+  );
+  const params = {
+    url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
+  };
+  assert.equal(call(guard, "web_fetch", { event: { params } }), undefined);
+  afterCall(guard, "web_fetch", {
+    event: { params, result: { isError: true, details: { status: 404 } } },
+  });
+  assert.equal(
+    call(guard, "web_search").blockReason,
+    GITHUB_CANONICAL_FETCH_FAILED_REASON
+  );
+  assert.equal(reply(guard).payload.text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
 });
 
 test("allows an exact named GitHub file after a truncated canonical README", () => {
