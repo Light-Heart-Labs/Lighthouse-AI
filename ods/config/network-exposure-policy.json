@@ -74,6 +74,12 @@
       "auth_required": false,
       "notes": "Local OpenAI-compatible inference API."
     },
+    "model-router": {
+      "risk": "model-routing-internal-api",
+      "lan_exposure": "none",
+      "auth_required": false,
+      "notes": "Internal-only stable model route for ODS services; it must not publish a host port."
+    },
     "n8n": {
       "risk": "workflow-automation-ui",
       "lan_exposure": "operator-controlled",

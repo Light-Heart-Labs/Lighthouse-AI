@@ -105,6 +105,31 @@ def test_pixel_edge_is_internal_only_and_token_gated() -> None:
     assert_true(policy["auth_required"] is True, "pixel-edge policy must require auth")
 
 
+def test_model_router_is_internal_only() -> None:
+    base_compose = read(ROOT / "docker-compose.base.yml")
+    manifest = read(SERVICES / "model-router" / "manifest.yaml")
+    policy = json.loads(read(POLICY))["services"]["model-router"]
+    service_block = re.search(
+        r"(?ms)^  model-router:\s*\n(?P<body>.*?)(?=^  [A-Za-z0-9_.-]+:\s*\n|\Z)",
+        base_compose,
+    )
+
+    assert_true(service_block is not None, "model-router compose service must exist")
+    assert_true(
+        "\n    ports:" not in f"\n{service_block.group('body')}",
+        "model-router must not bind a host port",
+    )
+    assert_true(
+        manifest_value(manifest, "external_port_default") == "0",
+        "model-router external port must be 0",
+    )
+    assert_true(
+        manifest_value(manifest, "health_source") == "container",
+        "model-router health must come from its Docker healthcheck",
+    )
+    assert_true(policy["lan_exposure"] == "none", "model-router policy must mark no LAN exposure")
+
+
 def test_hermes_whatsapp_bridge_avoids_open_webui_port() -> None:
     hermes_compose = read(SERVICES / "hermes" / "compose.yaml")
     hermes_config = read(SERVICES / "hermes" / "cli-config.yaml.template")
@@ -245,6 +270,7 @@ def main() -> int:
         test_exposed_services_are_policy_labeled,
         test_hermes_is_internal_only_and_proxy_gated,
         test_pixel_edge_is_internal_only_and_token_gated,
+        test_model_router_is_internal_only,
         test_hermes_whatsapp_bridge_avoids_open_webui_port,
         test_hermes_local_provider_has_generous_timeouts,
         test_ods_proxy_routes_talk_portal,
