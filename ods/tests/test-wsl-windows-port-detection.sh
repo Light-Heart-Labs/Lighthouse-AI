@@ -25,7 +25,7 @@ cat > "$tmp/docker" <<'STUB'
 if [[ "${1:-}" == "ps" && "$*" == *"publish=3000"* ]]; then
     printf 'owned-container\n'
 elif [[ "${1:-}" == "inspect" && "${*: -1}" == "owned-container" ]]; then
-    printf '%s\n' "${INSTALL_DIR:?}"
+    printf '/previous/ods/install|ods\n'
 fi
 STUB
 chmod +x "$tmp/docker"

@@ -152,19 +152,24 @@ fi
 _port_check_warned=false
 
 _phase04_current_install_owns_docker_port() {
-    local port="${1:-}" container_id working_dir
+    local port="${1:-}" container_id ownership working_dir project_name
     [[ "$port" =~ ^[0-9]+$ ]] || return 1
     command -v docker >/dev/null 2>&1 || return 1
 
-    # An in-place upgrade is allowed to reuse ports already published by
-    # containers created from this exact installation directory. Containers
-    # from another Compose project remain genuine conflicts.
+    # An in-place upgrade is allowed to reuse ports already published by the
+    # fixed ODS Compose project. Compose can retain an unchanged container's
+    # original working-directory label after an install-directory migration,
+    # so accept either the exact directory or the canonical project identity.
+    # Containers from another Compose project remain genuine conflicts.
     while IFS= read -r container_id; do
         [[ -n "$container_id" ]] || continue
-        working_dir=$(docker inspect --format \
-            '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' \
+        ownership=$(docker inspect --format \
+            '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}|{{ index .Config.Labels "com.docker.compose.project" }}' \
             "$container_id" 2>/dev/null || true)
+        working_dir="${ownership%%|*}"
+        project_name="${ownership#*|}"
         [[ -n "$working_dir" && "$working_dir" == "${INSTALL_DIR:-}" ]] && return 0
+        [[ "$project_name" == "${COMPOSE_PROJECT_NAME:-ods}" ]] && return 0
     done < <(docker ps --filter "publish=${port}" --format '{{.ID}}' 2>/dev/null || true)
 
     return 1
