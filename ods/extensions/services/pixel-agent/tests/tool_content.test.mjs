@@ -54,6 +54,9 @@ test("status result states each bounded host fact in natural language", () => {
   assert.match(text, /context length: 32768 tokens/);
   assert.match(text, /Projected Docker applications online: 2 of 2/);
   assert.match(text, /not the Dashboard's total ODS service count/);
+  assert.match(text, /Services without a Docker container are not represented/);
+  assert.match(text, /cannot classify intentionally unconfigured optional services/);
+  assert.match(text, /cannot .* prove whole-stack health/);
   assert.ok(!text.includes("ods-dashboard"));
   assert.ok(!text.includes("http://localhost:3001/"));
 });

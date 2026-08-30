@@ -44,6 +44,7 @@ export function statusToolText(projection) {
     `ODS version: ${version}.`,
     runtime,
     `Projected Docker applications online: ${projection.online_app_count} of ${projection.app_count}. This is not the Dashboard's total ODS service count because host-level services are outside this projection. Docker: ${projection.docker}.`,
+    "Services without a Docker container are not represented, so this evidence cannot classify intentionally unconfigured optional services or prove whole-stack health.",
     `This ${freshness(projection.stale)} projection was written at ${projection.timestamp}.`,
     EVIDENCE_BOUNDARY,
   ].join(" ");

@@ -61,6 +61,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /do not also call pixel_ods_apps_list/);
   assert.match(result.appendSystemContext, /counts allowlisted Docker applications/);
   assert.match(result.appendSystemContext, /never total ODS service count/);
+  assert.match(result.appendSystemContext, /services without a Docker container are absent/);
+  assert.match(result.appendSystemContext, /never claim the whole ODS stack has no degradation/);
   assert.match(result.appendSystemContext, /Use pixel_ods_apps_list first/);
   assert.match(result.appendSystemContext, /configured links, or URLs such as n8n/);
   assert.match(result.appendSystemContext, /gather each requested ODS projection exactly once first/);
