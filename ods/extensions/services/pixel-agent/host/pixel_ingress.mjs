@@ -23,8 +23,7 @@ import { pathToFileURL } from "node:url";
 
 const MAX_BODY = 2 * 1024 * 1024; // 2 MiB request body cap
 const MAX_NONSTREAM_RESPONSE = 2 * 1024 * 1024; // 2 MiB non-stream response cap
-const MAX_STREAM_RESPONSE = 4 * 1024 * 1024; // 4 MiB buffered SSE cap
-const MAX_SSE_LINE = 1024 * 1024; // 1 MiB stream line cap
+const MAX_STREAM_RESPONSE = 4 * 1024 * 1024; // 4 MiB terminal completion cap for SSE clients
 const MAX_VERIFICATION_RESPONSE = 4096;
 const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONNECT_TIMEOUT_MS = 5000;
@@ -665,49 +664,20 @@ function applyVerificationToCompletion(completion, verification) {
   };
 }
 
-function parseBufferedSse(body) {
-  let text;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    throw new HttpError(502, "upstream stream failed");
+function completionSse(completion) {
+  const runId = completion?.id;
+  const text = completion?.choices?.[0]?.message?.content;
+  if (!OPENAI_RUN_ID.test(runId) || typeof text !== "string") {
+    throw new HttpError(502, "invalid upstream response");
   }
-  let runId;
-  let model = "openclaw/default";
-  let created = Math.floor(Date.now() / 1000);
-  let sawDone = false;
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (Buffer.byteLength(line, "utf8") > MAX_SSE_LINE) {
-      throw new HttpError(502, "upstream stream failed");
-    }
-    if (!line || line.startsWith(":")) continue;
-    if (!line.startsWith("data:")) throw new HttpError(502, "upstream stream failed");
-    const data = line.slice(5).trimStart();
-    if (data === "[DONE]") {
-      sawDone = true;
-      continue;
-    }
-    let event;
-    try {
-      event = JSON.parse(data);
-    } catch {
-      throw new HttpError(502, "upstream stream failed");
-    }
-    if (typeof event?.id === "string") {
-      if (!OPENAI_RUN_ID.test(event.id) || (runId && event.id !== runId)) {
-        throw new HttpError(502, "upstream stream failed");
-      }
-      runId = event.id;
-    }
-    if (typeof event?.model === "string" && event.model.length <= 256) model = event.model;
-    if (Number.isSafeInteger(event?.created) && event.created > 0) created = event.created;
-  }
-  if (!sawDone || !runId) throw new HttpError(502, "upstream stream failed");
-  return { runId, model, created };
-}
-
-function verificationSse({ runId, model, created }, text) {
+  const model =
+    typeof completion?.model === "string" && completion.model.length <= 256
+      ? completion.model
+      : "openclaw/default";
+  const created =
+    Number.isSafeInteger(completion?.created) && completion.created > 0
+      ? completion.created
+      : Math.floor(Date.now() / 1000);
   const envelope = (delta, finishReason) => JSON.stringify({
     id: runId,
     object: "chat.completion.chunk",
@@ -735,13 +705,19 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
   // proxy can consume a close before it reaches this response object.
   res.once("close", abortOnDownstreamClose);
   const wantsStream = outgoing.stream === true;
+  // OpenClaw's OpenAI-compatible streaming route concatenates assistant block
+  // replies from every tool continuation. Its non-stream route returns only
+  // the terminal assistant reply. This ingress already withholds response
+  // bytes until host verification completes, so request one terminal upstream
+  // completion and synthesize SSE for downstream streaming clients.
+  const gatewayOutgoing = wantsStream ? { ...outgoing, stream: false } : outgoing;
   try {
     const upstream = await deps.fetch(
       `http://127.0.0.1:${gatewayPort}/v1/chat/completions`,
       {
         method: "POST",
-        headers: upstreamHeaders(wantsStream, token),
-        body: JSON.stringify(outgoing),
+        headers: upstreamHeaders(false, token),
+        body: JSON.stringify(gatewayOutgoing),
         redirect: "error",
         signal: controller.signal,
       }
@@ -753,12 +729,12 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
     }
 
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("application/json")) {
+      await drain(upstream.body);
+      sendError(res, 502, "invalid upstream response");
+      return;
+    }
     if (wantsStream) {
-      if (!contentType.startsWith("text/event-stream")) {
-        await drain(upstream.body);
-        sendError(res, 502, "invalid upstream response");
-        return;
-      }
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-store",
@@ -768,27 +744,21 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
       res.flushHeaders?.();
       try {
         const body = await readBounded(upstream.body, MAX_STREAM_RESPONSE);
-        const envelope = parseBufferedSse(body);
+        const completion = JSON.parse(body.toString("utf8"));
         const verification = await verificationForRun(
-          envelope.runId,
+          completion?.id,
           token,
           gatewayPort,
           controller.signal,
           deps
         );
-        res.end(verification.text ? verificationSse(envelope, verification.text) : body);
+        res.end(completionSse(applyVerificationToCompletion(completion, verification)));
       } catch {
         if (!res.destroyed && !res.writableEnded) {
           res.write('data: {"error":{"message":"upstream stream failed","type":"pixel_ingress_error"}}\n\n');
           res.end("data: [DONE]\n\n");
         }
       }
-      return;
-    }
-
-    if (!contentType.startsWith("application/json")) {
-      await drain(upstream.body);
-      sendError(res, 502, "invalid upstream response");
       return;
     }
     const body = await readBounded(upstream.body, MAX_NONSTREAM_RESPONSE);

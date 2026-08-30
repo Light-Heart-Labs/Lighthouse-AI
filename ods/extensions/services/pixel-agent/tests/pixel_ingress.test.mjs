@@ -488,7 +488,7 @@ test("returns sanitized JSON error for invalid JSON, never reflects upstream bod
 // Streaming bounds
 // ---------------------------------------------------------------------------
 
-test("streaming request forwards accept and returns SSE", async () => {
+test("streaming client receives terminal SSE from a non-stream gateway completion", async () => {
   let captured = null;
   const gw = await fakeGateway({ onRequest: (c) => (captured = c) });
   try {
@@ -499,8 +499,10 @@ test("streaming request forwards accept and returns SSE", async () => {
         headers: { "Content-Type": "application/json" },
       });
       assert.equal(res.status, 200);
-      assert.equal(captured.headers.accept, "text/event-stream");
-      assert.ok(res.body.includes("[DONE]"), "should pass through SSE bytes");
+      assert.equal(captured.headers.accept, "application/json");
+      assert.equal(captured.body.stream, false);
+      assert.ok(res.body.includes('"content":"ok"'));
+      assert.ok(res.body.includes("[DONE]"));
     } finally {
       await new Promise((r) => srv.close(r));
     }
@@ -569,7 +571,7 @@ test("closing a silent downstream stream closes the active gateway transport", a
   const upstream = http.createServer((req, res) => {
     req.resume();
     req.on("end", () => {
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.flushHeaders();
       res.on("close", () => markUpstreamClosed(!res.writableEnded));
     });
