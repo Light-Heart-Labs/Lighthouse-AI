@@ -77,6 +77,15 @@ The registry and completed model files are also independent of dashboard-api
 and host-agent process lifetime: restarting either service reloads the same
 pinned records and on-disk artifacts.
 
+A routine Linux installer rerun also preserves the valid local model that is
+currently active, including its exact GGUF pin, context, runtime profile, and
+safe llama.cpp tuning. The installer still refreshes its hardware-based
+recommendation separately, so the Models page can offer a better candidate
+without changing the live agent behind the operator's back. Use
+`./install.sh --reselect-model` only when you intentionally want the installer
+to replace the active local model with its current recommendation. Missing,
+incomplete, non-local, or catalog-mismatched state is never adopted.
+
 When a catalog model is loaded, ODS updates the active GGUF settings
 and restarts the local inference service so OpenAI-compatible clients use the
 new model. After the switch settles, verify it from the host:

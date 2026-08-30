@@ -835,6 +835,7 @@ fix_nvidia_secure_boot() {
     $ENABLE_OPENCLAW && resume_args="$resume_args --openclaw"
     [[ -n "$TIER" ]] && resume_args="$resume_args --tier $TIER"
     [[ "$OFFLINE_MODE" == "true" ]] && resume_args="$resume_args --offline"
+    [[ "${ODS_RESELECT_MODEL:-false}" == "true" ]] && resume_args="$resume_args --reselect-model"
 
     ods_sudo tee /etc/systemd/system/${svc_name}.service > /dev/null << SVCEOF
 [Unit]

@@ -637,9 +637,10 @@ raise SystemExit(1)' 2>/dev/null && return 0
     LANGFUSE_INIT_USER_EMAIL=$(_env_get LANGFUSE_INIT_USER_EMAIL "admin@ods.local")
     LANGFUSE_INIT_USER_PASSWORD=$(_env_get LANGFUSE_INIT_USER_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
     MODEL_PROFILE_VALUE=$(_env_get MODEL_PROFILE "${MODEL_PROFILE_REQUESTED:-${MODEL_PROFILE:-qwen}}")
-    MODEL_RECOMMENDED_MODEL_VALUE="${LLM_MODEL}"
-    MODEL_RECOMMENDED_GGUF_VALUE="${GGUF_FILE}"
-    MODEL_RECOMMENDED_CONTEXT_VALUE="${MAX_CONTEXT}"
+    MODEL_RECOMMENDED_MODEL_VALUE="${INSTALLER_RECOMMENDED_MODEL:-${LLM_MODEL}}"
+    MODEL_RECOMMENDED_GGUF_VALUE="${INSTALLER_RECOMMENDED_GGUF:-${GGUF_FILE}}"
+    MODEL_RECOMMENDED_CONTEXT_VALUE="${INSTALLER_RECOMMENDED_CONTEXT:-${MAX_CONTEXT}}"
+    MODEL_SELECTION_SOURCE_VALUE="${MODEL_SELECTION_SOURCE:-installer}"
     EXTERNAL_LLM_URL_VALUE="${EXTERNAL_LLM_URL:-}"
     EXTERNAL_LLM_CONTAINER_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL:-}"
     EXTERNAL_LLM_PROVIDER_VALUE="${EXTERNAL_LLM_PROVIDER:-}"
@@ -657,7 +658,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
         _docker_memory_gb="$(ods_docker_memory_gb 2>/dev/null || true)"
         _effective_memory_gb="$(ods_effective_container_memory_gb "${RAM_GB:-0}" "$_docker_memory_gb")"
         _llama_memory_default="$(ods_default_nvidia_llama_memory_limit "$_effective_memory_gb")"
-        LLAMA_SERVER_MEMORY_LIMIT_VALUE="$(_env_get LLAMA_SERVER_MEMORY_LIMIT "$_llama_memory_default")"
+        LLAMA_SERVER_MEMORY_LIMIT_VALUE="$(_env_get LLAMA_SERVER_MEMORY_LIMIT "${LLAMA_SERVER_MEMORY_LIMIT:-$_llama_memory_default}")"
         unset _docker_memory_gb _effective_memory_gb _llama_memory_default
     fi
     ODS_MODE_VALUE="$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "local"; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
@@ -987,8 +988,12 @@ MODEL_PROFILE=${MODEL_PROFILE_VALUE}
 # Effective model profile for this hardware: ${MODEL_PROFILE_EFFECTIVE:-qwen}
 LLM_MODEL=${LLM_MODEL}
 GGUF_FILE=${GGUF_FILE}
+GGUF_URL=${GGUF_URL:-}
+GGUF_SHA256=${GGUF_SHA256:-}
+LLM_MODEL_SIZE_MB=${LLM_MODEL_SIZE_MB:-0}
 MAX_CONTEXT=${MAX_CONTEXT}
 CTX_SIZE=${MAX_CONTEXT}
+MODEL_SELECTION_SOURCE=${MODEL_SELECTION_SOURCE_VALUE}
 MODEL_RECOMMENDED_MODEL=${MODEL_RECOMMENDED_MODEL_VALUE}
 MODEL_RECOMMENDED_GGUF=${MODEL_RECOMMENDED_GGUF_VALUE}
 MODEL_RECOMMENDED_CONTEXT=${MODEL_RECOMMENDED_CONTEXT_VALUE}
@@ -999,6 +1004,9 @@ MODEL_RECOMMENDATION_REASON=$(dotenv_quote "${MODEL_RECOMMENDATION_REASON:-Selec
 MODEL_RECOMMENDED_ALTERNATIVES=$(dotenv_quote "${MODEL_RECOMMENDED_ALTERNATIVES:-}")
 MODEL_PERFORMANCE_SOURCE=benchmark_required
 MODEL_PERFORMANCE_LABEL=$(dotenv_quote "Benchmark after first launch")
+MODEL_RUNTIME_PROFILE=$(dotenv_quote "${MODEL_RUNTIME_PROFILE:-}")
+MODEL_RUNTIME_PROFILE_LABEL=$(dotenv_quote "${MODEL_RUNTIME_PROFILE_LABEL:-}")
+MODEL_RUNTIME_PROFILE_SOURCE=$(dotenv_quote "${MODEL_RUNTIME_PROFILE_SOURCE:-}")
 GPU_BACKEND=${GPU_BACKEND}
 SYSTEM_RAM_GB=${RAM_GB:-0}
 N_GPU_LAYERS=${N_GPU_LAYERS_VALUE}
@@ -1017,6 +1025,8 @@ LLAMA_PARALLEL=${LLAMA_PARALLEL:-1}
 # Optional MTP speculative decoding only. Requires an MTP-capable GGUF and llama.cpp build.
 # LLAMA_ARG_SPEC_TYPE=draft-mtp
 # LLAMA_ARG_SPEC_DRAFT_N_MAX=3
+$(if [[ -n "${LLAMA_ARG_SPEC_TYPE:-}" ]]; then echo "LLAMA_ARG_SPEC_TYPE=${LLAMA_ARG_SPEC_TYPE}"; fi)
+$(if [[ -n "${LLAMA_ARG_SPEC_DRAFT_N_MAX:-}" ]]; then echo "LLAMA_ARG_SPEC_DRAFT_N_MAX=${LLAMA_ARG_SPEC_DRAFT_N_MAX}"; fi)
 LLAMA_CPU_LIMIT=${LLAMA_CPU_LIMIT}
 LLAMA_CPU_RESERVATION=${LLAMA_CPU_RESERVATION}
 

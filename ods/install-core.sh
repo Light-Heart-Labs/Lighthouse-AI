@@ -142,6 +142,7 @@ EXTERNAL_LLM_PROVIDER="${EXTERNAL_LLM_PROVIDER:-auto}"
 EXTERNAL_LLM_MODEL="${EXTERNAL_LLM_MODEL:-}"
 EXTERNAL_LLM_AUTO_REUSE="${EXTERNAL_LLM_AUTO_REUSE:-false}"
 EXTERNAL_LLM_DISABLE=false
+ODS_RESELECT_MODEL="${ODS_RESELECT_MODEL:-false}"
 
 usage() {
     cat << EOF
@@ -171,6 +172,7 @@ Options:
                       Allow non-interactive reuse of a detected matching model
     --no-external-llm
                       Disable a persisted external LLM selection on this rerun
+    --reselect-model  Replace a valid active local model with the current installer recommendation
     --voice           Enable voice services (Whisper + Kokoro)
     --no-voice        Disable voice services
     --workflows       Enable n8n workflow automation
@@ -237,6 +239,7 @@ while [[ $# -gt 0 ]]; do
         --external-llm-model) EXTERNAL_LLM_MODEL="$2"; shift 2 ;;
         --reuse-external-llm) EXTERNAL_LLM_AUTO_REUSE=true; shift ;;
         --no-external-llm) EXTERNAL_LLM_DISABLE=true; shift ;;
+        --reselect-model) ODS_RESELECT_MODEL=true; shift ;;
         --voice) ENABLE_VOICE=true; shift ;;
         --no-voice) ENABLE_VOICE=false; shift ;;
         --workflows) ENABLE_WORKFLOWS=true; shift ;;
@@ -286,7 +289,7 @@ if [[ "${LEMONADE_EXTERNAL,,}" == "true" ]]; then
 fi
 
 export EXTERNAL_LLM_URL EXTERNAL_LLM_PROVIDER EXTERNAL_LLM_MODEL
-export EXTERNAL_LLM_AUTO_REUSE EXTERNAL_LLM_DISABLE
+export EXTERNAL_LLM_AUTO_REUSE EXTERNAL_LLM_DISABLE ODS_RESELECT_MODEL
 
 # OpenClaw deprecation back-compat: preserve OpenClaw on UPGRADES of installs
 # that previously had it enabled. The earlier heuristic — "does the compose

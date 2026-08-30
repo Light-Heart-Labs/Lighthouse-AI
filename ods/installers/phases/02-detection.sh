@@ -585,6 +585,48 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "${TIER:-}" !=
     fi
 fi
 
+# The tier/catalog result is a recommendation.  A valid local model already
+# activated through the Dashboard is operator state and must survive routine
+# installer reruns.  Keep those two concepts separate so updates can advertise
+# a newer recommendation without silently replacing the live agent model.
+INSTALLER_RECOMMENDED_MODEL="${LLM_MODEL:-}"
+INSTALLER_RECOMMENDED_GGUF="${GGUF_FILE:-}"
+INSTALLER_RECOMMENDED_CONTEXT="${MAX_CONTEXT:-}"
+MODEL_SELECTION_SOURCE="installer"
+if [[ -f "$INSTALL_DIR/.env" && "${ODS_RESELECT_MODEL:-false}" != "true" && "${TIER:-}" != "CLOUD" ]]; then
+    _preserve_script="$SCRIPT_DIR/scripts/preserve-active-model.py"
+    if [[ -f "$_preserve_script" ]]; then
+        if [[ -z "${_selector_python:-}" ]]; then
+            if [[ -f "$SCRIPT_DIR/lib/python-cmd.sh" ]]; then
+                # shellcheck source=/dev/null
+                . "$SCRIPT_DIR/lib/python-cmd.sh"
+                _selector_python="$(ods_detect_python_cmd || true)"
+            elif command -v python3 >/dev/null 2>&1; then
+                _selector_python="python3"
+            fi
+        fi
+        if [[ -n "${_selector_python:-}" ]]; then
+            _preserved_model_env="$("$_selector_python" "$_preserve_script" \
+                --env "$INSTALL_DIR/.env" \
+                --catalog "$SCRIPT_DIR/config/model-library.json" \
+                --imports "$INSTALL_DIR/data/model-imports.json" \
+                --models-dir "$INSTALL_DIR/data/models" \
+                --backend "${GPU_BACKEND:-unknown}" \
+                --memory-type "${GPU_MEMORY_TYPE:-discrete}" \
+                --vram-mb "${GPU_VRAM:-0}" \
+                --ram-gb "${RAM_GB:-0}" \
+                --host-arch "${HOST_ARCH:-unknown}" \
+                2>>"$LOG_FILE" || true)"
+            if [[ -n "$_preserved_model_env" ]] && command -v load_model_selector_env_from_output >/dev/null 2>&1; then
+                load_model_selector_env_from_output <<< "$_preserved_model_env"
+                log "Preserved active local model across installer rerun: ${LLM_MODEL} (${GGUF_FILE})"
+            fi
+        fi
+    fi
+elif [[ "${ODS_RESELECT_MODEL:-false}" == "true" ]]; then
+    log "Active-model preservation disabled by --reselect-model"
+fi
+
 # Display hardware summary with nice formatting
 CPU_INFO=$(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs || echo "Unknown")
 if [[ "$INTERACTIVE" == "true" ]]; then

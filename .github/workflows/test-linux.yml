@@ -101,6 +101,9 @@ jobs:
       - name: Tier Map Unit Tests
         run: bash tests/test-tier-map.sh
 
+      - name: Active Model Preservation Tests
+        run: python3 tests/test-preserve-active-model.py
+
       - name: Service Registry Tests
         run: bash tests/test-service-registry.sh
 

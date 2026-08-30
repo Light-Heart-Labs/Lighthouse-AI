@@ -8290,6 +8290,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     "MODEL_RUNTIME_PROFILE": runtime_profile.get("id", "") if runtime_profile else "",
                     "MODEL_RUNTIME_PROFILE_LABEL": runtime_profile.get("label", "") if runtime_profile else "",
                     "MODEL_RUNTIME_PROFILE_SOURCE": runtime_profile.get("source_url", "") if runtime_profile else "",
+                    "MODEL_SELECTION_SOURCE": "dashboard",
                 }
                 if gpu_assignment_plan:
                     updates.update(gpu_assignment_plan["env_updates"])
