@@ -60,6 +60,12 @@ export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
 export const CLIENT_CANCELLED_REASON =
   "The owner cancelled this Pixel response. Do not call another tool or continue the task in this turn.";
 
+export const ODS_TOOL_ROUTING_ABORT_REASON =
+  "Pixel stopped this response because the required dedicated ODS projection tool was not used after one correction. Do not call another tool in this turn. State that the requested ODS facts were not verified and ask the owner to retry.";
+
+export const ODS_TOOL_ROUTING_LOOP_ABORT_REASON =
+  "Pixel stopped this response because it requested another tool after the ODS projection route was enforced. Start a fresh message to continue.";
+
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
@@ -341,6 +347,33 @@ function currentUserText(messages, prompt = undefined) {
   return messageContentText(userMessage?.content);
 }
 
+export function userMessageOdsToolRequirements(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return [];
+  const requirements = [];
+  const asksStatus =
+    /\bpixel_ods_status\b/i.test(text) ||
+    /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(text) ||
+    /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
+      text
+    ) ||
+    /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
+      text
+    ) ||
+    /\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
+      text
+    );
+  const asksApps =
+    /\bpixel_ods_apps_list\b/i.test(text) ||
+    /\b(?:ODS|configured)\b.{0,80}\b(?:apps?|applications?|links?|URLs?)\b/i.test(text) ||
+    /\b(?:apps?|applications?|links?|URLs?)\b.{0,80}\bODS\b/i.test(text) ||
+    (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
+      /\b(?:configured|link|URL|where|open|address)\b/i.test(text));
+  if (asksStatus) requirements.push("pixel_ods_status");
+  if (asksApps) requirements.push("pixel_ods_apps_list");
+  return requirements;
+}
+
 export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   return textRequestsPrivateUrlAccess(text);
@@ -533,6 +566,11 @@ export function createToolLoopGuard({
         githubFileUrl: undefined,
         githubCanonicalSatisfied: false,
         githubCanonicalBlocks: 0,
+        odsRoutingInitialized: false,
+        odsRequiredTools: new Set(),
+        odsRoutingBlocks: 0,
+        odsRoutingExhausted: false,
+        odsRoutingTerminalBlocks: 0,
         failedExec: new Map(),
         execOriginalByWrapped: new Map(),
       };
@@ -576,6 +614,42 @@ export function createToolLoopGuard({
         `Pixel stopped a tool retry after a private-network block for run ${runId}; active run aborted=${aborted}`
       );
       return { block: true, blockReason: PRIVATE_NETWORK_LOOP_ABORT_REASON };
+    }
+
+    if (state?.odsRoutingExhausted) {
+      if (state.odsRoutingTerminalBlocks === 0) {
+        state.odsRoutingTerminalBlocks = 1;
+        return { block: true, blockReason: ODS_TOOL_ROUTING_ABORT_REASON };
+      }
+      let aborted = false;
+      try {
+        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+      } catch (error) {
+        warn(`Pixel ODS-routing abort failed for run ${runId}: ${String(error)}`);
+      }
+      warn(
+        `Pixel stopped a tool retry after an ODS-routing block for run ${runId}; active run aborted=${aborted}`
+      );
+      return { block: true, blockReason: ODS_TOOL_ROUTING_LOOP_ABORT_REASON };
+    }
+
+    if (state?.odsRequiredTools.size > 0) {
+      if (state.odsRequiredTools.has(toolName)) {
+        state.odsRequiredTools.delete(toolName);
+        state.odsRoutingBlocks = 0;
+      } else if (state.odsRoutingBlocks === 0) {
+        state.odsRoutingBlocks = 1;
+        const required = [...state.odsRequiredTools].join(" and ");
+        return {
+          block: true,
+          blockReason:
+            `This request asks for ODS facts exposed by dedicated read-only tools. ` +
+            `Before any other tool, call ${required} exactly once. Then continue the owner's remaining work normally.`,
+        };
+      } else {
+        state.odsRoutingExhausted = true;
+        return { block: true, blockReason: ODS_TOOL_ROUTING_ABORT_REASON };
+      }
     }
 
     if (
@@ -768,9 +842,16 @@ export function createToolLoopGuard({
       stateFor(runId).privateNetworkPrompt = true;
     }
     if (typeof runId === "string" && runId) {
+      const state = stateFor(runId);
+      if (!state.odsRoutingInitialized) {
+        const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
+        if (requirements.length > 0) {
+          state.odsRequiredTools = new Set(requirements);
+          state.odsRoutingInitialized = true;
+        }
+      }
       const githubUrl = userMessageGitHubRepositoryUrl(event?.messages, event?.prompt);
       if (githubUrl) {
-        const state = stateFor(runId);
         if (!state.githubCanonicalUrl) {
           state.githubCanonicalUrl = githubUrl;
           state.githubReadmeUrl = githubReadmeUrl(githubUrl);

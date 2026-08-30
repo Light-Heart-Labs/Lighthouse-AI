@@ -12,6 +12,8 @@ import {
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
   GITHUB_CANONICAL_SOURCE_PREFIX,
+  ODS_TOOL_ROUTING_ABORT_REASON,
+  ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   PRIVATE_URL_REQUEST_REASON,
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
   WEB_BUDGET_EXHAUSTED_REASON,
@@ -26,6 +28,7 @@ import {
   textRequestsPrivateUrlAccess,
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
+  userMessageOdsToolRequirements,
   userMessageRequestsPrivateUrl,
 } from "../plugin/tool-loop-guard.mjs";
 
@@ -100,6 +103,68 @@ test("allows bounded web research then returns a terminal final-answer instructi
     blockReason: WEB_BUDGET_EXHAUSTED_REASON,
   });
   assert.deepEqual(aborts, []);
+});
+
+test("routes explicit ODS facts through projections before mixed workspace work", () => {
+  const guard = createToolLoopGuard();
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  const prompt =
+    "Use ODS tools to identify the exact active model and configured n8n URL, then create result.txt.";
+  assert.deepEqual(userMessageOdsToolRequirements([], prompt), [
+    "pixel_ods_status",
+    "pixel_ods_apps_list",
+  ]);
+  guard.observeRun(context, "pixel", { prompt });
+
+  const redirected = call(guard, "exec", { event: { params: { command: "find ." } } });
+  assert.equal(redirected.block, true);
+  assert.match(redirected.blockReason, /call pixel_ods_status and pixel_ods_apps_list exactly once/);
+  assert.equal(call(guard, "pixel_ods_status"), undefined);
+  assert.equal(call(guard, "pixel_ods_apps_list"), undefined);
+  assert.equal(call(guard, "exec", { event: { params: { command: "printf done" } } }), undefined);
+});
+
+test("does not route unrelated model, app, or n8n implementation work", () => {
+  assert.deepEqual(userMessageOdsToolRequirements([], "Explain model classes in my app."), []);
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Create an n8n workflow fixture in flow.json."),
+    []
+  );
+  assert.deepEqual(userMessageOdsToolRequirements([], "Which model is currently active?"), [
+    "pixel_ods_status",
+  ]);
+  assert.deepEqual(userMessageOdsToolRequirements([], "What is the configured n8n URL?"), [
+    "pixel_ods_apps_list",
+  ]);
+});
+
+test("terminates an ignored ODS projection correction instead of looping", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    abortRun: (sessionId) => {
+      aborts.push(sessionId);
+      return true;
+    },
+  });
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "What ODS model is active?" }
+  );
+  assert.match(call(guard, "read").blockReason, /call pixel_ods_status exactly once/);
+  assert.deepEqual(call(guard, "exec"), {
+    block: true,
+    blockReason: ODS_TOOL_ROUTING_ABORT_REASON,
+  });
+  assert.deepEqual(call(guard, "web_search"), {
+    block: true,
+    blockReason: ODS_TOOL_ROUTING_ABORT_REASON,
+  });
+  assert.deepEqual(call(guard, "read"), {
+    block: true,
+    blockReason: ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
+  });
+  assert.deepEqual(aborts, ["session-1"]);
 });
 
 test("uses a small balanced web budget by default", () => {

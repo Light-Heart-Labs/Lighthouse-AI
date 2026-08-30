@@ -52,6 +52,12 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /rerun a focused test before the full suite/);
   assert.match(result.appendSystemContext, /Once the requested acceptance checks pass/);
   assert.match(result.appendSystemContext, /do not rerun an unchanged green suite/);
+  assert.match(result.appendSystemContext, /use pixel_ods_status first for ODS health/);
+  assert.match(result.appendSystemContext, /active model, or its context window/);
+  assert.match(result.appendSystemContext, /Use pixel_ods_apps_list first/);
+  assert.match(result.appendSystemContext, /configured links, or URLs such as n8n/);
+  assert.match(result.appendSystemContext, /gather each requested ODS projection exactly once first/);
+  assert.match(result.appendSystemContext, /continue normally with the file, coding, research, or execution tools/);
   assert.match(result.appendSystemContext, /Do not call tools merely to discover/);
   assert.match(result.appendSystemContext, /never substitute pixel_ods_status/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);
