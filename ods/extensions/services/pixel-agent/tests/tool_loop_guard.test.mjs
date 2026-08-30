@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   CODING_LOOP_ABORT_REASON,
   CODING_RETRY_EXHAUSTED_REASON,
+  CANCELLABLE_EXEC_UNAVAILABLE_REASON,
+  CLIENT_CANCELLED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
   GITHUB_CANONICAL_SOURCE_PREFIX,
@@ -13,6 +19,7 @@ import {
   WEB_FETCH_TRUNCATED_PIVOT_REASON,
   WEB_FETCH_PUBLIC_ONLY_REASON,
   WEB_LOOP_ABORT_REASON,
+  createExecCancellationControl,
   createToolLoopGuard,
   createToolLoopGuardRegistry,
   githubReadmeUrl,
@@ -21,6 +28,33 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageRequestsPrivateUrl,
 } from "../plugin/tool-loop-guard.mjs";
+
+test("exec cancellation control creates exact owner-private markers and fails closed", () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), "pixel-exec-control-"));
+  const root = path.join(temporary, "control");
+  try {
+    mkdirSync(root, { mode: 0o700 });
+    writeFileSync(path.join(root, "cancellable-exec.sh"), "#!/bin/sh\n", { mode: 0o500 });
+    const control = createExecCancellationControl({ root });
+    const runId = "run-exact";
+    const marker = path.join(
+      root,
+      `${createHash("sha256").update(runId, "utf8").digest("hex")}.cancel`
+    );
+    assert.match(control.prepare(runId, "printf 'hello world'"), /^\/run\/pixel-ods-control\/cancellable-exec\.sh [0-9a-f]{64} /);
+    assert.equal(control.signal(runId), true);
+    assert.equal(statSync(marker).mode & 0o777, 0o600);
+    assert.equal(control.clear(runId), true);
+    assert.equal(control.clear(runId), false);
+    control.signal(runId);
+    control.prepare(runId, "true");
+    assert.throws(() => statSync(marker), /ENOENT/);
+    chmodSync(root, 0o755);
+    assert.throws(() => control.prepare(runId, "true"), /unsafe Pixel execution control root/);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
 
 function call(guard, toolName, overrides = {}) {
   const event = { toolName, runId: "run-1", ...(overrides.event ?? {}) };
@@ -436,6 +470,57 @@ test("normalizes sandbox-root file paths and exec workdirs", () => {
   );
 });
 
+test("wraps exec in exact run cancellation control without weakening retry detection", () => {
+  const prepared = [];
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: (runId, command) => {
+        prepared.push([runId, command]);
+        return `/control/wrapper ${runId} ${Buffer.from(command).toString("base64")}`;
+      },
+      signal: () => true,
+    },
+    limits: { failedExecRetries: 1 },
+  });
+  const original = { command: "python3 -m unittest", workdir: "/workspace" };
+  const wrapped = call(guard, "exec", { event: { params: original } });
+  assert.deepEqual(prepared, [["run-1", "python3 -m unittest"]]);
+  assert.equal(wrapped.params.workdir, undefined);
+  assert.match(wrapped.params.command, /^\/control\/wrapper run-1 /);
+  afterCall(guard, "exec", {
+    event: {
+      params: wrapped.params,
+      result: { isError: true, details: { exitCode: 1 } },
+    },
+  });
+  assert.equal(
+    call(guard, "exec", { event: { params: original } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
+test("fails closed when exact cancellable execution preparation is unavailable", () => {
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: () => {
+        throw new Error("missing read-only control mount");
+      },
+      signal: () => true,
+    },
+  });
+  assert.deepEqual(call(guard, "exec", { event: { params: { command: "true" } } }), {
+    block: true,
+    blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON,
+  });
+  assert.deepEqual(
+    call(guard, "exec", {
+      event: { params: { command: "true" }, runId: undefined },
+      context: { runId: undefined, sessionId: undefined },
+    }),
+    { block: true, blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON }
+  );
+});
+
 test("blocks a fourth identical command after three failed executions", () => {
   const guard = createToolLoopGuard({ limits: { failedExecRetries: 3 } });
   const params = { command: "python3 -m unittest -v test_probe.py", workdir: "/workspace" };
@@ -566,6 +651,70 @@ test("tracks and drains only the active hashed ODS OpenAI user", async () => {
   assert.equal(await guard.abortUserRun(user), true);
   assert.deepEqual(aborts, [["session-live", `agent:pixel:openai-user:${user}`]]);
   assert.equal(guard.trackedUserCount(), 0);
+});
+
+test("client cancellation signals the exact run and blocks any later tool", async () => {
+  const signals = [];
+  const clears = [];
+  const guard = createToolLoopGuard({
+    abortRunAndDrain: async () => ({ aborted: true, drained: true }),
+    execMarkerCleanupDelayMs: 0,
+    execControl: {
+      prepare: (_runId, command) => command,
+      signal: (runId) => {
+        signals.push(runId);
+        return true;
+      },
+      clear: (runId) => clears.push(runId),
+    },
+  });
+  const user = `ods-${"e".repeat(64)}`;
+  guard.observeRun({
+    agentId: "pixel",
+    sessionId: "session-live",
+    sessionKey: `agent:pixel:openai-user:${user}`,
+    runId: "run-live",
+  });
+  assert.equal(await guard.abortUserRun(user), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(signals, ["run-live"]);
+  assert.deepEqual(clears, ["run-live"]);
+  assert.deepEqual(
+    call(guard, "read", {
+      event: { runId: "run-live" },
+      context: { runId: "run-live", sessionId: "session-live" },
+    }),
+    { block: true, blockReason: CLIENT_CANCELLED_REASON }
+  );
+});
+
+test("still aborts the model run when exact execution signalling fails", async () => {
+  const aborts = [];
+  const warnings = [];
+  const guard = createToolLoopGuard({
+    abortRunAndDrain: async (sessionId) => {
+      aborts.push(sessionId);
+      return { aborted: true, drained: true };
+    },
+    execControl: {
+      prepare: (_runId, command) => command,
+      signal: () => {
+        throw new Error("marker unavailable");
+      },
+    },
+    warn: (message) => warnings.push(message),
+  });
+  const user = `ods-${"f".repeat(64)}`;
+  guard.observeRun({
+    agentId: "pixel",
+    sessionId: "session-live",
+    sessionKey: `agent:pixel:openai-user:${user}`,
+    runId: "run-live",
+  });
+
+  assert.equal(await guard.abortUserRun(user), false);
+  assert.deepEqual(aborts, ["session-live"]);
+  assert.match(warnings[0], /execution signal failed/);
 });
 
 test("refreshes the dashboard cancellation mapping from tool hook context", async () => {

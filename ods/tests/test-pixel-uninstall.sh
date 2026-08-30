@@ -190,11 +190,17 @@ ENV
 write_active_fixture() {
     write_fixture
     local pixel_install="$HOME_DIR/.local/share/pixel"
+    local exec_control="$HOME_DIR/.openclaw/.ods-exec-control"
     local release="$pixel_install/releases/4.3.14"
     local source_ref="d2a2b6be552126f294fb30ee5fb46872acf82c89"
     local source_tree image_id
     source_tree="$(printf 'a%.0s' {1..40})"
     image_id="sha256:$(printf 'd%.0s' {1..64})"
+    mkdir -m 0700 "$exec_control"
+    printf '%s\n' '#!/bin/sh' >"$exec_control/cancellable-exec.sh"
+    chmod 0500 "$exec_control/cancellable-exec.sh"
+    : >"$exec_control/$(printf 'e%.0s' {1..64}).cancel"
+    chmod 0600 "$exec_control/$(printf 'e%.0s' {1..64}).cancel"
     mkdir -p "$release"
     cat >"$release/release-identity.json" <<JSON
 {"kind":"pixel-release-source-identity","pixel":"4.3.14","source":{"state":"git-clean","commit":"$source_ref","tree":"$source_tree"}}
@@ -310,6 +316,7 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
         && "$(stat -c '%a' "$pixel_install/retired-ods-releases")" == 700 \
         && -f "$pixel_install/.deployment.lock" \
         && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && ! -e "$HOME_DIR/.openclaw/.ods-exec-control" \
         && ! -e "$DOCKER_STATE" ]] \
         && pass "fully bound ODS Pixel is deactivated while its exact release is privately retired" \
         || fail "fully bound ODS Pixel active-state cleanup was incomplete or over-broad"
@@ -320,6 +327,34 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
 else
     fail "fully bound ODS Pixel active state was not safely deactivated"
 fi
+
+write_active_fixture
+printf '%s\n' 'unexpected' >"$HOME_DIR/.openclaw/.ods-exec-control/unowned-artifact"
+chmod 0600 "$HOME_DIR/.openclaw/.ods-exec-control/unowned-artifact"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "unexpected Pixel execution-control artifact was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && -e "$HOME_DIR/.openclaw/.ods-exec-control/unowned-artifact" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "unsafe Pixel execution-control drift fails before service or Docker mutation" \
+        || fail "execution-control cleanup refusal caused partial mutation"
+fi
+
+write_active_fixture
+chmod 0500 "$HOME_DIR/.openclaw/.ods-exec-control"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "non-writable Pixel execution-control root was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && -e "$HOME_DIR/.openclaw/.ods-exec-control/cancellable-exec.sh" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "non-writable execution-control root fails before mutation" \
+        || fail "execution-control mode refusal caused partial mutation"
+fi
+chmod 0700 "$HOME_DIR/.openclaw/.ods-exec-control"
 
 write_active_fixture
 printf '%s\n' '{"tampered":true}' >"$HOME_DIR/.local/share/pixel/runtime-attestation.json"

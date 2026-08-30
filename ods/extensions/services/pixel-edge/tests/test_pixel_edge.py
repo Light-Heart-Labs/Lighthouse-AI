@@ -1,5 +1,6 @@
 """Tests for pixel_edge — upstream Unix socket + edge proxy routes."""
 
+import asyncio
 import io
 import json
 import os
@@ -35,6 +36,16 @@ async def _upstream_chat(request):
 
     if stream:
         async def generate():
+            if data.get("trigger_cancel_wait"):
+                yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+                request.app["stream_started"].set()
+                await request.app["release_stream"].wait()
+                if data.get("trigger_cancel_eof"):
+                    return
+                yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{"content":"LLM request timed out."},"finish_reason":null}]}\n\n'
+                yield b'data: {"id":"1","model":"openclaw/default","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                yield b'data: [DONE]\n\n'
+                return
             if data.get("trigger_stream_error"):
                 yield b'data: {"error":{"message":"upstream failed"}}\n\n'
                 yield b'data: [DONE]\n\n'
@@ -82,6 +93,8 @@ async def _upstream_health(_request):
 async def _upstream_cancel(request):
     data = await request.json()
     request.app["cancel_users"].append(data.get("user"))
+    if request.app["release_on_cancel"]:
+        asyncio.get_running_loop().call_later(0.05, request.app["release_stream"].set)
     return web.json_response({"aborted": True})
 
 
@@ -92,6 +105,9 @@ async def _start_upstream():
     app = web.Application()
     app["chat_requests"] = []
     app["cancel_users"] = []
+    app["stream_started"] = asyncio.Event()
+    app["release_stream"] = asyncio.Event()
+    app["release_on_cancel"] = False
     app.router.add_post("/v1/chat/completions", _upstream_chat)
     app.router.add_post("/v1/chat/cancel", _upstream_cancel)
     app.router.add_get("/v1/models", _upstream_models)
@@ -370,6 +386,60 @@ class TestCancellation(BaseEdgeTest):
             ) as resp:
                 self.assertEqual(resp.status, 400)
         self.assertEqual(self.up_runner.app["cancel_users"], [])
+
+    async def test_cancelled_stream_ends_cleanly_without_late_upstream_error(self):
+        self.up_runner.app["release_on_cancel"] = True
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "long task"}],
+                "stream": True,
+                "user": "conversation-cancel-clean",
+                "trigger_cancel_wait": True,
+            },
+        ) as stream_response:
+            await asyncio.wait_for(self.up_runner.app["stream_started"].wait(), timeout=1)
+            async with self.client.post(
+                "http://localhost/v1/chat/cancel",
+                headers=self.auth(),
+                json={"user": "conversation-cancel-clean"},
+            ) as cancel_response:
+                self.assertEqual(cancel_response.status, 200)
+                self.assertEqual(await cancel_response.json(), {"aborted": True})
+            body = await stream_response.text()
+
+        self.assertNotIn("LLM request timed out", body)
+        self.assertTrue(body.endswith("data: [DONE]\n\n"))
+        self.assertEqual(self.edge_app[self.pe._CANCEL_EVENTS_KEY], {})
+
+    async def test_cancelled_stream_with_immediate_upstream_eof_is_only_done(self):
+        self.up_runner.app["release_on_cancel"] = True
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "long task"}],
+                "stream": True,
+                "user": "conversation-cancel-eof",
+                "trigger_cancel_wait": True,
+                "trigger_cancel_eof": True,
+            },
+        ) as stream_response:
+            await asyncio.wait_for(self.up_runner.app["stream_started"].wait(), timeout=1)
+            async with self.client.post(
+                "http://localhost/v1/chat/cancel",
+                headers=self.auth(),
+                json={"user": "conversation-cancel-eof"},
+            ) as cancel_response:
+                self.assertEqual(cancel_response.status, 200)
+                self.assertEqual(await cancel_response.json(), {"aborted": True})
+            body = await stream_response.text()
+
+        self.assertEqual(body, "data: [DONE]\n\n")
+        self.assertEqual(self.edge_app[self.pe._CANCEL_EVENTS_KEY], {})
 
 
 # ---------------------------------------------------------------------------

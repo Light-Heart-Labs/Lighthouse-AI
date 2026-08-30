@@ -107,6 +107,7 @@ _EMPTY_REPLY = (
     "I couldn't produce a useful response to that request. Please try again or "
     "tell me what you'd like me to do differently."
 )
+_CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
 
 
 def _validate_config() -> str:
@@ -448,6 +449,11 @@ async def handle_chat_completions(request: web.Request):
     if _private_url_access_requested(data):
         return await _private_url_response(request, data.get("stream") is True)
     empty_reply_fallback = _empty_reply_fallback(data)
+    chat_id = data.get("user")
+    cancel_event = None
+    if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
+        cancel_event = asyncio.Event()
+        request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
     data["model"] = _UPSTREAM_REWRITE
 
     fwd_headers = _sanitize_headers(dict(request.headers))
@@ -469,7 +475,9 @@ async def handle_chat_completions(request: web.Request):
                     return web.json_response({"error": "pixel request rejected"}, status=status)
 
                 if "text/event-stream" in ctype:
-                    return await _stream_upstream(request, resp, empty_reply_fallback)
+                    return await _stream_upstream(
+                        request, resp, empty_reply_fallback, cancel_event
+                    )
 
                 if "application/json" not in ctype:
                     return web.json_response({"error": "invalid upstream response"}, status=502)
@@ -489,6 +497,13 @@ async def handle_chat_completions(request: web.Request):
         return web.json_response({"error": "service unavailable"}, status=502)
     except Exception:
         return web.json_response({"error": "bad gateway"}, status=502)
+    finally:
+        if cancel_event is not None:
+            active = request.app[_CANCEL_EVENTS_KEY].get(chat_id)
+            if active is not None:
+                active.discard(cancel_event)
+                if not active:
+                    request.app[_CANCEL_EVENTS_KEY].pop(chat_id, None)
 
 
 async def handle_chat_cancel(request: web.Request):
@@ -541,6 +556,10 @@ async def handle_chat_cancel(request: web.Request):
                     or not isinstance(result.get("aborted"), bool)
                 ):
                     return web.json_response({"error": "pixel cancellation failed"}, status=502)
+                if result["aborted"]:
+                    active = request.app[_CANCEL_EVENTS_KEY].get(data["user"], ())
+                    for event in tuple(active):
+                        event.set()
                 return web.json_response({"aborted": result["aborted"]})
     except (ConnectionError, OSError, asyncio.TimeoutError, json.JSONDecodeError, ValueError):
         return web.json_response({"error": "pixel cancellation failed"}, status=502)
@@ -548,7 +567,12 @@ async def handle_chat_cancel(request: web.Request):
         return web.json_response({"error": "pixel cancellation failed"}, status=502)
 
 
-async def _stream_upstream(request: web.Request, resp, empty_reply_fallback: str):
+async def _stream_upstream(
+    request: web.Request,
+    resp,
+    empty_reply_fallback: str,
+    cancel_event: asyncio.Event | None = None,
+):
     """Stream bounded SSE while replacing only a reserved/empty final reply."""
     response = web.StreamResponse(
         status=resp.status,
@@ -589,6 +613,12 @@ async def _stream_upstream(request: web.Request, resp, empty_reply_fallback: str
             while b"\n" in buffered:
                 line, _, remainder = buffered.partition(b"\n")
                 buffered = bytearray(remainder)
+                if cancel_event is not None and cancel_event.is_set():
+                    pending = []
+                    await response.write(b"data: [DONE]\n\n")
+                    passthrough = True
+                    await response.write_eof()
+                    return response
                 if len(line) > _MAX_SSE_LINE:
                     raise ValueError("SSE line exceeded limit")
                 if line.startswith(b"data: ") and line != b"data: [DONE]":
@@ -641,6 +671,11 @@ async def _stream_upstream(request: web.Request, resp, empty_reply_fallback: str
                     ):
                         await flush_pending()
                         passthrough = True
+        if cancel_event is not None and cancel_event.is_set():
+            pending = []
+            await response.write(b"data: [DONE]\n\n")
+            await response.write_eof()
+            return response
         if buffered:
             if len(buffered) > _MAX_SSE_LINE:
                 raise ValueError("SSE line exceeded limit")
@@ -663,9 +698,15 @@ async def _stream_upstream(request: web.Request, resp, empty_reply_fallback: str
             else:
                 await flush_pending()
     except (ConnectionError, OSError, asyncio.TimeoutError):
-        await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
+        if cancel_event is not None and cancel_event.is_set():
+            await response.write(b"data: [DONE]\n\n")
+        else:
+            await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
     except Exception:
-        await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
+        if cancel_event is not None and cancel_event.is_set():
+            await response.write(b"data: [DONE]\n\n")
+        else:
+            await response.write(b'data: {"error":"upstream error"}\n\ndata: [DONE]\n\n')
     await response.write_eof()
     return response
 
@@ -680,6 +721,7 @@ async def handle_not_found(_request: web.Request):
 
 def create_app() -> web.Application:
     app = web.Application()
+    app[_CANCEL_EVENTS_KEY] = {}
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)

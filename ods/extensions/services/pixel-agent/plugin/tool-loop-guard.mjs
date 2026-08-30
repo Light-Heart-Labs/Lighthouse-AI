@@ -8,6 +8,10 @@
 // the model ignores a terminal instruction, abort only that active agent run
 // through OpenClaw's public harness runtime.
 
+import { createHash, randomBytes } from "node:crypto";
+import * as fs from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import { isIP } from "node:net";
 
 export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
@@ -50,18 +54,107 @@ export const CODING_RETRY_EXHAUSTED_REASON =
 export const CODING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another coding tool after the repeated-command limit was reached. Start a fresh message to continue from the preserved workspace with a different approach.";
 
+export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
+  "Pixel could not establish the exact cancellation boundary for this command. Do not call another tool in this turn; explain that execution is temporarily unavailable.";
+
+export const CLIENT_CANCELLED_REASON =
+  "The owner cancelled this Pixel response. Do not call another tool or continue the task in this turn.";
+
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
 const MAX_TRACKED_RUNS = 256;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
+const EXEC_CONTROL_WRAPPER = "/run/pixel-ods-control/cancellable-exec.sh";
 const ARTIFACT_DRAFT_PREFIX =
   /^\s*(?:please\s+)?(?:write|draft|document|compose|create|edit|update|refactor|implement|generate)\b/i;
 const ARTIFACT_NOUN =
   /\b(?:code|config(?:uration)?|documentation|example|file|fixture|readme|script|snippet|test)\b/i;
 const FOLLOWUP_PRIVATE_ACCESS =
   /\b(?:and\s+)?then\s+(?:access|browse|call|check|connect|download|fetch|inspect|open|query|read|request|retrieve|summari[sz]e|test|visit)\b/i;
+
+function execMarkerId(runId) {
+  if (typeof runId !== "string" || !runId) throw new Error("invalid Pixel run id");
+  return createHash("sha256").update(runId, "utf8").digest("hex");
+}
+
+export function createExecCancellationControl({
+  root = path.join(homedir(), ".openclaw", ".ods-exec-control"),
+} = {}) {
+  const resolvedRoot = path.resolve(root);
+
+  function assertRoot() {
+    const owner = typeof process.getuid === "function" ? process.getuid() : undefined;
+    const rootInfo = fs.lstatSync(resolvedRoot);
+    const wrapperInfo = fs.lstatSync(path.join(resolvedRoot, "cancellable-exec.sh"));
+    if (
+      !rootInfo.isDirectory() ||
+      rootInfo.isSymbolicLink() ||
+      (rootInfo.mode & 0o777) !== 0o700 ||
+      (owner !== undefined && rootInfo.uid !== owner) ||
+      !wrapperInfo.isFile() ||
+      wrapperInfo.isSymbolicLink() ||
+      wrapperInfo.nlink !== 1 ||
+      (wrapperInfo.mode & 0o777) !== 0o500 ||
+      (owner !== undefined && wrapperInfo.uid !== owner)
+    ) {
+      throw new Error("unsafe Pixel execution control root");
+    }
+  }
+
+  function markerPath(runId) {
+    return path.join(resolvedRoot, `${execMarkerId(runId)}.cancel`);
+  }
+
+  return {
+    prepare(runId, command) {
+      if (typeof command !== "string" || !command.trim() || command.includes("\0")) {
+        throw new Error("invalid Pixel exec command");
+      }
+      assertRoot();
+      try {
+        fs.unlinkSync(markerPath(runId));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      const encoded = Buffer.from(command, "utf8").toString("base64");
+      return `${EXEC_CONTROL_WRAPPER} ${execMarkerId(runId)} ${encoded}`;
+    },
+
+    signal(runId) {
+      assertRoot();
+      const target = markerPath(runId);
+      const temporary = path.join(
+        resolvedRoot,
+        `.${execMarkerId(runId)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`
+      );
+      try {
+        const fd = fs.openSync(temporary, "wx", 0o600);
+        fs.closeSync(fd);
+        fs.renameSync(temporary, target);
+        return true;
+      } finally {
+        try {
+          fs.unlinkSync(temporary);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+      }
+    },
+
+    clear(runId) {
+      assertRoot();
+      try {
+        fs.unlinkSync(markerPath(runId));
+        return true;
+      } catch (error) {
+        if (error?.code === "ENOENT") return false;
+        throw error;
+      }
+    },
+  };
+}
 
 function validLimit(value, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
@@ -391,6 +484,8 @@ function execTargetsNonPublicAddress(event) {
 export function createToolLoopGuard({
   abortRun,
   abortRunAndDrain,
+  execControl,
+  execMarkerCleanupDelayMs = 5000,
   limits,
   warn = () => {},
 } = {}) {
@@ -428,6 +523,7 @@ export function createToolLoopGuard({
         codingTerminalBlocks: 0,
         privateNetworkExhausted: false,
         privateNetworkPrompt: false,
+        clientCancelled: false,
         fetchedUrls: new Set(),
         fetchPivots: new Set(),
         targetedExtractPending: undefined,
@@ -438,6 +534,7 @@ export function createToolLoopGuard({
         githubCanonicalSatisfied: false,
         githubCanonicalBlocks: 0,
         failedExec: new Map(),
+        execOriginalByWrapped: new Map(),
       };
       runs.set(runId, state);
     }
@@ -457,6 +554,10 @@ export function createToolLoopGuard({
 
     const { runId, sessionId } = runIdentity(event, context);
     const state = runId && sessionId ? stateFor(runId) : undefined;
+
+    if (state?.clientCancelled) {
+      return { block: true, blockReason: CLIENT_CANCELLED_REASON };
+    }
 
     if (state?.privateNetworkPrompt) {
       state.privateNetworkPrompt = false;
@@ -556,6 +657,9 @@ export function createToolLoopGuard({
     }
 
     if (!runId || !sessionId) {
+      if (toolName === "exec" && execControl) {
+        return { block: true, blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON };
+      }
       return normalizedParams ? { params: normalizedParams } : undefined;
     }
 
@@ -605,6 +709,21 @@ export function createToolLoopGuard({
     }
 
     if (!WEB_TOOLS.has(toolName)) {
+      if (toolName === "exec" && execControl) {
+        const params = { ...(normalizedParams ?? event?.params) };
+        const originalFingerprint = execFingerprint(params);
+        try {
+          params.command = execControl.prepare(runId, params.command);
+        } catch (error) {
+          warn(`Pixel cancellable exec preparation failed for run ${runId}: ${String(error)}`);
+          return { block: true, blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON };
+        }
+        const wrappedFingerprint = execFingerprint(params);
+        if (originalFingerprint && wrappedFingerprint) {
+          state.execOriginalByWrapped.set(wrappedFingerprint, originalFingerprint);
+        }
+        return { params };
+      }
       return normalizedParams ? { params: normalizedParams } : undefined;
     }
 
@@ -664,6 +783,8 @@ export function createToolLoopGuard({
     if (
       typeof sessionKey !== "string" ||
       !sessionKey.startsWith(prefix) ||
+      typeof runId !== "string" ||
+      !runId ||
       typeof sessionId !== "string" ||
       !sessionId
     ) {
@@ -677,7 +798,7 @@ export function createToolLoopGuard({
     // requesting OpenClaw's broad raw-conversation permission for agent_end.
     if (activeUsers.has(user)) activeUsers.delete(user);
     pruneActiveUsers();
-    activeUsers.set(user, { sessionId, sessionKey });
+    activeUsers.set(user, { runId, sessionId, sessionKey });
   }
 
   async function abortUserRun(user) {
@@ -685,6 +806,15 @@ export function createToolLoopGuard({
     const active = activeUsers.get(user);
     if (!active) return false;
     let aborted = false;
+    let executionSignalled = execControl ? false : true;
+    stateFor(active.runId).clientCancelled = true;
+    if (execControl) {
+      try {
+        executionSignalled = Boolean(execControl.signal(active.runId));
+      } catch (error) {
+        warn(`Pixel client-cancel execution signal failed: ${String(error)}`);
+      }
+    }
     try {
       if (typeof abortRunAndDrain === "function") {
         const result = await abortRunAndDrain(active.sessionId, active.sessionKey);
@@ -695,8 +825,19 @@ export function createToolLoopGuard({
     } catch (error) {
       warn(`Pixel client-cancel abort failed: ${String(error)}`);
     }
-    if (aborted) activeUsers.delete(user);
-    return aborted;
+    const cancelled = aborted && executionSignalled;
+    if (executionSignalled && typeof execControl?.clear === "function") {
+      const cleanup = setTimeout(() => {
+        try {
+          execControl.clear(active.runId);
+        } catch (error) {
+          warn(`Pixel client-cancel marker cleanup failed: ${String(error)}`);
+        }
+      }, Math.max(0, execMarkerCleanupDelayMs));
+      cleanup.unref?.();
+    }
+    if (cancelled) activeUsers.delete(user);
+    return cancelled;
   }
 
   function afterToolCall(event, context, agentId = "pixel") {
@@ -721,7 +862,9 @@ export function createToolLoopGuard({
       return;
     }
     if (toolName !== "exec") return;
-    const fingerprint = execFingerprint(event?.params);
+    const observedFingerprint = execFingerprint(event?.params);
+    const fingerprint = state.execOriginalByWrapped.get(observedFingerprint) ?? observedFingerprint;
+    if (observedFingerprint) state.execOriginalByWrapped.delete(observedFingerprint);
     if (!fingerprint) return;
     if (execFailed(event)) {
       state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);

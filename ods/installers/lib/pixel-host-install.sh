@@ -639,6 +639,8 @@ normalized_agent_tools = normalized_agent.setdefault("tools", {})
 normalized_agent_deny = normalized_agent_tools.setdefault("deny", [])
 normalized_sandbox_tools = normalized_tools.setdefault("sandbox", {}).setdefault("tools", {})
 normalized_sandbox_allow = normalized_sandbox_tools.setdefault("allow", [])
+normalized_agent_sandbox = normalized_defaults.setdefault("sandbox", {})
+normalized_sandbox_docker = normalized_agent_sandbox.setdefault("docker", {})
 if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_diagnostics, dict)
         or not isinstance(normalized_write_lock, dict)
@@ -652,8 +654,18 @@ if (not isinstance(normalized_compaction, dict)
         or not all(isinstance(item, str) for item in normalized_agent_deny)
         or not isinstance(normalized_sandbox_tools, dict)
         or not isinstance(normalized_sandbox_allow, list)
-        or not all(isinstance(item, str) for item in normalized_sandbox_allow)):
+        or not all(isinstance(item, str) for item in normalized_sandbox_allow)
+        or not isinstance(normalized_agent_sandbox, dict)
+        or not isinstance(normalized_sandbox_docker, dict)):
     raise SystemExit("live Pixel runtime policy is outside the ODS contract")
+exec_control_bind = "{}:/run/pixel-ods-control:ro".format(
+    pathlib.Path.home() / ".openclaw" / ".ods-exec-control"
+)
+existing_binds = normalized_sandbox_docker.get("binds", [])
+if existing_binds not in ([], [exec_control_bind]):
+    raise SystemExit("live Pixel sandbox binds are outside the ODS contract")
+normalized_sandbox_docker["binds"] = [exec_control_bind]
+normalized_sandbox_docker["dangerouslyAllowExternalBindSources"] = True
 normalized_compaction["reserveTokens"] = contract.get("modelMaxTokens")
 normalized_compaction["reserveTokensFloor"] = 0
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
@@ -836,6 +848,44 @@ _ods_pixel_verify_plugin_loaded() {
             >/dev/null
 }
 
+_ods_pixel_install_exec_control() {
+    local owner="$1" home="$2" source="$3"
+    local parent="$home/.openclaw" root="$home/.openclaw/.ods-exec-control"
+    [[ -f "$source" && ! -L "$source" \
+        && "$(stat -c '%U' -- "$source")" == "$owner" \
+        && "$(stat -c '%h' -- "$source")" == 1 ]] || return 1
+    (( (8#$(stat -c '%a' -- "$source") & 0022) == 0 )) || return 1
+    [[ -d "$parent" && ! -L "$parent" \
+        && "$(stat -c '%U' -- "$parent")" == "$owner" ]] || return 1
+    (( (8#$(stat -c '%a' -- "$parent") & 0022) == 0 )) || return 1
+    if [[ -e "$root" || -L "$root" ]]; then
+        [[ -d "$root" && ! -L "$root" && "$(stat -c '%U' -- "$root")" == "$owner" \
+            && "$(stat -c '%a' -- "$root")" == 700 ]] || return 1
+    fi
+    if [[ -e "$root/cancellable-exec.sh" || -L "$root/cancellable-exec.sh" ]]; then
+        [[ -f "$root/cancellable-exec.sh" && ! -L "$root/cancellable-exec.sh" \
+            && "$(stat -c '%U' -- "$root/cancellable-exec.sh")" == "$owner" \
+            && "$(stat -c '%h' -- "$root/cancellable-exec.sh")" == 1 ]] || return 1
+    fi
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "$root" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" install -m 0500 -- \
+        "$source" "$root/cancellable-exec.sh" || return 1
+    [[ -d "$root" && ! -L "$root" && -f "$root/cancellable-exec.sh" \
+        && ! -L "$root/cancellable-exec.sh" \
+        && "$(stat -c '%U' -- "$root")" == "$owner" \
+        && "$(stat -c '%U' -- "$root/cancellable-exec.sh")" == "$owner" \
+        && "$(stat -c '%a' -- "$root")" == 700 \
+        && "$(stat -c '%h' -- "$root/cancellable-exec.sh")" == 1 \
+        && "$(stat -c '%a' -- "$root/cancellable-exec.sh")" == 500 ]]
+}
+
+_ods_pixel_recreate_agent_sandbox() {
+    local owner="$1" home="$2" openclaw_bin="$3"
+    [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
+    ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
+        sandbox recreate --agent pixel --force >/dev/null
+}
+
 _ods_pixel_apply_runtime_budget() {
     local owner="$1" home="$2" config="$3" openclaw_bin="$4" staged
     # ODS qualifies Pixel on CPU-only hosts. The first local 9B turn can spend
@@ -886,6 +936,8 @@ updated_defaults = updated["agents"]["defaults"]
 updated_agent = next(item for item in updated["agents"]["list"] if isinstance(item, dict) and item.get("id") == "pixel")
 updated_model = updated_provider["models"][0]
 updated_session = updated["session"]
+updated_agent_sandbox = updated_defaults.setdefault("sandbox", {})
+updated_sandbox_docker = updated_agent_sandbox.setdefault("docker", {})
 updated_diagnostics = updated.setdefault("diagnostics", {})
 updated_compaction = updated_defaults.setdefault("compaction", {})
 write_lock = updated_session.setdefault("writeLock", {})
@@ -904,6 +956,8 @@ if not isinstance(write_lock, dict):
     raise SystemExit("OpenClaw session write-lock configuration must be an object")
 if not isinstance(updated_diagnostics, dict):
     raise SystemExit("OpenClaw diagnostics configuration must be an object")
+if not isinstance(updated_agent_sandbox, dict) or not isinstance(updated_sandbox_docker, dict):
+    raise SystemExit("OpenClaw sandbox configuration must be an object")
 if (not isinstance(updated_tools, dict)
         or not isinstance(updated_also_allow, list)
         or not all(isinstance(item, str) for item in updated_also_allow)
@@ -917,6 +971,17 @@ if (not isinstance(updated_tools, dict)
     raise SystemExit("OpenClaw tool policy is outside the ODS Pixel runtime contract")
 if not isinstance(updated_web, dict) or not isinstance(updated_fetch, dict):
     raise SystemExit("OpenClaw web tool policy is outside the ODS Pixel runtime contract")
+exec_control_bind = "{}:/run/pixel-ods-control:ro".format(
+    pathlib.Path.home() / ".openclaw" / ".ods-exec-control"
+)
+existing_binds = updated_sandbox_docker.get("binds", [])
+if existing_binds not in ([], [exec_control_bind]):
+    raise SystemExit("OpenClaw sandbox binds are outside the ODS Pixel runtime contract")
+# OpenClaw accepts this owner-private source only with its explicit external
+# bind opt-in. ODS still pins the sole source and destination above, validates
+# the host tree owner/mode, and exposes it read-only inside the sandbox.
+updated_sandbox_docker["binds"] = [exec_control_bind]
+updated_sandbox_docker["dangerouslyAllowExternalBindSources"] = True
 search = updated_web.get("search", {})
 searxng = updated.get("plugins", {}).get("entries", {}).get("searxng", {})
 search_url = searxng.get("config", {}).get("webSearch", {}).get("baseUrl")
@@ -1106,12 +1171,14 @@ _ods_pixel_restart_gateway_and_verify() {
 
 _ods_pixel_restore_model_reconciliation() {
     local owner="$1" home="$2" pixel_root="$3" answers="$4" backup="$5"
-    local old_contract
+    local old_contract openclaw_bin
+    openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
     _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/openclaw.json" "$home/.openclaw/openclaw.json" || return 1
     _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/rollback-onboarding.json" "$answers" || return 1
     _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/pixel-managed.json" "$home/.config/ods/pixel-managed.json" || return 1
     if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan \
+        || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
         || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
         _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/runtime-attestation.json" \
             "$home/.local/share/pixel/runtime-attestation.json" || true
@@ -1168,6 +1235,11 @@ ods_pixel_reconcile_promoted_model() {
             failed=true
             failure_phase="config-install"
         fi
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin"; then
+        failed=true
+        failure_phase="sandbox-recreate"
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
@@ -1556,9 +1628,15 @@ ods_pixel_install_default_agent() {
         return 1
     }
     plugin_root="${INSTALL_DIR:?}/extensions/services/pixel-agent"
-    [[ -f "$plugin_root/plugin/openclaw.plugin.json" && -f "$plugin_root/host/pixel_ingress.mjs" ]] || return 1
+    [[ -f "$plugin_root/plugin/openclaw.plugin.json" \
+        && -f "$plugin_root/host/pixel_ingress.mjs" \
+        && -f "$plugin_root/host/cancellable-exec.sh" ]] || return 1
     if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then
         ai_bad "The ODS Pixel plugin path is not a safe owner-controlled code tree."
+        return 1
+    fi
+    if ! _ods_pixel_install_exec_control "$owner" "$home" "$plugin_root/host/cancellable-exec.sh"; then
+        ai_bad "Could not install Pixel's owner-private cancellable execution control."
         return 1
     fi
 
@@ -1701,6 +1779,7 @@ ods_pixel_install_default_agent() {
     # the final ODS runtime policy. A plain service restart can otherwise keep
     # stale tool descriptors across same-release extension refreshes.
     if ! _ods_pixel_refresh_plugin_registry "$owner" "$home" "$openclaw_bin" "$plugin_root/plugin" \
+        || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
         || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" >>"$LOG_FILE" 2>&1; then
         ai_bad "Pixel could not refresh and load the exact ODS plugin registry. See $LOG_FILE."
         return 1

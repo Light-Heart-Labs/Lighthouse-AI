@@ -212,6 +212,36 @@ else
 fi
 rm -f "$plugin_tree/linked.json"
 
+exec_control_home="$TEST_ROOT/exec-control-home"
+exec_control_source="$TEST_ROOT/cancellable-exec.sh"
+install -m 0644 "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh" \
+    "$exec_control_source"
+mkdir -m 0700 -p "$exec_control_home/.openclaw"
+check _ods_pixel_install_exec_control "$owner" "$exec_control_home" \
+    "$exec_control_source"
+check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control")" = 700
+check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control/cancellable-exec.sh")" = 500
+exec_control_bad_home="$TEST_ROOT/exec-control-bad-home"
+mkdir -m 0700 -p "$exec_control_bad_home/.openclaw" "$TEST_ROOT/exec-control-link-target"
+ln -s "$TEST_ROOT/exec-control-link-target" \
+    "$exec_control_bad_home/.openclaw/.ods-exec-control"
+if _ods_pixel_install_exec_control "$owner" "$exec_control_bad_home" \
+    "$exec_control_source" >/dev/null 2>&1; then
+    fail "symlink Pixel execution control root rejected"
+else
+    pass "symlink Pixel execution control root rejected"
+fi
+exec_control_bad_wrapper_home="$TEST_ROOT/exec-control-bad-wrapper-home"
+mkdir -m 0700 -p "$exec_control_bad_wrapper_home/.openclaw/.ods-exec-control"
+ln -s "$TEST_ROOT/exec-control-link-target" \
+    "$exec_control_bad_wrapper_home/.openclaw/.ods-exec-control/cancellable-exec.sh"
+if _ods_pixel_install_exec_control "$owner" "$exec_control_bad_wrapper_home" \
+    "$exec_control_source" >/dev/null 2>&1; then
+    fail "symlink Pixel execution wrapper rejected"
+else
+    pass "symlink Pixel execution wrapper rejected"
+fi
+
 plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
@@ -379,7 +409,7 @@ cat > "$runtime_validator" <<'SH'
 set -euo pipefail
 [[ "$1 $2" == "config validate" ]]
 python3 - "$OPENCLAW_CONFIG_PATH" <<'PY'
-import json, sys
+import json, pathlib, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 assert value["agents"]["defaults"]["timeoutSeconds"] == 1800
 assert value["agents"]["defaults"]["bootstrapMaxChars"] == 4000
@@ -433,6 +463,12 @@ else:
     assert "compat" not in model
 assert value["diagnostics"]["stuckSessionAbortMs"] == 1860000
 assert value["session"]["writeLock"] == {"maxHoldMs": 1920000, "staleMs": 3600000}
+assert value["agents"]["defaults"]["sandbox"]["docker"]["binds"] == [
+    "{}:/run/pixel-ods-control:ro".format(
+        pathlib.Path.home() / ".openclaw" / ".ods-exec-control"
+    )
+]
+assert value["agents"]["defaults"]["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True
 PY
 SH
 chmod 0755 "$runtime_validator"
@@ -441,12 +477,30 @@ cp "$runtime_config" "$runtime_recovery_candidate"
 chmod 0600 "$runtime_recovery_candidate"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 4000 and d["bootstrapTotalMaxChars"] == 14000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; assert d["sandbox"]["docker"]["binds"] == [sys.argv[2] + "/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro"] and d["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config" "$runtime_home"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_recovery_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_config_matches_live "$owner" "$runtime_home" "$runtime_recovery_candidate"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
+
+runtime_unsafe_bind="$runtime_home/.openclaw/unsafe-bind.json"
+python3 - "$runtime_config" "$runtime_unsafe_bind" <<'PY'
+import json, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+value = json.loads(source.read_text())
+value["agents"]["defaults"]["sandbox"]["docker"]["binds"] = [
+    "/:/host:rw"
+]
+target.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$runtime_unsafe_bind"
+if _ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_unsafe_bind" \
+    "$runtime_validator" >/dev/null 2>&1; then
+    fail "unmanaged Pixel sandbox bind rejected"
+else
+    pass "unmanaged Pixel sandbox bind rejected"
+fi
 
 runtime_target="$TEST_ROOT/runtime-target.json"
 runtime_link="$TEST_ROOT/runtime-link.json"
@@ -605,6 +659,18 @@ fi
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" "$reconcile_candidate" "$runtime_validator")" = changed
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is True and m["compat"] == {"thinkingFormat":"qwen-chat-template"} and a["thinkingDefault"] == "low"' "$reconcile_candidate"
 check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
+cp "$reconcile_config" "$TEST_ROOT/reconcile-config-with-control-bind.json"
+python3 - "$reconcile_config" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["agents"]["defaults"].pop("sandbox", None)
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$reconcile_config"
+check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" "$reconcile_candidate" "$reconcile_answers"
+cp "$TEST_ROOT/reconcile-config-with-control-bind.json" "$reconcile_config"
+chmod 0600 "$reconcile_config"
 python3 - "$reconcile_candidate" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -778,6 +844,7 @@ check node --check "$plugin/prompt-contract.mjs"
 check node --check "$plugin/tool-content.mjs"
 check node --check "$plugin/tool-loop-guard.mjs"
 check node --check "$plugin/web-extract.mjs"
+check sh -n "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh"
 check python3 -c '
 import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
@@ -811,6 +878,8 @@ assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
 assert "_ods_pixel_apply_runtime_budget" in text
+assert "_ods_pixel_install_exec_control" in text
+assert "_ods_pixel_recreate_agent_sandbox" in text
 assert "_ods_pixel_refresh_plugin_registry" in text
 assert "plugins registry --refresh --json" in text
 assert "ods_pixel_reconcile_promoted_model" in text
@@ -821,6 +890,7 @@ assert "failure_phase=\"runtime-budget\"" in text
 assert "failure_phase=\"managed-update-validation\"" in text
 assert "failure_phase=\"config-install\"" in text
 assert "failure_phase=\"gateway-restart-verify\"" in text
+assert "failure_phase=\"sandbox-recreate\"" in text
 assert "failure_phase=\"contract-hash\"" in text
 assert "failure_phase=\"ready-marker\"" in text
 assert "failure_phase=\"installing-marker\"" in text

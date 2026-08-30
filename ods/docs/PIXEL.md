@@ -90,6 +90,29 @@ The edge and host ingress health checks fail closed unless the next hop is
 actually ready. Open WebUI is not allowed to advertise `pixel/default` while
 the private ingress is unavailable.
 
+### Cancellation and sandbox execution
+
+The Dashboard cancel path is an execution boundary, not only a UI gesture.
+The ODS plugin maps the opaque chat user to one exact active OpenClaw run. Each
+`exec` command in that run is launched in its own process group by an
+owner-installed wrapper. Cancellation atomically creates one zero-byte marker
+named with the run ID's SHA-256; the sandbox sees the owner-private control
+directory read-only, terminates only that process group with `TERM` and then
+`KILL`, and returns status 130. The gateway run is drained independently, the
+marker is removed after a short bounded delay, and the edge closes a successful
+cancelled stream with only `[DONE]`. A different concurrent chat and its
+process group are not touched.
+
+OpenClaw requires `dangerouslyAllowExternalBindSources=true` for this one
+host-to-sandbox bind. ODS does not treat that opt-in as general bind authority:
+the installer accepts exactly
+`~/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro`, validates the source
+owner, type, link count, and exact `0700`/`0500` modes, recreates the Pixel
+sandbox after lifecycle changes, and rejects every additional bind. OpenClaw's
+security audit will still report the generic dangerous-flag warning. Removing
+the flag without removing the bind makes cancellation fail closed; adding a
+second source is outside the ODS contract.
+
 The dashboard route also handles explicit requests to open private HTTP(S)
 URLs at the edge. It returns one exact local explanation without forwarding the
 request to Pixel or the model, while ordinary conversation, public URLs, and
@@ -208,6 +231,16 @@ Adding an ODS action is a security-boundary change. It requires a new explicit
 tool contract, policy and authorization design, adversarial tests, and fresh
 install/rollback qualification; do not broaden the projection reader into a
 generic shell, HTTP, Docker, or filesystem tool.
+
+OpenClaw's security audit also reports its generic `models.small_params`
+critical when the active local model is at or below 300B and public web tools
+are enabled. The qualified ODS posture is a personal assistant for one trusted
+operator, with sandbox mode `all`, bounded tool loops, public-only destinations,
+and page content explicitly treated as untrusted evidence. It is not a
+multi-tenant or hostile-input deployment. Operators who expose Pixel to
+untrusted users must deny `group:web` and `browser` for that model (losing web
+research) or qualify a stronger model and threat model first; do not describe
+the generic audit finding as green or suppressed.
 
 ## Installer ownership and upgrades
 
@@ -339,13 +372,20 @@ head:
 - a clean supported-host install with PID1 systemd;
 - a real Open WebUI `pixel/default` chat;
 - a real Dashboard `/pixel` streaming chat;
+- cancellation of a real long-running sandbox command, proving a clean
+  `[DONE]` stream, status 130, marker cleanup, no surviving descendant, and a
+  successful fresh command afterward;
+- concurrent-chat cancellation isolation, proving the cancelled command stops
+  while the other chat completes unchanged;
 - a real turn invoking `pixel_ods_status` with sanitized ODS results;
 - a cross-family model swap and a context-only change, with Pixel using the
   newly active identity and invoking both bounded ODS tools after each change;
 - rejection of a managed-Pixel activation below 16K with the previous runtime,
   persisted configuration, and gateway process unchanged;
-- `--no-pixel --hermes` rollback with ordinary chat and Hermes verified; and
-- reinstallation/reactivation from the same clean, exact source.
+- `--no-pixel --hermes` rollback with ordinary chat and Hermes verified;
+- reinstallation/reactivation from the same clean, exact source; and
+- OpenClaw's deep security audit, with every remaining finding recorded and
+  reconciled to this documented single-operator threat model.
 
 Record the ODS and Pixel commit SHAs, resolved Compose config, service states,
 test logs, install log, and sanitized chat/tool evidence. A green unit suite

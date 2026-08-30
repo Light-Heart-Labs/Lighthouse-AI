@@ -28,6 +28,7 @@ ods_pixel_uninstall_managed() {
     local ingress_program="$libexec_dir/ods-pixel-ingress.mjs"
     local source_program="$install_dir/extensions/services/pixel-agent/host/pixel_ingress.mjs"
     local openclaw_config="$owner_home/.openclaw/openclaw.json"
+    local exec_control="$owner_home/.openclaw/.ods-exec-control"
     local gateway_env="$owner_home/.config/pixel-agent/gateway.env"
     local onboarding="$owner_home/.config/pixel-deployment/onboarding.json"
     local pixel_install="$owner_home/.local/share/pixel"
@@ -64,7 +65,7 @@ ods_pixel_uninstall_managed() {
     if ! cleanup_plan="$(python3 - \
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
-        "$openclaw_config" "$gateway_env" "$onboarding" \
+        "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
         "$retired_releases" <<'PY'
 import hashlib
@@ -89,6 +90,7 @@ import sys
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
+    exec_control_raw,
     current_raw,
     runtime_attestation_raw,
     staged_current_raw,
@@ -293,6 +295,30 @@ onboarding = pathlib.Path(onboarding_raw)
 for path in (openclaw_config, gateway_env, onboarding):
     if path.exists() or path.is_symlink():
         regular(path, owner_uid, 2 * 1024 * 1024, private=True)
+
+exec_control = pathlib.Path(exec_control_raw)
+if exec_control.exists() or exec_control.is_symlink():
+    control_info = exec_control.lstat()
+    if (not stat.S_ISDIR(control_info.st_mode) or stat.S_ISLNK(control_info.st_mode)
+            or control_info.st_uid != owner_uid
+            or (control_info.st_mode & 0o777) != 0o700):
+        raise SystemExit("unsafe ODS-managed Pixel execution control root")
+    for item in exec_control.iterdir():
+        item_info = item.lstat()
+        is_wrapper = item.name == "cancellable-exec.sh"
+        is_marker = bool(re.fullmatch(r"[0-9a-f]{64}\.cancel", item.name))
+        is_temporary = bool(re.fullmatch(r"\.[0-9a-f]{64}\.[0-9]+\.[0-9a-f]{16}\.tmp", item.name))
+        if (not stat.S_ISREG(item_info.st_mode) or stat.S_ISLNK(item_info.st_mode)
+                or item_info.st_nlink != 1 or item_info.st_uid != owner_uid
+                or item_info.st_mode & 0o077 or not (is_wrapper or is_marker or is_temporary)):
+            raise SystemExit("unsafe ODS-managed Pixel execution control artifact")
+        if is_wrapper and (item_info.st_mode & 0o777) != 0o500:
+            raise SystemExit("unsafe ODS-managed Pixel execution wrapper")
+        if not is_wrapper and item_info.st_size != 0:
+            raise SystemExit("unsafe ODS-managed Pixel execution marker")
+    wrapper = exec_control / "cancellable-exec.sh"
+    if not wrapper.exists():
+        raise SystemExit("ODS-managed Pixel execution wrapper is missing")
 
 if openclaw_config.exists():
     config = json.loads(openclaw_config.read_text(encoding="utf-8"))
@@ -684,8 +710,37 @@ PY
         fi
     fi
 
+    if [[ -e "$exec_control" || -L "$exec_control" ]]; then
+        python3 - "$exec_control" <<'PY'
+import os, pathlib, re, stat, sys
+
+root = pathlib.Path(sys.argv[1])
+root_info = root.lstat()
+if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != os.getuid()
+        or (root_info.st_mode & 0o777) != 0o700):
+    raise SystemExit("unsafe ODS-managed Pixel execution control cleanup")
+for item in root.iterdir():
+    item_info = item.lstat()
+    is_wrapper = item.name == "cancellable-exec.sh"
+    is_marker = bool(re.fullmatch(r"[0-9a-f]{64}\.cancel", item.name))
+    is_temporary = bool(re.fullmatch(r"\.[0-9a-f]{64}\.[0-9]+\.[0-9a-f]{16}\.tmp", item.name))
+    if (not (is_wrapper or is_marker or is_temporary)
+            or not stat.S_ISREG(item_info.st_mode) or stat.S_ISLNK(item_info.st_mode)
+            or item_info.st_nlink != 1 or item_info.st_uid != os.getuid()
+            or item_info.st_mode & 0o077):
+        raise SystemExit("unsafe ODS-managed Pixel execution control cleanup")
+    if is_wrapper and (item_info.st_mode & 0o777) != 0o500:
+        raise SystemExit("unsafe ODS-managed Pixel execution wrapper cleanup")
+    if not is_wrapper and item_info.st_size != 0:
+        raise SystemExit("unsafe ODS-managed Pixel execution marker cleanup")
+    item.unlink()
+root.rmdir()
+PY
+    fi
     rm -f -- "$openclaw_config" "$gateway_env" "$onboarding"
-    if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" ]]; then
+    if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
+        || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1
     fi

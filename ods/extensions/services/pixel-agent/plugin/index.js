@@ -27,12 +27,16 @@ import {
   statusToolText,
   unavailableToolText,
 } from "./tool-content.mjs";
-import { createToolLoopGuardRegistry } from "./tool-loop-guard.mjs";
+import {
+  createExecCancellationControl,
+  createToolLoopGuardRegistry,
+} from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
 const toolLoopGuardRegistry = createToolLoopGuardRegistry();
+const execCancellationControl = createExecCancellationControl();
 
 // Restrict tool registration to the Pixel agent. Tools are only offered to the
 // agent id declared by this plugin (see openclaw.plugin.json); this guards the
@@ -153,6 +157,7 @@ export default definePluginEntry({
           forceClear: false,
           reason: "ods_client_disconnect",
         }),
+      execControl: execCancellationControl,
       warn: (message) => api.logger.warn(message),
     });
 
