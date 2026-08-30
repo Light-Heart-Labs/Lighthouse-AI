@@ -535,8 +535,10 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const asksApps =
     !rejectsApps &&
     (/\bpixel_ods_apps_list\b/i.test(text) ||
-      /\b(?:ODS|configured)\b.{0,80}\b(?:apps?|applications?|links?|URLs?)\b/i.test(text) ||
-      /\b(?:apps?|applications?|links?|URLs?)\b.{0,80}\bODS\b/i.test(text) ||
+      /\bODS\b.{0,80}\b(?:apps?|applications?)\b/i.test(text) ||
+      /\b(?:apps?|applications?)\b.{0,80}\bODS\b/i.test(text) ||
+      /\bODS(?:\s+(?:app|application|service)s?)?\s+(?:links?|URLs?)\b/i.test(text) ||
+      /\bconfigured\s+(?:app\s+)?(?:links?|URLs?)\b.{0,48}\bODS\b/i.test(text) ||
       (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
         /\b(?:configured|link|URL|where|open|address)\b/i.test(text)));
   if (asksStatus) requirements.push("pixel_ods_status");

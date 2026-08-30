@@ -164,6 +164,19 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
   assert.deepEqual(
     userMessageOdsToolRequirements(
       [],
+      "Inspect https://github.com/Osmantic/ODS and end each claim with a source URL. Do not use ODS status tools."
+    ),
+    []
+  );
+  assert.deepEqual(userMessageOdsToolRequirements([], "List the ODS URLs."), [
+    "pixel_ods_apps_list",
+  ]);
+  assert.deepEqual(userMessageOdsToolRequirements([], "Which ODS apps are local?"), [
+    "pixel_ods_apps_list",
+  ]);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
       "Do not use shell, but use pixel_ods_status exactly once for the current model."
     ),
     ["pixel_ods_status"]
