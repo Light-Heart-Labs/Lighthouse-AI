@@ -193,6 +193,23 @@ EXAMPLES:
 EOF
 }
 
+# Report payload bytes without relying on GNU-only `du --bytes`. Archives are
+# regular files; directory backups sum the content length of each regular file.
+backup_size_bytes() {
+    local backup="$1"
+
+    if [[ -f "$backup" ]]; then
+        wc -c < "$backup" | tr -d '[:space:]'
+        return
+    fi
+
+    find "$backup" -type f -exec sh -c '
+        for file do
+            wc -c < "$file"
+        done
+    ' sh {} + | awk '{ total += $1 } END { print total + 0 }'
+}
+
 # Emit a stable inventory contract for automation and support tooling. Each
 # entry reports metadata without extracting an archive onto disk; malformed or
 # legacy manifests stay visible with an explicit status instead of making the
@@ -205,7 +222,7 @@ list_backups_json() {
     fi
 
     {
-        local backup id format size_kib size_bytes manifest_data manifest_status
+        local backup id format size_bytes manifest_data manifest_status
         local integrity archive_name
         for backup in "${COLLECTED_BACKUPS[@]}"; do
             id=$(basename "$backup")
@@ -237,8 +254,7 @@ list_backups_json() {
                 manifest_status="invalid"
             fi
 
-            size_kib=$(du -sk "$backup" | awk '{print $1}')
-            size_bytes=$((size_kib * 1024))
+            size_bytes=$(backup_size_bytes "$backup")
             jq -cn \
                 --arg id "$id" \
                 --arg format "$format" \
