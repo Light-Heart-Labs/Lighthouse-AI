@@ -68,6 +68,9 @@ export const VERIFICATION_PENDING_DELIVERY_PREFIX =
 export const VERIFICATION_FAILED_DELIVERY_PREFIX =
   "Pixel could not complete this task successfully because the latest verification check failed. The workspace is preserved; ask Pixel to continue with a focused repair.";
 
+export const VERIFICATION_COMMAND_NOT_AUDITABLE_REASON =
+  "Pixel blocked this verification because a shell pipeline, redirect, or chained command can hide the test runner's exit status or truncate its evidence. Rerun the same test command directly, with no pipeline, redirection, chaining, or output filter, and inspect its complete output.";
+
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
 
@@ -252,7 +255,7 @@ function execFingerprint(params) {
   return JSON.stringify([command.trim(), typeof workdir === "string" ? workdir : ""]);
 }
 
-function verificationExecFingerprint(params) {
+function verificationCommand(params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   if (typeof params.command !== "string" || !params.command.trim()) return undefined;
   let command = params.command.trim();
@@ -264,15 +267,28 @@ function verificationExecFingerprint(params) {
     commandWorkdir = workspaceCd[1] ?? workspaceCd[2] ?? workspaceCd[3];
     command = workspaceCd[4];
   }
-  command = command
-    .replace(/\s+2>&1\s*$/i, "")
-    .replace(/\s+/g, " ");
+  const withoutStderrMerge = command.replace(/\s+2>&1\s*$/i, "").trim();
   if (
-    !/^(?:python(?:3(?:\.\d+)?)?\s+-m\s+(?:unittest|pytest)\b|pytest\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn(?:w)?\s+test\b|gradle(?:w)?\s+test\b)/i.test(command)
+    !/^(?:python(?:3(?:\.\d+)?)?\s+-m\s+(?:unittest|pytest)\b|pytest\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn(?:w)?\s+test\b|gradle(?:w)?\s+test\b)/i.test(withoutStderrMerge)
   ) {
     return undefined;
   }
-  const normalizedWorkdir = normalizeExecWorkdir(params.workdir ?? commandWorkdir);
+  return { command, commandWorkdir, withoutStderrMerge };
+}
+
+function verificationCommandIsAuditable(params) {
+  const parsed = verificationCommand(params);
+  if (!parsed) return true;
+  return !/(?:\r|\n|[|;<>`]|&&|\|\||\$\()/.test(parsed.withoutStderrMerge);
+}
+
+function verificationExecFingerprint(params) {
+  const parsed = verificationCommand(params);
+  if (!parsed || !verificationCommandIsAuditable(params)) return undefined;
+  const command = parsed.command
+    .replace(/\s+2>&1\s*$/i, "")
+    .replace(/\s+/g, " ");
+  const normalizedWorkdir = normalizeExecWorkdir(params.workdir ?? parsed.commandWorkdir);
   const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
   return JSON.stringify([command, typeof workdir === "string" ? workdir : ""]);
 }
@@ -820,6 +836,14 @@ export function createToolLoopGuard({
       !state?.recursiveDeleteAuthorized
     ) {
       return { block: true, blockReason: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
+    }
+
+    if (
+      toolName === "exec" &&
+      !verificationCommandIsAuditable(normalizedParams ?? event?.params)
+    ) {
+      if (state) state.latestVerificationStatus = "failed";
+      return { block: true, blockReason: VERIFICATION_COMMAND_NOT_AUDITABLE_REASON };
     }
 
     if (state?.privateNetworkPrompt) {

@@ -20,6 +20,7 @@ import {
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
   RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
+  VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
   VERIFICATION_PENDING_DELIVERY_PREFIX,
   WEB_BUDGET_EXHAUSTED_REASON,
   WEB_FETCH_REPEAT_PIVOT_REASON,
@@ -1068,6 +1069,45 @@ test("final delivery replaces a model claim after failed verification", () => {
     text: VERIFICATION_FAILED_DELIVERY_PREFIX,
   });
   assert.doesNotMatch(terminal.payload.text, /claimed success/i);
+});
+
+test("blocks verification shell composition that can hide failures or truncate evidence", () => {
+  const commands = [
+    "python3 -m unittest discover -s tests -v | head -20",
+    "pytest -q | tail -5",
+    "npm test > test.log",
+    "go test ./...; true",
+    "cargo test && echo passed",
+  ];
+  for (const command of commands) {
+    const guard = createToolLoopGuard();
+    assert.deepEqual(call(guard, "exec", { event: { params: { command } } }), {
+      block: true,
+      blockReason: VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
+    });
+    assert.deepEqual(guard.verificationForRun("run-1"), {
+      status: "failed",
+      text: VERIFICATION_FAILED_DELIVERY_PREFIX,
+    });
+    assert.equal(reply(guard).payload.text, VERIFICATION_FAILED_DELIVERY_PREFIX);
+  }
+});
+
+test("allows direct verification and a terminal stderr merge after a blocked pipeline", () => {
+  const guard = createToolLoopGuard();
+  const piped = { command: "python3 -m unittest -v | head" };
+  assert.deepEqual(call(guard, "exec", { event: { params: piped } }), {
+    block: true,
+    blockReason: VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
+  });
+
+  const direct = { command: "python3 -m unittest -v 2>&1", workdir: "/workspace/project" };
+  assert.equal(call(guard, "exec", { event: { params: direct } }), undefined);
+  afterCall(guard, "exec", {
+    event: { params: direct, result: { isError: false, details: { exitCode: 0 } } },
+  });
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" });
+  assert.equal(reply(guard), undefined);
 });
 
 test("final delivery preserves a model response after passing verification", () => {
