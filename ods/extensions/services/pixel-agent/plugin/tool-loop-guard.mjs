@@ -119,9 +119,6 @@ export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
 export const OPERATIONS_WRONG_ACTION_REASON =
   "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
 
-export const OPERATIONS_QUERY_MISMATCH_REASON =
-  "Pixel blocked an extension catalog submission because parameters.query did not preserve the owner-labeled query character-for-character. Retry the same ods.extensions.search action with the exact original query; do not shorten, normalize, split, correct, or sanitize it.";
-
 export const OPERATIONS_HOST_EVIDENCE_PREFIX =
   "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
 
@@ -1575,7 +1572,13 @@ export function createToolLoopGuard({
         state.operationsExpectedQuery !== undefined &&
         params?.parameters?.query !== state.operationsExpectedQuery
       ) {
-        return { block: true, blockReason: OPERATIONS_QUERY_MISMATCH_REASON };
+        return {
+          params: {
+            target: "ods-host",
+            action: "ods.extensions.search",
+            parameters: { query: state.operationsExpectedQuery },
+          },
+        };
       }
     }
 

@@ -25,7 +25,6 @@ import {
   OPERATIONS_HOST_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
   OPERATIONS_LOOP_ABORT_REASON,
-  OPERATIONS_QUERY_MISMATCH_REASON,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
   OPERATIONS_UNVERIFIED_DELIVERY_PREFIX,
@@ -643,7 +642,7 @@ test("routes extension catalog requests only to the exact broker action", () => 
   );
 });
 
-test("preserves an owner-labeled extension query before the broker boundary", () => {
+test("repairs a distorted owner-labeled extension query before the broker boundary", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -660,7 +659,13 @@ test("preserves an owner-labeled extension query before the broker boundary", ()
         },
       },
     }),
-    { block: true, blockReason: OPERATIONS_QUERY_MISMATCH_REASON }
+    {
+      params: {
+        target: "ods-host",
+        action: "ods.extensions.search",
+        parameters: { query: "x; id" },
+      },
+    }
   );
   assert.equal(
     call(guard, "pixel_ops_run", {
