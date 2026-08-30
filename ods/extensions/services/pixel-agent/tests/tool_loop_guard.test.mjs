@@ -1190,7 +1190,24 @@ test("final delivery preserves a model response after passing verification", () 
   assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" });
 });
 
-test("verification delivery hook ignores non-final payloads and unknown runs", () => {
+test("suppresses nonterminal narration only for an observed Pixel run", () => {
+  const guard = createToolLoopGuard();
+  call(guard, "read", { event: { params: { path: "probe.py" } } });
+
+  for (const kind of ["block", "tool"]) {
+    assert.deepEqual(reply(guard, { event: { kind } }), {
+      cancel: true,
+      reason: "Pixel delivers one terminal owner-visible reply per turn.",
+    });
+  }
+  assert.equal(
+    reply(guard, { event: { runId: "unknown", kind: "block" } }),
+    undefined
+  );
+  assert.equal(reply(guard), undefined);
+});
+
+test("verification delivery hook ignores payloads for unknown runs", () => {
   const guard = createToolLoopGuard();
   assert.equal(reply(guard), undefined);
   assert.equal(reply(guard, { event: { kind: "tool" } }), undefined);

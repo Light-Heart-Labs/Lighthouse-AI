@@ -33,6 +33,10 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /inspect the requested target paths once/);
   assert.match(result.appendSystemContext, /make the smallest relevant edits/);
   assert.match(result.appendSystemContext, /do not reorganize or delete the target project/);
+  assert.match(result.appendSystemContext, /keep working narration out of the assistant stream/);
+  assert.match(result.appendSystemContext, /exactly one visible natural-language response after the final tool result/);
+  assert.match(result.appendSystemContext, /truly independent and safe to run concurrently/);
+  assert.match(result.appendSystemContext, /wait for its result before issuing the dependent call/);
   assert.match(result.appendSystemContext, /workspace root with one stable command/);
   assert.match(result.appendSystemContext, /read the exact error/);
   assert.match(result.appendSystemContext, /rerun that same command/);

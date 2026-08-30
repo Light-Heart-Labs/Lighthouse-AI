@@ -1307,7 +1307,19 @@ export function createToolLoopGuard({
   }
 
   function replyPayloadSending(event) {
-    if (event?.kind !== "final") return undefined;
+    const state = runs.get(event?.runId);
+    if (!state) return undefined;
+    // OpenClaw's OpenAI-compatible stream otherwise concatenates block/tool
+    // narration from every model continuation into the terminal chat bubble.
+    // The ODS UI already exposes honest elapsed progress. Suppress only this
+    // known Pixel run's nonterminal delivery; tool results remain in the agent
+    // loop and the verified final payload remains visible.
+    if (event?.kind !== "final") {
+      return {
+        cancel: true,
+        reason: "Pixel delivers one terminal owner-visible reply per turn.",
+      };
+    }
     const verification = verificationForRun(event?.runId);
     const authoritativeText = verification.text;
     if (!authoritativeText) return undefined;
