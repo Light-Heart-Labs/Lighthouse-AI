@@ -2,11 +2,12 @@
 //
 // OpenClaw's built-in identical-call detector blocks a repeated tool call, but
 // a model can keep asking for the blocked tool on later continuation passes.
-// Bound the web-research portion of a Pixel response. A duplicate fetch of the
-// same canonical page gets one nonterminal pivot to targeted extraction; all
-// terminal blocks get one result in which to produce a useful final answer. If
-// the model ignores a terminal instruction, abort only that active agent run
-// through OpenClaw's public harness runtime.
+// Bound the web-research and coding-repair portions of a Pixel response. A
+// duplicate fetch gets one nonterminal pivot to targeted extraction, while
+// repeated foreground or background verification failures share a run-wide
+// budget. Terminal blocks get one result in which to produce a useful final
+// answer; if the model ignores one, abort only that active agent run through
+// OpenClaw's public harness runtime.
 
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
@@ -72,6 +73,7 @@ const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
 const MAX_TRACKED_RUNS = 256;
+const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
 const EXEC_CONTROL_WRAPPER = "/run/pixel-ods-control/cancellable-exec.sh";
 const ARTIFACT_DRAFT_PREFIX =
@@ -267,6 +269,39 @@ function execFailed(event) {
   if (result.isError === true) return true;
   const exitCode = result?.details?.exitCode;
   return Number.isInteger(exitCode) && exitCode !== 0;
+}
+
+function runningExecSessionId(event) {
+  const details = event?.result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.status !== "running" ||
+    typeof details.sessionId !== "string" ||
+    !details.sessionId
+  ) {
+    return undefined;
+  }
+  return details.sessionId;
+}
+
+function completedProcessResult(event) {
+  const action = event?.params?.action;
+  if (action !== "poll" && action !== "log") return undefined;
+  const details = event?.result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.status !== "completed" ||
+    typeof details.sessionId !== "string" ||
+    !details.sessionId ||
+    !Number.isInteger(details.exitCode)
+  ) {
+    return undefined;
+  }
+  return { sessionId: details.sessionId, failed: details.exitCode !== 0 };
 }
 
 function toolCallFailed(event) {
@@ -603,6 +638,7 @@ export function createToolLoopGuard({
         odsRoutingTerminalBlocks: 0,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
+        pendingExecSessions: new Map(),
         execOriginalByWrapped: new Map(),
         verificationOriginalByWrapped: new Map(),
       };
@@ -971,6 +1007,26 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    if (toolName === "process") {
+      const completion = completedProcessResult(event);
+      if (!completion) return;
+      const pending = state.pendingExecSessions.get(completion.sessionId);
+      if (!pending) return;
+      state.pendingExecSessions.delete(completion.sessionId);
+      if (completion.failed) {
+        if (pending.fingerprint) {
+          state.failedExec.set(
+            pending.fingerprint,
+            (state.failedExec.get(pending.fingerprint) ?? 0) + 1
+          );
+        }
+        if (pending.verificationFingerprint) state.failedVerificationAttempts += 1;
+      } else {
+        if (pending.fingerprint) state.failedExec.delete(pending.fingerprint);
+        if (pending.verificationFingerprint) state.failedVerificationAttempts = 0;
+      }
+      return;
+    }
     // A successful file mutation permits another identical command, but does
     // not erase the run-wide failed-verification count. This distinguishes a
     // useful repair cycle from unbounded edit/test churn.
@@ -996,6 +1052,18 @@ export function createToolLoopGuard({
       state.verificationOriginalByWrapped.delete(observedFingerprint);
     }
     if (!fingerprint && !verificationFingerprint) return;
+    const pendingSessionId = runningExecSessionId(event);
+    if (pendingSessionId) {
+      if (state.pendingExecSessions.size >= MAX_PENDING_EXEC_SESSIONS) {
+        state.codingExhausted = true;
+        return;
+      }
+      state.pendingExecSessions.set(pendingSessionId, {
+        fingerprint,
+        verificationFingerprint,
+      });
+      return;
+    }
     if (execFailed(event)) {
       if (fingerprint) {
         state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);

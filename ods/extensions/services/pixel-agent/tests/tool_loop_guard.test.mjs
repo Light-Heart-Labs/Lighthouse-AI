@@ -713,6 +713,147 @@ test("counts failed verification commands across different test runners", () => 
   );
 });
 
+test("counts verification failures that finish through process polling", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const params = {
+    command: "cd /workspace/project && python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  for (const sessionId of ["test-one", "test-two"]) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: {
+        params,
+        result: { isError: false, details: { status: "running", sessionId } },
+      },
+    });
+    afterCall(guard, "process", {
+      event: {
+        params: { action: "poll", sessionId },
+        result: {
+          isError: true,
+          details: { status: "completed", sessionId, exitCode: 1 },
+        },
+      },
+    });
+    // A second log read for the same completed process must not double-count.
+    afterCall(guard, "process", {
+      event: {
+        params: { action: "log", sessionId },
+        result: {
+          isError: true,
+          details: { status: "completed", sessionId, exitCode: 1 },
+        },
+      },
+    });
+    afterCall(guard, "edit", {
+      event: {
+        params: { path: "project/probe.py" },
+        result: { isError: false, details: { changed: true } },
+      },
+    });
+  }
+  assert.equal(
+    call(guard, "exec", { event: { params } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
+test("a passing background verification clears prior process failures", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const params = {
+    command: "python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  for (const [sessionId, exitCode] of [
+    ["failed-test", 1],
+    ["passing-test", 0],
+    ["later-failure", 1],
+  ]) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: {
+        params,
+        result: { isError: false, details: { status: "running", sessionId } },
+      },
+    });
+    afterCall(guard, "process", {
+      event: {
+        params: { action: "poll", sessionId },
+        result: {
+          isError: exitCode !== 0,
+          details: { status: "completed", sessionId, exitCode },
+        },
+      },
+    });
+    if (exitCode !== 0) {
+      afterCall(guard, "edit", {
+        event: {
+          params: { path: "project/probe.py" },
+          result: { isError: false, details: { changed: true } },
+        },
+      });
+    }
+  }
+  assert.equal(call(guard, "exec", { event: { params } }), undefined);
+});
+
+test("ignores terminal process results that were not started by this run", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 1, failedVerificationAttempts: 1 },
+  });
+  const params = {
+    command: "python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  afterCall(guard, "process", {
+    event: {
+      params: { action: "poll", sessionId: "unrelated-session" },
+      result: {
+        isError: true,
+        details: {
+          status: "completed",
+          sessionId: "unrelated-session",
+          exitCode: 1,
+        },
+      },
+    },
+  });
+  assert.equal(call(guard, "exec", { event: { params } }), undefined);
+});
+
+test("fails closed when one run leaves too many background executions pending", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    command: "python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  for (let index = 0; index <= 64; index += 1) {
+    assert.equal(call(guard, "exec", { event: { params } })?.block, undefined);
+    afterCall(guard, "exec", {
+      event: {
+        params,
+        result: {
+          isError: false,
+          details: { status: "running", sessionId: `pending-${index}` },
+        },
+      },
+    });
+  }
+  assert.equal(
+    call(guard, "exec", { event: { params } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
 test("a passing verification clears the run-wide failed-verification count", () => {
   const guard = createToolLoopGuard({
     limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
