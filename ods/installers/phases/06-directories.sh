@@ -608,7 +608,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
             error "Existing PIXEL_INGRESS_GID is invalid"
 
         PIXEL_SOURCE_URL_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_URL "https://github.com/Osmantic/Pixel.git")"
-        PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "f1f811d02bffd5a1589eb6feb34323f6dadf7832")"
+        PIXEL_SOURCE_REF_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_REF "0f5e2e117fc7080964c12e26bceff7498032acc8")"
         PIXEL_SOURCE_DIR_VALUE="$(_env_get_explicit_first PIXEL_SOURCE_DIR "")"
         # Phase 11 installs Pixel in this same installer shell. Preserve the
         # resolved immutable source contract in that shell as well as in .env;
