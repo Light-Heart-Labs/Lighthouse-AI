@@ -150,6 +150,24 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
   assert.deepEqual(userMessageOdsToolRequirements([], "What is the configured n8n URL?"), [
     "pixel_ods_apps_list",
   ]);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Research https://github.com/Osmantic/Pixel. Do not use shell or ODS status tools."
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Research Pixel without using ODS tools."),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Do not use shell, but use pixel_ods_status exactly once for the current model."
+    ),
+    ["pixel_ods_status"]
+  );
 });
 
 test("routes from only the current dashboard message, not stale transcript context", () => {

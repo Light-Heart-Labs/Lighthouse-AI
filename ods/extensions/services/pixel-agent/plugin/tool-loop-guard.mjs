@@ -462,6 +462,27 @@ function currentUserText(messages, prompt = undefined) {
   return unwrapCurrentUserText(messageContentText(userMessage?.content));
 }
 
+function explicitlyRejectsOdsTool(text, toolPattern) {
+  const actionNegation = new RegExp(
+    `\\b(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
+      `(?:call|invoke|query|run|use)\\b[^.!?;\\n]{0,80}\\b(?:${toolPattern})\\b`,
+    "i"
+  );
+  const omissionNegation = new RegExp(
+    `\\b(?:avoid|skip|without)\\b[^.!?;\\n]{0,80}\\b(?:${toolPattern})\\b`,
+    "i"
+  );
+  const directNegation = new RegExp(`\\bnot\\s+(?:the\\s+)?(?:${toolPattern})\\b`, "i");
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some(
+      (clause) =>
+        actionNegation.test(clause) ||
+        omissionNegation.test(clause) ||
+        directNegation.test(clause)
+    );
+}
+
 export function userMessageAuthorizesRecursiveDelete(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return false;
@@ -487,25 +508,37 @@ function requestsRecursiveForcedDelete(params) {
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return [];
+  const genericOdsTool = String.raw`ODS\s+(?:read-only\s+)?(?:projection|tool)s?`;
+  const statusTool =
+    String.raw`(?:pixel_ods_status|ODS\s+(?:health|model|status)(?:\s+(?:projection|tool)s?)?)`;
+  const appsTool =
+    String.raw`(?:pixel_ods_apps_list|ODS\s+(?:app|application)s?(?:\s+(?:list|projection|tool)s?)?)`;
+  const rejectsStatus = explicitlyRejectsOdsTool(
+    text,
+    `(?:${genericOdsTool}|${statusTool})`
+  );
+  const rejectsApps = explicitlyRejectsOdsTool(text, `(?:${genericOdsTool}|${appsTool})`);
   const requirements = [];
   const asksStatus =
-    /\bpixel_ods_status\b/i.test(text) ||
-    /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(text) ||
-    /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
-      text
-    ) ||
-    /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
-      text
-    ) ||
-    /\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
-      text
-    );
+    !rejectsStatus &&
+    (/\bpixel_ods_status\b/i.test(text) ||
+      /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(text) ||
+      /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
+        text
+      ) ||
+      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
+        text
+      ) ||
+      /\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
+        text
+      ));
   const asksApps =
-    /\bpixel_ods_apps_list\b/i.test(text) ||
-    /\b(?:ODS|configured)\b.{0,80}\b(?:apps?|applications?|links?|URLs?)\b/i.test(text) ||
-    /\b(?:apps?|applications?|links?|URLs?)\b.{0,80}\bODS\b/i.test(text) ||
-    (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
-      /\b(?:configured|link|URL|where|open|address)\b/i.test(text));
+    !rejectsApps &&
+    (/\bpixel_ods_apps_list\b/i.test(text) ||
+      /\b(?:ODS|configured)\b.{0,80}\b(?:apps?|applications?|links?|URLs?)\b/i.test(text) ||
+      /\b(?:apps?|applications?|links?|URLs?)\b.{0,80}\bODS\b/i.test(text) ||
+      (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
+        /\b(?:configured|link|URL|where|open|address)\b/i.test(text)));
   if (asksStatus) requirements.push("pixel_ods_status");
   if (asksApps) requirements.push("pixel_ods_apps_list");
   return requirements;
