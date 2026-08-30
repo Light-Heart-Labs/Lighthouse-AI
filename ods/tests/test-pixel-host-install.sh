@@ -276,6 +276,50 @@ else
     pass "stale ODS Pixel plugin registry rejected"
 fi
 
+restart_probe="$TEST_ROOT/restart-probe"
+mkdir -p "$restart_probe/pixel-root"
+if (
+    restart_state="$restart_probe/state"
+    systemctl() {
+        if [[ "$1" == show ]]; then
+            if [[ -e "$restart_state" ]]; then
+                printf '%s\n' 4242
+            else
+                : > "$restart_state"
+                printf '%s\n' 0
+            fi
+        elif [[ "$1" == is-active ]]; then
+            return 0
+        else
+            return 1
+        fi
+    }
+    ods_sudo_available() { return 0; }
+    ods_sudo() { [[ "$*" == "systemctl restart openclaw-gateway.service" ]]; }
+    curl() { printf '%s\n' '{"ok":true,"status":"live"}'; }
+    ods_pixel_run_as_owner() {
+        [[ "$1" == "$owner" && "$2" == "$home" \
+            && "$3" == "$restart_probe/pixel-root/pixel" && "$4" == verify ]]
+    }
+    _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$restart_probe/pixel-root"
+); then
+    pass "privileged Pixel restart tolerates transient MainPID zero"
+else
+    fail "privileged Pixel restart tolerates transient MainPID zero"
+fi
+
+if (
+    systemctl() {
+        [[ "$1" == show ]] && printf '%s\n' 0
+    }
+    ods_sudo_available() { return 1; }
+    _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$restart_probe/pixel-root"
+) >/dev/null 2>&1; then
+    fail "unprivileged Pixel restart still rejects a missing owned process"
+else
+    pass "unprivileged Pixel restart still rejects a missing owned process"
+fi
+
 source_fixture="$TEST_ROOT/pixel-source-fixture"
 mkdir -p "$source_fixture"
 git -C "$source_fixture" init -q

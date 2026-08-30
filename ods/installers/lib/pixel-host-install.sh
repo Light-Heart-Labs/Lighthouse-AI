@@ -1128,8 +1128,13 @@ PY
 _ods_pixel_restart_gateway_and_verify() {
     local owner="$1" home="$2" pixel_root="$3" attempt ready=false previous_pid current_pid
     previous_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
-    [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]] || return 1
     if ods_sudo_available; then
+        # Writing the final ODS runtime overlay can make OpenClaw begin its own
+        # supervised config restart before this helper samples MainPID. A
+        # transient MainPID=0 is safe on the privileged systemd path because
+        # `systemctl restart` establishes the desired service state directly.
+        # Keep the stricter live-PID proof below for the unprivileged signal
+        # fallback, where ODS must prove exactly which owner process it kills.
         ods_sudo systemctl restart openclaw-gateway.service || return 1
     else
         # The ODS host agent runs as the same unprivileged install owner. Its
@@ -1139,6 +1144,7 @@ _ods_pixel_restart_gateway_and_verify() {
         # /proc must prove the current MainPID has that owner's UID. SIGTERM is
         # then enough for systemd to replace the process under the same unit.
         local unit_user restart_policy owner_uid process_uid
+        [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]] || return 1
         unit_user="$(systemctl show openclaw-gateway.service -p User --value 2>/dev/null || true)"
         restart_policy="$(systemctl show openclaw-gateway.service -p Restart --value 2>/dev/null || true)"
         owner_uid="$(id -u "$owner" 2>/dev/null || true)"
@@ -1153,13 +1159,15 @@ _ods_pixel_restart_gateway_and_verify() {
     current_pid=""
     for attempt in {1..60}; do
         current_pid="$(systemctl show openclaw-gateway.service -p MainPID --value 2>/dev/null || true)"
-        if [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] \
+        if [[ "$current_pid" =~ ^[1-9][0-9]*$ \
+            && ( ! "$previous_pid" =~ ^[1-9][0-9]*$ || "$current_pid" != "$previous_pid" ) ]] \
             && systemctl is-active --quiet openclaw-gateway.service; then
             break
         fi
         sleep 1
     done
-    [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] || return 1
+    [[ "$current_pid" =~ ^[1-9][0-9]*$ \
+        && ( ! "$previous_pid" =~ ^[1-9][0-9]*$ || "$current_pid" != "$previous_pid" ) ]] || return 1
     for attempt in {1..60}; do
         if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18789/health 2>/dev/null \
             | jq -e '.ok == true and .status == "live"' >/dev/null 2>&1; then
@@ -1782,9 +1790,18 @@ ods_pixel_install_default_agent() {
     # the final ODS runtime policy. A plain service restart can otherwise keep
     # stale tool descriptors across same-release extension refreshes.
     if ! _ods_pixel_refresh_plugin_registry "$owner" "$home" "$openclaw_bin" "$plugin_root/plugin" \
-        || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
-        || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel could not refresh and load the exact ODS plugin registry. See $LOG_FILE."
+        >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel could not refresh the exact ODS plugin registry. See $LOG_FILE."
+        return 1
+    fi
+    if ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
+        >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel could not recreate its agent sandbox for the reviewed ODS runtime. See $LOG_FILE."
+        return 1
+    fi
+    if ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" \
+        >>"$LOG_FILE" 2>&1; then
+        ai_bad "Pixel could not restart and verify its gateway after the ODS runtime update. See $LOG_FILE."
         return 1
     fi
     # Reconfirm the exact verified contract and canonical live config after the
