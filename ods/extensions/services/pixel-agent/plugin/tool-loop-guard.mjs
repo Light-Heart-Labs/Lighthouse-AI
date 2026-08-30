@@ -119,8 +119,14 @@ export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
 export const OPERATIONS_WRONG_ACTION_REASON =
   "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
 
+export const OPERATIONS_QUERY_MISMATCH_REASON =
+  "Pixel blocked an extension catalog submission because parameters.query did not preserve the owner-labeled query character-for-character. Retry the same ods.extensions.search action with the exact original query; do not shorten, normalize, split, correct, or sanitize it.";
+
 export const OPERATIONS_HOST_EVIDENCE_PREFIX =
   "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
+
+export const OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX =
+  "Pixel verified this ODS extension catalog result through a structurally matched terminal Operations Broker receipt:";
 
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
@@ -597,7 +603,11 @@ function operationsSubmission(event, toolName) {
     ) {
       return undefined;
     }
-    actions.push({ target: event.params.target, action: event.params.action });
+    actions.push({
+      target: event.params.target,
+      action: event.params.action,
+      parameters: event.params.parameters,
+    });
   } else if (toolName === "pixel_ops_workflow_submit") {
     if (details.kind !== "workflow" || !Array.isArray(event?.params?.steps)) {
       return undefined;
@@ -612,7 +622,7 @@ function operationsSubmission(event, toolName) {
       ) {
         return undefined;
       }
-      actions.push({ target: step.target, action: step.action });
+      actions.push({ target: step.target, action: step.action, parameters: step.parameters });
     }
   } else if (toolName === "pixel_ops_download_stage" && details.kind === "download") {
     actions.push({ target: "broker", action: "download.stage" });
@@ -801,6 +811,151 @@ function operationsHostEvidenceText(requiredActions, terminalJobs) {
     if (!value || osRelease.stderr.trim() || osRelease.riskSignals.length > 0) return undefined;
     lines.push(`- Operating system: \`${value}\` (job \`${osRelease.jobId}\`)`);
   }
+  return lines.join("\n");
+}
+
+function exactKeys(value, keys) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join("\u0000") === [...keys].sort().join("\u0000")
+  );
+}
+
+function boundedCatalogString(value, pattern, maximum) {
+  if (typeof value !== "string" || !value || value.length > maximum) return undefined;
+  if ([...value].some((character) => character.codePointAt(0) < 32)) return undefined;
+  return pattern && !pattern.test(value) ? undefined : value;
+}
+
+function boundedCatalogList(value, pattern, maximumItems = 64, maximumLength = 256) {
+  if (!Array.isArray(value) || value.length > maximumItems) return undefined;
+  const result = value.map((item) => boundedCatalogString(item, pattern, maximumLength));
+  if (result.some((item) => item === undefined) || new Set(result).size !== result.length) {
+    return undefined;
+  }
+  return result;
+}
+
+function extensionCatalogResult(step, submittedParameters) {
+  if (
+    !step ||
+    step.target !== "ods-host" ||
+    step.action !== "ods.extensions.search" ||
+    step.stderr.trim() ||
+    step.riskSignals.length > 0 ||
+    typeof step.stdout !== "string" ||
+    step.stdout.length > 256 * 1024
+  ) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  const topKeys = [
+    "schemaVersion", "kind", "query", "totalCatalog", "totalMatches",
+    "truncated", "matches", "boundary",
+  ];
+  if (
+    !exactKeys(value, topKeys) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-pixel-extension-search" ||
+    value.boundary !==
+      "Read-only catalog projection; it grants no installation or configuration authority." ||
+    !Number.isInteger(value.totalCatalog) ||
+    value.totalCatalog < 1 ||
+    value.totalCatalog > 256 ||
+    !Number.isInteger(value.totalMatches) ||
+    value.totalMatches < 0 ||
+    value.totalMatches > value.totalCatalog ||
+    value.truncated !== (value.totalMatches > 10) ||
+    !Array.isArray(value.matches) ||
+    value.matches.length !== Math.min(value.totalMatches, 10)
+  ) {
+    return undefined;
+  }
+  const query = boundedCatalogString(value.query, /^[A-Za-z0-9 _/+:#.\-]{1,80}$/, 80);
+  if (!query || submittedParameters?.query !== query) return undefined;
+  const entryKeys = [
+    "id", "name", "description", "category", "gpuBackends", "dependsOn",
+    "requiredConfiguration", "optionalConfiguration", "tags", "featureNames",
+  ];
+  const identifiers = new Set();
+  const matches = [];
+  for (const entry of value.matches) {
+    if (!exactKeys(entry, entryKeys)) return undefined;
+    const id = boundedCatalogString(entry.id, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64);
+    const name = boundedCatalogString(
+      entry.name,
+      /^[A-Za-z0-9][A-Za-z0-9 ._+()/:&'\-]{0,127}$/,
+      128
+    );
+    const description = boundedCatalogString(entry.description, undefined, 1000);
+    const category = boundedCatalogString(entry.category, /^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$/, 64);
+    const gpuBackends = boundedCatalogList(entry.gpuBackends, /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/, 16, 32);
+    const dependsOn = boundedCatalogList(entry.dependsOn, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64, 64);
+    const requiredConfiguration = boundedCatalogList(entry.requiredConfiguration, /^[A-Z][A-Z0-9_]{0,127}$/, 64, 128);
+    const optionalConfiguration = boundedCatalogList(entry.optionalConfiguration, /^[A-Z][A-Z0-9_]{0,127}$/, 64, 128);
+    const tags = boundedCatalogList(entry.tags, /^[A-Za-z0-9][A-Za-z0-9._+\-/]{0,127}$/, 64, 128);
+    const featureNames = boundedCatalogList(entry.featureNames, /^[A-Za-z0-9][A-Za-z0-9 ._+()/:&'\-]{0,255}$/, 32, 256);
+    if (
+      !id || !name || !description || !category || !gpuBackends || !dependsOn ||
+      !requiredConfiguration || !optionalConfiguration || !tags || !featureNames ||
+      identifiers.has(id)
+    ) {
+      return undefined;
+    }
+    identifiers.add(id);
+    matches.push({ id, name, dependsOn, requiredConfiguration, optionalConfiguration });
+  }
+  return { ...value, query, matches };
+}
+
+function operationsEvidenceText(requiredActions, terminalJobs) {
+  if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
+  const hostActions = new Set([
+    "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
+  ]);
+  if ([...requiredActions].every((action) => hostActions.has(action))) {
+    return operationsHostEvidenceText(requiredActions, terminalJobs);
+  }
+  if (requiredActions.size !== 1 || !requiredActions.has("ods.extensions.search")) {
+    return undefined;
+  }
+  if (!(terminalJobs instanceof Map) || terminalJobs.size !== 1) return undefined;
+  const outcome = [...terminalJobs.values()][0];
+  if (outcome.status !== "succeeded") {
+    const plan = typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
+      ? ` Plan SHA-256: ${outcome.planHash}.`
+      : "";
+    return `Pixel's ODS extension catalog job reached terminal status ${outcome.status}. No catalog result or external effect was accepted. Job: ${outcome.jobId}.${plan}`;
+  }
+  if (outcome.steps.length !== 1 || outcome.actions.length !== 1) return undefined;
+  const result = extensionCatalogResult(
+    outcome.steps[0],
+    outcome.actions[0]?.parameters
+  );
+  if (!result) return undefined;
+  const lines = [
+    OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
+    `- Query: \`${result.query}\``,
+    `- Catalog: ${result.totalMatches} match(es) among ${result.totalCatalog}; results truncated: ${result.truncated ? "yes" : "no"}.`,
+  ];
+  const first = result.matches[0];
+  if (first) {
+    lines.push(`- Top match: \`${first.name}\` (\`${first.id}\`).`);
+    lines.push(`- Dependencies: ${first.dependsOn.length ? first.dependsOn.map((item) => `\`${item}\``).join(", ") : "none"}.`);
+    lines.push(`- Required configuration keys: ${first.requiredConfiguration.length ? first.requiredConfiguration.map((item) => `\`${item}\``).join(", ") : "none"}.`);
+    lines.push(`- Optional configuration keys: ${first.optionalConfiguration.length ? first.optionalConfiguration.map((item) => `\`${item}\``).join(", ") : "none"}.`);
+  } else {
+    lines.push("- Top match: none.");
+  }
+  lines.push("- Authority: read-only catalog projection; no installation or configuration authority.");
+  lines.push(`- Broker job: \`${outcome.jobId}\`.`);
   return lines.join("\n");
 }
 
@@ -1044,6 +1199,16 @@ export function userMessageRequestsExtensionCatalog(messages, prompt = undefined
     /\b(?:installable|supported|available)\b.{0,80}\b(?:ODS\s+)?extensions?\b/i.test(text) ||
     /\b(?:ODS\s+)?extensions?\b.{0,80}\b(?:installable|supported|available)\b/i.test(text)
   );
+}
+
+export function userMessageExtensionCatalogExactQuery(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text || !userMessageRequestsExtensionCatalog(messages, prompt)) return undefined;
+  const quoted = text.match(/\bquery\s*(?:is|[:=])?\s*([`"'])([^\r\n]{1,80})\1/i);
+  const exact = quoted ?? text.match(/\bquery\s+(?:is\s+)?(.{1,80}?)\s+exactly(?:\s+as\s+written)?(?:[.!?]|$)/i);
+  const value = exact ? (quoted ? exact[2] : exact[1]).trim() : "";
+  if (!value || value.length > 80 || /[\u0000-\u001f\u007f]/.test(value)) return undefined;
+  return value;
 }
 
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
@@ -1293,6 +1458,7 @@ export function createToolLoopGuard({
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
         operationsRequiredActions: new Set(),
+        operationsExpectedQuery: undefined,
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
@@ -1402,6 +1568,14 @@ export function createToolLoopGuard({
             ...state.operationsRequiredActions,
           ].join(", ")}.`,
         };
+      }
+      if (
+        toolName === "pixel_ops_run" &&
+        params?.action === "ods.extensions.search" &&
+        state.operationsExpectedQuery !== undefined &&
+        params?.parameters?.query !== state.operationsExpectedQuery
+      ) {
+        return { block: true, blockReason: OPERATIONS_QUERY_MISMATCH_REASON };
       }
     }
 
@@ -1699,6 +1873,9 @@ export function createToolLoopGuard({
         state.operationsRequiredActions = new Set(
           state.operationsRequired ? operations.actions : []
         );
+        state.operationsExpectedQuery = state.operationsRequired
+          ? userMessageExtensionCatalogExactQuery(event?.messages, event?.prompt)
+          : undefined;
       }
       if (!state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
@@ -1940,19 +2117,21 @@ export function createToolLoopGuard({
       ) {
         return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
       }
-      const hostText = operationsHostEvidenceText(
+      const evidenceText = operationsEvidenceText(
         state.operationsRequiredActions,
         state.operationsTerminalJobs
       );
       if (state.operationsRequiredActions.size > 0) {
-        if (!hostText) {
+        if (!evidenceText) {
           return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
         }
         return {
-          status: hostText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX)
+          status:
+            evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
+            evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX)
             ? "passed"
             : "failed",
-          text: hostText,
+          text: evidenceText,
         };
       }
     }

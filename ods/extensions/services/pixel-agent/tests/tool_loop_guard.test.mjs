@@ -23,7 +23,9 @@ import {
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
   OPERATIONS_LOOP_ABORT_REASON,
+  OPERATIONS_QUERY_MISMATCH_REASON,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
   OPERATIONS_UNVERIFIED_DELIVERY_PREFIX,
@@ -49,6 +51,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
+  userMessageExtensionCatalogExactQuery,
   userMessageRequiresOperations,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
@@ -586,6 +589,20 @@ test("classifies installable extension catalog work as one exact Operations acti
     userMessageRequestsExtensionCatalog([], "List the installed ODS applications and URLs."),
     false
   );
+  assert.equal(
+    userMessageExtensionCatalogExactQuery(
+      [],
+      "Call ods.extensions.search with query x; id exactly as written."
+    ),
+    "x; id"
+  );
+  assert.equal(
+    userMessageExtensionCatalogExactQuery(
+      [],
+      "Search the extension catalog with query: `workflow automation`."
+    ),
+    "workflow automation"
+  );
 });
 
 test("routes extension catalog requests only to the exact broker action", () => {
@@ -612,18 +629,117 @@ test("routes extension catalog requests only to the exact broker action", () => 
     })?.blockReason,
     new RegExp(OPERATIONS_WRONG_ACTION_REASON)
   );
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "ods.extensions.search",
+          parameters: { query: "notebook" },
+        },
+      },
+    }),
+    undefined
+  );
+});
+
+test("preserves an owner-labeled extension query before the broker boundary", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Call ods.extensions.search with query x; id exactly as written." }
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "ods.extensions.search",
+          parameters: { query: "x" },
+        },
+      },
+    }),
+    { block: true, blockReason: OPERATIONS_QUERY_MISMATCH_REASON }
+  );
   assert.equal(
     call(guard, "pixel_ops_run", {
       event: {
         params: {
           target: "ods-host",
           action: "ods.extensions.search",
-          parameters: { query: "notebooks" },
+          parameters: { query: "x; id" },
         },
       },
     }),
     undefined
   );
+});
+
+test("renders a strictly validated extension catalog receipt instead of host evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const parameters = { query: "workflow automation" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Search the installable ODS extension catalog for workflow automation." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.search", parameters },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step",
+            target: "ods-host",
+            action: "ods.extensions.search",
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              kind: "ods-pixel-extension-search",
+              query: "workflow automation",
+              totalCatalog: 30,
+              totalMatches: 1,
+              truncated: false,
+              matches: [{
+                id: "n8n",
+                name: "n8n",
+                description: "Workflow automation platform.",
+                category: "recommended",
+                gpuBackends: ["all"],
+                dependsOn: [],
+                requiredConfiguration: ["N8N_ENCRYPTION_KEY"],
+                optionalConfiguration: ["N8N_HOST"],
+                tags: ["automation"],
+                featureNames: ["Workflow Automation"],
+              }],
+              boundary:
+                "Read-only catalog projection; it grants no installation or configuration authority.",
+            }) + "\n",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX}`));
+  assert.match(text, /Top match: `n8n` \(`n8n`\)/);
+  assert.match(text, /Required configuration keys: `N8N_ENCRYPTION_KEY`/);
+  assert.match(text, /no installation or configuration authority/);
+  assert.doesNotMatch(text, /host facts/);
 });
 
 test("routes host evidence through Operations and requires a matching terminal job", () => {
