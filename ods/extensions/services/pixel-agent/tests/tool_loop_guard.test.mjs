@@ -660,11 +660,12 @@ test("bounds a failed verification loop across successful edits and harmless she
     limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
   });
   const first = {
-    command: "cd /workspace && python3 -m unittest pixel_capability.test_slugify",
+    command:
+      "cd /workspace/pixel_capability && python3 -m unittest test_slugify -v",
   };
   const second = {
-    command: "python3 -m unittest pixel_capability.test_slugify 2>&1",
-    workdir: "/workspace",
+    command: "python3 -m unittest test_slugify -v 2>&1",
+    workdir: "/workspace/pixel_capability",
   };
   for (const params of [first, second]) {
     call(guard, "exec", { event: { params } });
@@ -680,6 +681,34 @@ test("bounds a failed verification loop across successful edits and harmless she
   }
   assert.equal(
     call(guard, "exec", { event: { params: second } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON
+  );
+});
+
+test("counts failed verification commands across different test runners", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const attempts = [
+    { command: "python3 -m unittest -v", workdir: "/workspace/python" },
+    { command: "pytest -q", workdir: "/workspace/python" },
+  ];
+  for (const params of attempts) {
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", {
+      event: { params, result: { isError: true, details: { exitCode: 1 } } },
+    });
+    afterCall(guard, "edit", {
+      event: {
+        params: { path: "python/probe.py" },
+        result: { isError: false, details: { changed: true } },
+      },
+    });
+  }
+  assert.equal(
+    call(guard, "exec", {
+      event: { params: { command: "npm test", workdir: "/workspace/web" } },
+    }).blockReason,
     CODING_RETRY_EXHAUSTED_REASON
   );
 });
@@ -709,6 +738,30 @@ test("a passing verification clears the run-wide failed-verification count", () 
   assert.deepEqual(call(guard, "exec", { event: { params } }), {
     params: { command: params.command },
   });
+});
+
+test("a different passing verification clears all prior verification failures", () => {
+  const guard = createToolLoopGuard({
+    limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
+  });
+  const unittest = { command: "python3 -m unittest", workdir: "/workspace/python" };
+  const pytest = { command: "pytest -q", workdir: "/workspace/python" };
+  const npm = { command: "npm test", workdir: "/workspace/web" };
+
+  call(guard, "exec", { event: { params: unittest } });
+  afterCall(guard, "exec", {
+    event: { params: unittest, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  call(guard, "exec", { event: { params: pytest } });
+  afterCall(guard, "exec", {
+    event: { params: pytest, result: { isError: false, details: { exitCode: 0 } } },
+  });
+  call(guard, "exec", { event: { params: npm } });
+  afterCall(guard, "exec", {
+    event: { params: npm, result: { isError: true, details: { exitCode: 1 } } },
+  });
+
+  assert.equal(call(guard, "exec", { event: { params: unittest } }), undefined);
 });
 
 test("a failed workspace mutation preserves identical verification failures", () => {

@@ -238,9 +238,16 @@ function execFingerprint(params) {
 function verificationExecFingerprint(params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   if (typeof params.command !== "string" || !params.command.trim()) return undefined;
-  const command = params.command
-    .trim()
-    .replace(/^cd\s+\/workspace\s*&&\s*/i, "")
+  let command = params.command.trim();
+  let commandWorkdir;
+  const workspaceCd = command.match(
+    /^cd\s+(?:"(\/workspace(?:\/[^"\r\n]*)?)"|'(\/workspace(?:\/[^'\r\n]*)?)'|(\/workspace(?:\/[A-Za-z0-9._/-]+)?))\s*&&\s*(.+)$/is
+  );
+  if (workspaceCd) {
+    commandWorkdir = workspaceCd[1] ?? workspaceCd[2] ?? workspaceCd[3];
+    command = workspaceCd[4];
+  }
+  command = command
     .replace(/\s+2>&1\s*$/i, "")
     .replace(/\s+/g, " ");
   if (
@@ -248,7 +255,7 @@ function verificationExecFingerprint(params) {
   ) {
     return undefined;
   }
-  const normalizedWorkdir = normalizeExecWorkdir(params.workdir);
+  const normalizedWorkdir = normalizeExecWorkdir(params.workdir ?? commandWorkdir);
   const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
   return JSON.stringify([command, typeof workdir === "string" ? workdir : ""]);
 }
@@ -595,7 +602,7 @@ export function createToolLoopGuard({
         odsRoutingExhausted: false,
         odsRoutingTerminalBlocks: 0,
         failedExec: new Map(),
-        failedVerification: new Map(),
+        failedVerificationAttempts: 0,
         execOriginalByWrapped: new Map(),
         verificationOriginalByWrapped: new Map(),
       };
@@ -805,8 +812,7 @@ export function createToolLoopGuard({
         (fingerprint &&
           (state.failedExec.get(fingerprint) ?? 0) >= effective.failedExecRetries) ||
         (verificationFingerprint &&
-          (state.failedVerification.get(verificationFingerprint) ?? 0) >=
-            effective.failedVerificationAttempts)
+          state.failedVerificationAttempts >= effective.failedVerificationAttempts)
       ) {
         state.codingExhausted = true;
         return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
@@ -995,14 +1001,11 @@ export function createToolLoopGuard({
         state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);
       }
       if (verificationFingerprint) {
-        state.failedVerification.set(
-          verificationFingerprint,
-          (state.failedVerification.get(verificationFingerprint) ?? 0) + 1
-        );
+        state.failedVerificationAttempts += 1;
       }
     } else {
       if (fingerprint) state.failedExec.delete(fingerprint);
-      if (verificationFingerprint) state.failedVerification.delete(verificationFingerprint);
+      if (verificationFingerprint) state.failedVerificationAttempts = 0;
     }
   }
 
