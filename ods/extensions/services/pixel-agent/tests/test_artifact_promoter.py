@@ -12,6 +12,7 @@ import socket
 import stat
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -273,6 +274,58 @@ class ArtifactPromoterTests(unittest.TestCase):
         server.close()
         self.assertFalse(worker.is_alive())
         self.assertFalse((self.workspace / self.relative_path).exists())
+
+    def test_connected_socket_receives_success_without_false_disconnect(self) -> None:
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        worker = threading.Thread(
+            target=promoter._serve_connection,
+            args=(server,),
+            kwargs={
+                "owner_uid": self.uid,
+                "owner_gid": self.gid,
+                "broker_uid": self.uid,
+                "results_root": self.results,
+                "artifacts_root": self.artifacts,
+                "workspace": self.workspace,
+            },
+        )
+        try:
+            worker.start()
+            client.settimeout(2)
+            wire_request = {
+                "schemaVersion": 1,
+                "action": "promote",
+                **self.request(),
+            }
+            client.sendall((json.dumps(wire_request) + "\n").encode())
+            response = bytearray()
+            while not response.endswith(b"\n"):
+                response.extend(client.recv(4096))
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(json.loads(response)["status"], "succeeded")
+            self.assertEqual(
+                (self.workspace / self.relative_path).read_bytes(), self.payload
+            )
+        finally:
+            client.close()
+            server.close()
+
+    def test_connected_idle_socket_is_not_reported_disconnected(self) -> None:
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            # The live service applies a bounded read timeout before promotion.
+            # A connected requester has no more bytes to send while it waits for
+            # the result, so the liveness check itself must remain non-blocking.
+            server.settimeout(10)
+            started = time.monotonic()
+            disconnected = promoter._connection_closed(server)
+            elapsed = time.monotonic() - started
+            self.assertFalse(disconnected)
+            self.assertLess(elapsed, 0.5)
+        finally:
+            client.close()
+            server.close()
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import select
 import socket
 import stat
 import struct
@@ -562,6 +563,18 @@ def _error_result() -> dict[str, Any]:
     }
 
 
+def _connection_closed(connection: socket.socket) -> bool:
+    try:
+        readable, _writable, _exceptional = select.select([connection], [], [], 0)
+        if not readable:
+            return False
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except (BlockingIOError, InterruptedError):
+        return False
+    except OSError:
+        return True
+
+
 def _serve_connection(
     connection: socket.socket,
     *,
@@ -573,12 +586,7 @@ def _serve_connection(
     workspace: pathlib.Path,
 ) -> None:
     def requester_disconnected() -> bool:
-        try:
-            return connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
-        except BlockingIOError:
-            return False
-        except OSError:
-            return True
+        return _connection_closed(connection)
 
     response: dict[str, Any]
     try:
