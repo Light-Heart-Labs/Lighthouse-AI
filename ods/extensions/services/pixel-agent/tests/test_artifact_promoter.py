@@ -13,6 +13,7 @@ import stat
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "host" / "artifact_promoter.py"
@@ -123,6 +124,54 @@ class ArtifactPromoterTests(unittest.TestCase):
             with self.subTest(relative_path=relative_path):
                 with self.assertRaises(promoter.PromotionError):
                     self.request(relativePath=relative_path)
+
+    def test_mode_is_sealed_before_owner_custody_transfer(self) -> None:
+        calls = []
+        with (
+            mock.patch.object(
+                promoter.os,
+                "fchmod",
+                side_effect=lambda descriptor, mode: calls.append(
+                    ("fchmod", descriptor, mode)
+                ),
+            ),
+            mock.patch.object(
+                promoter.os,
+                "fchown",
+                side_effect=lambda descriptor, uid, gid: calls.append(
+                    ("fchown", descriptor, uid, gid)
+                ),
+            ),
+        ):
+            promoter._secure_fd_for_owner(9, 0o600, 1000, 1000)
+        self.assertEqual(
+            calls,
+            [("fchmod", 9, 0o600), ("fchown", 9, 1000, 1000)],
+        )
+
+        calls.clear()
+        path = pathlib.Path("/run/example.sock")
+        with (
+            mock.patch.object(
+                promoter.os,
+                "chmod",
+                side_effect=lambda candidate, mode: calls.append(
+                    ("chmod", candidate, mode)
+                ),
+            ),
+            mock.patch.object(
+                promoter.os,
+                "chown",
+                side_effect=lambda candidate, uid, gid: calls.append(
+                    ("chown", candidate, uid, gid)
+                ),
+            ),
+        ):
+            promoter._secure_path_for_owner(path, 0o600, 1000, 1000)
+        self.assertEqual(
+            calls,
+            [("chmod", path, 0o600), ("chown", path, 1000, 1000)],
+        )
 
     def test_promotes_exact_bytes_create_only_and_non_executable(self) -> None:
         result = self.promote()

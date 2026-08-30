@@ -48,6 +48,22 @@ class PromotionError(RuntimeError):
     """A promotion failure whose details must not cross the service boundary."""
 
 
+def _secure_fd_for_owner(
+    descriptor: int, mode: int, owner_uid: int, owner_gid: int
+) -> None:
+    # CAP_FOWNER is deliberately absent. Seal the mode while the service still
+    # owns the inode, then transfer ownership as the final custody operation.
+    os.fchmod(descriptor, mode)
+    os.fchown(descriptor, owner_uid, owner_gid)
+
+
+def _secure_path_for_owner(
+    path: pathlib.Path, mode: int, owner_uid: int, owner_gid: int
+) -> None:
+    os.chmod(path, mode)
+    os.chown(path, owner_uid, owner_gid)
+
+
 def _exact_object(value: Any, required: set[str]) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != required:
         raise PromotionError("invalid promotion request")
@@ -354,8 +370,7 @@ def _workspace_parent(
                     | getattr(os, "O_NOFOLLOW", 0),
                     dir_fd=current,
                 )
-                os.fchown(child, owner_uid, owner_gid)
-                os.fchmod(child, 0o700)
+                _secure_fd_for_owner(child, 0o700, owner_uid, owner_gid)
                 os.fsync(current)
             info = os.fstat(child)
             if (
@@ -441,8 +456,7 @@ def _copy_create_only(
             follow_symlinks=False,
         )
         linked = True
-        os.fchown(target, owner_uid, owner_gid)
-        os.fchmod(target, 0o600)
+        _secure_fd_for_owner(target, 0o600, owner_uid, owner_gid)
         os.fsync(target)
         if cancel_requested is not None and cancel_requested():
             raise PromotionError("promotion requester disconnected")
@@ -646,8 +660,7 @@ def serve(
     # systemd creates the runtime directory as root. Give only the owner's
     # primary group traversal; the socket itself remains mode 0600 and peer
     # credentials still require the exact owner UID.
-    os.chown(parent, 0, owner_entry.pw_gid)
-    os.chmod(parent, 0o710)
+    _secure_path_for_owner(parent, 0o710, 0, owner_entry.pw_gid)
     if socket_path.exists() or socket_path.is_symlink():
         info = socket_path.lstat()
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != owner_entry.pw_uid:
@@ -656,8 +669,9 @@ def serve(
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         listener.bind(str(socket_path))
-        os.chown(socket_path, owner_entry.pw_uid, owner_entry.pw_gid)
-        os.chmod(socket_path, 0o600)
+        _secure_path_for_owner(
+            socket_path, 0o600, owner_entry.pw_uid, owner_entry.pw_gid
+        )
         listener.listen(4)
         while True:
             connection, _address = listener.accept()
