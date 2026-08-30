@@ -202,7 +202,16 @@ check_port_conflict() {
             warn "Neither 'lsof', 'ss', nor 'netstat' found — cannot verify port availability"
             warn "Install lsof, iproute2 (for ss), or net-tools (for netstat) to enable port checks"
         fi
-        return 1
+    fi
+
+    # Docker Desktop publishes WSL ports through Windows. Native Windows
+    # listeners are invisible to Linux lsof/ss/netstat but still make the
+    # eventual Docker bind fail.
+    if declare -F ods_windows_host_port_in_use >/dev/null 2>&1 \
+        && ods_windows_host_port_in_use "$port"; then
+        PORT_CONFLICT_PROC="Windows host process"
+        PORT_CONFLICT=true
+        return 0
     fi
 
     return 1
@@ -258,6 +267,34 @@ if [[ "${ENABLE_VOICE:-false}" == "true" ]] && _phase04_lemonade_uses_host_9000;
         WHISPER_PORT=9100
         SERVICE_PORTS[whisper]=9100
         log "AMD/Lemonade detected; reserving host port 9000 for Lemonade and checking Whisper on 9100"
+    fi
+    unset _whisper_port_for_check
+fi
+
+# A native Windows application can own 9000 even when WSL reports it free.
+# For the generated Whisper default, select ODS's established alternate only
+# when it is also free on both sides of the WSL boundary. Explicit non-default
+# ports remain untouched and are reported by the normal conflict loop below.
+if [[ "${ENABLE_VOICE:-false}" == "true" ]]; then
+    _whisper_port_for_check="${WHISPER_PORT:-${SERVICE_PORTS[whisper]:-9000}}"
+    if [[ "$_whisper_port_for_check" == "9000" ]] \
+        && declare -F ods_windows_host_port_in_use >/dev/null 2>&1 \
+        && ods_windows_host_port_in_use 9000; then
+        _whisper_alternate=""
+        for _whisper_candidate in 9100 9001; do
+            if ! check_port_conflict "$_whisper_candidate"; then
+                _whisper_alternate="$_whisper_candidate"
+                break
+            fi
+        done
+        if [[ -n "$_whisper_alternate" ]]; then
+            WHISPER_PORT="$_whisper_alternate"
+            SERVICE_PORTS[whisper]="$_whisper_alternate"
+            log "Windows host port 9000 is occupied; checking Whisper on ${_whisper_alternate}"
+        else
+            warn "Windows host port 9000 is occupied and Whisper alternates 9100 and 9001 are unavailable"
+        fi
+        unset _whisper_alternate _whisper_candidate
     fi
     unset _whisper_port_for_check
 fi

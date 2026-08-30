@@ -28,6 +28,8 @@ echo "╚═══════════════════════�
 echo ""
 
 # Source only the functions under test (phase scripts expect installer env).
+SCRIPT_DIR="$ROOT_DIR"
+source "$ROOT_DIR/installers/lib/detection.sh"
 source <(sed -n '/^check_port_conflict\s*()\s*{/,/^}/p;/^check_ollama_conflict\s*()\s*{/,/^}/p' \
   "$ROOT_DIR/installers/phases/04-requirements.sh") || {
     echo -e "${RED}✗ FAIL${NC} - Cannot load functions from 04-requirements.sh"

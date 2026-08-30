@@ -10,7 +10,8 @@
 #           INTERACTIVE, TIER, OFFLINE_MODE, ENABLE_VOICE, ENABLE_WORKFLOWS,
 #           ENABLE_RAG, ENABLE_OPENCLAW (all used by fix_nvidia_secure_boot),
 #           log/warn/ai/ai_ok/ai_warn/ai_bad helpers
-# Provides: detect_gpu(), load_capability_profile(),
+# Provides: detect_gpu(), load_capability_profile(), ods_is_wsl_host(),
+#           ods_windows_host_port_in_use(),
 #           normalize_profile_tier(), tier_rank(), load_backend_contract(),
 #           fix_nvidia_secure_boot(), MIN_DRIVER_VERSION
 #           Side-effect var on Jetson: JETSON_L4T_RELEASE (e.g. "R36.4.0")
@@ -22,6 +23,50 @@
 
 # Safe env loading (no eval) for script output KEY="value" lines
 [[ -f "${SCRIPT_DIR:-}/lib/safe-env.sh" ]] && . "${SCRIPT_DIR}/lib/safe-env.sh"
+
+# WSL2 forwards Docker-published ports through the Windows host. A port can
+# therefore look free to lsof/ss inside Linux while Docker Desktop still
+# refuses the bind because a native Windows process already owns it. Query the
+# Windows listener table once and cache the numeric ports for the installer
+# run. The override is a test hook; normal detection uses WSL's environment and
+# kernel release witnesses.
+ods_is_wsl_host() {
+    case "${ODS_WSL_HOST_OVERRIDE:-auto}" in
+        true|1|yes|on) return 0 ;;
+        false|0|no|off) return 1 ;;
+    esac
+    [[ -n "${WSL_DISTRO_NAME:-}" ]] && return 0
+    grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null
+}
+
+ods_windows_host_listening_ports() {
+    ods_is_wsl_host || return 2
+    command -v powershell.exe >/dev/null 2>&1 || return 2
+
+    if [[ "${_ODS_WINDOWS_PORT_CACHE_READY:-false}" != "true" ]]; then
+        local output
+        output=$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command \
+            'Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort -Unique | Sort-Object; Write-Output ODS_WINDOWS_PORT_SCAN_OK' \
+            2>/dev/null | tr -d '\r' || true)
+        grep -Fxq 'ODS_WINDOWS_PORT_SCAN_OK' <<< "$output" || return 2
+        output=$(grep -Fvx 'ODS_WINDOWS_PORT_SCAN_OK' <<< "$output" || true)
+        if [[ -n "$output" ]] && grep -qvE '^[[:space:]]*[0-9]+[[:space:]]*$' <<< "$output"; then
+            return 2
+        fi
+        _ODS_WINDOWS_PORT_CACHE="$output"
+        _ODS_WINDOWS_PORT_CACHE_READY=true
+    fi
+
+    return 0
+}
+
+ods_windows_host_port_in_use() {
+    local port="${1:-}"
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || return 2
+
+    ods_windows_host_listening_ports || return $?
+    grep -Fxq "$port" <<< "${_ODS_WINDOWS_PORT_CACHE:-}"
+}
 
 load_capability_profile() {
     CAP_PROFILE_LOADED="false"
