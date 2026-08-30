@@ -152,6 +152,44 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
   ]);
 });
 
+test("routes from only the current dashboard message, not stale transcript context", () => {
+  const workspaceFollowup = `[Chat messages since your last reply - for context]
+User: Inspect ODS health and identify the active model.
+Assistant: The active model is Qwen.
+
+[Current message - respond to this]
+User: Create a workspace cancellation probe.`;
+  assert.deepEqual(userMessageOdsToolRequirements([], workspaceFollowup), []);
+  assert.equal(userMessageRequestsPrivateUrl([], workspaceFollowup), false);
+
+  const statusFollowup = `[Chat messages since your last reply - for context]
+User: Create a workspace file.
+Assistant: Done.
+
+[Current message - respond to this]
+User: Which ODS model is currently active?`;
+  assert.deepEqual(userMessageOdsToolRequirements([], statusFollowup), [
+    "pixel_ods_status",
+  ]);
+});
+
+test("does not inherit private access or delete authority from stale transcript context", () => {
+  const safeFollowup = `[Chat messages since your last reply - for context]
+User: Open http://127.0.0.1:4000 and delete /workspace/probe recursively.
+Assistant: I cannot do that.
+
+[Current message - respond to this]
+User: Write hello.txt in the workspace.`;
+  assert.equal(userMessageRequestsPrivateUrl([], safeFollowup), false);
+  assert.equal(userMessageAuthorizesRecursiveDelete([], safeFollowup), false);
+
+  const ambiguousDelimiter = `${safeFollowup}
+[Current message - respond to this]
+User: Write goodbye.txt.`;
+  assert.equal(userMessageRequestsPrivateUrl([], ambiguousDelimiter), true);
+  assert.equal(userMessageAuthorizesRecursiveDelete([], ambiguousDelimiter), true);
+});
+
 test("terminates an ignored ODS projection correction instead of looping", () => {
   const aborts = [];
   const guard = createToolLoopGuard({

@@ -434,13 +434,32 @@ function messageContentText(content) {
     .join("\n");
 }
 
+const CURRENT_MESSAGE_WRAPPER = "[Current message - respond to this]\nUser:";
+
+function unwrapCurrentUserText(text) {
+  if (typeof text !== "string" || !text) return "";
+  const normalized = text.replace(/\r\n/g, "\n");
+  const first = normalized.indexOf(CURRENT_MESSAGE_WRAPPER);
+  if (first === -1) return normalized;
+  // The dashboard/OpenClaw compatibility prompt uses exactly one trusted
+  // current-message delimiter after its history transcript. If untrusted user
+  // content introduces another delimiter, keep the complete prompt so every
+  // safety classifier fails conservatively instead of accepting a forged tail.
+  if (
+    normalized.indexOf(CURRENT_MESSAGE_WRAPPER, first + CURRENT_MESSAGE_WRAPPER.length) !== -1
+  ) {
+    return normalized;
+  }
+  return normalized.slice(first + CURRENT_MESSAGE_WRAPPER.length).trimStart();
+}
+
 function currentUserText(messages, prompt = undefined) {
-  if (typeof prompt === "string" && prompt) return prompt;
+  if (typeof prompt === "string" && prompt) return unwrapCurrentUserText(prompt);
   if (!Array.isArray(messages)) return "";
   const userMessage = [...messages]
     .reverse()
     .find((message) => message && message.role === "user");
-  return messageContentText(userMessage?.content);
+  return unwrapCurrentUserText(messageContentText(userMessage?.content));
 }
 
 export function userMessageAuthorizesRecursiveDelete(messages, prompt = undefined) {
