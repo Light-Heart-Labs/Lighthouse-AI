@@ -28,8 +28,11 @@ the Pixel default-model selector.
 ## 2026-08-30 Windows laptop probe
 
 The probe ran through the installed ODS Pixel UI on WSL2 Ubuntu 24.04 with an
-NVIDIA 8 GB GPU and a 64K active context. The installed ODS source was
-`df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b`; the installed Pixel source was
+NVIDIA 8 GB GPU. The first four candidates used a 64K active context. Qwen3 4B
+Instruct 2507 was additionally profiled at 64K, 32K, and 24K because the larger
+contexts did not reach a first tool action within the observational budget. The
+installed ODS source was `df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b`;
+the installed Pixel source was
 `f1f811d02bffd5a1589eb6feb34323f6dadf7832`.
 
 Each model received a clean `/workspace/pixel_<model>_probe` directory and the
@@ -89,6 +92,38 @@ to completion, repair failures, and report only verified truth.
   `Available` without any owner-facing terminal report.
 - No verified passing result was produced.
 - Verdict: `not_agent_viable` on `windows-laptop` for this runtime.
+
+### Qwen3 4B Instruct 2507
+
+- Initial Pixel session: `505b13f2-871a-4aaf-a381-34565bd6d617`
+- Focused continuation session: `cd025ef5-6217-405c-8b7c-55a91fd29831`
+- Direct OpenAI-compatible tool requests proved that the model artifact and
+  chat template could emit a valid structured tool call. A roughly 9.7K-token
+  direct request also produced a tool call, so model loading alone was not the
+  failure.
+- At 64K and 32K active context, cold full Pixel turns did not reach a first
+  tool action within more than two minutes. At 24K, the cold turn reached its
+  first tool action after roughly 110 seconds; 35 of 37 model layers remained
+  on GPU and the runtime stayed within the 8 GB device budget.
+- The 24K turn created both files and used a background unittest command, but
+  ignored the fake-clock/no-sleep contract, validated constructor arguments in
+  the wrong method, mishandled updates and lazy reclamation, and wrote a
+  self-comparison that could never pass.
+- The model invented a process-session alias in the initial turn. Candidate
+  guard commit `7c1a8af544dcde07e0104a35804fe653c612835d` repaired only the exact
+  `session-<known-label>-<pid>` shape for a process already created by the same
+  run. The focused continuation then polled the canonical `fresh-ocean` and
+  `dawn-glade` labels successfully, demonstrating that background-process
+  continuity was no longer the blocker.
+- The continuation inspected the real two-test failure, but retained real
+  sleeping, added expiration cleanup after capacity eviction, failed to repair
+  the self-comparison, and eventually introduced a duplicate `__len__` method.
+  The bounded verification guard stopped the retry loop and the ODS UI
+  correctly reported failure instead of exposing a false success.
+- Independent replay of `python3 -m unittest -v` still ran seven tests with two
+  failures. Source inspection confirmed the remaining duplicate method and
+  broader contract defects.
+- Verdict: `not_agent_viable` on `windows-laptop` for the tested 24K runtime.
 
 ## Revalidation
 
