@@ -58,6 +58,9 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /configured links, or URLs such as n8n/);
   assert.match(result.appendSystemContext, /gather each requested ODS projection exactly once first/);
   assert.match(result.appendSystemContext, /continue normally with the file, coding, research, or execution tools/);
+  assert.match(result.appendSystemContext, /retain projection facts silently/);
+  assert.match(result.appendSystemContext, /do not emit or restate those facts between tool calls/);
+  assert.match(result.appendSystemContext, /one consolidated final answer only after all requested work is verified/);
   assert.match(result.appendSystemContext, /Do not call tools merely to discover/);
   assert.match(result.appendSystemContext, /never substitute pixel_ods_status/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);

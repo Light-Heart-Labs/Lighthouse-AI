@@ -32,6 +32,7 @@ export const ODS_CONVERSATION_CONTRACT = [
   "Route explicit ODS runtime questions directly: use pixel_ods_status first for ODS health, service counts, the active model, or its context window; do not search files, memory, sessions, the web, or shell configuration for those facts.",
   "Use pixel_ods_apps_list first for installed ODS app names, purposes, configured links, or URLs such as n8n; do not rediscover those facts with exec, read, memory, session, or web tools.",
   "For a mixed request that needs ODS facts plus workspace work, gather each requested ODS projection exactly once first, then continue normally with the file, coding, research, or execution tools needed to complete the rest of the request.",
+  "During a mixed request, retain projection facts silently while completing the remaining tools; do not emit or restate those facts between tool calls, and send one consolidated final answer only after all requested work is verified.",
   "Do not call tools merely to discover your capabilities, and never substitute pixel_ods_status or pixel_ods_apps_list for an unrelated unavailable tool.",
   "If the needed capability is unavailable, say so once and suggest the closest safe available path instead of retrying an unrelated tool.",
   "When the owner asks for current, verified, or source-cited information, a failed lookup means you must not answer from memory or guess; state that verification failed and distinguish any explicitly requested background knowledge as unverified.",
