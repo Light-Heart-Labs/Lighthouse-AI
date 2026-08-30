@@ -104,6 +104,24 @@ export const EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX =
 export const EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX =
   "Pixel staged the requested download as an immutable plan, but external approval is required. No artifact was created, and Pixel did not self-approve it.";
 
+export const OPERATIONS_REQUIRES_BROKER_REASON =
+  "The owner requested host or Operations evidence. Generic exec runs inside Pixel's sandbox and cannot establish host facts. Use pixel_ops_inventory when action names are needed, submit the matching named action with pixel_ops_run or pixel_ops_workflow_submit, and obtain its terminal result with pixel_ops_job_wait.";
+
+export const OPERATIONS_LOOP_ABORT_REASON =
+  "Pixel stopped this response because it requested another non-Operations tool after the host Operations boundary was enforced. Start a fresh message to retry the named broker action.";
+
+export const OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX =
+  "Pixel did not submit the requested host or Operations work through the isolated Operations Broker. No sandbox command was accepted as host evidence.";
+
+export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel submitted Operations work but did not obtain a matching terminal broker result in this response. Treat the host outcome as pending or unverified, not completed.";
+
+export const OPERATIONS_WRONG_ACTION_REASON =
+  "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
+
+export const OPERATIONS_HOST_EVIDENCE_PREFIX =
+  "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
+
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
@@ -115,6 +133,25 @@ const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ops_job_wait",
   "pixel_ops_job_events",
   "pixel_ops_job_cancel",
+]);
+const OPERATIONS_TOOLS = new Set([
+  "pixel_ops_inventory",
+  "pixel_ops_run",
+  "pixel_ops_workflow_submit",
+  "pixel_ops_download_stage",
+  "pixel_ops_artifact_transfer",
+  "pixel_ops_shell_propose",
+  "pixel_ops_job_get",
+  "pixel_ops_job_wait",
+  "pixel_ops_job_events",
+  "pixel_ops_job_cancel",
+]);
+const OPERATIONS_SUBMISSION_TOOLS = new Set([
+  "pixel_ops_run",
+  "pixel_ops_workflow_submit",
+  "pixel_ops_download_stage",
+  "pixel_ops_artifact_transfer",
+  "pixel_ops_shell_propose",
 ]);
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
@@ -536,6 +573,237 @@ function exactDownloadTerminalText(outcome) {
   return `${EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX} Job: ${outcome.jobId}. Terminal status: ${outcome.status}.`;
 }
 
+function operationsSubmission(event, toolName) {
+  if (!OPERATIONS_SUBMISSION_TOOLS.has(toolName) || toolCallFailed(event)) {
+    return undefined;
+  }
+  const details = event?.result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.status !== "submitted" ||
+    typeof details.jobId !== "string" ||
+    !OPS_JOB_ID.test(details.jobId)
+  ) {
+    return undefined;
+  }
+  const actions = [];
+  if (toolName === "pixel_ops_run") {
+    if (
+      details.kind !== "action" ||
+      typeof event?.params?.target !== "string" ||
+      typeof event?.params?.action !== "string"
+    ) {
+      return undefined;
+    }
+    actions.push({ target: event.params.target, action: event.params.action });
+  } else if (toolName === "pixel_ops_workflow_submit") {
+    if (details.kind !== "workflow" || !Array.isArray(event?.params?.steps)) {
+      return undefined;
+    }
+    for (const step of event.params.steps) {
+      if (
+        !step ||
+        typeof step !== "object" ||
+        Array.isArray(step) ||
+        typeof step.target !== "string" ||
+        typeof step.action !== "string"
+      ) {
+        return undefined;
+      }
+      actions.push({ target: step.target, action: step.action });
+    }
+  } else if (toolName === "pixel_ops_download_stage" && details.kind === "download") {
+    actions.push({ target: "broker", action: "download.stage" });
+  } else if (
+    toolName === "pixel_ops_artifact_transfer" &&
+    details.kind === "transfer" &&
+    typeof event?.params?.target === "string"
+  ) {
+    actions.push({ target: event.params.target, action: "artifact.transfer" });
+  } else if (
+    toolName === "pixel_ops_shell_propose" &&
+    details.kind === "shell" &&
+    typeof event?.params?.target === "string"
+  ) {
+    actions.push({ target: event.params.target, action: "raw-shell" });
+  } else {
+    return undefined;
+  }
+  return { jobId: details.jobId, actions };
+}
+
+function operationsTerminalOutcome(event, submittedJobs) {
+  if (toolCallFailed(event) || !(submittedJobs instanceof Map)) return undefined;
+  const requestedJobId = event?.params?.jobId;
+  const details = event?.result?.details;
+  const submission = submittedJobs.get(requestedJobId);
+  if (
+    typeof requestedJobId !== "string" ||
+    !submission ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.jobId !== requestedJobId ||
+    details.waitTimedOut === true ||
+    !["succeeded", "failed", "cancelled", "rejected", "awaiting-approval"].includes(
+      details.status
+    )
+  ) {
+    return undefined;
+  }
+  if (
+    details.status === "awaiting-approval" &&
+    (details.approvalRequired !== true ||
+      typeof details.planHash !== "string" ||
+      !SHA256.test(details.planHash))
+  ) {
+    return undefined;
+  }
+  if (details.status !== "succeeded") {
+    return {
+      jobId: requestedJobId,
+      status: details.status,
+      planHash: details.planHash,
+      actions: submission.actions,
+      steps: [],
+    };
+  }
+  if (!Array.isArray(details.steps) || details.steps.length !== submission.actions.length) {
+    return undefined;
+  }
+  const expected = submission.actions
+    .map(({ target, action }) => `${target}\u0000${action}`)
+    .sort();
+  const observed = [];
+  for (const step of details.steps) {
+    if (
+      !step ||
+      typeof step !== "object" ||
+      Array.isArray(step) ||
+      typeof step.target !== "string" ||
+      typeof step.action !== "string" ||
+      step.exitCode !== 0 ||
+      typeof step.stdout !== "string" ||
+      typeof step.stderr !== "string" ||
+      !step.outputTruncated ||
+      typeof step.outputTruncated !== "object" ||
+      step.outputTruncated.stdout !== false ||
+      step.outputTruncated.stderr !== false ||
+      !Array.isArray(step.riskSignals)
+    ) {
+      return undefined;
+    }
+    observed.push(`${step.target}\u0000${step.action}`);
+  }
+  observed.sort();
+  if (expected.length !== observed.length || expected.some((value, index) => value !== observed[index])) {
+    return undefined;
+  }
+  return {
+    jobId: requestedJobId,
+    status: details.status,
+    planHash: details.planHash,
+    actions: submission.actions,
+    steps: details.steps,
+  };
+}
+
+function cleanSingleLine(value, pattern, maximum) {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text || text.length > maximum || text.includes("\n") || text.includes("\r")) {
+    return undefined;
+  }
+  return pattern.test(text) ? text : undefined;
+}
+
+function osPrettyName(value) {
+  if (typeof value !== "string" || value.length > 16 * 1024 || value.includes("\0")) {
+    return undefined;
+  }
+  const line = value.split(/\r?\n/).find((candidate) => candidate.startsWith("PRETTY_NAME="));
+  if (!line) return undefined;
+  let text = line.slice("PRETTY_NAME=".length).trim();
+  if (
+    text.length >= 2 &&
+    ((text.startsWith('"') && text.endsWith('"')) ||
+      (text.startsWith("'") && text.endsWith("'")))
+  ) {
+    text = text.slice(1, -1);
+  }
+  return cleanSingleLine(text, /^[A-Za-z0-9][A-Za-z0-9 .,_+()/:;~'&-]{0,255}$/, 256);
+}
+
+function operationsHostEvidenceText(requiredActions, terminalJobs) {
+  if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
+  if (!(terminalJobs instanceof Map)) return undefined;
+  const steps = new Map();
+  for (const outcome of terminalJobs.values()) {
+    if (outcome.status !== "succeeded") {
+      const plan = typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
+        ? ` Plan SHA-256: ${outcome.planHash}.`
+        : "";
+      return `Pixel's required host Operations job reached terminal status ${outcome.status}. Job: ${outcome.jobId}.${plan}`;
+    }
+    for (const step of outcome.steps) {
+      if (step.target === "ods-host" && requiredActions.has(step.action)) {
+        steps.set(step.action, { ...step, jobId: outcome.jobId });
+      }
+    }
+  }
+  if ([...requiredActions].some((action) => !steps.has(action))) return undefined;
+  const lines = [OPERATIONS_HOST_EVIDENCE_PREFIX];
+  const identity = steps.get("host.identity");
+  if (identity) {
+    const value = cleanSingleLine(
+      identity.stdout,
+      /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/,
+      253
+    );
+    if (!value || identity.stderr.trim() || identity.riskSignals.length > 0) return undefined;
+    lines.push(`- Hostname: \`${value}\` (job \`${identity.jobId}\`)`);
+  }
+  const kernel = steps.get("host.kernel");
+  if (kernel) {
+    const value = cleanSingleLine(
+      kernel.stdout,
+      /^[A-Za-z0-9][A-Za-z0-9 ._~+/:#()-]{0,511}$/,
+      512
+    );
+    if (!value || kernel.stderr.trim() || kernel.riskSignals.length > 0) return undefined;
+    lines.push(`- Kernel: \`${value}\` (job \`${kernel.jobId}\`)`);
+  }
+  const architecture = steps.get("host.architecture");
+  if (architecture) {
+    const value = cleanSingleLine(
+      architecture.stdout,
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+      64
+    );
+    if (!value || architecture.stderr.trim() || architecture.riskSignals.length > 0) return undefined;
+    lines.push(`- Architecture: \`${value}\` (job \`${architecture.jobId}\`)`);
+  }
+  const platform = steps.get("host.platform");
+  if (platform) {
+    const value = cleanSingleLine(
+      platform.stdout,
+      /^[A-Za-z0-9][A-Za-z0-9 ._~+/:#()-]{0,1023}$/,
+      1024
+    );
+    if (!value || platform.stderr.trim() || platform.riskSignals.length > 0) return undefined;
+    lines.push(`- Platform: \`${value}\` (job \`${platform.jobId}\`)`);
+  }
+  const osRelease = steps.get("host.os-release");
+  if (osRelease) {
+    const value = osPrettyName(osRelease.stdout);
+    if (!value || osRelease.stderr.trim() || osRelease.riskSignals.length > 0) return undefined;
+    lines.push(`- Operating system: \`${value}\` (job \`${osRelease.jobId}\`)`);
+  }
+  return lines.join("\n");
+}
+
 function webFetchWasTruncated(event) {
   if (event?.error) return false;
   const details = event?.result?.details;
@@ -732,6 +1000,9 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   );
   const rejectsApps = explicitlyRejectsOdsTool(text, `(?:${genericOdsTool}|${appsTool})`);
   const requirements = [];
+  const asksAvailability =
+    /\b(?:is|are)\s+(?:the\s+)?(?:ODS|Pixel)\b.{0,32}\bavailable\b/i.test(text) ||
+    /\b(?:ODS|Pixel)\b.{0,32}\b(?:is|are)\s+available\b/i.test(text);
   const asksStatus =
     !rejectsStatus &&
     (/\bpixel_ods_status\b/i.test(text) ||
@@ -739,12 +1010,13 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
       /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
         text
       ) ||
-      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
+      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
         text
       ) ||
-      /\b(?:health|status|online|available|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
+      /\b(?:health|status|online|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
         text
-      ));
+      ) ||
+      asksAvailability);
   const asksApps =
     !rejectsApps &&
     (/\bpixel_ods_apps_list\b/i.test(text) ||
@@ -757,6 +1029,34 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   if (asksStatus) requirements.push("pixel_ods_status");
   if (asksApps) requirements.push("pixel_ods_apps_list");
   return requirements;
+}
+
+export function userMessageRequiresOperations(messages, prompt = undefined) {
+  return userMessageOperationsRequirements(messages, prompt).required;
+}
+
+export function userMessageOperationsRequirements(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return { required: false, actions: [] };
+  const explicitOperations =
+    /\b(?:use|using|via|through|with)\b.{0,48}\b(?:Pixel\s+)?Operations(?:\s+(?:Broker|capabilit(?:y|ies)|tools?))?\b/i.test(
+      text
+    );
+  const hostEvidence =
+    /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|os (?:signature|release))\b/i.test(
+      text
+    ) && /\b(?:ODS|host|machine)\b/i.test(text);
+  const actions = [];
+  if (/\b(?:hostname|host identity)\b/i.test(text)) actions.push("host.identity");
+  if (/\bkernel\b/i.test(text)) actions.push("host.kernel");
+  if (/\b(?:machine architecture|architecture|cpu architecture)\b/i.test(text)) {
+    actions.push("host.architecture");
+  }
+  if (/\bhost platform\b/i.test(text)) actions.push("host.platform");
+  if (/\b(?:operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i.test(text)) {
+    actions.push("host.os-release");
+  }
+  return { required: explicitOperations || hostEvidence, actions: [...new Set(actions)] };
 }
 
 export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
@@ -975,6 +1275,11 @@ export function createToolLoopGuard({
         exactDownloadArtifact: undefined,
         exactDownloadTerminalOutcome: undefined,
         exactDownloadTerminalBlocks: 0,
+        operationsRequired: false,
+        operationsRequiredActions: new Set(),
+        operationsSubmittedJobs: new Map(),
+        operationsTerminalJobs: new Map(),
+        operationsTerminalBlocks: 0,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
         latestVerificationStatus: undefined,
@@ -1035,6 +1340,53 @@ export function createToolLoopGuard({
         `Pixel stopped a tool retry after the exact-download boundary for run ${runId}; active run aborted=${aborted}`
       );
       return { block: true, blockReason: EXACT_DOWNLOAD_LOOP_ABORT_REASON };
+    }
+
+    if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
+      if (state.operationsTerminalBlocks === 0) {
+        state.operationsTerminalBlocks = 1;
+        return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
+      }
+      let aborted = false;
+      try {
+        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+      } catch (error) {
+        warn(`Pixel Operations-routing abort failed for run ${runId}: ${String(error)}`);
+      }
+      warn(
+        `Pixel stopped a tool retry after the Operations boundary for run ${runId}; active run aborted=${aborted}`
+      );
+      return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
+    }
+
+    if (
+      state?.operationsRequiredActions?.size > 0 &&
+      OPERATIONS_SUBMISSION_TOOLS.has(toolName)
+    ) {
+      const params = normalizedParams ?? event?.params;
+      let actions = [];
+      if (toolName === "pixel_ops_run") {
+        actions = [{ target: params?.target, action: params?.action }];
+      } else if (toolName === "pixel_ops_workflow_submit" && Array.isArray(params?.steps)) {
+        actions = params.steps.map((step) => ({
+          target: step?.target,
+          action: step?.action,
+        }));
+      }
+      const matches =
+        actions.length > 0 &&
+        actions.every(
+          ({ target, action }) =>
+            target === "ods-host" && state.operationsRequiredActions.has(action)
+        );
+      if (!matches) {
+        return {
+          block: true,
+          blockReason: `${OPERATIONS_WRONG_ACTION_REASON} Required actions: ${[
+            ...state.operationsRequiredActions,
+          ].join(", ")}.`,
+        };
+      }
     }
 
     if (
@@ -1323,6 +1675,14 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        const operations = userMessageOperationsRequirements(
+          event?.messages,
+          event?.prompt
+        );
+        state.operationsRequired = !state.exactDownloadRequested && operations.required;
+        state.operationsRequiredActions = new Set(
+          state.operationsRequired ? operations.actions : []
+        );
       }
       if (!state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
@@ -1408,6 +1768,19 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    if (state.operationsRequired) {
+      const submission = operationsSubmission(event, toolName);
+      if (submission) {
+        state.operationsSubmittedJobs.set(submission.jobId, submission);
+      }
+      if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+        const outcome = operationsTerminalOutcome(
+          event,
+          state.operationsSubmittedJobs
+        );
+        if (outcome) state.operationsTerminalJobs.set(outcome.jobId, outcome);
+      }
+    }
     if (toolName === "pixel_ops_download_stage") {
       const submission = exactDownloadSubmission(event);
       if (submission) state.exactDownloadSubmissions.set(submission.jobId, submission);
@@ -1537,6 +1910,33 @@ export function createToolLoopGuard({
           text: state.exactDownloadSubmissions.size > 0
             ? EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX
             : EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
+        };
+      }
+    }
+    if (state.operationsRequired) {
+      if (state.operationsSubmittedJobs.size === 0) {
+        return { status: "failed", text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX };
+      }
+      if (
+        [...state.operationsSubmittedJobs.keys()].some(
+          (jobId) => !state.operationsTerminalJobs.has(jobId)
+        )
+      ) {
+        return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+      }
+      const hostText = operationsHostEvidenceText(
+        state.operationsRequiredActions,
+        state.operationsTerminalJobs
+      );
+      if (state.operationsRequiredActions.size > 0) {
+        if (!hostText) {
+          return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+        }
+        return {
+          status: hostText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX)
+            ? "passed"
+            : "failed",
+          text: hostText,
         };
       }
     }

@@ -1696,7 +1696,8 @@ install_root = normalized_root(install_root, "ODS install root")
 workspace = normalized_root(workspace, "Pixel workspace")
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
-for binary in (hostname_binary, uname_binary):
+cat_binary = "/usr/bin/cat"
+for binary in (hostname_binary, uname_binary, cat_binary):
     info = pathlib.Path(binary).lstat()
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_uid != 0 or info.st_mode & 0o022
@@ -1781,6 +1782,42 @@ payload = {
             "reversible": False,
             "targets": ["ods-host"],
             "argv": [uname_binary, "-a"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.kernel": {
+            "description": "Report the ODS host kernel name and release.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [uname_binary, "-sr"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.architecture": {
+            "description": "Report the ODS host machine architecture.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [uname_binary, "-m"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.os-release": {
+            "description": "Report the ODS host operating-system release metadata.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [cat_binary, "/etc/os-release"],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },

@@ -22,6 +22,12 @@ import {
   GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
+  OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_LOOP_ABORT_REASON,
+  OPERATIONS_REQUIRES_BROKER_REASON,
+  OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
+  OPERATIONS_UNVERIFIED_DELIVERY_PREFIX,
+  OPERATIONS_WRONG_ACTION_REASON,
   PRIVATE_URL_REQUEST_REASON,
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
   RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
@@ -42,6 +48,8 @@ import {
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
+  userMessageOperationsRequirements,
+  userMessageRequiresOperations,
   userMessageRequestsPrivateUrl,
   userMessageRequestsExactByteDownload,
 } from "../plugin/tool-loop-guard.mjs";
@@ -490,6 +498,16 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
   assert.deepEqual(userMessageOdsToolRequirements([], "Which model is currently active?"), [
     "pixel_ods_status",
   ]);
+  assert.deepEqual(userMessageOdsToolRequirements([], "Is Pixel available?"), [
+    "pixel_ods_status",
+  ]);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Use the safe Operations capabilities available to inspect the ODS host kernel."
+    ),
+    []
+  );
   assert.deepEqual(userMessageOdsToolRequirements([], "What is the configured n8n URL?"), [
     "pixel_ods_apps_list",
   ]);
@@ -524,6 +542,208 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
     ),
     ["pixel_ods_status"]
   );
+});
+
+test("classifies explicit host evidence as Operations work", () => {
+  assert.equal(
+    userMessageRequiresOperations(
+      [],
+      "Tell me the ODS host hostname, kernel, and machine architecture using Operations capabilities."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequiresOperations([], "Explain the operational considerations in this code."),
+    false
+  );
+  assert.equal(userMessageRequiresOperations([], "Run unit tests in the workspace."), false);
+  assert.deepEqual(
+    userMessageOperationsRequirements(
+      [],
+      "Tell me the exact hostname, kernel, OS signature, and machine architecture of the ODS host."
+    ),
+    {
+      required: true,
+      actions: ["host.identity", "host.kernel", "host.architecture", "host.os-release"],
+    }
+  );
+});
+
+test("routes host evidence through Operations and requires a matching terminal job", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Use Operations to report the ODS host identity." }
+  );
+  assert.deepEqual(call(guard, "exec", { event: { params: { command: "hostname" } } }), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  assert.equal(call(guard, "pixel_ops_inventory"), undefined);
+  assert.match(
+    call(guard, "pixel_ops_run", {
+      event: { params: { target: "ods-host", action: "host.platform" } },
+    })?.blockReason,
+    new RegExp(OPERATIONS_WRONG_ACTION_REASON)
+  );
+  assert.equal(
+    call(guard, "pixel_ops_run", {
+      event: { params: { target: "ods-host", action: "host.identity" } },
+    }),
+    undefined
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step",
+            target: "ods-host",
+            action: "host.identity",
+            exitCode: 0,
+            stdout: "light-worker\n",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `${OPERATIONS_HOST_EVIDENCE_PREFIX}\n- Hostname: \`light-worker\` (job \`${jobId}\`)`
+  );
+});
+
+test("binds every requested host fact to exact workflow actions and terminal output", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const prompt =
+    "Tell me the exact hostname, kernel, OS signature, and machine architecture of the ODS host using Operations.";
+  const steps = [
+    { id: "identity", target: "ods-host", action: "host.identity" },
+    { id: "kernel", target: "ods-host", action: "host.kernel" },
+    { id: "architecture", target: "ods-host", action: "host.architecture" },
+    { id: "os", target: "ods-host", action: "host.os-release" },
+  ];
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  assert.equal(
+    call(guard, "pixel_ops_workflow_submit", { event: { params: { steps } } }),
+    undefined
+  );
+  afterCall(guard, "pixel_ops_workflow_submit", {
+    event: {
+      params: { steps },
+      result: { details: { jobId, status: "submitted", kind: "workflow" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [
+            { stepId: "identity", target: "ods-host", action: "host.identity", exitCode: 0, stdout: "light-worker\n", stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] },
+            { stepId: "kernel", target: "ods-host", action: "host.kernel", exitCode: 0, stdout: "Linux 6.6.87.2-microsoft-standard-WSL2\n", stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] },
+            { stepId: "architecture", target: "ods-host", action: "host.architecture", exitCode: 0, stdout: "x86_64\n", stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] },
+            { stepId: "os", target: "ods-host", action: "host.os-release", exitCode: 0, stdout: 'PRETTY_NAME="Ubuntu 24.04.3 LTS"\nNAME="Ubuntu"\n', stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] },
+          ],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
+  assert.match(text, /Hostname: `light-worker`/);
+  assert.match(text, /Kernel: `Linux 6\.6\.87\.2-microsoft-standard-WSL2`/);
+  assert.match(text, /Architecture: `x86_64`/);
+  assert.match(text, /Operating system: `Ubuntu 24\.04\.3 LTS`/);
+  assert.doesNotMatch(text, /Model claimed success/);
+});
+
+test("rejects terminal Operations evidence whose action or output is not bound", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Use Operations to report the ODS host identity." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step",
+            target: "ods-host",
+            action: "host.platform",
+            exitCode: 0,
+            stdout: "invented-host",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
+});
+
+test("fails closed when Operations work is not submitted or routing is ignored", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    abortRun: (sessionId) => {
+      aborts.push(sessionId);
+      return true;
+    },
+  });
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Use the Operations Broker to inspect the ODS host platform." }
+  );
+  assert.deepEqual(call(guard, "exec"), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  assert.deepEqual(call(guard, "read"), {
+    block: true,
+    blockReason: OPERATIONS_LOOP_ABORT_REASON,
+  });
+  assert.deepEqual(aborts, ["session-1"]);
+  assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX);
 });
 
 test("routes from only the current dashboard message, not stale transcript context", () => {

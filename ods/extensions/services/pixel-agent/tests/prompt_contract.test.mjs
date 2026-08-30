@@ -77,6 +77,15 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /one consolidated final answer only after all requested work is verified/);
   assert.match(result.appendSystemContext, /Do not call tools merely to discover/);
   assert.match(result.appendSystemContext, /never substitute pixel_ods_status/);
+  assert.match(result.appendSystemContext, /generic exec is sandbox-only evidence/);
+  assert.match(result.appendSystemContext, /host\.identity for the hostname/);
+  assert.match(result.appendSystemContext, /host\.kernel for the kernel/);
+  assert.match(result.appendSystemContext, /host\.architecture for machine architecture/);
+  assert.match(result.appendSystemContext, /host\.os-release for operating-system release/);
+  assert.match(result.appendSystemContext, /exact ods-host actions with pixel_ops_run/);
+  assert.match(result.appendSystemContext, /terminal state of every submitted job with pixel_ops_job_wait/);
+  assert.match(result.appendSystemContext, /submitted Operations job is not completed work/);
+  assert.match(result.appendSystemContext, /never approve an immutable plan yourself/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);
   assert.match(result.appendSystemContext, /a failed lookup means you must not answer from memory or guess/);
   assert.match(result.appendSystemContext, /truncated excerpt does not verify/);
@@ -119,6 +128,7 @@ test("recognizes private-boundary tool results as loop recovery triggers", () =>
     "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames.",
     "Pixel blocked this command because shell execution cannot be used to contact local, private, or raw-IP HTTP(S) destinations.",
     "Pixel stopped this response because a private-network boundary was enforced.",
+    "Pixel stopped this response because the host Operations boundary was enforced.",
     "Pixel's web-research budget is exhausted for this response.",
     "Pixel stopped repeating the same failing command after three attempts.",
     "Pixel stopped a no-progress coding repair loop after its bounded failed-verification limit.",

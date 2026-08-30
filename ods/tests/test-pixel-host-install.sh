@@ -394,10 +394,13 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-assert set(v["actions"]) == {"host.identity","host.platform"}
+assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release"}
 assert all(action["tier"] == "read" and action["defaultAuthority"] == "observe" for action in v["actions"].values())
 assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
+assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
+assert v["actions"]["host.architecture"]["argv"] == ["/usr/bin/uname", "-m"]
 assert v["actions"]["host.platform"]["argv"] == ["/usr/bin/uname", "-a"]
+assert v["actions"]["host.os-release"]["argv"] == ["/usr/bin/cat", "/etc/os-release"]
 assert v["authority"]["defaultLevel"] == "propose"
 assert v["authority"]["grants"] == [{"id":"ods-approved-downloads","level":"bounded-auto","actions":["download.stage"],"targets":["broker"],"tiers":["staging"],"environments":["lab"],"maxExecutions":100,"windowSeconds":86400,"maxConcurrent":2,"maxRuntimeSeconds":600,"maxFailures":10,"maxArtifactBytes":536870912}]
 ' "$operations_policy" "$INSTALL_DIR" "$home/.openclaw/workspace-pixel"

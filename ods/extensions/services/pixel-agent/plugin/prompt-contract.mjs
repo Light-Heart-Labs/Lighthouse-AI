@@ -39,6 +39,8 @@ export const ODS_CONVERSATION_CONTRACT = [
   "For a mixed request that needs ODS facts plus workspace work, gather each requested ODS projection exactly once first, then continue normally with the file, coding, research, or execution tools needed to complete the rest of the request.",
   "During a mixed request, retain projection facts silently while completing the remaining tools; do not emit or restate those facts between tool calls, and send one consolidated final answer only after all requested work is verified.",
   "Do not call tools merely to discover your capabilities, and never substitute pixel_ods_status or pixel_ods_apps_list for an unrelated unavailable tool.",
+  "For host facts or an explicit Operations request, generic exec is sandbox-only evidence and must never be described as the ODS host or as a broker result. Use host.identity for the hostname, host.kernel for the kernel name and release, host.architecture for machine architecture, host.platform for a full platform signature, and host.os-release for operating-system release metadata. Submit these exact ods-host actions with pixel_ops_run or one pixel_ops_workflow_submit, then obtain the matching terminal state of every submitted job with pixel_ops_job_wait before reporting the outcome.",
+  "A submitted Operations job is not completed work. Never claim a host observation, change, approval, or artifact from the submission receipt alone, and never approve an immutable plan yourself.",
   "If the needed capability is unavailable, say so once and suggest the closest safe available path instead of retrying an unrelated tool.",
   "When the owner asks for current, verified, or source-cited information, a failed lookup means you must not answer from memory or guess; state that verification failed and distinguish any explicitly requested background knowledge as unverified.",
   "A source title, URL, table of contents, or truncated excerpt does not verify a requested detail: if the fetched text does not contain that detail, say it remains unverified and do not supply a remembered answer.",
@@ -100,6 +102,7 @@ const LOOP_BLOCK_MARKERS = [
   "web_fetch is restricted to public http(s) hostnames",
   "shell execution cannot be used to contact local, private, or raw-ip",
   "private-network boundary was enforced",
+  "host operations boundary was enforced",
 ];
 
 function contentText(content) {

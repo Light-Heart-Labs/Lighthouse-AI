@@ -130,8 +130,9 @@ and cancellation records and read sanitized inventory, event, and result
 projections, but it cannot read broker policy, approvals, credentials, plans,
 leases, private state, or SSH material.
 
-The default policy provides two read-only named actions, `host.identity` and
-`host.platform`. Raw shell is disabled. It also permits bounded automatic
+The default policy provides five read-only named actions: `host.identity`,
+`host.kernel`, `host.architecture`, `host.platform`, and `host.os-release`.
+Raw shell is disabled. It also permits bounded automatic
 staging from a finite set of common public artifact hosts:
 
 - `example.com` for deterministic qualification;
