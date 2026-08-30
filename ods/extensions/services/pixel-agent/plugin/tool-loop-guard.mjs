@@ -87,7 +87,19 @@ export const ODS_TOOL_ROUTING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another tool after the ODS projection route was enforced. Start a fresh message to continue.";
 
 export const EXACT_DOWNLOAD_REQUIRES_BROKER_REASON =
-  "Pixel cannot turn web_fetch or another transformed page view into an exact-byte download. Call pixel_ops_download_stage now with the owner's exact HTTPS URL, filename, and expected digest when one was supplied. This is the only permitted correction; do not create a workspace substitute or claim success without a matching terminal broker receipt.";
+  "Pixel cannot turn web_fetch or another transformed page view into an exact-byte download. Call pixel_ops_download_stage now; ODS will bind it to the owner's exact HTTPS URL, destination basename, and expected digest. Wait for that exact job with pixel_ops_job_wait, then publish only its verified receipt with pixel_ods_download_promote. Do not create a substitute file.";
+
+export const EXACT_DOWNLOAD_REQUIRES_WAIT_REASON =
+  "Pixel submitted the exact-byte staged download but has not obtained its terminal receipt. Call pixel_ops_job_wait now; ODS will bind it to the submitted job. Do not read, recreate, or transfer the quarantine path.";
+
+export const EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON =
+  "Pixel verified the staged artifact in quarantine. Call pixel_ods_download_promote now; ODS will bind the job, source URL, digest, filename, and workspace-relative destination. Do not read the root-only quarantine path or create a substitute file.";
+
+export const EXACT_DOWNLOAD_COMPLETE_REASON =
+  "Pixel has already published and reverified the requested exact-byte artifact. Do not call another tool; give the owner the final path, byte count, SHA-256, source, and non-executable status.";
+
+export const EXACT_DOWNLOAD_REQUEST_UNBOUND_REASON =
+  "Pixel could not bind this exact-byte request to one unambiguous HTTPS source URL and one safe workspace-relative destination. Do not call another tool or create a substitute; ask the owner for one exact HTTPS URL and destination path.";
 
 export const EXACT_DOWNLOAD_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another tool after the exact-download provenance boundary was enforced. Start a fresh message with an approved staged-download capability or ask for a non-byte-exact page summary.";
@@ -97,6 +109,15 @@ export const EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX =
 
 export const EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel did not verify that the requested artifact was staged. A broker request may have been submitted, but exact-byte success requires a matching terminal succeeded Operations receipt with an absolute quarantine path, byte count, SHA-256 digest, HTTPS source, and non-executable artifact evidence. Continue or retry the broker job; do not treat a workspace substitute as the download.";
+
+export const EXACT_DOWNLOAD_UNPUBLISHED_DELIVERY_PREFIX =
+  "Pixel verified the requested bytes in Operations quarantine but did not publish them into the owner workspace. No workspace download was accepted; retry the verified create-only promotion path.";
+
+export const EXACT_DOWNLOAD_PROMOTION_FAILED_DELIVERY_PREFIX =
+  "Pixel could not publish the verified staged bytes into the owner workspace. No overwrite or substitute file was accepted.";
+
+export const EXACT_DOWNLOAD_PUBLISHED_DELIVERY_PREFIX =
+  "Pixel securely published the requested exact-byte download into the owner workspace:";
 
 export const EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX =
   "Pixel's staged-download job reached a verified terminal failure. No artifact was created, and Pixel did not claim success.";
@@ -137,11 +158,9 @@ const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
 const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ops_download_stage",
-  "pixel_ops_artifact_transfer",
   "pixel_ops_job_get",
   "pixel_ops_job_wait",
-  "pixel_ops_job_events",
-  "pixel_ops_job_cancel",
+  "pixel_ods_download_promote",
 ]);
 const OPERATIONS_TOOLS = new Set([
   "pixel_ops_inventory",
@@ -442,9 +461,12 @@ function toolCallFailed(event) {
 
 const OPS_JOB_ID = /^ops-[0-9]{13}-[a-f0-9]{12}$/;
 const OPS_ARTIFACT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const WORKSPACE_PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const DOWNLOAD_PROMOTION_BOUNDARY =
+  "Verified create-only promotion from Pixel Operations quarantine into the configured owner workspace; no arbitrary source, overwrite, execution, or path traversal authority.";
 
-function exactDownloadSubmission(event) {
+function exactDownloadSubmission(event, requested) {
   if (toolCallFailed(event)) return undefined;
   const params = event?.params;
   const details = event?.result?.details;
@@ -453,10 +475,13 @@ function exactDownloadSubmission(event) {
     typeof params !== "object" ||
     Array.isArray(params) ||
     typeof params.url !== "string" ||
+    params.url !== requested?.url ||
     typeof params.filename !== "string" ||
+    params.filename !== requested?.filename ||
     !OPS_ARTIFACT_FILENAME.test(params.filename) ||
     (params.expectedSha256 !== undefined &&
       (typeof params.expectedSha256 !== "string" || !SHA256.test(params.expectedSha256))) ||
+    params.expectedSha256 !== requested?.expectedSha256 ||
     !details ||
     typeof details !== "object" ||
     Array.isArray(details) ||
@@ -488,6 +513,7 @@ function exactDownloadSubmission(event) {
     safeSource: params.url.split("?", 1)[0],
     filename: params.filename,
     expectedSha256: params.expectedSha256,
+    relativePath: requested.relativePath,
   };
 }
 
@@ -546,7 +572,56 @@ function exactDownloadTerminalArtifact(event, submissions) {
   ) {
     return undefined;
   }
-  return artifact;
+  return {
+    ...artifact,
+    jobId: requestedJobId,
+    requestedSource: submission.url,
+    relativePath: submission.relativePath,
+  };
+}
+
+function exactDownloadPromotion(event, artifact) {
+  if (toolCallFailed(event) || !artifact) return undefined;
+  const params = event?.params;
+  const details = event?.result?.details;
+  if (
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.schemaVersion !== 1 ||
+    details.kind !== "ods-pixel-download-promotion" ||
+    details.status !== "succeeded" ||
+    details.jobId !== artifact.jobId ||
+    details.filename !== artifact.filename ||
+    details.relativePath !== artifact.relativePath ||
+    details.bytes !== artifact.bytes ||
+    details.sha256 !== artifact.sha256 ||
+    details.requestedSource !== artifact.requestedSource ||
+    typeof details.source !== "string" ||
+    !details.source.startsWith("https://") ||
+    details.executable !== false ||
+    details.overwritten !== false ||
+    details.boundary !== DOWNLOAD_PROMOTION_BOUNDARY
+  ) {
+    return undefined;
+  }
+  return details;
+}
+
+function exactDownloadPublishedText(promotion) {
+  if (!promotion) return undefined;
+  return [
+    EXACT_DOWNLOAD_PUBLISHED_DELIVERY_PREFIX,
+    `- Workspace path: \`${promotion.relativePath}\`.`,
+    `- Bytes: ${promotion.bytes}.`,
+    `- SHA-256: \`${promotion.sha256}\`.`,
+    `- Source: ${promotion.source}.`,
+    "- Executable: no; overwrite: no.",
+    `- Operations job: \`${promotion.jobId}\`.`,
+  ].join("\n");
 }
 
 function exactDownloadTerminalOutcome(event, submissions) {
@@ -1482,6 +1557,88 @@ export function userMessageRequestsExactByteDownload(messages, prompt = undefine
   return asksDownload && asksExactBytes;
 }
 
+function exactDownloadWorkspacePath(text, sourceUrl) {
+  const quoted = text.match(
+    /\b(?:workspace\s+)?(?:file|artifact)\s+(?:named|at|as)\s*[`"']([A-Za-z0-9][A-Za-z0-9._/-]{0,511})[`"']/i
+  );
+  const unquoted = text.match(
+    /\b(?:workspace\s+)?(?:file|artifact)\s+(?:named|at|as)\s+([A-Za-z0-9][A-Za-z0-9._/-]{0,511})(?=[\s,.;!?)]|$)/i
+  );
+  const direct = text.match(
+    /\b(?:download|fetch|retrieve|save)\b[^\n]{0,240}?\b(?:as|to|into)\s+[`"']?([A-Za-z0-9][A-Za-z0-9._/-]{0,511})[`"']?(?=[\s,.;!?)]|$)/i
+  );
+  const hasExplicitDestinationClause =
+    /\b(?:workspace\s+)?(?:file|artifact)\s+(?:named|at|as)\s+\S+/i.test(text) ||
+    /\b(?:download|fetch|retrieve|save)\b[^\n]{0,240}?\b(?:as|to|into)\s+\S+/i.test(text);
+  let value = (quoted?.[1] ?? unquoted?.[1] ?? direct?.[1] ?? "").replace(
+    /^\/?workspace\//i,
+    ""
+  ).replace(/[.,;!?]+$/, "");
+  if (!value) {
+    if (hasExplicitDestinationClause) return undefined;
+    try {
+      const pathname = new URL(sourceUrl).pathname;
+      const candidate = pathname.split("/").filter(Boolean).at(-1) ?? "download.bin";
+      value = OPS_ARTIFACT_FILENAME.test(candidate) ? `downloads/${candidate}` : "downloads/download.bin";
+    } catch {
+      return undefined;
+    }
+  }
+  const parts = value.split("/");
+  if (
+    value.startsWith("/") ||
+    value.includes("\\") ||
+    value.length > 512 ||
+    parts.length < 1 ||
+    parts.length > 16 ||
+    parts.some(
+      (part) =>
+        ["", ".", ".."].includes(part) || !WORKSPACE_PATH_COMPONENT.test(part)
+    ) ||
+    !OPS_ARTIFACT_FILENAME.test(parts.at(-1))
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+export function userMessageExactDownloadRequest(messages, prompt = undefined) {
+  if (!userMessageRequestsExactByteDownload(messages, prompt)) return undefined;
+  const text = currentUserText(messages, prompt);
+  const candidates = text.match(/https:\/\/[^\s<>`"']+/gi) ?? [];
+  const urls = [];
+  for (const candidate of candidates) {
+    let value = candidate.replace(/[),.;!?\]}]+$/g, "");
+    try {
+      const parsed = new URL(value);
+      if (
+        parsed.protocol === "https:" &&
+        parsed.hostname &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.hash
+      ) {
+        urls.push(parsed.href);
+      }
+    } catch {
+      // The broker route stays unavailable when the owner URL is ambiguous.
+    }
+  }
+  if (urls.length !== 1) return { exact: true };
+  const relativePath = exactDownloadWorkspacePath(text, urls[0]);
+  if (!relativePath) return { exact: true, url: urls[0] };
+  const digest = text.match(
+    /\b(?:sha-?256|sha256|expected\s+digest|digest)\b[^a-f0-9]{0,32}([a-f0-9]{64})(?![a-f0-9])/i
+  )?.[1]?.toLowerCase();
+  return {
+    exact: true,
+    url: urls[0],
+    relativePath,
+    filename: relativePath.split("/").at(-1),
+    expectedSha256: digest,
+  };
+}
+
 function validGitHubRepository(owner, repository) {
   return (
     /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner) &&
@@ -1675,9 +1832,12 @@ export function createToolLoopGuard({
         odsRoutingExhausted: false,
         odsRoutingTerminalBlocks: 0,
         exactDownloadRequested: false,
+        exactDownloadRequest: undefined,
         exactDownloadSubmissions: new Map(),
         exactDownloadBrokerObserved: false,
         exactDownloadArtifact: undefined,
+        exactDownloadPromotion: undefined,
+        exactDownloadPromotionAttempted: false,
         exactDownloadTerminalOutcome: undefined,
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
@@ -1729,13 +1889,21 @@ export function createToolLoopGuard({
       return { block: true, blockReason: CLIENT_CANCELLED_REASON };
     }
 
-    if (
-      state?.exactDownloadRequested &&
-      !EXACT_DOWNLOAD_BROKER_TOOLS.has(toolName)
-    ) {
+    if (state?.exactDownloadRequested && state.exactDownloadPromotion) {
+      return { block: true, blockReason: EXACT_DOWNLOAD_COMPLETE_REASON };
+    }
+
+    if (state?.exactDownloadRequested && !EXACT_DOWNLOAD_BROKER_TOOLS.has(toolName)) {
       if (state.exactDownloadTerminalBlocks === 0) {
         state.exactDownloadTerminalBlocks = 1;
-        return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON };
+        return {
+          block: true,
+          blockReason: state.exactDownloadArtifact
+            ? EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON
+            : state.exactDownloadSubmissions.size > 0
+              ? EXACT_DOWNLOAD_REQUIRES_WAIT_REASON
+              : EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
+        };
       }
       let aborted = false;
       try {
@@ -1747,6 +1915,55 @@ export function createToolLoopGuard({
         `Pixel stopped a tool retry after the exact-download boundary for run ${runId}; active run aborted=${aborted}`
       );
       return { block: true, blockReason: EXACT_DOWNLOAD_LOOP_ABORT_REASON };
+    }
+
+    if (state?.exactDownloadRequested) {
+      const request = state.exactDownloadRequest;
+      if (!request?.url || !request?.filename || !request?.relativePath) {
+        return { block: true, blockReason: EXACT_DOWNLOAD_REQUEST_UNBOUND_REASON };
+      }
+      if (toolName === "pixel_ops_download_stage") {
+        if (state.exactDownloadArtifact) {
+          return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON };
+        }
+        if (state.exactDownloadSubmissions.size > 0) {
+          return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_WAIT_REASON };
+        }
+        const params = { url: request.url, filename: request.filename };
+        if (request.expectedSha256) params.expectedSha256 = request.expectedSha256;
+        return { params };
+      }
+      if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+        const submission = [...state.exactDownloadSubmissions.values()].at(-1);
+        if (!submission) {
+          return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON };
+        }
+        if (state.exactDownloadArtifact) {
+          return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON };
+        }
+        return { params: { jobId: submission.jobId } };
+      }
+      if (toolName === "pixel_ods_download_promote") {
+        const artifact = state.exactDownloadArtifact;
+        if (!artifact) {
+          return {
+            block: true,
+            blockReason:
+              state.exactDownloadSubmissions.size > 0
+                ? EXACT_DOWNLOAD_REQUIRES_WAIT_REASON
+                : EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
+          };
+        }
+        return {
+          params: {
+            jobId: artifact.jobId,
+            filename: artifact.filename,
+            relativePath: artifact.relativePath,
+            sha256: artifact.sha256,
+            sourceUrl: artifact.requestedSource,
+          },
+        };
+      }
     }
 
     if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
@@ -2139,10 +2356,11 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
-        state.exactDownloadRequested = userMessageRequestsExactByteDownload(
+        state.exactDownloadRequest = userMessageExactDownloadRequest(
           event?.messages,
           event?.prompt
         );
+        state.exactDownloadRequested = Boolean(state.exactDownloadRequest?.exact);
         const operations = userMessageOperationsRequirements(
           event?.messages,
           event?.prompt
@@ -2256,8 +2474,11 @@ export function createToolLoopGuard({
       }
     }
     if (toolName === "pixel_ops_download_stage") {
-      const submission = exactDownloadSubmission(event);
-      if (submission) state.exactDownloadSubmissions.set(submission.jobId, submission);
+      const submission = exactDownloadSubmission(event, state.exactDownloadRequest);
+      if (submission) {
+        state.exactDownloadSubmissions.set(submission.jobId, submission);
+        state.exactDownloadTerminalBlocks = 0;
+      }
     }
     if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
       const artifact = exactDownloadTerminalArtifact(
@@ -2268,6 +2489,7 @@ export function createToolLoopGuard({
         state.exactDownloadBrokerObserved = true;
         state.exactDownloadArtifact = artifact;
         state.exactDownloadTerminalOutcome = undefined;
+        state.exactDownloadTerminalBlocks = 0;
       } else {
         const outcome = exactDownloadTerminalOutcome(
           event,
@@ -2277,6 +2499,14 @@ export function createToolLoopGuard({
           state.exactDownloadBrokerObserved = true;
           state.exactDownloadTerminalOutcome = outcome;
         }
+      }
+    }
+    if (toolName === "pixel_ods_download_promote") {
+      state.exactDownloadPromotionAttempted = true;
+      const promotion = exactDownloadPromotion(event, state.exactDownloadArtifact);
+      if (promotion) {
+        state.exactDownloadPromotion = promotion;
+        state.exactDownloadTerminalBlocks = 0;
       }
     }
     if (
@@ -2386,6 +2616,18 @@ export function createToolLoopGuard({
             : EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
         };
       }
+      if (!state.exactDownloadPromotion) {
+        return {
+          status: "failed",
+          text: state.exactDownloadPromotionAttempted
+            ? EXACT_DOWNLOAD_PROMOTION_FAILED_DELIVERY_PREFIX
+            : EXACT_DOWNLOAD_UNPUBLISHED_DELIVERY_PREFIX,
+        };
+      }
+      return {
+        status: "passed",
+        text: exactDownloadPublishedText(state.exactDownloadPromotion),
+      };
     }
     if (state.operationsRequired) {
       if (state.operationsSubmittedJobs.size === 0) {

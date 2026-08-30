@@ -92,15 +92,18 @@ Browser
             |                    |                      |                    |
             v                    v                      v                    v
  exact-digest ODS plugin   Operations plugin     sandbox coding      ods-gateway/
- three projection tools   typed request spool    and public web      ods/current
+ four bounded tools       typed request spool    and public web      ods/current
             |                    |                                           |
             v                    v                                           v
  /run/ods-pixel/         isolated root-owned                         authenticated
  ods-status.json         Operations Broker                          LiteLLM loopback
                               |                                          |
                               v                                          v
-                   quarantined downloads and                 active ODS model/
-                   named policy actions                      provider route
+                   root-only quarantine                     active ODS model/
+                              |                              provider route
+                              v
+                   fixed artifact-promoter
+                   socket -> owner workspace
 ```
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
@@ -155,12 +158,27 @@ raw or private addresses, DNS rebinding, redirects outside reviewed domains,
 oversized content, digest mismatches, and emergency-pause or cancellation
 events fail closed.
 
-Successful downloads remain non-executable mode-`0600` artifacts under
-`/var/lib/pixel-ops-broker/artifacts/<job-id>/`. A submission receipt is not
-success. ODS accepts an exact-download claim only after a matching terminal
-broker result reports `succeeded` with the quarantine path, exact byte count,
-SHA-256 digest, HTTPS source, and `executable=false`. A transformed `web_fetch`
-response or model-created workspace substitute can never satisfy this
+Successful downloads first enter a root-only, non-executable mode-`0600`
+quarantine under `/var/lib/pixel-ops-broker/artifacts/<job-id>/`. A submission
+receipt is not success. After a matching terminal broker result reports
+`succeeded`, Pixel may call the separately bounded
+`pixel_ods_download_promote` tool with that exact job ID, filename, requested
+HTTPS source, optional expected digest, and a safe relative workspace path.
+
+The root-custodied artifact promoter accepts only Pixel's owner UID over a
+mode-`0600` Unix socket. It re-reads the broker result, reopens the quarantined
+file without following symlinks, verifies the source, filename, byte count,
+SHA-256 digest, and stable file identity, and create-only publishes the same
+bytes into Pixel's workspace as an owner-owned, mode-`0600`, non-executable
+file. It has no network, shell, Docker, credential, overwrite, or arbitrary
+source-file capability. Parent traversal, symlink parents, broker-result drift,
+source or digest mismatch, and existing targets fail closed.
+
+ODS accepts an exact-download claim only after the promoter returns a
+host-authoritative final receipt containing the workspace path, exact byte
+count, SHA-256 digest, bound HTTPS source, `executable=false`, and
+`overwritten=false`. A transformed `web_fetch` response, a model-created
+workspace substitute, or a broker staging receipt can never satisfy this
 contract.
 
 ### Cancellation and sandbox execution
@@ -309,7 +327,8 @@ case, and explicit `--pixel` fails visibly instead of implying provider parity.
 
 ## Bounded ODS tools
 
-The default ODS integration exposes three read-only tools to Pixel:
+The default ODS integration exposes three read-only tools and one narrow
+create-only artifact tool to Pixel:
 
 - `pixel_ods_status` returns the sanitized overall ODS state, an explicit
   application count, and allowlisted application states.
@@ -325,6 +344,9 @@ The default ODS integration exposes three read-only tools to Pixel:
   window. It is the targeted fallback when the normal `web_fetch` prefix is
   truncated before the requested detail; local, private, single-label,
   credentialed, and raw-IP destinations remain blocked.
+- `pixel_ods_download_promote` can publish one already-successful, exact broker
+  download into one new relative path in Pixel's workspace. It cannot fetch,
+  transform, overwrite, execute, or select an arbitrary host file.
 
 The status tools read only `/run/ods-pixel/ods-status.json`. The plugin does not
 receive the Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS
@@ -338,9 +360,13 @@ timestamps, and group/world-writable files.
 `web_fetch` and `pixel_ods_web_extract` return transformed, safety-marked page
 evidence, not the origin server's exact response bytes. Pixel must not save that
 representation as a byte-exact download or attribute its size or digest to the
-remote object. Until the separately policy-approved staged-download capability
-is installed and qualified, an exact-byte download request fails closed without
-creating a substitute artifact; ordinary page research remains available.
+remote object. For an exact-byte request, the loop guard binds one HTTPS URL and
+one safe relative workspace path, then requires `pixel_ops_download_stage`, a
+terminal `pixel_ops_job_wait`, and `pixel_ods_download_promote` in that order. It
+rejects substitute writes and blocks a success claim without the promoter's
+matching final receipt. If staging or promotion is unavailable, the request
+fails closed without creating a substitute artifact; ordinary page research
+remains available.
 
 Adding an ODS action is a security-boundary change. It requires a new explicit
 tool contract, policy and authorization design, adversarial tests, and fresh
@@ -515,6 +541,9 @@ head:
 - concurrent-chat cancellation isolation, proving the cancelled command stops
   while the other chat completes unchanged;
 - a real turn invoking `pixel_ods_status` with sanitized ODS results;
+- a real exact-byte download through stage, terminal wait, and create-only
+  promotion, independently matching the remote byte count and SHA-256 digest,
+  plus live rejection of overwrite, traversal, and symlink-parent attempts;
 - a cross-family model swap and a context-only change, with Pixel using the
   newly active identity and invoking both bounded ODS tools after each change;
 - rejection of a managed-Pixel activation below 16K with the previous runtime,
@@ -536,6 +565,7 @@ alone is not proof of live usability.
 | Host installation, adoption guard, systemd | `installers/lib/pixel-host-install.sh` |
 | Open WebUI and Dashboard edge | `extensions/services/pixel-edge/` |
 | Host ingress and bounded ODS plugin | `extensions/services/pixel-agent/` |
+| Exact-download promotion boundary | `extensions/services/pixel-agent/host/artifact_promoter.py`, `extensions/services/pixel-agent/plugin/download-promote.mjs` |
 | Dashboard API/UI | `extensions/services/dashboard-api/routers/pixel.py`, `extensions/services/dashboard/src/pages/Pixel.jsx` |
 | Feature selection and Compose inclusion | `installers/phases/03-features.sh`, `installers/phases/11-services.sh` |
 | Generated secrets and pinned source | `installers/phases/06-directories.sh` |

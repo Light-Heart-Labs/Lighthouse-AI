@@ -13,8 +13,12 @@ import {
   EXEC_PRIVATE_NETWORK_REASON,
   EXACT_DOWNLOAD_LOOP_ABORT_REASON,
   EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
+  EXACT_DOWNLOAD_REQUEST_UNBOUND_REASON,
   EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX,
   EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX,
+  EXACT_DOWNLOAD_PUBLISHED_DELIVERY_PREFIX,
+  EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON,
+  EXACT_DOWNLOAD_UNPUBLISHED_DELIVERY_PREFIX,
   EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
   EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX,
   GITHUB_CANONICAL_FETCH_FAILED_REASON,
@@ -58,6 +62,7 @@ import {
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsExactByteDownload,
+  userMessageExactDownloadRequest,
 } from "../plugin/tool-loop-guard.mjs";
 
 test("exec cancellation control creates exact owner-private markers and fails closed", () => {
@@ -193,6 +198,75 @@ test("classifies exact-byte downloads without capturing ordinary page research",
     userMessageRequestsExactByteDownload([], "Save this exact sentence to notes.txt."),
     false
   );
+  assert.deepEqual(
+    userMessageExactDownloadRequest(
+      [],
+      `Download https://example.com/file.bin into a workspace file named web/file.bin, preserve the exact bytes, and verify SHA-256 ${"c".repeat(64)}.`
+    ),
+    {
+      exact: true,
+      url: "https://example.com/file.bin",
+      relativePath: "web/file.bin",
+      filename: "file.bin",
+      expectedSha256: "c".repeat(64),
+    }
+  );
+  assert.deepEqual(
+    userMessageExactDownloadRequest(
+      [],
+      "Download https://example.com/file.bin byte-for-byte as exact.bin."
+    ),
+    {
+      exact: true,
+      url: "https://example.com/file.bin",
+      relativePath: "exact.bin",
+      filename: "exact.bin",
+      expectedSha256: undefined,
+    }
+  );
+  assert.deepEqual(
+    userMessageExactDownloadRequest(
+      [],
+      "Download https://example.com/file.bin into web/from-origin.bin and preserve its exact bytes."
+    ),
+    {
+      exact: true,
+      url: "https://example.com/file.bin",
+      relativePath: "web/from-origin.bin",
+      filename: "from-origin.bin",
+      expectedSha256: undefined,
+    }
+  );
+  assert.deepEqual(
+    userMessageExactDownloadRequest(
+      [],
+      "Download https://example.com/a and https://example.com/b as exact bytes."
+    ),
+    { exact: true }
+  );
+  assert.deepEqual(
+    userMessageExactDownloadRequest(
+      [],
+      "Download https://example.com/file.bin byte-for-byte to ../escape.bin."
+    ),
+    { exact: true, url: "https://example.com/file.bin" }
+  );
+});
+
+test("blocks exact-download tools when source or destination is ambiguous", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Download https://example.com/a and https://example.com/b as exact bytes.",
+    }
+  );
+  assert.deepEqual(call(guard, "pixel_ops_download_stage"), {
+    block: true,
+    blockReason: EXACT_DOWNLOAD_REQUEST_UNBOUND_REASON,
+  });
 });
 
 test("fails closed when transformed web evidence is requested as an exact download", () => {
@@ -246,7 +320,9 @@ test("allows one exact correction from transformed web fetch to the staged-downl
     }),
     { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON }
   );
-  assert.equal(call(guard, "pixel_ops_download_stage"), undefined);
+  assert.deepEqual(call(guard, "pixel_ops_download_stage"), {
+    params: { url: "https://example.com/", filename: "exact.html" },
+  });
 });
 
 test("requires terminal artifact evidence after a staged-download submission", () => {
@@ -254,9 +330,11 @@ test("requires terminal artifact evidence after a staged-download submission", (
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Fetch this artifact byte-for-byte and save the exact file." }
+    { prompt: "Fetch https://example.com/ byte-for-byte and save the exact file as exact.html." }
   );
-  assert.equal(call(guard, "pixel_ops_download_stage"), undefined);
+  assert.deepEqual(call(guard, "pixel_ops_download_stage"), {
+    params: { url: "https://example.com/", filename: "exact.html" },
+  });
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
       params: { url: "https://example.com/", filename: "exact.html" },
@@ -269,7 +347,9 @@ test("requires terminal artifact evidence after a staged-download submission", (
       },
     },
   });
-  assert.equal(call(guard, "pixel_ops_job_wait"), undefined);
+  assert.deepEqual(call(guard, "pixel_ops_job_wait"), {
+    params: { jobId: "ops-1234567890123-abcdef123456" },
+  });
   assert.deepEqual(reply(guard), {
     payload: {
       text: EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX,
@@ -286,7 +366,7 @@ test("accepts a matching terminal staged-download artifact receipt", () => {
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Download https://example.com byte-for-byte and report the exact digest." }
+    { prompt: "Download https://example.com/ byte-for-byte as web/example.html and report the exact digest." }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
@@ -320,7 +400,55 @@ test("accepts a matching terminal staged-download artifact receipt", () => {
       },
     },
   });
-  assert.equal(reply(guard), undefined);
+  assert.equal(reply(guard)?.payload?.text, EXACT_DOWNLOAD_UNPUBLISHED_DELIVERY_PREFIX);
+  assert.deepEqual(call(guard, "read", { event: { params: { path: "/var/lib/pixel-ops-broker/artifacts" } } }), {
+    block: true,
+    blockReason: EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON,
+  });
+  assert.deepEqual(call(guard, "pixel_ods_download_promote"), {
+    params: {
+      jobId,
+      filename: "example.html",
+      relativePath: "web/example.html",
+      sha256: "a".repeat(64),
+      sourceUrl: "https://example.com/",
+    },
+  });
+  afterCall(guard, "pixel_ods_download_promote", {
+    event: {
+      params: {
+        jobId,
+        filename: "example.html",
+        relativePath: "web/example.html",
+        sha256: "a".repeat(64),
+        sourceUrl: "https://example.com/",
+      },
+      result: {
+        details: {
+          schemaVersion: 1,
+          kind: "ods-pixel-download-promotion",
+          status: "succeeded",
+          jobId,
+          filename: "example.html",
+          relativePath: "web/example.html",
+          bytes: 559,
+          sha256: "a".repeat(64),
+          source: "https://example.com/",
+          requestedSource: "https://example.com/",
+          executable: false,
+          overwritten: false,
+          boundary:
+            "Verified create-only promotion from Pixel Operations quarantine into the configured owner workspace; no arbitrary source, overwrite, execution, or path traversal authority.",
+        },
+      },
+    },
+  });
+  const delivered = reply(guard)?.payload?.text;
+  assert.match(delivered, new RegExp(`^${EXACT_DOWNLOAD_PUBLISHED_DELIVERY_PREFIX}`));
+  assert.match(delivered, /web\/example\.html/);
+  assert.match(delivered, /Bytes: 559/);
+  assert.match(delivered, /a{64}/);
+  assert.match(delivered, /Executable: no; overwrite: no/);
 });
 
 test("rejects mismatched or malformed staged-download terminal evidence", () => {
@@ -329,7 +457,7 @@ test("rejects mismatched or malformed staged-download terminal evidence", () => 
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Save exact origin bytes from this HTTPS URL and give me the SHA-256." }
+    { prompt: "Save exact origin bytes from https://example.com/ as substitute.html and give me the SHA-256." }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
@@ -371,7 +499,9 @@ test("binds staged-download success to the submitted expected digest", () => {
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Download the exact bytes and verify the supplied SHA-256." }
+    {
+      prompt: `Download https://example.com/ as exact.html, preserve the exact bytes, and verify SHA-256 ${"d".repeat(64)}.`,
+    }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
@@ -418,7 +548,7 @@ test("reports a matching staged-download terminal failure without claiming an ar
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Download these exact bytes and report the staged artifact digest." }
+    { prompt: "Download https://example.com/ as exact.html and report the exact-byte artifact digest." }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
@@ -451,7 +581,7 @@ test("reports a matching immutable staged-download plan that needs owner approva
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Download these exact bytes and report the staged artifact digest." }
+    { prompt: "Download https://example.com/ as exact.html and report the exact-byte artifact digest." }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {
@@ -485,7 +615,7 @@ test("rejects malformed staged-download approval evidence", () => {
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Fetch the exact origin bytes and save the resulting artifact." }
+    { prompt: "Fetch the exact origin bytes from https://example.com/ and save the artifact as exact.html." }
   );
   afterCall(guard, "pixel_ops_download_stage", {
     event: {

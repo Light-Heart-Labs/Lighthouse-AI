@@ -309,13 +309,13 @@ fi
 plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract","pixel_ods_download_promote"]}}]}'
 SH
 chmod 0755 "$plugin_list_bin"
 check _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract","pixel_ods_download_promote"]}}]}'
 SH
 if _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree" >/dev/null 2>&1; then
     fail "blocked ODS Pixel plugin rejected"
@@ -326,7 +326,7 @@ fi
 plugin_registry_bin="$TEST_ROOT/openclaw-plugin-registry"
 cat > "$plugin_registry_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_status","pixel_ods_web_extract"]}}}]}}'
+printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_status","pixel_ods_web_extract","pixel_ods_download_promote"]}}}]}}'
 SH
 chmod 0755 "$plugin_registry_bin"
 check _ods_pixel_refresh_plugin_registry "$owner" "$home" "$plugin_registry_bin" "$plugin_tree"
@@ -435,9 +435,15 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+  cp "$ROOT/extensions/services/pixel-agent/host/artifact_promoter.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
   chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
-      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
   chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
 printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
 cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
@@ -445,10 +451,13 @@ cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
 JSON
 extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
 extension_manager_unit="$INSTALL_DIR/data/pixel/extension-manager.service"
+artifact_promoter_unit="$INSTALL_DIR/data/pixel/artifact-promoter.service"
 _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"
 _ods_pixel_write_extension_manager_unit "$owner" "$home" "$extension_manager_unit"
+_ods_pixel_write_artifact_promoter_unit "$owner" "$home" "$artifact_promoter_unit"
 check test "$(stat -c '%a' "$extension_catalog")" = 600
 check test "$(stat -c '%a' "$extension_manager_unit")" = 600
+check test "$(stat -c '%a' "$artifact_promoter_unit")" = 600
 check grep -F "User=$owner" "$extension_manager_unit"
 check grep -F "Group=pixel-ops" "$extension_manager_unit"
 check grep -F "${INSTALL_DIR}/.env" "$extension_manager_unit"
@@ -459,6 +468,16 @@ check grep -F "ProtectProc=invisible" "$extension_manager_unit"
 check grep -F "RestrictNamespaces=true" "$extension_manager_unit"
 check grep -F "ReadOnlyPaths=/var/lib/pixel-ops-broker/results" "$extension_manager_unit"
 check grep -F "InaccessiblePaths=/var/lib/pixel-ops-broker/plans" "$extension_manager_unit"
+if grep -F "__PIXEL_" "$artifact_promoter_unit" >/dev/null; then
+    fail "artifact promoter placeholders resolved"
+else
+    pass "artifact promoter placeholders resolved"
+fi
+check grep -F "User=root" "$artifact_promoter_unit"
+check grep -F "$home/.openclaw/workspace-pixel" "$artifact_promoter_unit"
+check grep -F "RestrictAddressFamilies=AF_UNIX" "$artifact_promoter_unit"
+check grep -F "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE" "$artifact_promoter_unit"
+check grep -F "ReadOnlyPaths=/var/lib/pixel-ops-broker/results /var/lib/pixel-ops-broker/artifacts" "$artifact_promoter_unit"
 check python3 -c '
 import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))
@@ -484,6 +503,15 @@ if _ods_pixel_write_extension_manager_unit "$owner" "$home" \
     fail "symlink extension manager unit rejected"
 else
     pass "symlink extension manager unit rejected"
+fi
+printf '%s\n' 'unsafe' >"$TEST_ROOT/artifact-promoter-unit-target.service"
+ln -s "$TEST_ROOT/artifact-promoter-unit-target.service" \
+    "$TEST_ROOT/linked-artifact-promoter.service"
+if _ods_pixel_write_artifact_promoter_unit "$owner" "$home" \
+    "$TEST_ROOT/linked-artifact-promoter.service" >/dev/null 2>&1; then
+    fail "symlink artifact promoter unit rejected"
+else
+    pass "symlink artifact promoter unit rejected"
 fi
 operations_policy="$TEST_ROOT/operations-policy.json"
 _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"
@@ -614,6 +642,25 @@ else
 fi
 mv "$TEST_ROOT/ods-pixel-approve.original" "$approval_helper"
 chmod 0755 "$approval_helper"
+artifact_promoter="$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+cp "$artifact_promoter" "$TEST_ROOT/artifact-promoter.original.py"
+printf '\n# changed\n' >>"$artifact_promoter"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds artifact promoter bytes"
+else
+    pass "managed contract hash binds artifact promoter bytes"
+fi
+mv "$TEST_ROOT/artifact-promoter.original.py" "$artifact_promoter"
+chmod 0644 "$artifact_promoter"
+cp "$artifact_promoter_unit" "$TEST_ROOT/artifact-promoter-unit.original.service"
+printf '\n# changed\n' >>"$artifact_promoter_unit"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds rendered artifact promoter unit bytes"
+else
+    pass "managed contract hash binds rendered artifact promoter unit bytes"
+fi
+mv "$TEST_ROOT/artifact-promoter-unit.original.service" "$artifact_promoter_unit"
+chmod 0600 "$artifact_promoter_unit"
 installed_policy="$TEST_ROOT/installed-operations-policy.json"
 cp "$operations_policy" "$installed_policy"
 chmod 0640 "$installed_policy"
@@ -662,7 +709,7 @@ assert v["modelMaxTokens"] == 4096
 assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
 assert v["operationsPolicyFile"] == sys.argv[2]
-assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}]
+assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract","pixel_ods_download_promote"]}]
 assert v["operationsLimbEnabled"] is True
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","frontierLimbEnabled"))
 ' "$answers" "$operations_policy"
@@ -818,8 +865,8 @@ assert value["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800
 agent = value["agents"]["list"][0]
 model = value["models"]["providers"]["ods-local"]["models"][0]
 assert agent["tools"]["deny"] == []
-assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"}.issubset(value["tools"]["alsoAllow"])
-assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
+assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"}.issubset(value["tools"]["alsoAllow"])
+assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
 assert "pixel_web_extract" not in value["tools"]["alsoAllow"]
 assert "pixel_web_extract" not in value["tools"]["sandbox"]["tools"]["allow"]
 assert value["tools"]["web"]["fetch"] == {
@@ -876,7 +923,7 @@ cp "$runtime_config" "$runtime_recovery_candidate"
 chmod 0600 "$runtime_recovery_candidate"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 32000 and d["bootstrapTotalMaxChars"] == 96000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; assert d["sandbox"]["docker"]["binds"] == [sys.argv[2] + "/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro"] and d["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config" "$runtime_home"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 32000 and d["bootstrapTotalMaxChars"] == 96000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":4096,"reserveTokensFloor":0}; assert d["sandbox"]["docker"]["binds"] == [sys.argv[2] + "/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro"] and d["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == []; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract","pixel_ods_download_promote"}.issubset(v["tools"]["alsoAllow"]); assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract","pixel_ods_download_promote"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config" "$runtime_home"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_recovery_candidate" "$runtime_validator")" = changed
@@ -1325,6 +1372,8 @@ check node --check "$plugin/prompt-contract.mjs"
 check node --check "$plugin/tool-content.mjs"
 check node --check "$plugin/tool-loop-guard.mjs"
 check node --check "$plugin/web-extract.mjs"
+check node --check "$plugin/download-promote.mjs"
+check python3 -m py_compile "$ROOT/extensions/services/pixel-agent/host/artifact_promoter.py"
 check sh -n "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh"
 check bash -n "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh"
 check python3 -c '
@@ -1339,7 +1388,7 @@ import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
-assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_status","pixel_ods_web_extract"]
+assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_download_promote","pixel_ods_status","pixel_ods_web_extract"]
 import re
 reserved = re.compile(r"^pixel_(?:gmail|calendar|social|web|ops|frontier)_")
 assert all(name != "pixel_limb_status" and not reserved.match(name) for name in m["contracts"]["tools"])
@@ -1374,7 +1423,9 @@ assert "_ods_pixel_write_extension_catalog" in text
 assert "secret-free ODS extension catalog" in text
 assert "_ods_pixel_write_extension_manager_unit" in text
 assert "owner-private ODS Pixel extension manager service" in text
-assert "ods-pixel-contract-v5" in text
+assert "_ods_pixel_write_artifact_promoter_unit" in text
+assert "owner-private ODS Pixel artifact promoter service" in text
+assert "ods-pixel-contract-v6" in text
 assert "bin/ods-pixel-approve" in text
 assert "ods_sudo install -o root -g pixel-ops -m 0640 \"$extension_catalog\" \"$installed_extension_catalog\"" in text
 assert "ods-extension-manager.py" in text
@@ -1382,6 +1433,7 @@ assert "pixel-extension-manager.service" in text
 assert "manage-extensions" in text
 assert "ods_sudo -u pixel-ops-broker /usr/bin/python3" in text
 assert "_ods_pixel_wait_extension_manager_probe" in text
+assert "_ods_pixel_wait_artifact_promoter_probe" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
@@ -1459,6 +1511,16 @@ assert "BindReadOnlyPaths=\"__ODS_INSTALL_DIR__\"" in text
 assert "IPAddressDeny=any" in text and "IPAddressAllow=localhost" in text
 assert "RestrictAddressFamilies=AF_UNIX AF_INET" in text
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-extension-manager.service"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "User=root" in text
+assert "RestrictAddressFamilies=AF_UNIX" in text
+assert "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE" in text
+assert "BindPaths=\"__PIXEL_WORKSPACE__\"" in text
+assert "ReadOnlyPaths=/var/lib/pixel-ops-broker/results /var/lib/pixel-ops-broker/artifacts" in text
+assert "IPAddressAllow" not in text
+' "$ROOT/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()

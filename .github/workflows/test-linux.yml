@@ -233,6 +233,7 @@ jobs:
           bash tests/test-pixel-host-install.sh
           bash tests/test-pixel-compose-wiring.sh
           python3 tests/test_pixel_timeout_contract.py
+          python3 -m unittest -v extensions/services/pixel-agent/tests/test_artifact_promoter.py
           node --test extensions/services/pixel-agent/tests/*.test.mjs
 
       - name: Linux install preflight tests

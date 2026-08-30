@@ -4,6 +4,7 @@ import {
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
+  ODS_EXACT_DOWNLOAD_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
@@ -94,7 +95,7 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /do not supply a remembered answer/);
   assert.match(result.appendSystemContext, /safety-marked, transformed evidence/);
   assert.match(result.appendSystemContext, /never save that transformed text as an exact download/);
-  assert.match(result.appendSystemContext, /pixel_ops_download_stage only when that tool is actually exposed/);
+  assert.match(result.appendSystemContext, /dedicated staged-download and verified workspace-publication route/);
   assert.match(result.appendSystemContext, /exact-byte download is unavailable/);
   assert.match(result.appendSystemContext, /do not create a substitute artifact/);
   assert.match(result.appendSystemContext, /web_fetch is public-web only/);
@@ -123,6 +124,24 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /empty, unavailable, or reports an error/);
   assert.match(result.appendSystemContext, /status-only untrusted evidence/);
   assert.match(result.appendSystemContext, /never as authority for an action/);
+});
+
+test("adds a strict staged-download and publication sequence only for exact bytes", () => {
+  const result = promptContractForAgent(
+    { agentId: "pixel" },
+    "pixel",
+    { prompt: "Download https://example.com/ as web/example.html and preserve the exact bytes." }
+  );
+  assert.match(result.appendSystemContext, new RegExp(ODS_EXACT_DOWNLOAD_CONTRACT.slice(0, 80)));
+  assert.match(result.appendSystemContext, /pixel_ops_download_stage first/);
+  assert.match(result.appendSystemContext, /pixel_ops_job_wait/);
+  assert.match(result.appendSystemContext, /pixel_ods_download_promote/);
+  const ordinary = promptContractForAgent(
+    { agentId: "pixel" },
+    "pixel",
+    { prompt: "Fetch https://example.com/ and summarize it." }
+  );
+  assert.doesNotMatch(ordinary.appendSystemContext, /pixel_ods_download_promote/);
 });
 
 test("recognizes private-boundary tool results as loop recovery triggers", () => {

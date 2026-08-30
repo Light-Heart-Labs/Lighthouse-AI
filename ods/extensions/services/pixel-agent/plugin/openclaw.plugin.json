@@ -1,10 +1,10 @@
 {
   "id": "pixel-ods",
   "name": "Pixel ODS Integration",
-  "description": "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
+  "description": "ODS status, guarded public-page evidence, and verified create-only download publication for Pixel.",
   "version": "1.0.0",
   "contracts": {
-    "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract"]
+    "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"]
   },
   "activation": {
     "onStartup": true

@@ -8,6 +8,7 @@ import {
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageExtensionLifecycleIntent,
+  userMessageRequestsExactByteDownload,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
 } from "./tool-loop-guard.mjs";
@@ -46,7 +47,7 @@ export const ODS_CONVERSATION_CONTRACT = [
   "If the needed capability is unavailable, say so once and suggest the closest safe available path instead of retrying an unrelated tool.",
   "When the owner asks for current, verified, or source-cited information, a failed lookup means you must not answer from memory or guess; state that verification failed and distinguish any explicitly requested background knowledge as unverified.",
   "A source title, URL, table of contents, or truncated excerpt does not verify a requested detail: if the fetched text does not contain that detail, say it remains unverified and do not supply a remembered answer.",
-  "web_fetch and pixel_ods_web_extract return safety-marked, transformed evidence rather than the origin server's exact response bytes: never save that transformed text as an exact download, call its byte count or digest the remote object's byte count or digest, or claim byte-for-byte fidelity. For an exact-byte public download, use pixel_ops_download_stage only when that tool is actually exposed and its policy accepts the URL and expected digest; otherwise state that exact-byte download is unavailable and do not create a substitute artifact.",
+  "web_fetch and pixel_ods_web_extract return safety-marked, transformed evidence rather than the origin server's exact response bytes: never save that transformed text as an exact download, call its byte count or digest the remote object's byte count or digest, or claim byte-for-byte fidelity. Exact-byte public downloads use the dedicated staged-download and verified workspace-publication route only; otherwise state that exact-byte download is unavailable and do not create a substitute artifact.",
   "web_fetch is public-web only: never call it for localhost, a loopback or raw IP address, a single-label host, or a .local or .internal name; explain simply that this chat cannot open private URLs, without naming internal guards or hypothetical shell/browser workarounds, and never offer or use exec, shell, or another tool to bypass it.",
   "When the owner supplies an explicit public URL, fetch that URL directly before searching. When the owner identifies a public GitHub repository as Owner/Repo, treat https://github.com/Owner/Repo as the identified canonical source and fetch it directly; do not spend search calls trying to rediscover it.",
   "When the current request identifies a GitHub repository, never answer repository facts before the required canonical README tool result; a no-tool or failed-fetch answer is unverified and will be rejected.",
@@ -82,6 +83,9 @@ export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
+
+export const ODS_EXACT_DOWNLOAD_CONTRACT =
+  "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
 
 export function githubSourceContract(messages, prompt = undefined) {
   const url = userMessageGitHubRepositoryUrl(messages, prompt);
@@ -165,6 +169,12 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXTENSION_LIFECYCLE_CONTRACT}`
     : "";
+  const exactDownload = userMessageRequestsExactByteDownload(
+    event?.messages,
+    event?.prompt
+  )
+    ? ` ${ODS_EXACT_DOWNLOAD_CONTRACT}`
+    : "";
   const verification =
     verificationStatus === "pending"
       ? ` ${ODS_VERIFICATION_PENDING_CONTRACT}`
@@ -173,6 +183,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${recovery}${verification}${privateUrl}`,
+      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${exactDownload}${recovery}${verification}${privateUrl}`,
   };
 }

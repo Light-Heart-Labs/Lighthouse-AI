@@ -33,6 +33,10 @@ ods_pixel_uninstall_managed() {
     local extension_manager_source="$install_dir/extensions/services/pixel-agent/host/extension_manager.py"
     local extension_manager_owner_unit="$install_dir/data/pixel/extension-manager.service"
     local approval_source="$install_dir/bin/ods-pixel-approve"
+    local artifact_promoter_unit="$systemd_dir/pixel-artifact-promoter.service"
+    local artifact_promoter_program="$libexec_dir/ods-pixel-artifact-promoter.py"
+    local artifact_promoter_source="$install_dir/extensions/services/pixel-agent/host/artifact_promoter.py"
+    local artifact_promoter_owner_unit="$install_dir/data/pixel/artifact-promoter.service"
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
@@ -77,7 +81,8 @@ ods_pixel_uninstall_managed() {
     [[ "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]] || return 1
     for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
         "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" "$ops_state" \
-        "$extension_manager_unit" "$extension_manager_program"; do
+        "$extension_manager_unit" "$extension_manager_program" \
+        "$artifact_promoter_unit" "$artifact_promoter_program"; do
         [[ "$path" == /* && "$path" != / ]] || {
             log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
             return 1
@@ -109,6 +114,8 @@ ods_pixel_uninstall_managed() {
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
         "$extension_manager_unit" "$extension_manager_program" "$extension_manager_source" \
         "$extension_manager_owner_unit" "$approval_source" \
+        "$artifact_promoter_unit" "$artifact_promoter_program" "$artifact_promoter_source" \
+        "$artifact_promoter_owner_unit" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$ops_extension_source_program" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
@@ -137,6 +144,10 @@ import sys
     extension_manager_source_raw,
     extension_manager_owner_unit_raw,
     approval_source_raw,
+    artifact_promoter_unit_raw,
+    artifact_promoter_program_raw,
+    artifact_promoter_source_raw,
+    artifact_promoter_owner_unit_raw,
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
@@ -430,6 +441,8 @@ extension_program_present = (
 extension_manager_source = pathlib.Path(extension_manager_source_raw)
 extension_manager_owner_unit = pathlib.Path(extension_manager_owner_unit_raw)
 approval_source = pathlib.Path(approval_source_raw)
+artifact_promoter_source = pathlib.Path(artifact_promoter_source_raw)
+artifact_promoter_owner_unit = pathlib.Path(artifact_promoter_owner_unit_raw)
 extension_manager_present = (
     extension_manager_source.exists() or extension_manager_source.is_symlink()
 )
@@ -448,6 +461,12 @@ if approval_present:
     approval_info = regular(approval_source, owner_uid, 256 * 1024)
     if not approval_info.st_mode & 0o111:
         raise SystemExit("ODS Pixel approval helper is not executable")
+artifact_promoter_contract_present = (
+    artifact_promoter_owner_unit.exists() or artifact_promoter_owner_unit.is_symlink()
+)
+if artifact_promoter_contract_present:
+    regular(artifact_promoter_source, owner_uid, 2 * 1024 * 1024)
+    regular(artifact_promoter_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
 if extension_catalog_present:
     regular(ops_owner_extension_catalog, owner_uid, 2 * 1024 * 1024, private=True)
     regular(ops_extension_source_program, owner_uid, 2 * 1024 * 1024)
@@ -527,6 +546,23 @@ if onboarding.exists():
                             v5.update(len(payload).to_bytes(8, "big"))
                             v5.update(payload)
                         accepted_contracts.add(v5.hexdigest())
+                        if artifact_promoter_contract_present:
+                            v6 = hashlib.sha256()
+                            v6.update(b"ods-pixel-contract-v6\0")
+                            for payload in (
+                                onboarding_payload,
+                                policy_payload,
+                                ops_owner_extension_catalog.read_bytes(),
+                                ops_extension_source_program.read_bytes(),
+                                extension_manager_source.read_bytes(),
+                                extension_manager_owner_unit.read_bytes(),
+                                approval_source.read_bytes(),
+                                artifact_promoter_source.read_bytes(),
+                                artifact_promoter_owner_unit.read_bytes(),
+                            ):
+                                v6.update(len(payload).to_bytes(8, "big"))
+                                v6.update(payload)
+                            accepted_contracts.add(v6.hexdigest())
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
@@ -539,6 +575,8 @@ ingress_program = pathlib.Path(ingress_program_raw)
 source_program = pathlib.Path(source_program_raw)
 extension_manager_unit = pathlib.Path(extension_manager_unit_raw)
 extension_manager_program = pathlib.Path(extension_manager_program_raw)
+artifact_promoter_unit = pathlib.Path(artifact_promoter_unit_raw)
+artifact_promoter_program = pathlib.Path(artifact_promoter_program_raw)
 for path, maximum in (
     (gateway_unit, 256 * 1024),
     (ingress_unit, 256 * 1024),
@@ -546,6 +584,8 @@ for path, maximum in (
     (ingress_program, 2 * 1024 * 1024),
     (extension_manager_unit, 256 * 1024),
     (extension_manager_program, 2 * 1024 * 1024),
+    (artifact_promoter_unit, 256 * 1024),
+    (artifact_promoter_program, 2 * 1024 * 1024),
 ):
     if path.exists() or path.is_symlink():
         regular(path, root_uid, maximum)
@@ -558,6 +598,15 @@ if state == "ready" and extension_manager_present != manager_root_present:
     raise SystemExit("ready ODS-managed Pixel extension lifecycle deployment is partial")
 if manager_root_present and not extension_manager_present:
     raise SystemExit("Pixel extension manager system artifacts lack an ODS contract")
+
+promoter_unit_present = artifact_promoter_unit.exists() or artifact_promoter_unit.is_symlink()
+promoter_program_present = artifact_promoter_program.exists() or artifact_promoter_program.is_symlink()
+if promoter_unit_present != promoter_program_present:
+    raise SystemExit("ODS-managed Pixel artifact promoter system artifacts are partial")
+if state == "ready" and artifact_promoter_contract_present != promoter_unit_present:
+    raise SystemExit("ready ODS-managed Pixel artifact promotion deployment is partial")
+if promoter_unit_present and not artifact_promoter_contract_present:
+    raise SystemExit("Pixel artifact promoter system artifacts lack an ODS contract")
 
 if gateway_unit.exists():
     text = gateway_unit.read_text(encoding="utf-8")
@@ -584,6 +633,14 @@ if extension_manager_program.exists():
         raise SystemExit("ODS-managed Pixel extension manager source is missing")
     if extension_manager_program.read_bytes() != extension_manager_source.read_bytes():
         raise SystemExit("installed Pixel extension manager program drifted from this ODS install")
+
+if artifact_promoter_unit.exists():
+    if artifact_promoter_unit.read_bytes() != artifact_promoter_owner_unit.read_bytes():
+        raise SystemExit("installed Pixel artifact promoter unit drifted from this ODS install")
+
+if artifact_promoter_program.exists():
+    if artifact_promoter_program.read_bytes() != artifact_promoter_source.read_bytes():
+        raise SystemExit("installed Pixel artifact promoter program drifted from this ODS install")
 
 if ingress_env.exists():
     entries = {}
@@ -647,7 +704,7 @@ PY
     fi
     for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" \
         "$ops_owner_policy" "$ops_owner_extension_catalog" "$ops_extension_manager" \
-        "$extension_manager_owner_unit"; do
+        "$extension_manager_owner_unit" "$artifact_promoter_owner_unit"; do
         if [[ -e "$path" || -L "$path" ]]; then
             ops_artifacts_present=true
         fi
@@ -1026,6 +1083,8 @@ PY
         || -e "$ingress_program" || -L "$ingress_program" \
         || -e "$extension_manager_unit" || -L "$extension_manager_unit" \
         || -e "$extension_manager_program" || -L "$extension_manager_program" \
+        || -e "$artifact_promoter_unit" || -L "$artifact_promoter_unit" \
+        || -e "$artifact_promoter_program" || -L "$artifact_promoter_program" \
         || "$ops_artifacts_present" == true ]]; then
         root_artifacts_present=true
         command -v sudo >/dev/null 2>&1 || {
@@ -1035,6 +1094,7 @@ PY
     fi
 
     if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$extension_manager_unit" \
+        || -e "$artifact_promoter_unit" \
         || -e "$ops_unit" ]]; then
         # Stop the ingress before the gateway it proxies to. Keep these as
         # separate calls so the shutdown order is an enforced contract rather
@@ -1051,6 +1111,11 @@ PY
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
+        if [[ -e "$artifact_promoter_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now pixel-artifact-promoter.service; then
+            log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
+            return 1
+        fi
         if [[ -e "$gateway_unit" ]] \
             && ! timeout 30s sudo systemctl disable --now openclaw-gateway.service; then
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
@@ -1064,6 +1129,7 @@ PY
         if systemctl is-active --quiet openclaw-gateway.service \
             || systemctl is-active --quiet pixel-ingress.service \
             || systemctl is-active --quiet pixel-extension-manager.service \
+            || systemctl is-active --quiet pixel-artifact-promoter.service \
             || systemctl is-active --quiet pixel-ops-broker.service; then
             log_error "ODS-managed Pixel system services are still active; no Pixel files were removed"
             return 1
@@ -1322,13 +1388,15 @@ PY
     if [[ "$root_artifacts_present" == "true" ]]; then
         if ! sudo rm -f -- "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" \
             "$extension_manager_unit" "$extension_manager_program" \
+            "$artifact_promoter_unit" "$artifact_promoter_program" \
             || ! sudo systemctl daemon-reload; then
             log_error "Could not remove ODS-managed Pixel system artifacts"
             return 1
         fi
         if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ingress_env" \
             || -e "$ingress_program" || -e "$extension_manager_unit" \
-            || -e "$extension_manager_program" ]]; then
+            || -e "$extension_manager_program" || -e "$artifact_promoter_unit" \
+            || -e "$artifact_promoter_program" ]]; then
             log_error "ODS-managed Pixel system artifact cleanup was incomplete"
             return 1
         fi
@@ -1363,11 +1431,13 @@ root.rmdir()
 PY
     fi
     rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy" \
-        "$ops_owner_extension_catalog" "$extension_manager_owner_unit"
+        "$ops_owner_extension_catalog" "$extension_manager_owner_unit" \
+        "$artifact_promoter_owner_unit"
     if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
         || -e "$ops_owner_policy" || -L "$ops_owner_policy" \
         || -e "$ops_owner_extension_catalog" || -L "$ops_owner_extension_catalog" \
         || -e "$extension_manager_owner_unit" || -L "$extension_manager_owner_unit" \
+        || -e "$artifact_promoter_owner_unit" || -L "$artifact_promoter_owner_unit" \
         || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1

@@ -32,6 +32,7 @@ import {
   createToolLoopGuardRegistry,
 } from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
+import { createDownloadPromoteTool } from "./download-promote.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
@@ -293,6 +294,10 @@ export default definePluginEntry({
       }),
       { names: ["pixel_ods_web_extract"] }
     );
+
+    registerTool(api, createDownloadPromoteTool(), {
+      names: ["pixel_ods_download_promote"],
+    });
 
   },
 });
