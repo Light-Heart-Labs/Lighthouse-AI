@@ -431,6 +431,22 @@ else
     pass "forged Pixel gateway model display name rejected"
 fi
 
+legacy_gateway_answers="$TEST_ROOT/legacy-gateway-onboarding.json"
+cp "$answers" "$legacy_gateway_answers"
+python3 - "$legacy_gateway_answers" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["modelId"] = "default"
+value["modelName"] = "ODS Default (qwen-test)"
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$legacy_gateway_answers"
+_ods_pixel_update_onboarding_model "$owner" "$home" \
+    "$legacy_gateway_answers" 'org/qwen+tools:remote' 131072 8192 true
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "ods/current" and v["modelName"] == "ODS Current (org/qwen+tools:remote)"' \
+    "$legacy_gateway_answers"
+
 MAX_CONTEXT=16384
 LLM_MODEL=NVIDIA-Nemotron3-Nano-4B
 _ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/nemotron-onboarding.json" \

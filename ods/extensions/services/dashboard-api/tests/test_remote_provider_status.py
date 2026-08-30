@@ -155,6 +155,19 @@ def test_activation_status_rejects_incomplete_ready_claim(monkeypatch, tmp_path)
     }
 
 
+def test_activation_status_treats_missing_receipt_as_not_activated(monkeypatch, tmp_path):
+    from routers import remote_provider_status as rps
+
+    monkeypatch.setattr(rps, "_activation_path", lambda: tmp_path / "missing.json")
+
+    assert rps._read_activation() == {
+        "valid": True,
+        "active": False,
+        "proven": False,
+        "reason": "not_activated",
+    }
+
+
 def test_remote_provider_status_missing_state_is_disabled(
     test_client,
     monkeypatch,

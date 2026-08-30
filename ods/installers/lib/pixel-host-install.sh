@@ -601,8 +601,11 @@ if provider == "ods-local":
     value["modelId"] = model
     value["modelName"] = f"ODS Local {model}"
 else:
-    alias_label = "Current" if model_id == "ods/current" else "Default"
-    value["modelName"] = f"ODS {alias_label} ({model})"
+    # Reconciliation is the safe upgrade boundary for pre-stable-alias ODS
+    # installs. Keep accepting the legacy default contract above so it can be
+    # rolled forward, then persist only the canonical alias.
+    value["modelId"] = "ods/current"
+    value["modelName"] = f"ODS Current ({model})"
 payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
 fd, temporary = tempfile.mkstemp(prefix=".pixel-onboarding.", dir=path.parent)
 try:

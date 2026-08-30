@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -101,9 +102,9 @@ def _route_fingerprint(route_state: Mapping[str, Any]) -> str:
 def _read_activation() -> dict[str, Any]:
     path = _activation_path()
     try:
-        if path.is_symlink() or not path.is_file():
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             return {"valid": False, "active": False, "proven": False, "reason": "unsafe"}
-        metadata = path.stat()
         if metadata.st_size > 65536:
             return {"valid": False, "active": False, "proven": False, "reason": "oversized"}
         value = json.loads(path.read_text(encoding="utf-8"))
