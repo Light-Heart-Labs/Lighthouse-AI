@@ -615,12 +615,16 @@ function parseVerificationResponse(value) {
   if (!["none", "passed", "pending", "failed"].includes(status)) {
     throw new HttpError(502, "verification state unavailable");
   }
-  const expectedKeys = status === "pending" || status === "failed"
+  const carriesAuthoritativeText =
+    status === "pending" ||
+    status === "failed" ||
+    (status === "passed" && Object.prototype.hasOwnProperty.call(value, "text"));
+  const expectedKeys = carriesAuthoritativeText
     ? ["status", "text"]
     : ["status"];
   if (
     Object.keys(value).sort().join("\n") !== expectedKeys.sort().join("\n") ||
-    ((status === "pending" || status === "failed") &&
+    (carriesAuthoritativeText &&
       (typeof value.text !== "string" ||
         value.text.length < 1 ||
         value.text.length > 2048 ||

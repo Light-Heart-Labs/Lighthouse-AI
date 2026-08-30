@@ -578,6 +578,62 @@ test("non-stream response replaces a false success with host verification truth"
   }
 });
 
+test("non-stream response releases authoritative text from passed Operations verification", async () => {
+  const verifiedText =
+    "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts.";
+  const gw = await fakeGateway({
+    verification: { status: "passed", text: verifiedText },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "report host facts" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      const completion = JSON.parse(response.body);
+      assert.equal(completion.id, TEST_RUN_ID);
+      assert.equal(completion.choices[0].message.content, verifiedText);
+      assert.equal(completion.choices[0].finish_reason, "stop");
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("passed Operations verification remains fail-closed for extra fields", async () => {
+  const gw = await fakeGateway({
+    verification: {
+      status: "passed",
+      text: "Verified host facts.",
+      untrusted: "must not cross the ingress boundary",
+    },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "report host facts" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 502);
+      assert.deepEqual(JSON.parse(response.body), {
+        error: {
+          message: "verification state unavailable",
+          type: "pixel_ingress_error",
+        },
+      });
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("streaming response is buffered and replaced before false content is released", async () => {
   const safeText = "Pixel stopped before verification reached a terminal result.";
   const gw = await fakeGateway({ verification: { status: "pending", text: safeText } });
