@@ -103,6 +103,11 @@
           "maximum": 300,
           "description": "Health check timeout in seconds (default: 10)"
         },
+        "health_source": {
+          "type": "string",
+          "enum": ["http", "container"],
+          "description": "Health authority used by host-side CLI checks. Defaults to http; use container only for internal-only Docker services with a declared Docker healthcheck."
+        },
         "ui_path": {
           "type": "string",
           "pattern": "^/.*",
