@@ -51,6 +51,7 @@ function baseState(overrides = {}) {
     activationModeError: null,
     recommendationAlternatives: [],
     hermesMinimumContext: 65536,
+    pixelMinimumContext: 16384,
     loading: false,
     error: null,
     actionLoading: null,
@@ -638,7 +639,7 @@ test('allows low-context downloaded models to run with an agent-readiness warnin
   confirmModelRun()
   expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 8192 })
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
-  expect(screen.getByText('Needs 64K')).toBeInTheDocument()
+  expect(screen.getByText('Needs 16K')).toBeInTheDocument()
 
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
@@ -721,6 +722,25 @@ test('distinguishes generic agent compatibility from real Pixel qualification', 
   expect(screen.getByText('Pixel unverified')).toBeInTheDocument()
   expect(screen.getByText('Test before default')).toBeInTheDocument()
   expect(screen.getByText('Pixel ready', { selector: 'span' })).toBeInTheDocument()
+})
+
+test('shows explicit Pixel qualification in the activation dialog before context heuristics', () => {
+  useModelsMock.mockReturnValue(baseState({
+    models: [model({
+      status: 'downloaded',
+      contextLength: 32768,
+      appCompatibility: {
+        agentViability: { status: 'verified' },
+        pixelAgent: { status: 'not_agent_viable' },
+      },
+    })],
+  }))
+
+  renderModels()
+  fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+
+  expect(screen.getAllByText('Pixel blocked')).toHaveLength(2)
+  expect(screen.queryByText('Hermes ready')).not.toBeInTheDocument()
 })
 
 test('blocks direct-chat-incompatible models before Run', () => {

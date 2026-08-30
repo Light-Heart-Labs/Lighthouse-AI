@@ -67,6 +67,7 @@ export default function Models() {
     activationModeError,
     recommendationAlternatives,
     hermesMinimumContext,
+    pixelMinimumContext,
     loading,
     error,
     actionLoading,
@@ -420,6 +421,7 @@ export default function Models() {
                       canActivateModels={canActivateModels}
                       activationModeError={activationModeError}
                       hermesMinimumContext={hermesMinimumContext}
+                      pixelMinimumContext={pixelMinimumContext}
                       isCurrentModel={model.id === currentModel}
                       isLoading={pendingModelActions.includes(model.id)}
                       loadBusy={pendingModelActions.length > 0}
@@ -464,7 +466,7 @@ export default function Models() {
         <ModelActivationDialog
           model={activationConfigModel}
           gpu={gpu}
-          hermesMinimumContext={hermesMinimumContext}
+          pixelMinimumContext={pixelMinimumContext}
           isCurrentModel={activationConfigModel.id === currentModel}
           onCancel={() => setActivationConfigModel(null)}
           onConfirm={handleConfirmActivation}
@@ -786,6 +788,7 @@ function ModelTableRow({
   canActivateModels,
   activationModeError,
   hermesMinimumContext,
+  pixelMinimumContext,
   isCurrentModel,
   isLoading,
   loadBusy,
@@ -800,7 +803,7 @@ function ModelTableRow({
   const isLoaded = model.status === 'loaded' || isCurrentModel
   const isDownloaded = model.status === 'downloaded'
   const memory = getMemoryMeta(model, gpu)
-  const compatibility = getCompatibilityMeta(model, memory, hermesMinimumContext)
+  const compatibility = getCompatibilityMeta(model, memory, pixelMinimumContext)
   const speed = getSpeedDisplay(model)
   const tags = getModelTags(model, hermesMinimumContext)
   const iconTone = getIconTone(model, compatibility)
@@ -1081,7 +1084,7 @@ function DeleteModelDialog({ model, onCancel, onConfirm }) {
 function ModelActivationDialog({
   model,
   gpu,
-  hermesMinimumContext,
+  pixelMinimumContext,
   isCurrentModel,
   onCancel,
   onConfirm,
@@ -1098,7 +1101,18 @@ function ModelActivationDialog({
   const contextValid = Number.isSafeInteger(selectedContext)
     && selectedContext >= 1024
   const sameContext = contextValid && isCurrentModel && selectedContext === currentContext
-  const hermesReady = selectedContext >= Number(hermesMinimumContext || 65536)
+  const pixelAgent = getPixelAgentCompatibility(model)
+  const agentViability = getAgentViabilityCompatibility(model)
+  const pixelContextReady = selectedContext >= Number(pixelMinimumContext || 16384)
+  const appProfile = isAgentViabilityBlocked(pixelAgent)
+    ? { label: 'Pixel blocked', tone: 'text-red-300' }
+    : isAgentViabilityBlocked(agentViability)
+      ? { label: 'Agent blocked', tone: 'text-red-300' }
+      : !pixelContextReady
+        ? { label: `Needs ${formatContext(pixelMinimumContext || 16384)}`, tone: 'text-amber-300' }
+        : isPixelAgentVerified(pixelAgent)
+          ? { label: 'Pixel ready', tone: 'text-emerald-400' }
+          : { label: 'Pixel unverified', tone: 'text-amber-300' }
   const memoryCapacity = Number(gpu?.vramTotal || 0)
   const exceedsMemory = selected?.fitsVram === false
   const exceedsDeclaredLimit = declaredLimit > 0 && selectedContext > declaredLimit
@@ -1221,8 +1235,8 @@ function ModelActivationDialog({
             />
             <ContextMetric
               label="App profile"
-              value={hermesReady ? 'Hermes ready' : 'Chat only'}
-              tone={hermesReady ? 'text-emerald-400' : 'text-amber-300'}
+              value={appProfile.label}
+              tone={appProfile.tone}
             />
           </div>
 
@@ -1666,7 +1680,7 @@ function getMemoryMeta(model, gpu) {
   }
 }
 
-function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
+function getCompatibilityMeta(model, memory, pixelMinimumContext = 0) {
   if (!model?.fitsVram) {
     const nearLimit = memory.total > 0 && memory.required <= memory.total * 1.08
     return {
@@ -1699,20 +1713,20 @@ function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
       tone: 'amber',
     }
   }
-  const contextLength = Number(model?.contextLength || 0)
-  const minimumContext = Number(hermesMinimumContext || 0)
-  if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
-    return {
-      label: 'Direct chat only',
-      detail: `Needs ${formatContext(minimumContext)}`,
-      tone: 'amber',
-    }
-  }
   const pixelAgent = getPixelAgentCompatibility(model)
   if (isAgentViabilityBlocked(pixelAgent)) {
     return {
       label: 'Direct chat only',
       detail: 'Pixel blocked',
+      tone: 'amber',
+    }
+  }
+  const contextLength = Number(model?.contextLength || 0)
+  const minimumContext = Number(pixelMinimumContext || 0)
+  if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
+    return {
+      label: 'Direct chat only',
+      detail: `Needs ${formatContext(minimumContext)}`,
       tone: 'amber',
     }
   }

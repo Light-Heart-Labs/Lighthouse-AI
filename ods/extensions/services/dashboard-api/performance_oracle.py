@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from env_values import strip_matching_quotes
 from gguf_inspector import inspect_gguf
-from context_policy import HERMES_MIN_CONTEXT, HERMES_TARGET_CONTEXT
+from context_policy import HERMES_MIN_CONTEXT, HERMES_TARGET_CONTEXT, PIXEL_MIN_CONTEXT
 from helpers import (
     get_model_performance_samples,
     get_recorded_model_performance,
@@ -1502,6 +1502,7 @@ def build_models_payload(gpu_info: Optional[GPUInfo], loaded_model: Optional[str
         "configuredModel": configured_model_id,
         "hermesMinimumContext": HERMES_MIN_CONTEXT,
         "hermesTargetContext": HERMES_TARGET_CONTEXT,
+        "pixelMinimumContext": PIXEL_MIN_CONTEXT,
         "recommendationPolicy": recommendation.get("selectionPolicy") or _DEFAULT_RECOMMENDATION_POLICY,
         "recommendationAlternatives": [
             _recommendation_alternative(model, gpu_info)
