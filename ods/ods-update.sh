@@ -942,7 +942,7 @@ cmd_health() {
         return 1
     fi
     
-    for service in $services; do
+    while read -r service; do
         local status
         status=$("${compose_cmd[@]}" "${compose_args[@]}" ps --format json "$service" 2>/dev/null \
             | jq -r 'if type == "array" then (.[0].State // "unknown") else (.State // "unknown") end' 2>/dev/null \
