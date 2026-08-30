@@ -11,6 +11,9 @@ import {
   CLIENT_CANCELLED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
+  EXACT_DOWNLOAD_LOOP_ABORT_REASON,
+  EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
+  EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
   GITHUB_CANONICAL_FETCH_FAILED_REASON,
   GITHUB_CANONICAL_SOURCE_PREFIX,
   GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
@@ -37,6 +40,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageRequestsPrivateUrl,
+  userMessageRequestsExactByteDownload,
 } from "../plugin/tool-loop-guard.mjs";
 
 test("exec cancellation control creates exact owner-private markers and fails closed", () => {
@@ -120,6 +124,76 @@ test("allows bounded web research then returns a terminal final-answer instructi
     blockReason: WEB_BUDGET_EXHAUSTED_REASON,
   });
   assert.deepEqual(aborts, []);
+});
+
+test("classifies exact-byte downloads without capturing ordinary page research", () => {
+  assert.equal(
+    userMessageRequestsExactByteDownload(
+      [],
+      "Download https://example.com into a file and report the SHA-256 of the exact bytes saved."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequestsExactByteDownload([], "Fetch https://example.com and summarize it."),
+    false
+  );
+  assert.equal(
+    userMessageRequestsExactByteDownload([], "Save this exact sentence to notes.txt."),
+    false
+  );
+});
+
+test("fails closed when transformed web evidence is requested as an exact download", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    abortRun: (sessionId) => {
+      aborts.push(sessionId);
+      return true;
+    },
+  });
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Download https://example.com into exact.html and report the exact bytes and digest.",
+    }
+  );
+
+  assert.deepEqual(
+    call(guard, "web_fetch", {
+      event: { params: { url: "https://example.com/" } },
+    }),
+    { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON }
+  );
+  assert.deepEqual(call(guard, "write", { event: { params: { path: "exact.html" } } }), {
+    block: true,
+    blockReason: EXACT_DOWNLOAD_LOOP_ABORT_REASON,
+  });
+  assert.deepEqual(aborts, ["session-1"]);
+  assert.deepEqual(reply(guard), {
+    payload: {
+      text: EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
+      metadata: { preserved: true },
+    },
+    reason:
+      "Pixel replaced an unverified terminal reply with host-authoritative evidence truth.",
+  });
+});
+
+test("permits the explicit staged-download broker family for an exact download", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Fetch this artifact byte-for-byte and save the exact file." }
+  );
+  assert.equal(call(guard, "pixel_ops_download_stage"), undefined);
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: { result: { details: { status: "submitted" } } },
+  });
+  assert.equal(reply(guard), undefined);
 });
 
 test("routes explicit ODS facts through projections before mixed workspace work", () => {

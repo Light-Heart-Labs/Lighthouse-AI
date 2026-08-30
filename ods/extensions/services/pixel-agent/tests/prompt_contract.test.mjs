@@ -81,6 +81,11 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /a failed lookup means you must not answer from memory or guess/);
   assert.match(result.appendSystemContext, /truncated excerpt does not verify/);
   assert.match(result.appendSystemContext, /do not supply a remembered answer/);
+  assert.match(result.appendSystemContext, /safety-marked, transformed evidence/);
+  assert.match(result.appendSystemContext, /never save that transformed text as an exact download/);
+  assert.match(result.appendSystemContext, /pixel_ops_download_stage only when that tool is actually exposed/);
+  assert.match(result.appendSystemContext, /exact-byte download is unavailable/);
+  assert.match(result.appendSystemContext, /do not create a substitute artifact/);
   assert.match(result.appendSystemContext, /web_fetch is public-web only/);
   assert.match(result.appendSystemContext, /explain simply that this chat cannot open private URLs/);
   assert.match(result.appendSystemContext, /without naming internal guards/);

@@ -284,6 +284,13 @@ enums, owner, mode, size, timestamp freshness, UTF-8, and fixed path. It rejects
 symlinks, replacement races, unknown keys, duplicate apps, stale or future
 timestamps, and group/world-writable files.
 
+`web_fetch` and `pixel_ods_web_extract` return transformed, safety-marked page
+evidence, not the origin server's exact response bytes. Pixel must not save that
+representation as a byte-exact download or attribute its size or digest to the
+remote object. Until the separately policy-approved staged-download capability
+is installed and qualified, an exact-byte download request fails closed without
+creating a substitute artifact; ordinary page research remains available.
+
 Adding an ODS action is a security-boundary change. It requires a new explicit
 tool contract, policy and authorization design, adversarial tests, and fresh
 install/rollback qualification; do not broaden the projection reader into a

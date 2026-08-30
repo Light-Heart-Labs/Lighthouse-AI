@@ -86,10 +86,27 @@ export const ODS_TOOL_ROUTING_ABORT_REASON =
 export const ODS_TOOL_ROUTING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another tool after the ODS projection route was enforced. Start a fresh message to continue.";
 
+export const EXACT_DOWNLOAD_REQUIRES_BROKER_REASON =
+  "Pixel cannot turn web_fetch or another transformed page view into an exact-byte download. Do not call another tool or create a substitute artifact in this turn. Exact-byte downloads require the separately exposed, policy-approved pixel_ops_download_stage path with its digest contract; tell the owner that capability is unavailable in this session.";
+
+export const EXACT_DOWNLOAD_LOOP_ABORT_REASON =
+  "Pixel stopped this response because it requested another tool after the exact-download provenance boundary was enforced. Start a fresh message with an approved staged-download capability or ask for a non-byte-exact page summary.";
+
+export const EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX =
+  "Pixel did not create the requested artifact because this session has no verified exact-byte download path. web_fetch and page extraction return transformed, safety-marked evidence rather than origin bytes. Enable and qualify the policy-approved staged-download capability, or provide a trusted local artifact and digest.";
+
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
+const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
+  "pixel_ops_download_stage",
+  "pixel_ops_artifact_transfer",
+  "pixel_ops_job_get",
+  "pixel_ops_job_wait",
+  "pixel_ops_job_events",
+  "pixel_ops_job_cancel",
+]);
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -596,6 +613,19 @@ export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
   return textRequestsPrivateUrlAccess(text);
 }
 
+export function userMessageRequestsExactByteDownload(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return false;
+  const asksDownload =
+    /\b(?:download|fetch|retrieve|save)\b/i.test(text) &&
+    /\b(?:file|artifact|object|page|response|bytes?)\b/i.test(text);
+  const asksExactBytes =
+    /\b(?:byte-for-byte|byte exact|byte-exact|exact[- ]bytes?|exact bytes?|raw bytes?|origin(?: server)? bytes?|remote(?: object)? bytes?)\b/i.test(
+      text
+    );
+  return asksDownload && asksExactBytes;
+}
+
 function validGitHubRepository(owner, repository) {
   return (
     /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner) &&
@@ -788,6 +818,9 @@ export function createToolLoopGuard({
         odsRoutingBlocks: 0,
         odsRoutingExhausted: false,
         odsRoutingTerminalBlocks: 0,
+        exactDownloadRequested: false,
+        exactDownloadBrokerObserved: false,
+        exactDownloadTerminalBlocks: 0,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
         latestVerificationStatus: undefined,
@@ -828,6 +861,26 @@ export function createToolLoopGuard({
 
     if (state?.clientCancelled) {
       return { block: true, blockReason: CLIENT_CANCELLED_REASON };
+    }
+
+    if (
+      state?.exactDownloadRequested &&
+      !EXACT_DOWNLOAD_BROKER_TOOLS.has(toolName)
+    ) {
+      if (state.exactDownloadTerminalBlocks === 0) {
+        state.exactDownloadTerminalBlocks = 1;
+        return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON };
+      }
+      let aborted = false;
+      try {
+        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+      } catch (error) {
+        warn(`Pixel exact-download abort failed for run ${runId}: ${String(error)}`);
+      }
+      warn(
+        `Pixel stopped a tool retry after the exact-download boundary for run ${runId}; active run aborted=${aborted}`
+      );
+      return { block: true, blockReason: EXACT_DOWNLOAD_LOOP_ABORT_REASON };
     }
 
     if (
@@ -1112,6 +1165,10 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        state.exactDownloadRequested = userMessageRequestsExactByteDownload(
+          event?.messages,
+          event?.prompt
+        );
       }
       if (!state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
@@ -1197,6 +1254,12 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    if (
+      toolName === "pixel_ops_download_stage" &&
+      !toolCallFailed(event)
+    ) {
+      state.exactDownloadBrokerObserved = true;
+    }
     if (
       state.githubReadmeUrl &&
       toolName === "web_fetch" &&
@@ -1293,6 +1356,9 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
+    if (state.exactDownloadRequested && !state.exactDownloadBrokerObserved) {
+      return { status: "failed", text: EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX };
+    }
     if (state.latestVerificationStatus === "pending") {
       return { status: "pending", text: VERIFICATION_PENDING_DELIVERY_PREFIX };
     }
