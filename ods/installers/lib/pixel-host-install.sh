@@ -423,7 +423,7 @@ _ods_pixel_model_reconciliation_snapshot() {
     backup_root="$home/.openclaw/backups"
     ods_pixel_run_as_owner "$owner" "$home" python3 - \
         "$marker" "$config" "$answers" "$attestation" "$backup_root" <<'PY'
-import json, os, pathlib, shutil, stat, sys, tempfile
+import json, os, pathlib, re, shutil, stat, sys, tempfile
 
 marker, config, answers, attestation, backup_root = map(pathlib.Path, sys.argv[1:])
 sources = (
@@ -459,18 +459,62 @@ for source, name in (
 
 live = json.loads(config.read_text(encoding="utf-8"))
 contract = json.loads(answers.read_text(encoding="utf-8"))
-provider = contract.get("modelProvider")
 agent_id = contract.get("agentId")
 providers = live.get("models", {}).get("providers", {})
-models = providers.get(provider, {}).get("models", []) if isinstance(providers, dict) else []
+if (not isinstance(providers, dict) or len(providers) != 1
+        or next(iter(providers), None) not in {"ods-local", "ods-gateway"}):
+    raise SystemExit("live Pixel provider is outside the ODS model-only contract")
+provider = next(iter(providers))
+provider_value = providers[provider]
+models = provider_value.get("models", []) if isinstance(provider_value, dict) else []
 agents = live.get("agents", {}).get("list", [])
 agent = [item for item in agents if isinstance(item, dict) and item.get("id") == agent_id]
-if (provider != "ods-local" or agent_id != "pixel" or len(models) != 1 or len(agent) != 1
+extensions = contract.get("gatewayExtensions")
+if (contract.get("deploymentName") != "ods-default" or agent_id != "pixel"
+        or not isinstance(extensions, list) or len(extensions) != 1
+        or extensions[0].get("id") != "pixel-ods"
+        or len(models) != 1 or len(agent) != 1
         or not isinstance(models[0].get("id"), str) or not isinstance(models[0].get("name"), str)
+        or provider_value.get("api") != "openai-completions"
         or agent[0].get("model") != f"{provider}/{models[0]['id']}"):
     raise SystemExit("live Pixel configuration is outside the ODS model-only contract")
+model_id = models[0]["id"]
+model_name = models[0]["name"]
+if provider == "ods-local":
+    if (provider_value.get("apiKey") != "local-no-auth"
+            or provider_value.get("baseUrl") != "http://127.0.0.1:11434/v1"
+            or model_name != f"ODS Local {model_id}"):
+        raise SystemExit("live Pixel local route is outside the ODS model-only contract")
+else:
+    gateway_key = provider_value.get("apiKey")
+    gateway_url = provider_value.get("baseUrl")
+    alias_label = "Current" if model_id == "ods/current" else "Default"
+    if (model_id not in {"default", "ods/current"}
+            or not isinstance(gateway_key, str) or not gateway_key or len(gateway_key) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in gateway_key)
+            or not isinstance(gateway_url, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", gateway_url)
+            or int(gateway_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535
+            or not re.fullmatch(
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                model_name,
+            )):
+        raise SystemExit("live Pixel gateway route is outside the ODS model-only contract")
+context_window = models[0].get("contextWindow")
+max_tokens = models[0].get("maxTokens")
+reasoning = models[0].get("reasoning")
+if (type(context_window) is not int or type(max_tokens) is not int or type(reasoning) is not bool
+        or not 4096 <= context_window <= 10_000_000
+        or not 1 <= max_tokens <= context_window):
+    raise SystemExit("live Pixel model limits are outside the ODS model-only contract")
+contract["modelProvider"] = provider
 contract["modelId"] = models[0]["id"]
 contract["modelName"] = models[0]["name"]
+contract["modelBaseUrl"] = provider_value.get("baseUrl")
+contract["modelApiKey"] = provider_value.get("apiKey")
+contract["modelContextWindow"] = context_window
+contract["modelMaxTokens"] = max_tokens
+contract["modelReasoning"] = reasoning
 rollback = backup / "rollback-onboarding.json"
 payload = json.dumps(contract, indent=2, sort_keys=True) + "\n"
 with rollback.open("x", encoding="utf-8", newline="\n") as handle:
@@ -504,12 +548,35 @@ if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
     raise SystemExit("unsafe ODS Pixel onboarding directory")
 value = json.loads(path.read_text(encoding="utf-8"))
 extensions = value.get("gatewayExtensions")
+provider = value.get("modelProvider")
+model_id = value.get("modelId")
+model_name = value.get("modelName")
+base_url = value.get("modelBaseUrl")
+api_key = value.get("modelApiKey")
 if (value.get("deploymentName") != "ods-default" or value.get("agentId") != "pixel"
-        or value.get("modelProvider") != "ods-local" or value.get("modelApiKey") != "local-no-auth"
-        or value.get("modelBaseUrl") != "http://127.0.0.1:11434/v1"
         or not isinstance(extensions, list) or len(extensions) != 1
         or extensions[0].get("id") != "pixel-ods"):
     raise SystemExit("onboarding contract is outside the ODS-managed Pixel boundary")
+if provider == "ods-local":
+    if (api_key != "local-no-auth" or base_url != "http://127.0.0.1:11434/v1"
+            or model_name != f"ODS Local {model_id}"):
+        raise SystemExit("onboarding local route is outside the ODS-managed Pixel boundary")
+elif provider == "ods-gateway":
+    alias_label = "Current" if model_id == "ods/current" else "Default"
+    if (model_id not in {"default", "ods/current"}
+            or not isinstance(model_name, str)
+            or not re.fullmatch(
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                model_name,
+            )
+            or not isinstance(api_key, str) or not api_key or len(api_key) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in api_key)
+            or not isinstance(base_url, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", base_url)
+            or int(base_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535):
+        raise SystemExit("onboarding gateway route is outside the ODS-managed Pixel boundary")
+else:
+    raise SystemExit("onboarding provider is outside the ODS-managed Pixel boundary")
 if (type(value.get("modelContextWindow")) is not int
         or type(value.get("modelMaxTokens")) is not int
         or type(value.get("modelReasoning")) is not bool
@@ -530,8 +597,12 @@ if reasoning_raw:
     if reasoning_raw not in {"true", "false"}:
         raise SystemExit("invalid promoted Pixel reasoning capability")
     value["modelReasoning"] = reasoning_raw == "true"
-value["modelId"] = model
-value["modelName"] = f"ODS Local {model}"
+if provider == "ods-local":
+    value["modelId"] = model
+    value["modelName"] = f"ODS Local {model}"
+else:
+    alias_label = "Current" if model_id == "ods/current" else "Default"
+    value["modelName"] = f"ODS {alias_label} ({model})"
 payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
 fd, temporary = tempfile.mkstemp(prefix=".pixel-onboarding.", dir=path.parent)
 try:
@@ -551,7 +622,7 @@ _ods_pixel_candidate_is_managed_runtime_update() {
     local owner="$1" home="$2" candidate="$3" answers="$4" live
     live="$home/.openclaw/openclaw.json"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$live" "$candidate" "$answers" <<'PY'
-import copy, json, os, pathlib, stat, sys
+import copy, json, os, pathlib, re, stat, sys
 
 values = []
 for raw in sys.argv[1:]:
@@ -570,23 +641,77 @@ provider = contract.get("modelProvider")
 model_id = contract.get("modelId")
 model_name = contract.get("modelName")
 agent_id = contract.get("agentId")
-if provider != "ods-local" or agent_id != "pixel" or model_name != f"ODS Local {model_id}":
+if provider not in {"ods-local", "ods-gateway"} or agent_id != "pixel":
     raise SystemExit("candidate is outside the ODS model contract")
+if provider == "ods-local":
+    if (model_name != f"ODS Local {model_id}"
+            or contract.get("modelApiKey") != "local-no-auth"
+            or contract.get("modelBaseUrl") != "http://127.0.0.1:11434/v1"):
+        raise SystemExit("candidate local model is outside the ODS model contract")
+else:
+    gateway_key = contract.get("modelApiKey")
+    gateway_url = contract.get("modelBaseUrl")
+    alias_label = "Current" if model_id == "ods/current" else "Default"
+    if (model_id not in {"default", "ods/current"}
+            or not isinstance(model_name, str)
+            or not re.fullmatch(
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                model_name,
+            )
+            or not isinstance(gateway_key, str) or not gateway_key or len(gateway_key) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in gateway_key)
+            or not isinstance(gateway_url, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", gateway_url)
+            or int(gateway_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535):
+        raise SystemExit("candidate gateway alias is outside the ODS model contract")
 
-def binding(document):
+def binding(document, expected_provider=None):
     providers = document.get("models", {}).get("providers", {})
-    if not isinstance(providers, dict) or set(providers) != {provider}:
+    if (not isinstance(providers, dict) or len(providers) != 1
+            or next(iter(providers), None) not in {"ods-local", "ods-gateway"}):
         raise SystemExit("unexpected Pixel model providers")
-    provider_value = providers[provider]
+    provider_id = next(iter(providers))
+    if expected_provider is not None and provider_id != expected_provider:
+        raise SystemExit("unexpected Pixel model provider")
+    provider_value = providers[provider_id]
     models = provider_value.get("models") if isinstance(provider_value, dict) else None
     agents = document.get("agents", {}).get("list", [])
     selected = [item for item in agents if isinstance(item, dict) and item.get("id") == agent_id]
     if not isinstance(models, list) or len(models) != 1 or len(selected) != 1:
         raise SystemExit("unexpected Pixel model or agent cardinality")
-    return provider_value, models[0], selected[0]
+    return provider_id, provider_value, models[0], selected[0]
 
-live_provider, live_model, live_agent = binding(live)
-candidate_provider, candidate_model, candidate_agent = binding(candidate)
+def validate_live_route(provider_id, provider_value, model, agent):
+    live_id = model.get("id")
+    if (provider_value.get("api") != "openai-completions" or not isinstance(live_id, str)
+            or agent.get("model") != f"{provider_id}/{live_id}"):
+        raise SystemExit("live provider route is outside the ODS model contract")
+    if provider_id == "ods-local":
+        if (provider_value.get("apiKey") != "local-no-auth"
+                or provider_value.get("baseUrl") != "http://127.0.0.1:11434/v1"
+                or model.get("name") != f"ODS Local {live_id}"):
+            raise SystemExit("live local provider route is outside the ODS model contract")
+        return
+    live_key = provider_value.get("apiKey")
+    live_url = provider_value.get("baseUrl")
+    live_label = "Current" if live_id == "ods/current" else "Default"
+    live_name = model.get("name")
+    if (live_id not in {"default", "ods/current"}
+            or not isinstance(live_name, str)
+            or not re.fullmatch(
+                rf"ODS {live_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                live_name,
+            )
+            or not isinstance(live_key, str) or not live_key or len(live_key) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in live_key)
+            or not isinstance(live_url, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", live_url)
+            or int(live_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535):
+        raise SystemExit("live gateway provider route is outside the ODS model contract")
+
+live_provider_id, live_provider, live_model, live_agent = binding(live)
+candidate_provider_id, candidate_provider, candidate_model, candidate_agent = binding(candidate, provider)
+validate_live_route(live_provider_id, live_provider, live_model, live_agent)
 expected_model = {
     "id": model_id,
     "name": model_name,
@@ -602,19 +727,31 @@ if (candidate_provider.get("api") != "openai-completions"
         or candidate_provider.get("baseUrl") != contract.get("modelBaseUrl")
         or candidate_agent.get("model") != f"{provider}/{model_id}"):
     raise SystemExit("candidate provider route does not match onboarding")
-old_id = live_model.get("id")
-if (not isinstance(old_id, str) or live_model.get("name") != f"ODS Local {old_id}"
-        or live_agent.get("model") != f"{provider}/{old_id}"):
-    raise SystemExit("live provider route is outside the ODS model contract")
 normalized = copy.deepcopy(live)
-normalized_provider, normalized_model, normalized_agent = binding(normalized)
+normalized_providers = normalized.get("models", {}).get("providers", {})
+if not isinstance(normalized_providers, dict) or set(normalized_providers) != {live_provider_id}:
+    raise SystemExit("live provider collection is outside the ODS model contract")
+normalized_provider = normalized_providers.pop(live_provider_id)
+normalized_providers[provider] = normalized_provider
+normalized_provider["api"] = candidate_provider.get("api")
+normalized_provider["apiKey"] = candidate_provider.get("apiKey")
+normalized_provider["baseUrl"] = candidate_provider.get("baseUrl")
+normalized_models = normalized_provider.get("models")
+if not isinstance(normalized_models, list) or len(normalized_models) != 1:
+    raise SystemExit("live provider models are outside the ODS model contract")
+normalized_model = normalized_models[0]
+normalized_agents = normalized.get("agents")
+normalized_agent_list = normalized_agents.get("list", []) if isinstance(normalized_agents, dict) else []
+normalized_selected = [item for item in normalized_agent_list if isinstance(item, dict) and item.get("id") == agent_id]
+if len(normalized_selected) != 1:
+    raise SystemExit("live Pixel agent is outside the ODS model contract")
+normalized_agent = normalized_selected[0]
 normalized_model["id"] = model_id
 normalized_model["name"] = model_name
 normalized_model["contextWindow"] = contract.get("modelContextWindow")
 normalized_model["maxTokens"] = contract.get("modelMaxTokens")
 normalized_model["reasoning"] = contract.get("modelReasoning")
 normalized_agent["model"] = f"{provider}/{model_id}"
-normalized_agents = normalized.get("agents")
 normalized_defaults = normalized_agents.get("defaults") if isinstance(normalized_agents, dict) else None
 normalized_session = normalized.get("session")
 if not isinstance(normalized_defaults, dict) or not isinstance(normalized_session, dict):
@@ -919,9 +1056,12 @@ providers = value.get("models", {}).get("providers", {})
 agents = value.get("agents", {})
 agent_list = agents.get("list", []) if isinstance(agents, dict) else []
 selected = [item for item in agent_list if isinstance(item, dict) and item.get("id") == "pixel"]
-if not isinstance(providers, dict) or set(providers) != {"ods-local"} or len(selected) != 1:
+if (not isinstance(providers, dict) or len(providers) != 1
+        or next(iter(providers), None) not in {"ods-local", "ods-gateway"}
+        or len(selected) != 1):
     raise SystemExit("OpenClaw configuration is outside the ODS Pixel runtime boundary")
-provider = providers["ods-local"]
+provider_id = next(iter(providers))
+provider = providers[provider_id]
 models = provider.get("models") if isinstance(provider, dict) else None
 defaults = agents.get("defaults") if isinstance(agents, dict) else None
 session = value.get("session")
@@ -929,12 +1069,33 @@ model_id = models[0].get("id") if isinstance(models, list) and len(models) == 1 
 if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict)
         or not isinstance(defaults, dict) or not isinstance(session, dict)
         or provider.get("api") != "openai-completions"
-        or provider.get("apiKey") != "local-no-auth"
-        or selected[0].get("model") != f"ods-local/{model_id}"):
+        or selected[0].get("model") != f"{provider_id}/{model_id}"):
     raise SystemExit("OpenClaw configuration is outside the ODS Pixel runtime contract")
+if provider_id == "ods-local":
+    if (provider.get("apiKey") != "local-no-auth"
+            or provider.get("baseUrl") != "http://127.0.0.1:11434/v1"
+            or not isinstance(model_id, str)
+            or models[0].get("name") != f"ODS Local {model_id}"):
+        raise SystemExit("OpenClaw local route is outside the ODS Pixel runtime contract")
+else:
+    gateway_key = provider.get("apiKey")
+    gateway_url = provider.get("baseUrl")
+    alias_label = "Current" if model_id == "ods/current" else "Default"
+    if (model_id not in {"default", "ods/current"}
+            or not isinstance(gateway_key, str) or not gateway_key or len(gateway_key) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in gateway_key)
+            or not isinstance(gateway_url, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", gateway_url)
+            or int(gateway_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535
+            or not isinstance(models[0].get("name"), str)
+            or not re.fullmatch(
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                models[0]["name"],
+            )):
+        raise SystemExit("OpenClaw gateway route is outside the ODS Pixel runtime contract")
 
 updated = copy.deepcopy(value)
-updated_provider = updated["models"]["providers"]["ods-local"]
+updated_provider = updated["models"]["providers"][provider_id]
 updated_defaults = updated["agents"]["defaults"]
 updated_agent = next(item for item in updated["agents"]["list"] if isinstance(item, dict) and item.get("id") == "pixel")
 updated_model = updated_provider["models"][0]
@@ -1417,6 +1578,35 @@ _ods_pixel_wait_http() {
     return 1
 }
 
+_ods_pixel_gateway_model_alias() {
+    case "${ODS_MODEL_SWITCHBOARD:-observe}" in
+        enabled) printf '%s\n' 'ods/current' ;;
+        legacy|observe|"") printf '%s\n' 'default' ;;
+        *) return 1 ;;
+    esac
+}
+
+_ods_pixel_wait_model_gateway() {
+    local label="$1" port="$2" api_key="$3" model="$4" attempts="${5:-120}"
+    local body attempt
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || return 1
+    [[ -n "$api_key" && ${#api_key} -le 4096 && "$api_key" != *[[:cntrl:]]* \
+        && "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$ ]] || return 1
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if body="$(curl --fail --silent --show-error --max-time 8 \
+            -H @<(printf 'Authorization: Bearer %s\n' "$api_key") \
+            "http://127.0.0.1:${port}/v1/models" 2>/dev/null)" \
+            && jq -e --arg model "$model" \
+                '.data | type == "array" and any(.[]?; .id == $model)' \
+                >/dev/null 2>&1 <<<"$body"; then
+            return 0
+        fi
+        sleep 2
+    done
+    ai_bad "$label did not publish the required model alias at its authenticated loopback endpoint."
+    return 1
+}
+
 _ods_pixel_enable_chat_endpoint() {
     local owner="$1" home="$2" config
     config="$home/.openclaw/openclaw.json"
@@ -1457,6 +1647,8 @@ PY
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
+    local gateway_alias gateway_label gateway_port="${LITELLM_PORT:-4000}" gateway_key="${LITELLM_KEY:-}"
+    local gateway_key_file write_status=0
     if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]]; then
         :
     else
@@ -1471,15 +1663,56 @@ _ods_pixel_write_onboarding() {
     if [[ ! "${LLAMA_REASONING:-off}" =~ ^(off|none|false|0)$ ]]; then
         reasoning=true
     fi
+    gateway_alias="$(_ods_pixel_gateway_model_alias)" || {
+        ai_bad "Pixel received an unsupported ODS model Switchboard mode."
+        return 1
+    }
+    gateway_label="Default"
+    [[ "$gateway_alias" == "ods/current" ]] && gateway_label="Current"
+    if [[ ! "$gateway_port" =~ ^[0-9]+$ ]] || (( gateway_port < 1 || gateway_port > 65535 )); then
+        ai_bad "Pixel requires a valid loopback LiteLLM port."
+        return 1
+    fi
+    [[ -n "$gateway_key" && ${#gateway_key} -le 4096 ]] || {
+        ai_bad "Pixel requires the generated LiteLLM gateway key."
+        return 1
+    }
 
     ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${answers%/*}" || return 1
+    gateway_key_file="$(ods_pixel_run_as_owner "$owner" "$home" \
+        mktemp "${answers%/*}/.pixel-gateway-key.XXXXXX")" || return 1
+    if ! printf '%s' "$gateway_key" \
+        | ods_pixel_run_as_owner "$owner" "$home" tee -- "$gateway_key_file" >/dev/null \
+        || ! ods_pixel_run_as_owner "$owner" "$home" chmod 0600 -- "$gateway_key_file"; then
+        ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$gateway_key_file" || true
+        return 1
+    fi
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
         "$openclaw_bin" "$home" "${LLM_MODEL:-default}" "$context" "$max_tokens" "$reasoning" \
-        "${OLLAMA_PORT:-11434}" "${SEARXNG_PORT:-8888}" "$plugin_path" "$plugin_digest" <<'PY'
-import json, os, pathlib, stat, sys, tempfile
+        "$gateway_alias" "$gateway_label" "$gateway_port" "$gateway_key_file" \
+        "${SEARXNG_PORT:-8888}" "$plugin_path" "$plugin_digest" <<'PY' || write_status=$?
+import json, os, pathlib, re, stat, sys, tempfile
 
 (out, openclaw_bin, home, model, context, max_tokens, reasoning,
- model_port, search_port, plugin_path, plugin_digest) = sys.argv[1:]
+ gateway_alias, gateway_label, gateway_port, gateway_key_path,
+ search_port, plugin_path, plugin_digest) = sys.argv[1:]
+gateway_key_path = pathlib.Path(gateway_key_path)
+gateway_key_info = gateway_key_path.lstat()
+if (not stat.S_ISREG(gateway_key_info.st_mode) or stat.S_ISLNK(gateway_key_info.st_mode)
+        or gateway_key_info.st_nlink != 1 or gateway_key_info.st_uid != os.getuid()
+        or gateway_key_info.st_mode & 0o077 or gateway_key_info.st_size > 4096):
+    raise SystemExit("unsafe ODS Pixel gateway credential")
+gateway_key = gateway_key_path.read_text(encoding="utf-8")
+if gateway_alias not in {"default", "ods/current"}:
+    raise SystemExit("invalid ODS Pixel gateway alias")
+if gateway_label not in {"Default", "Current"}:
+    raise SystemExit("invalid ODS Pixel gateway label")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+    raise SystemExit("invalid ODS Pixel model id")
+if (not gateway_port.isdigit() or not 1 <= int(gateway_port) <= 65535
+        or not gateway_key or len(gateway_key) > 4096
+        or any(ord(character) < 32 or ord(character) == 127 for character in gateway_key)):
+    raise SystemExit("invalid ODS Pixel gateway route")
 home = pathlib.Path(home)
 payload = {
     "deploymentProfile": "prepared",
@@ -1494,11 +1727,11 @@ payload = {
     "openclawHome": str(home / ".openclaw"),
     "installDir": str(home / ".local" / "share" / "pixel"),
     "workspace": str(home / ".openclaw" / "workspace-pixel"),
-    "modelProvider": "ods-local",
-    "modelId": model,
-    "modelName": f"ODS Local {model}",
-    "modelBaseUrl": f"http://127.0.0.1:{model_port}/v1",
-    "modelApiKey": "local-no-auth",
+    "modelProvider": "ods-gateway",
+    "modelId": gateway_alias,
+    "modelName": f"ODS {gateway_label} ({model})",
+    "modelBaseUrl": f"http://127.0.0.1:{gateway_port}/v1",
+    "modelApiKey": gateway_key,
     "modelReasoning": reasoning == "true",
     "modelContextWindow": int(context),
     "modelMaxTokens": int(max_tokens),
@@ -1554,6 +1787,8 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
+    ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$gateway_key_file" || write_status=1
+    return "$write_status"
 }
 
 _ods_pixel_install_ingress() {
@@ -1654,7 +1889,7 @@ _ods_pixel_wait_ingress() {
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256 runtime_budget_status
+    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -1677,9 +1912,14 @@ ods_pixel_install_default_agent() {
         return 1
     fi
 
-    ai "Starting the local model and search prerequisites for Pixel review..."
-    $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-build --pull never llama-server searxng >>"$LOG_FILE" 2>&1
-    _ods_pixel_wait_http "ODS local model" "http://127.0.0.1:${OLLAMA_PORT:-11434}/v1/models" 180 '.data | type == "array" and length > 0'
+    gateway_alias="$(_ods_pixel_gateway_model_alias)" || {
+        ai_bad "Pixel received an unsupported ODS model Switchboard mode."
+        return 1
+    }
+    ai "Starting the ODS model gateway and search prerequisites for Pixel review..."
+    $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-build --pull never litellm searxng >>"$LOG_FILE" 2>&1
+    _ods_pixel_wait_model_gateway "ODS model gateway" "${LITELLM_PORT:-4000}" \
+        "${LITELLM_KEY:-}" "$gateway_alias" 180
     _ods_pixel_wait_http "ODS local search" "http://127.0.0.1:${SEARXNG_PORT:-8888}/search?q=pixel-preflight&format=json" 90 '.results | type == "array"'
 
     ai "Bootstrapping the exact Pixel source and pinned runtime..."
@@ -1785,19 +2025,19 @@ ods_pixel_install_default_agent() {
     # verification, the next installer run can safely enter the exact-source
     # reconciliation path instead of attempting to reapply an active release.
     if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
-        ai_bad "Could not bind the verified Pixel release before local-runtime configuration."
+        ai_bad "Could not bind the verified Pixel release before managed-runtime configuration."
         return 1
     fi
     runtime_budget_status="$(_ods_pixel_apply_runtime_budget "$owner" "$home" \
         "$home/.openclaw/openclaw.json" "$openclaw_bin")" || {
-        ai_bad "Could not validate and apply Pixel's ODS local-runtime budget."
+        ai_bad "Could not validate and apply Pixel's ODS managed-runtime policy."
         return 1
     }
     case "$runtime_budget_status" in
-        changed) ai "Applying Pixel's bounded ODS local-runtime budget..." ;;
+        changed) ai "Applying Pixel's bounded ODS managed-runtime policy..." ;;
         unchanged) ;;
         *)
-            ai_bad "Pixel returned an invalid ODS local-runtime budget result."
+            ai_bad "Pixel returned an invalid ODS managed-runtime policy result."
             return 1
             ;;
     esac
@@ -1807,7 +2047,7 @@ ods_pixel_install_default_agent() {
     # can prove the managed contract and resume without misclassifying ODS's
     # own runtime policy as unmanaged drift.
     if ! _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root"; then
-        ai_bad "Could not bind the verified Pixel ODS local-runtime configuration."
+        ai_bad "Could not bind the verified Pixel ODS managed-runtime configuration."
         return 1
     fi
     # OpenClaw persists plugin descriptors separately from its live config.

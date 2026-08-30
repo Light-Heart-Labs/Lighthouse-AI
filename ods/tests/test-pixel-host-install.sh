@@ -357,6 +357,9 @@ export LLM_MODEL=qwen-test
 export LLAMA_REASONING=off
 export OLLAMA_PORT=11434
 export SEARXNG_PORT=8888
+export LITELLM_PORT=4000
+export LITELLM_KEY=test-litellm-secret
+export ODS_MODEL_SWITCHBOARD=observe
 digest="$(printf 'a%.0s' {1..64})"
 _ods_pixel_write_onboarding "$owner" "$home" "$answers" /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
 observed_contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"
@@ -366,8 +369,11 @@ check python3 -c '
 import json,sys
 v=json.load(open(sys.argv[1]))
 assert v["capabilityProfile"] == "minimal"
-assert v["modelBaseUrl"] == "http://127.0.0.1:11434/v1"
-assert v["modelId"] == "qwen-test"
+assert v["modelProvider"] == "ods-gateway"
+assert v["modelBaseUrl"] == "http://127.0.0.1:4000/v1"
+assert v["modelApiKey"] == "test-litellm-secret"
+assert v["modelId"] == "default"
+assert v["modelName"] == "ODS Default (qwen-test)"
 assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
 assert v["modelReasoning"] is False
@@ -376,6 +382,54 @@ assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugi
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
 ' "$answers"
 check test "$(stat -c '%a' "$answers")" = 600
+check test -z "$(find "${answers%/*}" -maxdepth 1 -name '.pixel-gateway-key.*' -print -quit)"
+
+ODS_MODEL_SWITCHBOARD=enabled
+_ods_pixel_write_onboarding "$owner" "$home" "$TEST_ROOT/switchboard-onboarding.json" \
+    /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-gateway" and v["modelId"] == "ods/current" and v["modelName"] == "ODS Current (qwen-test)" and v["modelBaseUrl"] == "http://127.0.0.1:4000/v1"' \
+    "$TEST_ROOT/switchboard-onboarding.json"
+ODS_MODEL_SWITCHBOARD=observe
+if LITELLM_KEY='' _ods_pixel_write_onboarding "$owner" "$home" \
+    "$TEST_ROOT/missing-gateway-key-onboarding.json" /usr/bin/openclaw \
+    /opt/ods/pixel-plugin "$digest" >/dev/null 2>&1; then
+    fail "Pixel onboarding without a LiteLLM key rejected"
+else
+    pass "Pixel onboarding without a LiteLLM key rejected"
+fi
+if (
+    curl() {
+        [[ "$*" != *"test-litellm-secret"* && "$*" == *"@/dev/fd/"* ]] || return 1
+        printf '%s\n' '{"data":[{"id":"default"}]}'
+    }
+    sleep() { :; }
+    _ods_pixel_wait_model_gateway "test gateway" 4000 test-litellm-secret default 1
+); then
+    pass "authenticated Pixel model-gateway alias preflight accepted"
+else
+    fail "authenticated Pixel model-gateway alias preflight accepted"
+fi
+if _ods_pixel_wait_model_gateway "test gateway" 4000 "" default 1 >/dev/null 2>&1; then
+    fail "Pixel model-gateway preflight without authentication rejected"
+else
+    pass "Pixel model-gateway preflight without authentication rejected"
+fi
+
+cp "$answers" "$TEST_ROOT/gateway-name-control.json"
+python3 - "$TEST_ROOT/gateway-name-control.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["modelName"] = "ODS Default (qwen-test)\nforged"
+path.write_text(json.dumps(value) + "\n")
+PY
+chmod 0600 "$TEST_ROOT/gateway-name-control.json"
+if _ods_pixel_update_onboarding_model "$owner" "$home" \
+    "$TEST_ROOT/gateway-name-control.json" qwen-next >/dev/null 2>&1; then
+    fail "forged Pixel gateway model display name rejected"
+else
+    pass "forged Pixel gateway model display name rejected"
+fi
 
 MAX_CONTEXT=16384
 LLM_MODEL=NVIDIA-Nemotron3-Nano-4B
@@ -600,8 +654,11 @@ import copy, json, pathlib, sys
 
 answers_path, live_path, candidate_path = map(pathlib.Path, sys.argv[1:])
 answers = json.loads(answers_path.read_text())
+answers["modelProvider"] = "ods-local"
 answers["modelId"] = "qwen-old"
 answers["modelName"] = "ODS Local qwen-old"
+answers["modelBaseUrl"] = "http://127.0.0.1:11434/v1"
+answers["modelApiKey"] = "local-no-auth"
 answers_path.write_text(json.dumps(answers, indent=2, sort_keys=True) + "\n")
 base = {
     "agents": {
@@ -781,6 +838,81 @@ check _ods_pixel_atomic_replace_managed_file "$owner" "$reconcile_home" \
     "$non_qwen_candidate" "$reconcile_config"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["id"] == "phi-4-mini" and m["contextWindow"] == 128000 and m["maxTokens"] == 4096 and m["reasoning"] is False and "compat" not in m and "thinkingDefault" not in a' "$reconcile_config"
 
+# Migrate an already verified direct llama.cpp route to the authenticated ODS
+# model gateway. Only the provider route, stable alias, concrete-model metadata,
+# and deterministic runtime policy may change; every unrelated Pixel field must
+# remain byte-equivalent after normalization. The rollback contract must still
+# describe the exact prior direct route.
+gateway_answers="$TEST_ROOT/gateway-reconcile-onboarding.json"
+gateway_candidate="$TEST_ROOT/gateway-reconcile-candidate.json"
+cp "$answers" "$gateway_answers"
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$gateway_answers" \
+    qwen-gateway 65536 4096 false
+python3 - "$reconcile_config" "$gateway_candidate" <<'PY'
+import json, pathlib, sys
+
+source, target = map(pathlib.Path, sys.argv[1:])
+value = json.loads(source.read_text())
+providers = value["models"]["providers"]
+provider = providers.pop("ods-local")
+providers["ods-gateway"] = provider
+provider["apiKey"] = "test-litellm-secret"
+provider["baseUrl"] = "http://127.0.0.1:4000/v1"
+model = provider["models"][0]
+model.update({
+    "id": "default",
+    "name": "ODS Default (qwen-gateway)",
+    "contextWindow": 65536,
+    "maxTokens": 4096,
+    "reasoning": False,
+})
+model.pop("compat", None)
+agent = next(item for item in value["agents"]["list"] if item.get("id") == "pixel")
+agent["model"] = "ods-gateway/default"
+agent.pop("thinkingDefault", None)
+target.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$gateway_answers" "$gateway_candidate"
+gateway_budget_status="$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_home" \
+    "$gateway_candidate" "$runtime_validator")"
+check test "$gateway_budget_status" = unchanged
+check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" \
+    "$gateway_candidate" "$gateway_answers"
+python3 - "$reconcile_marker" "$reconcile_config" <<'PY'
+import hashlib, json, pathlib, sys
+
+marker_path, config_path = map(pathlib.Path, sys.argv[1:])
+marker = json.loads(marker_path.read_text())
+config = json.loads(config_path.read_text())
+canonical = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+marker["configuration_sha256"] = hashlib.sha256(b"ods-pixel-openclaw-v1\0" + canonical).hexdigest()
+marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$reconcile_marker"
+gateway_migration_backup="$(_ods_pixel_model_reconciliation_snapshot \
+    "$owner" "$reconcile_home" "$gateway_answers")"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-local" and v["modelId"] == "phi-4-mini" and v["modelName"] == "ODS Local phi-4-mini" and v["modelBaseUrl"] == "http://127.0.0.1:11434/v1" and v["modelApiKey"] == "local-no-auth" and v["modelContextWindow"] == 128000 and v["modelMaxTokens"] == 4096 and v["modelReasoning"] is False' \
+    "$gateway_migration_backup/rollback-onboarding.json"
+cp "$gateway_candidate" "$TEST_ROOT/gateway-candidate-unsafe-route.json"
+python3 - "$TEST_ROOT/gateway-candidate-unsafe-route.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["models"]["providers"]["ods-gateway"]["baseUrl"] = "http://example.invalid/v1"
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+chmod 0600 "$TEST_ROOT/gateway-candidate-unsafe-route.json"
+if _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" \
+    "$TEST_ROOT/gateway-candidate-unsafe-route.json" "$gateway_answers" >/dev/null 2>&1; then
+    fail "non-loopback Pixel gateway migration rejected"
+else
+    pass "non-loopback Pixel gateway migration rejected"
+fi
+_ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$gateway_answers" \
+    qwen-gateway-next 131072 8192 true
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-gateway" and v["modelId"] == "default" and v["modelName"] == "ODS Default (qwen-gateway-next)" and v["modelContextWindow"] == 131072 and v["modelMaxTokens"] == 8192 and v["modelReasoning"] is True' \
+    "$gateway_answers"
+
 linked_answers="$TEST_ROOT/onboarding-linked.json"
 printf '%s\n' 'sentinel' > "$TEST_ROOT/onboarding-link-target"
 ln -s "$TEST_ROOT/onboarding-link-target" "$linked_answers"
@@ -956,7 +1088,7 @@ assert text.index("_ods_pixel_mark_verified_installing \"$owner\"") < text.index
 assert "if ! _ods_pixel_mark_ready" in text
 runtime_overlay = installer.index("runtime_budget_status=\"")
 runtime_checkpoint = installer.index(
-    "Could not bind the verified Pixel ODS local-runtime configuration.",
+    "Could not bind the verified Pixel ODS managed-runtime configuration.",
     runtime_overlay,
 )
 registry_refresh = installer.index("_ods_pixel_refresh_plugin_registry", runtime_overlay)

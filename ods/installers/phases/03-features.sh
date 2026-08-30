@@ -109,24 +109,31 @@ if ! PIXEL_AGENT_MODE="$(ods_pixel_resolve_enablement "${ENABLE_PIXEL:-auto}" 2>
 fi
 ENABLE_PIXEL_RUNTIME=false
 if [[ "$PIXEL_AGENT_MODE" == "pixel" ]]; then
-    if [[ "${PIXEL_AGENT_MODEL_READY:-unknown}" == "false" ]]; then
+    _pixel_model_route_class="$(ods_pixel_model_route_class \
+        "${ODS_MODE:-local}" "${EXTERNAL_LLM_URL:-}" "${LEMONADE_EXTERNAL:-false}")" || {
+        ai_bad "Pixel received an unsupported ODS model route."
+        return 1 2>/dev/null || exit 1
+    }
+    if [[ "${PIXEL_AGENT_MODEL_READY:-unknown}" == "false" \
+        && "$_pixel_model_route_class" == "local" ]]; then
         if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
             ai_bad "Pixel was explicitly required, but no catalog-verified agent model fits this hardware."
             return 1 2>/dev/null || exit 1
         fi
         PIXEL_AGENT_MODE=hermes
         log "Pixel auto-gate selected Hermes because no catalog-verified agent model fits this hardware"
-    elif [[ "${ODS_MODE:-local}" != "local" || -n "${EXTERNAL_LLM_URL:-}" || "${LEMONADE_EXTERNAL:-false}" == "true" ]]; then
+    elif [[ "$_pixel_model_route_class" == "unmanaged-external" ]]; then
         if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
-            ai_bad "Pixel currently requires the bundled local ODS model route."
+            ai_bad "Pixel requires an ODS-managed LiteLLM route; generic external-model reuse is not yet eligible."
             return 1 2>/dev/null || exit 1
         fi
         PIXEL_AGENT_MODE=hermes
-        log "Pixel auto-gate selected Hermes because this install uses an external/cloud model route"
+        log "Pixel auto-gate selected Hermes because this install uses a generic external-model route"
     else
         ENABLE_PIXEL_RUNTIME=true
-        log "Pixel selected as the default ODS agent; Hermes remains available as rollback when enabled"
+        log "Pixel selected as the default ODS agent on the managed ODS model route; Hermes remains available as rollback when enabled"
     fi
+    unset _pixel_model_route_class
 else
     log "Pixel auto-gate selected Hermes fallback"
 fi
@@ -206,9 +213,12 @@ if ! $DRY_RUN; then
     if [[ "${ENABLE_HERMES:-false}" != "true" && "${ENABLE_OPENCLAW:-false}" != "true" ]]; then
         ENABLE_APE=false
     fi
-    _sync_extension_compose "${ENABLE_RECOMMENDED:-}" litellm    "LiteLLM"       "recommended services not enabled"
-    _sync_extension_compose "${ENABLE_RECOMMENDED:-}" searxng    "SearXNG"       "recommended services not enabled"
+    _pixel_support_services="${ENABLE_RECOMMENDED:-false}"
+    [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && _pixel_support_services=true
+    _sync_extension_compose "$_pixel_support_services" litellm    "LiteLLM"       "neither recommended services nor Pixel are enabled"
+    _sync_extension_compose "$_pixel_support_services" searxng    "SearXNG"       "neither recommended services nor Pixel are enabled"
     _sync_extension_compose "${ENABLE_RECOMMENDED:-}" token-spy  "Token Spy"     "recommended services not enabled"
+    unset _pixel_support_services
     _sync_extension_compose "${ENABLE_VOICE:-}"      whisper    "Whisper (STT)" "voice not enabled"
     _sync_extension_compose "${ENABLE_VOICE:-}"      tts        "Kokoro (TTS)"  "voice not enabled"
     _sync_extension_compose "${ENABLE_WORKFLOWS:-}"  n8n        "n8n"           "workflows not enabled"

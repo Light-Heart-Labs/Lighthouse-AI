@@ -148,6 +148,11 @@ def main() -> int:
     assert "PIXEL_AGENT_MODEL_READY=false" in detection
     assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
     assert "selected Hermes because no catalog-verified agent model fits" in features
+    assert "ods_pixel_model_route_class" in features
+    assert '"$_pixel_model_route_class" == "unmanaged-external"' in features
+    assert '"${ENABLE_PIXEL_RUNTIME:-false}" == "true"' in features
+    assert '_sync_extension_compose "$_pixel_support_services" litellm' in features
+    assert '_sync_extension_compose "$_pixel_support_services" searxng' in features
 
     print("Pixel model selector tests passed: 5")
     return 0

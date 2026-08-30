@@ -7,12 +7,17 @@ Hermes remains installed by default as the portable fallback and rollback
 agent. Deprecated OpenClaw and the OpenCode coding UI remain separately
 selectable; this integration does not delete either one.
 
-On a fresh Pixel-enabled install, ODS selects only a pinned catalog model with
-an explicit verified agent-viability verdict. If a lightweight tier's model
-size preference would otherwise choose a model that failed agent or
+On a fresh local-model Pixel install, ODS selects only a pinned catalog model
+with an explicit verified agent-viability verdict. If a lightweight tier's
+model size preference would otherwise choose a model that failed agent or
 application probes, agent readiness takes precedence while hardware memory-fit
-checks remain enforced. An explicit `--pixel` install fails closed when no
-verified agent model fits; automatic enablement falls back to Hermes.
+checks remain enforced. An explicit local `--pixel` install fails closed when
+no verified agent model fits; automatic enablement falls back to Hermes.
+Qualified hosts using ODS-managed cloud, hybrid, or external Lemonade routes
+bind Pixel through the same authenticated LiteLLM gateway as other ODS
+consumers. Gateway readiness does not itself qualify an upstream model's agent
+quality, so broad provider support and model capability evidence remain
+separate claims.
 
 ## Legal and release boundary
 
@@ -46,12 +51,13 @@ Pixel is selected only on:
 - Ubuntu 24.04 LTS or Debian 12;
 - Linux with `systemd` as PID 1;
 - a native Linux host or WSL2 (WSL1 is rejected); and
-- the bundled local ODS model route in this first integration slice.
+- an ODS-managed local, cloud, hybrid, or Lemonade model route.
 
 ODS supports more platforms than Pixel. macOS, Windows-native, other Linux
-distributions, cloud mode, external Ollama/LM Studio, and external Lemonade
-continue to install ODS and use Hermes. These are ODS capability gates, not a
-reduction of the ODS support matrix.
+distributions, and generic external Ollama/LM Studio reuse continue to install
+ODS and use Hermes. Generic external reuse does not yet enter the authenticated
+ODS gateway, so Pixel rejects it rather than silently taking a different route.
+These are ODS capability gates, not a reduction of the ODS support matrix.
 
 ## Architecture
 
@@ -80,9 +86,18 @@ Browser
                                                 v
                            Pixel/OpenClaw gateway on 127.0.0.1:18789
                                                 |
-                         exact-digest ODS plugin, three read-only tools
-                                                v
-                         /run/ods-pixel/ods-status.json (mode 0640)
+                         +-----------------------+-------------------+
+                         |                                           |
+                         v                                           v
+       exact-digest ODS plugin, three read-only tools       ods-gateway/default
+                         |                                  (ods/current when the
+                         v                                   Switchboard is enabled)
+       /run/ods-pixel/ods-status.json (mode 0640)                     |
+                                                                     v
+                                                 authenticated LiteLLM on loopback
+                                                                     |
+                                                                     v
+                                                     active ODS model/provider route
 ```
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
@@ -171,7 +186,7 @@ After a successful install:
 3. Hermes remains at its authenticated proxy URL shown by the installer.
 4. OpenCode remains an independent coding UI when enabled.
 
-Open WebUI search-query generation uses the ordinary local model, not Pixel,
+Open WebUI search-query generation uses the ordinary ODS model route, not Pixel,
 to avoid recursive agent routing. Automatic title, tag, and follow-up
 generation is disabled while Pixel is active because those cosmetic jobs would
 otherwise compete with the agent for the same local inference slot.
@@ -190,16 +205,29 @@ allowlist or make custom tools replay-safe.
 
 ### Model swapping
 
-Pixel follows the same local-model activation transaction as the rest of ODS.
-Using the Dashboard Models page or `ods model swap <tier>` updates Pixel's exact
-model ID, context window, output limit, reasoning capability, and model-family
+Pixel follows the same model gateway as the rest of ODS. Its private OpenClaw
+provider is `ods-gateway`, bound only to authenticated LiteLLM on
+`127.0.0.1`. In legacy and observe modes it requests the stable `default`
+alias; with the Model Switchboard enabled it requests `ods/current`. Provider
+credentials, arbitrary URLs, and browser-supplied model IDs cannot rewrite
+that route.
+
+Using the Dashboard Models page or `ods model swap <tier>` keeps the stable
+alias while transactionally updating Pixel's concrete-model display metadata,
+context window, output limit, reasoning capability, and model-family
 compatibility policy after the new runtime and downstream routes pass their
-proofs. The gateway is restarted and verified before the transaction commits.
-The public Open WebUI identity remains `pixel/default`; the underlying model is
-the newly activated ODS model.
+proofs. Cloud, hybrid, and external Lemonade modes can change the route behind
+the same alias without teaching Pixel a provider-specific endpoint. The Pixel
+gateway is restarted and verified before the transaction commits. The public
+Open WebUI identity remains `pixel/default` throughout.
 
 If Pixel reconciliation fails, ODS restores and proves both the previous model
-runtime and Pixel route. A stopped or unmanaged Pixel is never adopted. Model
+runtime and Pixel route. The first upgrade from the legacy direct
+`ods-local`/llama.cpp binding is also transactional: the rollback contract
+captures the exact prior provider, model limits, reasoning mode, and route.
+The LiteLLM key stays only in owner-private mode-`0600` Pixel state and is never
+sent to the browser or written to a public config. A stopped or unmanaged Pixel
+is never adopted. Model
 family changes are supported: an explicitly reasoning-enabled Qwen route gets
 the Qwen chat-template compatibility policy and a real non-off effort; that
 policy is removed for no-think Qwen routes and when a non-Qwen model is
@@ -212,6 +240,10 @@ above it allows up to 4096 output tokens. The same value is applied as
 OpenClaw's compaction reserve, with its larger embedded reserve floor disabled,
 so a smaller qualified context still leaves room for Pixel's fixed prompt and
 tool results.
+
+Generic `EXTERNAL_LLM_URL` reuse remains outside this contract because it
+bypasses the managed LiteLLM route. Automatic selection uses Hermes for that
+case, and explicit `--pixel` fails visibly instead of implying provider parity.
 
 ## Bounded ODS tools
 

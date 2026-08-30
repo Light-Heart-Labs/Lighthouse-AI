@@ -35,9 +35,10 @@ Agent gating never changes whether the rest of ODS is supported.
 
 | Host/runtime | Default agent result |
 |--------------|----------------------|
-| Ubuntu 24.04 or Debian 12, PID1 systemd, bundled local model, separately authorized Pixel use | Pixel preferred; Hermes remains rollback |
-| WSL2 running a qualified distro with systemd and the same authorization/model conditions | Pixel preferred; Hermes remains rollback |
-| Other supported Linux distributions, WSL1, cloud/external model routes | Hermes fallback |
+| Ubuntu 24.04 or Debian 12, PID1 systemd, ODS-managed local/cloud/hybrid/Lemonade route, separately authorized Pixel use | Pixel preferred; Hermes remains rollback |
+| WSL2 running a qualified distro with systemd and the same authorization/managed-route conditions | Pixel preferred; Hermes remains rollback |
+| Qualified Pixel host using generic external-model reuse outside the ODS LiteLLM gateway | Hermes fallback; explicit Pixel fails closed |
+| Other supported Linux distributions or WSL1 | Hermes fallback |
 | Windows native installer or macOS | Hermes fallback |
 
 See [PIXEL.md](PIXEL.md) for the exact license acknowledgement and technical
