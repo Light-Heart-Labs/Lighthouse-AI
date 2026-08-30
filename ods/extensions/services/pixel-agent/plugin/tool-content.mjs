@@ -30,7 +30,6 @@ function appList(apps) {
 }
 
 export function statusToolText(projection) {
-  const applications = appList(projection.apps);
   const pixelAvailability = projection.ingress_ready && projection.gateway_reachable
     ? "available"
     : "unavailable";
@@ -44,8 +43,8 @@ export function statusToolText(projection) {
     `Pixel availability: ${pixelAvailability} (ingress ${availability(projection.ingress_ready)}; gateway ${reachability(projection.gateway_reachable)}).`,
     `ODS version: ${version}.`,
     runtime,
-    `Applications online: ${projection.online_app_count} of ${projection.app_count}. Docker: ${projection.docker}.`,
-    `This ${freshness(projection.stale)} projection was written at ${projection.timestamp}${applications ? ` and reports: ${applications}.` : "."}`,
+    `Projected Docker applications online: ${projection.online_app_count} of ${projection.app_count}. This is not the Dashboard's total ODS service count because host-level services are outside this projection. Docker: ${projection.docker}.`,
+    `This ${freshness(projection.stale)} projection was written at ${projection.timestamp}.`,
     EVIDENCE_BOUNDARY,
   ].join(" ");
 }

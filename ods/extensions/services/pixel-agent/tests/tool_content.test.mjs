@@ -52,7 +52,10 @@ test("status result states each bounded host fact in natural language", () => {
   assert.match(text, /ODS version: 2\.6\.0/);
   assert.match(text, /Loaded model: Qwen3\.5-9B-Q4_K_M\.gguf/);
   assert.match(text, /context length: 32768 tokens/);
-  assert.match(text, /Applications online: 2 of 2/);
+  assert.match(text, /Projected Docker applications online: 2 of 2/);
+  assert.match(text, /not the Dashboard's total ODS service count/);
+  assert.ok(!text.includes("ods-dashboard"));
+  assert.ok(!text.includes("http://localhost:3001/"));
 });
 
 test("unknown version and runtime stay explicit instead of being guessed", () => {
