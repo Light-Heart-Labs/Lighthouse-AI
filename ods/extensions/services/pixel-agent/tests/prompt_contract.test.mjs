@@ -39,7 +39,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /do not churn through equivalent cwd/);
   assert.match(result.appendSystemContext, /actual exit status and complete tool output/);
   assert.match(result.appendSystemContext, /nonzero harness exit, early abort, or missing expected case/);
-  assert.match(result.appendSystemContext, /without global errexit aborting first/);
+  assert.match(result.appendSystemContext, /directly executable test_\*\.py or \*_test\.py script/);
+  assert.match(result.appendSystemContext, /exit zero only after it has asserted the exact expected status and output/);
   assert.match(result.appendSystemContext, /set exec workdir instead of chaining cd/);
   assert.match(result.appendSystemContext, /quote wildcard test patterns/);
   assert.match(result.appendSystemContext, /implementation and test expectations from the owner's exact words/);

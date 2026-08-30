@@ -269,7 +269,7 @@ function verificationCommand(params) {
   }
   const withoutStderrMerge = command.replace(/\s+2>&1\s*$/i, "").trim();
   if (
-    !/^(?:python(?:3(?:\.\d+)?)?\s+-m\s+(?:unittest|pytest)\b|pytest\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn(?:w)?\s+test\b|gradle(?:w)?\s+test\b)/i.test(withoutStderrMerge)
+    !/^(?:python(?:3(?:\.\d+)?)?\s+-m\s+(?:unittest|pytest)\b|python(?:3(?:\.\d+)?)?\s+(?:(?:-B|-u)\s+)*(?:\.\/)?(?:[A-Za-z0-9._-]+\/)*(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py\b|pytest\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|mvn(?:w)?\s+test\b|gradle(?:w)?\s+test\b)/i.test(withoutStderrMerge)
   ) {
     return undefined;
   }

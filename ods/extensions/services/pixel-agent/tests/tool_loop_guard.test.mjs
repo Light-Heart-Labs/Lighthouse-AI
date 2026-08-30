@@ -1071,6 +1071,74 @@ test("final delivery replaces a model claim after failed verification", () => {
   assert.doesNotMatch(terminal.payload.text, /claimed success/i);
 });
 
+test("a passing direct unittest script clears an earlier runner failure", () => {
+  const guard = createToolLoopGuard();
+  const failedRunner = { command: "pytest -q", workdir: "/workspace/project" };
+  const directScript = {
+    command: "python3 test_inventory.py",
+    workdir: "/workspace/project",
+  };
+  call(guard, "exec", { event: { params: failedRunner } });
+  afterCall(guard, "exec", {
+    event: { params: failedRunner, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: VERIFICATION_FAILED_DELIVERY_PREFIX,
+  });
+
+  call(guard, "exec", { event: { params: directScript } });
+  afterCall(guard, "exec", {
+    event: { params: directScript, result: { isError: false, details: { exitCode: 0 } } },
+  });
+
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" });
+  assert.equal(reply(guard), undefined);
+});
+
+test("direct unittest scripts remain fail-closed and auditable", () => {
+  const accepted = [
+    "python test_inventory.py",
+    "python3 -u ./tests/inventory_test.py -v",
+    "cd /workspace/project && python3 tests/test_inventory.py",
+  ];
+  for (const command of accepted) {
+    const guard = createToolLoopGuard();
+    const params = { command };
+    assert.equal(call(guard, "exec", { event: { params } }), undefined);
+    afterCall(guard, "exec", {
+      event: { params, result: { isError: true, details: { exitCode: 1 } } },
+    });
+    assert.equal(guard.verificationStatus("run-1"), "failed");
+  }
+
+  const chained = { command: "python3 test_inventory.py; true" };
+  const guard = createToolLoopGuard();
+  assert.deepEqual(call(guard, "exec", { event: { params: chained } }), {
+    block: true,
+    blockReason: VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
+  });
+});
+
+test("an arbitrary successful Python program cannot clear a failed verification", () => {
+  const guard = createToolLoopGuard();
+  const failedRunner = { command: "python3 -m unittest", workdir: "/workspace/project" };
+  const application = { command: "python3 inventory.py sample.json", workdir: "/workspace/project" };
+  call(guard, "exec", { event: { params: failedRunner } });
+  afterCall(guard, "exec", {
+    event: { params: failedRunner, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  call(guard, "exec", { event: { params: application } });
+  afterCall(guard, "exec", {
+    event: { params: application, result: { isError: false, details: { exitCode: 0 } } },
+  });
+
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: VERIFICATION_FAILED_DELIVERY_PREFIX,
+  });
+});
+
 test("blocks verification shell composition that can hide failures or truncate evidence", () => {
   const commands = [
     "python3 -m unittest discover -s tests -v | head -20",
