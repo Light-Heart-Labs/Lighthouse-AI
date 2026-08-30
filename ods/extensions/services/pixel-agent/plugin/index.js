@@ -166,7 +166,9 @@ export default definePluginEntry({
     // so every ODS lookup is followed by a user-visible answer.
     api.on("before_prompt_build", (event, context) => {
       toolLoopGuard.observeRun(context, AGENT_ID, event);
-      return promptContractForAgent(context, AGENT_ID, event);
+      return promptContractForAgent(context, AGENT_ID, event, {
+        verificationStatus: toolLoopGuard.verificationStatus(context?.runId),
+      });
     });
     api.on("before_tool_call", (event, context) =>
       toolLoopGuard.beforeToolCall(event, context, AGENT_ID)

@@ -904,7 +904,8 @@ check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "api.on(\"before_prompt_build\"" in text
-assert "promptContractForAgent(context, AGENT_ID, event)" in text
+assert "promptContractForAgent(context, AGENT_ID, event, {" in text
+assert "verificationStatus: toolLoopGuard.verificationStatus(context?.runId)" in text
 ' "$plugin/index.js"
 # Dollar expressions below are literal source-code assertions.
 # shellcheck disable=SC2016

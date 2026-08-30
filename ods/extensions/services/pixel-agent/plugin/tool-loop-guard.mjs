@@ -638,6 +638,7 @@ export function createToolLoopGuard({
         odsRoutingTerminalBlocks: 0,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
+        latestVerificationStatus: undefined,
         pendingExecSessions: new Map(),
         execOriginalByWrapped: new Map(),
         verificationOriginalByWrapped: new Map(),
@@ -1020,10 +1021,16 @@ export function createToolLoopGuard({
             (state.failedExec.get(pending.fingerprint) ?? 0) + 1
           );
         }
-        if (pending.verificationFingerprint) state.failedVerificationAttempts += 1;
+        if (pending.verificationFingerprint) {
+          state.failedVerificationAttempts += 1;
+          state.latestVerificationStatus = "failed";
+        }
       } else {
         if (pending.fingerprint) state.failedExec.delete(pending.fingerprint);
-        if (pending.verificationFingerprint) state.failedVerificationAttempts = 0;
+        if (pending.verificationFingerprint) {
+          state.failedVerificationAttempts = 0;
+          state.latestVerificationStatus = "passed";
+        }
       }
       return;
     }
@@ -1062,6 +1069,7 @@ export function createToolLoopGuard({
         fingerprint,
         verificationFingerprint,
       });
+      if (verificationFingerprint) state.latestVerificationStatus = "pending";
       return;
     }
     if (execFailed(event)) {
@@ -1070,10 +1078,14 @@ export function createToolLoopGuard({
       }
       if (verificationFingerprint) {
         state.failedVerificationAttempts += 1;
+        state.latestVerificationStatus = "failed";
       }
     } else {
       if (fingerprint) state.failedExec.delete(fingerprint);
-      if (verificationFingerprint) state.failedVerificationAttempts = 0;
+      if (verificationFingerprint) {
+        state.failedVerificationAttempts = 0;
+        state.latestVerificationStatus = "passed";
+      }
     }
   }
 
@@ -1082,6 +1094,7 @@ export function createToolLoopGuard({
     afterToolCall,
     observeRun,
     abortUserRun,
+    verificationStatus: (runId) => runs.get(runId)?.latestVerificationStatus,
     trackedRunCount: () => runs.size,
     trackedUserCount: () => activeUsers.size,
   };

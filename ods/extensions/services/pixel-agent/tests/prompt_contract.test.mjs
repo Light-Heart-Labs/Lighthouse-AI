@@ -5,6 +5,8 @@ import {
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
+  ODS_VERIFICATION_FAILED_CONTRACT,
+  ODS_VERIFICATION_PENDING_CONTRACT,
   githubSourceContract,
   needsLoopRecovery,
   promptContractForAgent,
@@ -133,6 +135,34 @@ test("adds an immediate final-answer recovery after a runtime loop block", () =>
     `${ODS_CONVERSATION_CONTRACT} ${ODS_LOOP_RECOVERY_CONTRACT}`
   );
   assert.match(result.appendSystemContext, /Do not call any tool again in this turn/);
+});
+
+test("adds exact pending and failed verification truth constraints", () => {
+  const context = { agentId: "pixel" };
+  assert.deepEqual(
+    promptContractForAgent(context, "pixel", undefined, {
+      verificationStatus: "pending",
+    }),
+    {
+      appendSystemContext:
+        `${ODS_CONVERSATION_CONTRACT} ${ODS_VERIFICATION_PENDING_CONTRACT}`,
+    }
+  );
+  const failed = promptContractForAgent(context, "pixel", undefined, {
+    verificationStatus: "failed",
+  });
+  assert.equal(
+    failed.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_VERIFICATION_FAILED_CONTRACT}`
+  );
+  assert.match(failed.appendSystemContext, /no later verification passed/);
+  assert.match(failed.appendSystemContext, /truthfully report the current verified failure/);
+  assert.deepEqual(
+    promptContractForAgent(context, "pixel", undefined, {
+      verificationStatus: "passed",
+    }),
+    { appendSystemContext: ODS_CONVERSATION_CONTRACT }
+  );
 });
 
 test("does not let user-authored loop text disable tools", () => {

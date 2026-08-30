@@ -59,6 +59,12 @@ export const ODS_CONVERSATION_CONTRACT = [
 export const ODS_LOOP_RECOVERY_CONTRACT =
   "The runtime has blocked a repeated no-progress tool call. Do not call any tool again in this turn. Give the owner a concise final response now: share only results already verified, state what remains unavailable, and suggest one concrete next step.";
 
+export const ODS_VERIFICATION_PENDING_CONTRACT =
+  "The latest verification command in this response is still pending. Poll that exact process to a terminal exit before claiming any result; pending work is never evidence that the implementation is correct or passing.";
+
+export const ODS_VERIFICATION_FAILED_CONTRACT =
+  "The latest verification command in this response failed and no later verification passed. Do not say the work is complete, correct, fixed, successful, or passing. Either make one relevant repair and rerun the stable verification command, or stop and truthfully report the current verified failure.";
+
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
 
@@ -117,7 +123,12 @@ export function needsLoopRecovery(messages) {
 // status-only contract before the ODS conversation boundary was widened.
 export const ODS_TOOL_REPLY_CONTRACT = ODS_CONVERSATION_CONTRACT;
 
-export function promptContractForAgent(context, agentId, event = undefined) {
+export function promptContractForAgent(
+  context,
+  agentId,
+  event = undefined,
+  { verificationStatus } = {}
+) {
   if (!context || context.agentId !== agentId) return undefined;
   const recovery = needsLoopRecovery(event?.messages)
     ? ` ${ODS_LOOP_RECOVERY_CONTRACT}`
@@ -126,8 +137,14 @@ export function promptContractForAgent(context, agentId, event = undefined) {
     ? ` ${ODS_PRIVATE_URL_CONTRACT}`
     : "";
   const githubSource = githubSourceContract(event?.messages, event?.prompt);
+  const verification =
+    verificationStatus === "pending"
+      ? ` ${ODS_VERIFICATION_PENDING_CONTRACT}`
+      : verificationStatus === "failed"
+        ? ` ${ODS_VERIFICATION_FAILED_CONTRACT}`
+        : "";
   return {
     appendSystemContext:
-      `${ODS_CONVERSATION_CONTRACT}${githubSource}${recovery}${privateUrl}`,
+      `${ODS_CONVERSATION_CONTRACT}${githubSource}${recovery}${verification}${privateUrl}`,
   };
 }

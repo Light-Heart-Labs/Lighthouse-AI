@@ -730,6 +730,7 @@ test("counts verification failures that finish through process polling", () => {
         result: { isError: false, details: { status: "running", sessionId } },
       },
     });
+    assert.equal(guard.verificationStatus("run-1"), "pending");
     afterCall(guard, "process", {
       event: {
         params: { action: "poll", sessionId },
@@ -739,6 +740,7 @@ test("counts verification failures that finish through process polling", () => {
         },
       },
     });
+    assert.equal(guard.verificationStatus("run-1"), "failed");
     // A second log read for the same completed process must not double-count.
     afterCall(guard, "process", {
       event: {
@@ -749,6 +751,7 @@ test("counts verification failures that finish through process polling", () => {
         },
       },
     });
+    assert.equal(guard.verificationStatus("run-1"), "failed");
     afterCall(guard, "edit", {
       event: {
         params: { path: "project/probe.py" },
@@ -792,6 +795,10 @@ test("a passing background verification clears prior process failures", () => {
         },
       },
     });
+    assert.equal(
+      guard.verificationStatus("run-1"),
+      exitCode === 0 ? "passed" : "failed"
+    );
     if (exitCode !== 0) {
       afterCall(guard, "edit", {
         event: {
@@ -867,6 +874,10 @@ test("a passing verification clears the run-wide failed-verification count", () 
         result: { isError: exitCode !== 0, details: { exitCode } },
       },
     });
+    assert.equal(
+      guard.verificationStatus("run-1"),
+      exitCode === 0 ? "passed" : "failed"
+    );
     if (exitCode !== 0) {
       afterCall(guard, "edit", {
         event: {
