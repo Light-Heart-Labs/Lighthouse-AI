@@ -83,11 +83,13 @@ def test_local_profiles_allow_long_agent_streams() -> None:
     local_config = file_by_surface(local, "litellm-local")["content"]
     assert "request_timeout: 900" in local_config
     assert "stream_timeout: 900" in local_config
+    assert local_config.count("enable_thinking: false") == 3
 
     hybrid = run_renderer("--surface", "litellm-hybrid", "--ods-mode", "hybrid")
     hybrid_config = file_by_surface(hybrid, "litellm-hybrid")["content"]
     assert "request_timeout: 900" in hybrid_config
     assert "stream_timeout: 900" in hybrid_config
+    assert hybrid_config.count("enable_thinking: false") == 3
 
 
 def test_all_selects_one_mode_config() -> None:

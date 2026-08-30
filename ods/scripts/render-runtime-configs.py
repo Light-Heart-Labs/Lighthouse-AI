@@ -151,18 +151,27 @@ def render_litellm_local(inputs: RenderInputs) -> RenderedFile:
       model: openai/default
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
   - model_name: default
     litellm_params:
       model: openai/default
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
   - model_name: "*"
     litellm_params:
       model: openai/*
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
@@ -316,12 +325,18 @@ def render_litellm_hybrid(inputs: RenderInputs) -> RenderedFile:
       model: openai/default
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
   - model_name: local
     litellm_params:
       model: openai/default
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
   - model_name: cloud
     litellm_params:
@@ -345,6 +360,9 @@ def render_litellm_hybrid(inputs: RenderInputs) -> RenderedFile:
       model: openai/default
       api_base: http://llama-server:8080/v1
       api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
 router_settings:
   routing_strategy: simple-shuffle
