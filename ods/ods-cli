@@ -843,7 +843,7 @@ get_compose_flags() {
             # multigpu-nvidia.yml) where the cache would otherwise hand docker
             # compose a path that no longer resolves.
             local stale=0 prev="" tok
-            for tok in $cached; do
+            while read -r tok; do
                 if [[ "$prev" == "-f" ]]; then
                     if [[ "$tok" = /* ]]; then
                         [[ -f "$tok" ]] || { stale=1; break; }
@@ -852,7 +852,7 @@ get_compose_flags() {
                     fi
                 fi
                 prev="$tok"
-            done
+            done <<< "$(echo "$cached" | xargs -n1)"
             local _ods_mode="${ODS_MODE:-local}"
             local _lemonade_external="${LEMONADE_EXTERNAL:-false}"
             local _amd_runtime="${AMD_INFERENCE_RUNTIME:-}"
