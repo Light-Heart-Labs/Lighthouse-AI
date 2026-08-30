@@ -375,6 +375,35 @@ export LITELLM_PORT=4000
 export LITELLM_KEY=test-litellm-secret
 export ODS_MODEL_SWITCHBOARD=observe
 digest="$(printf 'a%.0s' {1..64})"
+mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/extensions/library/services/notebook" \
+    "$INSTALL_DIR/extensions/services/pixel-agent/host" "$INSTALL_DIR/data/pixel"
+cp "$ROOT/extensions/services/pixel-agent/host/extension_search.py" \
+    "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
+cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
+{"schema_version":"1.0.0","extensions":[{"id":"notebook","name":"Notebook Lab","description":"Private notebooks for data science.","category":"optional","gpu_backends":["nvidia","amd"],"compose_file":"compose.yaml","depends_on":["litellm"],"env_vars":[{"key":"NOTEBOOK_TOKEN","required":true},{"key":"NOTEBOOK_THEME","required":false}],"tags":["notebook","data-science"],"features":[{"name":"Interactive Notebooks"}]},{"id":"reference-only","name":"Reference Only","description":"Not currently deployable.","category":"optional","gpu_backends":[],"compose_file":"compose.yaml","depends_on":[],"env_vars":[],"tags":[],"features":[]}]}
+JSON
+extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
+_ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"
+check test "$(stat -c '%a' "$extension_catalog")" = 600
+check python3 -c '
+import importlib.util,json,sys
+catalog=json.load(open(sys.argv[1]))
+assert catalog["schemaVersion"] == 1 and catalog["kind"] == "ods-pixel-extension-catalog"
+assert len(catalog["sourceSha256"]) == 64
+assert catalog["extensions"] == [{"category":"optional","dependsOn":["litellm"],"description":"Private notebooks for data science.","featureNames":["Interactive Notebooks"],"gpuBackends":["amd","nvidia"],"id":"notebook","name":"Notebook Lab","optionalConfiguration":["NOTEBOOK_THEME"],"requiredConfiguration":["NOTEBOOK_TOKEN"],"tags":["data-science","notebook"]}]
+spec=importlib.util.spec_from_file_location("extension_search",sys.argv[2]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+assert [item["id"] for item in module._matches(catalog["extensions"],"data science")] == ["notebook"]
+assert [item["id"] for item in module._matches(catalog["extensions"],"all")] == ["notebook"]
+' "$extension_catalog" "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+printf '%s\n' '{}' >"$TEST_ROOT/extension-catalog-symlink-target.json"
+ln -s "$TEST_ROOT/extension-catalog-symlink-target.json" "$TEST_ROOT/linked-extension-catalog.json"
+if _ods_pixel_write_extension_catalog "$owner" "$home" "$TEST_ROOT/linked-extension-catalog.json" >/dev/null 2>&1; then
+    fail "symlink extension catalog rejected"
+else
+    pass "symlink extension catalog rejected"
+fi
 operations_policy="$TEST_ROOT/operations-policy.json"
 _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"
 check test "$(stat -c '%a' "$operations_policy")" = 600
@@ -395,13 +424,16 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release"}
+assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search"}
 assert all(action["tier"] == "read" and action["defaultAuthority"] == "observe" for action in v["actions"].values())
 assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
 assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
 assert v["actions"]["host.architecture"]["argv"] == ["/usr/bin/uname", "-m"]
 assert v["actions"]["host.platform"]["argv"] == ["/usr/bin/uname", "-a"]
 assert v["actions"]["host.os-release"]["argv"] == ["/usr/bin/cat", "/etc/os-release"]
+extension_search=v["actions"]["ods.extensions.search"]
+assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
+assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]
 assert v["authority"]["defaultLevel"] == "propose"
 assert v["authority"]["grants"] == [{"id":"ods-approved-downloads","level":"bounded-auto","actions":["download.stage"],"targets":["broker"],"tiers":["staging"],"environments":["lab"],"maxExecutions":100,"windowSeconds":86400,"maxConcurrent":2,"maxRuntimeSeconds":600,"maxFailures":10,"maxArtifactBytes":536870912}]
 ' "$operations_policy" "$INSTALL_DIR" "$home/.openclaw/workspace-pixel"
@@ -432,6 +464,32 @@ else
 fi
 mv "$TEST_ROOT/operations-policy.original.json" "$operations_policy"
 chmod 0600 "$operations_policy"
+cp "$extension_catalog" "$TEST_ROOT/extension-catalog.original.json"
+python3 - "$extension_catalog" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value["extensions"][0]["description"] = "Changed projection."
+path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+chmod 0600 "$extension_catalog"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds extension catalog bytes"
+else
+    pass "managed contract hash binds extension catalog bytes"
+fi
+mv "$TEST_ROOT/extension-catalog.original.json" "$extension_catalog"
+chmod 0600 "$extension_catalog"
+extension_helper="$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+cp "$extension_helper" "$TEST_ROOT/extension-search.original.py"
+printf '\n# changed\n' >>"$extension_helper"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds extension helper bytes"
+else
+    pass "managed contract hash binds extension helper bytes"
+fi
+mv "$TEST_ROOT/extension-search.original.py" "$extension_helper"
+chmod 0644 "$extension_helper"
 installed_policy="$TEST_ROOT/installed-operations-policy.json"
 cp "$operations_policy" "$installed_policy"
 chmod 0640 "$installed_policy"
@@ -1188,6 +1246,11 @@ assert "PATH=\"$home/.openclaw/.ods-exec-control:$PATH\"" in text
 assert "pixel\" apply --confirm </dev/null &&" in text
 assert "_ods_pixel_write_operations_policy" in text
 assert "Could not write the owner-private ODS Pixel Operations policy" in text
+assert "_ods_pixel_write_extension_catalog" in text
+assert "secret-free ODS extension catalog" in text
+assert "ods-pixel-contract-v3" in text
+assert "ods_sudo install -o root -g pixel-ops -m 0640 \"$extension_catalog\" \"$installed_extension_catalog\"" in text
+assert "ods_sudo -u pixel-ops-broker /usr/bin/python3" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text

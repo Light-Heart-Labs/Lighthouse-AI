@@ -285,11 +285,19 @@ write_ops_fixture() {
     local uid gid contract_sha256
     uid="$(id -u)"
     gid="$(id -g)"
-    mkdir -p "$source/.generated" "$source/deploy/ops-broker" "$INSTALL_DIR/data/pixel"
+    mkdir -p "$source/.generated" "$source/deploy/ops-broker" "$INSTALL_DIR/data/pixel" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host"
     cat >"$INSTALL_DIR/data/pixel/operations-policy.json" <<JSON
 {"schemaVersion":2,"deployment":"ods-default","download":{"stagingRoot":"$OPS_STATE/artifacts"},"targets":{"broker":{"backend":"local","writableRoots":["$OPS_STATE/artifacts"]}},"authority":{"defaultLevel":"propose"}}
 JSON
     chmod 0600 "$INSTALL_DIR/data/pixel/operations-policy.json"
+    cat >"$INSTALL_DIR/data/pixel/extension-catalog.json" <<'JSON'
+{"extensions":[{"category":"optional","dependsOn":[],"description":"Fixture extension.","featureNames":[],"gpuBackends":[],"id":"fixture","name":"Fixture","optionalConfiguration":[],"requiredConfiguration":[],"tags":[]}],"kind":"ods-pixel-extension-catalog","schemaVersion":1,"sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+JSON
+    chmod 0600 "$INSTALL_DIR/data/pixel/extension-catalog.json"
+    cp "$ROOT_DIR/extensions/services/pixel-agent/host/extension_search.py" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
+    chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py"
     cat >"$source/.generated/pixel-ops-broker.service" <<UNIT
 [Unit]
 Description=Pixel Operations Broker - isolated fleet execution and workflow service
@@ -317,10 +325,16 @@ ENV
     cp "$source/.generated/pixel-ops-broker.service" "$SYSTEMD_DIR/pixel-ops-broker.service"
     cp "$source/.generated/ops-broker.env" "$OPS_ENV"
     cp "$source/deploy/ops-broker/broker.py" "$OPS_INSTALL/broker.py"
+    cp "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
+        "$OPS_INSTALL/ods-extension-search.py"
+    cp "$INSTALL_DIR/data/pixel/extension-catalog.json" \
+        "$OPS_INSTALL/ods-extension-catalog.json"
     cp "$INSTALL_DIR/data/pixel/operations-policy.json" "$OPS_POLICY"
     chmod 0644 "$SYSTEMD_DIR/pixel-ops-broker.service"
     chmod 0640 "$OPS_ENV" "$OPS_POLICY"
-    chmod 0755 "$OPS_INSTALL" "$OPS_INSTALL/broker.py" "$OPS_POLICY_DIR"
+    chmod 0755 "$OPS_INSTALL" "$OPS_INSTALL/broker.py" \
+        "$OPS_INSTALL/ods-extension-search.py" "$OPS_POLICY_DIR"
+    chmod 0640 "$OPS_INSTALL/ods-extension-catalog.json"
     chmod 0750 "$OPS_STATE"
     mkdir -m 2770 "$OPS_STATE/requests" "$OPS_STATE/cancel"
     mkdir -m 2750 "$OPS_STATE/results" "$OPS_STATE/events" "$OPS_STATE/artifacts"
@@ -342,9 +356,18 @@ value["operationsPolicyFile"] = sys.argv[2]
 path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 PY
     chmod 0600 "$HOME_DIR/.config/pixel-deployment/onboarding.json"
-    contract_sha256="$(python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" <<'PY'
+    contract_sha256="$(python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" \
+        "$INSTALL_DIR/data/pixel/operations-policy.json" \
+        "$INSTALL_DIR/data/pixel/extension-catalog.json" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" <<'PY'
 import hashlib, pathlib, sys
-print(hashlib.sha256(b"ods-pixel-contract-v1\0" + pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+digest = hashlib.sha256()
+digest.update(b"ods-pixel-contract-v3\0")
+for raw in sys.argv[1:]:
+    payload = pathlib.Path(raw).read_bytes()
+    digest.update(len(payload).to_bytes(8, "big"))
+    digest.update(payload)
+print(digest.hexdigest())
 PY
 )"
     python3 - "$HOME_DIR/.config/ods/pixel-managed.json" "$contract_sha256" <<'PY'
@@ -472,6 +495,7 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
         && ! -e "$OPS_ENV" && ! -e "$OPS_POLICY_DIR" \
         && ! -e "$OPS_INSTALL" && ! -e "$OPS_STATE" \
         && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
+        && ! -e "$INSTALL_DIR/data/pixel/extension-catalog.json" \
         && ! -e "$OPS_PASSWD_STATE" && ! -e "$OPS_GROUP_STATE" \
         && "$(sed -n '1p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ingress.service" \
         && "$(sed -n '2p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
@@ -486,10 +510,12 @@ else
     fail "verified Operations Broker deployment could not be removed"
 fi
 
-for drift_target in program unit environment policy; do
+for drift_target in program extension-program extension-catalog unit environment policy; do
     write_ops_fixture
     case "$drift_target" in
         program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
+        extension-program) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-search.py" ;;
+        extension-catalog) printf '%s\n' ' ' >>"$OPS_INSTALL/ods-extension-catalog.json" ;;
         unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
         environment) printf '%s\n' 'UNEXPECTED=1' >>"$OPS_ENV" ;;
         policy) printf '%s\n' ' ' >>"$OPS_POLICY" ;;
@@ -538,7 +564,8 @@ fi
 
 write_ops_fixture
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
-    "$OPS_INSTALL/broker.py" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
+    "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
+    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
 rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
@@ -561,11 +588,13 @@ path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
-    "$OPS_INSTALL/broker.py" "$OPS_PASSWD_STATE"
+    "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
+    "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_PASSWD_STATE"
 rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
-    [[ ! -e "$OPS_GROUP_STATE" && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" ]] \
+    [[ ! -e "$OPS_GROUP_STATE" && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
+        && ! -e "$INSTALL_DIR/data/pixel/extension-catalog.json" ]] \
         && pass "interrupted installing Operations group-only state is resumably removed" \
         || fail "installing Operations partial cleanup left managed state"
 else

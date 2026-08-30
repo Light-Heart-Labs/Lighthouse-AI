@@ -36,8 +36,12 @@ ods_pixel_uninstall_managed() {
     local ops_policy_dir="${ops_policy%/*}"
     local ops_install="${ODS_PIXEL_UNINSTALL_OPS_INSTALL_DIR:-/opt/pixel-ops-broker}"
     local ops_program="$ops_install/broker.py"
+    local ops_extension_program="$ops_install/ods-extension-search.py"
+    local ops_extension_catalog="$ops_install/ods-extension-catalog.json"
     local ops_state="${ODS_PIXEL_UNINSTALL_OPS_STATE_DIR:-/var/lib/pixel-ops-broker}"
     local ops_owner_policy="$install_dir/data/pixel/operations-policy.json"
+    local ops_owner_extension_catalog="$install_dir/data/pixel/extension-catalog.json"
+    local ops_extension_source_program="$install_dir/extensions/services/pixel-agent/host/extension_search.py"
     local openclaw_config="$owner_home/.openclaw/openclaw.json"
     local exec_control="$owner_home/.openclaw/.ods-exec-control"
     local gateway_env="$owner_home/.config/pixel-agent/gateway.env"
@@ -65,7 +69,8 @@ ods_pixel_uninstall_managed() {
         return 1
     }
     [[ "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]] || return 1
-    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state"; do
+    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
+        "$ops_extension_program" "$ops_extension_catalog" "$ops_state"; do
         [[ "$path" == /* && "$path" != / ]] || {
             log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
             return 1
@@ -96,6 +101,7 @@ ods_pixel_uninstall_managed() {
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
+        "$ops_owner_extension_catalog" "$ops_extension_source_program" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
         "$retired_releases" <<'PY'
 import hashlib
@@ -122,6 +128,8 @@ import sys
     onboarding_raw,
     exec_control_raw,
     ops_owner_policy_raw,
+    ops_owner_extension_catalog_raw,
+    ops_extension_source_program_raw,
     current_raw,
     runtime_attestation_raw,
     staged_current_raw,
@@ -324,6 +332,8 @@ openclaw_config = pathlib.Path(openclaw_config_raw)
 gateway_env = pathlib.Path(gateway_env_raw)
 onboarding = pathlib.Path(onboarding_raw)
 ops_owner_policy = pathlib.Path(ops_owner_policy_raw)
+ops_owner_extension_catalog = pathlib.Path(ops_owner_extension_catalog_raw)
+ops_extension_source_program = pathlib.Path(ops_extension_source_program_raw)
 for path in (openclaw_config, gateway_env, onboarding):
     if path.exists() or path.is_symlink():
         regular(path, owner_uid, 2 * 1024 * 1024, private=True)
@@ -397,6 +407,24 @@ if ops_policy_present:
             or policy_value.get("deployment") != "ods-default"):
         raise SystemExit("ODS Pixel Operations policy is not an ODS-managed policy")
 
+extension_catalog_present = (
+    ops_owner_extension_catalog.exists() or ops_owner_extension_catalog.is_symlink()
+)
+extension_program_present = (
+    ops_extension_source_program.exists() or ops_extension_source_program.is_symlink()
+)
+if extension_catalog_present and not extension_program_present:
+    raise SystemExit("ODS Pixel extension projection source is incomplete")
+if extension_catalog_present:
+    regular(ops_owner_extension_catalog, owner_uid, 2 * 1024 * 1024, private=True)
+    regular(ops_extension_source_program, owner_uid, 2 * 1024 * 1024)
+    catalog_value = json.loads(ops_owner_extension_catalog.read_text(encoding="utf-8"))
+    if (not isinstance(catalog_value, dict) or catalog_value.get("schemaVersion") != 1
+            or catalog_value.get("kind") != "ods-pixel-extension-catalog"
+            or not isinstance(catalog_value.get("extensions"), list)
+            or not catalog_value.get("extensions")):
+        raise SystemExit("ODS Pixel extension catalog is not ODS-managed")
+
 if onboarding.exists():
     answers = json.loads(onboarding.read_text(encoding="utf-8"))
     extensions = answers.get("gatewayExtensions") if isinstance(answers, dict) else None
@@ -413,8 +441,31 @@ if onboarding.exists():
     elif ops_policy_present and state != "installing":
         raise SystemExit("ODS Operations policy exists without an enabled onboarding contract")
     if cleanup[0] != "none":
-        observed = hashlib.sha256(b"ods-pixel-contract-v1\0" + onboarding.read_bytes()).hexdigest()
-        if value.get("contract_sha256") != observed:
+        onboarding_payload = onboarding.read_bytes()
+        accepted_contracts = {
+            hashlib.sha256(b"ods-pixel-contract-v1\0" + onboarding_payload).hexdigest(),
+        }
+        if ops_policy_present:
+            policy_payload = ops_owner_policy.read_bytes()
+            v2 = hashlib.sha256()
+            v2.update(b"ods-pixel-contract-v2\0")
+            for payload in (onboarding_payload, policy_payload):
+                v2.update(len(payload).to_bytes(8, "big"))
+                v2.update(payload)
+            accepted_contracts.add(v2.hexdigest())
+            if extension_catalog_present:
+                v3 = hashlib.sha256()
+                v3.update(b"ods-pixel-contract-v3\0")
+                for payload in (
+                    onboarding_payload,
+                    policy_payload,
+                    ops_owner_extension_catalog.read_bytes(),
+                    ops_extension_source_program.read_bytes(),
+                ):
+                    v3.update(len(payload).to_bytes(8, "big"))
+                    v3.update(payload)
+                accepted_contracts.add(v3.hexdigest())
+        if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
     raise SystemExit("ODS-managed active Pixel onboarding contract is missing")
@@ -507,7 +558,8 @@ PY
     if [[ -n "$ops_passwd_entry" || -n "$ops_group_entry" ]]; then
         ops_artifacts_present=true
     fi
-    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" "$ops_owner_policy"; do
+    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" \
+        "$ops_owner_policy" "$ops_owner_extension_catalog"; do
         if [[ -e "$path" || -L "$path" ]]; then
             ops_artifacts_present=true
         fi
@@ -522,7 +574,8 @@ PY
             "$ops_passwd_entry" "$ops_group_entry" "$ops_user_group_ids" "$ops_user_group_names" \
             "${ODS_PIXEL_UNINSTALL_OPS_UID:-}" "${ODS_PIXEL_UNINSTALL_OPS_GID:-}" \
             "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state" \
-            "$ops_owner_policy" \
+            "$ops_owner_policy" "$ops_extension_program" "$ops_extension_catalog" \
+            "$ops_extension_source_program" "$ops_owner_extension_catalog" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/pixel-ops-broker.service" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/ops-broker.env" \
             "$install_dir/data/pixel/source-$pixel_source_ref/deploy/ops-broker/broker.py" <<'PY'
@@ -551,6 +604,10 @@ import sys
     program_raw,
     state_raw,
     owner_policy_raw,
+    extension_program_raw,
+    extension_catalog_raw,
+    expected_extension_program_raw,
+    owner_extension_catalog_raw,
     expected_unit_raw,
     expected_env_raw,
     expected_program_raw,
@@ -566,6 +623,10 @@ install_dir = pathlib.Path(install_raw)
 program = pathlib.Path(program_raw)
 state_dir = pathlib.Path(state_raw)
 owner_policy = pathlib.Path(owner_policy_raw)
+extension_program = pathlib.Path(extension_program_raw)
+extension_catalog = pathlib.Path(extension_catalog_raw)
+expected_extension_program = pathlib.Path(expected_extension_program_raw)
+owner_extension_catalog = pathlib.Path(owner_extension_catalog_raw)
 expected_unit = pathlib.Path(expected_unit_raw)
 expected_env = pathlib.Path(expected_env_raw)
 expected_program = pathlib.Path(expected_program_raw)
@@ -622,6 +683,10 @@ if group:
     elif observed_gid <= 0 or observed_gid >= 65536:
         raise SystemExit("unsafe Pixel Operations Broker system GID")
 
+projection_source_present = exists(owner_extension_catalog)
+if projection_source_present and not exists(expected_extension_program):
+    raise SystemExit("Pixel extension projection source is partial")
+
 paths = (unit, environment, policy, install_dir, state_dir)
 present = [exists(path) for path in paths]
 if marker_state == "ready" and (not all(present) or not passwd or not group):
@@ -665,18 +730,35 @@ if exists(policy):
 if exists(install_dir):
     info = install_dir.lstat()
     contents = {item.name for item in install_dir.iterdir()}
-    allowed_contents = ({"broker.py"}, set()) if marker_state in {"installing", "deactivating"} else ({"broker.py"},)
+    expected_contents = {"broker.py"}
+    if projection_source_present:
+        expected_contents.update({"ods-extension-search.py", "ods-extension-catalog.json"})
+    contents_valid = (
+        contents.issubset(expected_contents)
+        if marker_state in {"installing", "deactivating"}
+        else contents == expected_contents
+    )
     if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_uid != root_uid or stat.S_IMODE(info.st_mode) != 0o755
             or info.st_gid != root_gid
-            or contents not in allowed_contents):
+            or not contents_valid):
         raise SystemExit("unsafe Pixel Operations Broker install directory")
     if exists(program):
         exact_file(program, root_uid, root_gid, 0o755, 2 * 1024 * 1024)
         owner_source(expected_program, 2 * 1024 * 1024)
         if program.read_bytes() != expected_program.read_bytes():
             raise SystemExit("Pixel Operations Broker program drifted from the exact Pixel source")
-elif exists(program):
+    if exists(extension_program):
+        exact_file(extension_program, root_uid, root_gid, 0o755, 2 * 1024 * 1024)
+        owner_source(expected_extension_program, 2 * 1024 * 1024)
+        if extension_program.read_bytes() != expected_extension_program.read_bytes():
+            raise SystemExit("Pixel extension search program drifted from the exact ODS source")
+    if exists(extension_catalog):
+        exact_file(extension_catalog, root_uid, broker_gid, 0o640, 2 * 1024 * 1024)
+        owner_source(owner_extension_catalog, 2 * 1024 * 1024, private=True)
+        if extension_catalog.read_bytes() != owner_extension_catalog.read_bytes():
+            raise SystemExit("Pixel extension catalog drifted from the ODS private projection")
+elif exists(program) or exists(extension_program) or exists(extension_catalog):
     raise SystemExit("Pixel Operations Broker program escaped its install directory")
 
 policy_parent = policy.parent
@@ -1086,6 +1168,7 @@ PY
             return 1
         fi
         if ! sudo rm -f -- "$ops_unit" "$ops_env" "$ops_policy" "$ops_program" \
+            "$ops_extension_program" "$ops_extension_catalog" \
             || ! { [[ ! -e "$ops_install" && ! -L "$ops_install" ]] || sudo rmdir -- "$ops_install"; } \
             || ! { [[ ! -e "$ops_policy_dir" && ! -L "$ops_policy_dir" ]] || sudo rmdir -- "$ops_policy_dir"; }; then
             log_error "Could not remove the verified Pixel Operations Broker artifacts"
@@ -1161,9 +1244,11 @@ for item in root.iterdir():
 root.rmdir()
 PY
     fi
-    rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy"
+    rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy" \
+        "$ops_owner_extension_catalog"
     if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
         || -e "$ops_owner_policy" || -L "$ops_owner_policy" \
+        || -e "$ops_owner_extension_catalog" || -L "$ops_owner_extension_catalog" \
         || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1

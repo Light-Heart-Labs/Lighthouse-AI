@@ -270,10 +270,12 @@ _ods_pixel_mark_ready() {
 
 _ods_pixel_contract_sha256() {
     local owner="$1" home="$2" answers="$3"
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" <<'PY'
+    local extension_catalog="${INSTALL_DIR:?}/data/pixel/extension-catalog.json"
+    local extension_helper="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/extension_search.py"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" "$extension_helper" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path = pathlib.Path(sys.argv[1])
+path, catalog_path, helper_path = map(pathlib.Path, sys.argv[1:4])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -293,9 +295,16 @@ expected_policy = path.parent / "operations-policy.json"
 if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_policy:
     raise SystemExit("ODS Pixel Operations policy is outside the managed contract")
 policy_payload = read_private_regular(expected_policy, "Operations policy")
+catalog_payload = read_private_regular(catalog_path, "extension catalog")
+helper_info = helper_path.lstat()
+if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
+        or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
+        or helper_info.st_mode & 0o022 or helper_info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("invalid ODS Pixel extension helper")
+helper_payload = helper_path.read_bytes()
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v2\0")
-for payload in (answers_payload, policy_payload):
+digest.update(b"ods-pixel-contract-v3\0")
+for payload in (answers_payload, policy_payload, catalog_payload, helper_payload):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
 print(digest.hexdigest())
@@ -1690,6 +1699,168 @@ finally:
 PY
 }
 
+_ods_pixel_write_extension_catalog() {
+    local owner="$1" home="$2" output="$3" install_root="${INSTALL_DIR:?}"
+    local source_catalog="$install_root/config/extensions-catalog.json"
+    local services_root="$install_root/extensions/library/services"
+
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${output%/*}" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$source_catalog" "$services_root" "$output" <<'PY'
+import hashlib, json, os, pathlib, re, stat, sys, tempfile
+
+source_path, services_path, output_path = map(pathlib.Path, sys.argv[1:4])
+owner_uid = os.getuid()
+
+
+def owned_regular(path, label, maximum):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != owner_uid
+            or info.st_mode & 0o022 or info.st_size > maximum):
+        raise SystemExit(f"unsafe ODS {label}")
+    return path.read_bytes()
+
+
+def clean_text(value, label, maximum):
+    if not isinstance(value, str):
+        raise SystemExit(f"invalid ODS extension {label}")
+    result = " ".join(value.split())
+    if not result or len(result) > maximum or any(ord(character) < 32 for character in result):
+        raise SystemExit(f"invalid ODS extension {label}")
+    return result
+
+
+def token_list(value, label, pattern, maximum_items=64, maximum_length=128):
+    if not isinstance(value, list) or len(value) > maximum_items:
+        raise SystemExit(f"invalid ODS extension {label}")
+    result = []
+    for item in value:
+        if not isinstance(item, str) or len(item) > maximum_length or re.fullmatch(pattern, item) is None:
+            raise SystemExit(f"invalid ODS extension {label}")
+        if item not in result:
+            result.append(item)
+    return sorted(result)
+
+
+source_payload = owned_regular(source_path, "extension source catalog", 8 * 1024 * 1024)
+services_info = services_path.lstat()
+if (not stat.S_ISDIR(services_info.st_mode) or stat.S_ISLNK(services_info.st_mode)
+        or services_info.st_uid != owner_uid or services_info.st_mode & 0o022):
+    raise SystemExit("unsafe ODS extension services directory")
+try:
+    source = json.loads(source_payload)
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit("invalid ODS extension source catalog") from exc
+raw_extensions = source.get("extensions") if isinstance(source, dict) else None
+if not isinstance(raw_extensions, list) or not 1 <= len(raw_extensions) <= 256:
+    raise SystemExit("invalid ODS extension source catalog")
+
+extensions = []
+seen = set()
+for item in raw_extensions:
+    if not isinstance(item, dict):
+        raise SystemExit("invalid ODS extension catalog entry")
+    extension_id = item.get("id")
+    if (not isinstance(extension_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", extension_id) is None
+            or extension_id in seen):
+        raise SystemExit("invalid or duplicate ODS extension id")
+    seen.add(extension_id)
+    compose_name = item.get("compose_file")
+    if compose_name in {None, ""}:
+        continue
+    if not isinstance(compose_name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", compose_name) is None:
+        raise SystemExit(f"invalid compose file for ODS extension {extension_id}")
+    compose_path = services_path / extension_id / compose_name
+    try:
+        owned_regular(compose_path, f"extension compose file {extension_id}", 2 * 1024 * 1024)
+    except FileNotFoundError:
+        # Catalog-only entries are useful references but are not installable by
+        # the current ODS lifecycle and must not be advertised to Pixel as such.
+        continue
+
+    env_vars = item.get("env_vars", [])
+    if not isinstance(env_vars, list) or len(env_vars) > 128:
+        raise SystemExit(f"invalid environment metadata for ODS extension {extension_id}")
+    required_configuration = []
+    optional_configuration = []
+    for env_item in env_vars:
+        if not isinstance(env_item, dict) or not isinstance(env_item.get("required", False), bool):
+            raise SystemExit(f"invalid environment metadata for ODS extension {extension_id}")
+        key = env_item.get("key")
+        if not isinstance(key, str) or re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", key) is None:
+            raise SystemExit(f"invalid configuration key for ODS extension {extension_id}")
+        destination = required_configuration if env_item.get("required", False) else optional_configuration
+        if key not in destination:
+            destination.append(key)
+
+    feature_names = []
+    features = item.get("features", [])
+    if not isinstance(features, list) or len(features) > 64:
+        raise SystemExit(f"invalid feature metadata for ODS extension {extension_id}")
+    for feature in features:
+        if not isinstance(feature, dict):
+            raise SystemExit(f"invalid feature metadata for ODS extension {extension_id}")
+        name = clean_text(feature.get("name"), "feature name", 256)
+        if name not in feature_names:
+            feature_names.append(name)
+
+    extensions.append({
+        "id": extension_id,
+        "name": clean_text(item.get("name"), "name", 128),
+        "description": clean_text(item.get("description"), "description", 1000),
+        "category": clean_text(item.get("category"), "category", 64),
+        "gpuBackends": token_list(item.get("gpu_backends", []), "GPU backends", r"[a-z0-9][a-z0-9._-]{0,31}", 16, 32),
+        "dependsOn": token_list(item.get("depends_on", []), "dependencies", r"[a-z0-9][a-z0-9._-]{0,63}"),
+        "requiredConfiguration": sorted(required_configuration),
+        "optionalConfiguration": sorted(optional_configuration),
+        "tags": token_list(item.get("tags", []), "tags", r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}"),
+        "featureNames": sorted(feature_names),
+    })
+
+if not extensions:
+    raise SystemExit("ODS extension catalog has no installable entries")
+extensions.sort(key=lambda entry: entry["id"])
+payload = {
+    "schemaVersion": 1,
+    "kind": "ods-pixel-extension-catalog",
+    "sourceSha256": hashlib.sha256(source_payload).hexdigest(),
+    "extensions": extensions,
+}
+serialized = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+parent_info = output_path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != owner_uid or parent_info.st_mode & 0o077):
+    raise SystemExit("unsafe ODS Pixel extension catalog directory")
+if output_path.is_symlink():
+    raise SystemExit("ODS Pixel extension catalog cannot be a symlink")
+if output_path.exists():
+    existing = output_path.lstat()
+    if (not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1
+            or existing.st_uid != owner_uid or existing.st_mode & 0o077
+            or existing.st_size > 2 * 1024 * 1024):
+        raise SystemExit("unsafe existing ODS Pixel extension catalog")
+
+descriptor, temporary = tempfile.mkstemp(prefix=".extension-catalog.", dir=output_path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(serialized)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, output_path)
+    directory = os.open(output_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 _ods_pixel_write_operations_policy() {
     local owner="$1" home="$2" policy="$3" install_root="${INSTALL_DIR:?}"
     local workspace="$home/.openclaw/workspace-pixel"
@@ -1727,10 +1898,11 @@ def normalized_root(value, label):
 
 install_root = normalized_root(install_root, "ODS install root")
 workspace = normalized_root(workspace, "Pixel workspace")
+python_binary = str(pathlib.Path("/usr/bin/python3").resolve(strict=True))
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
 cat_binary = "/usr/bin/cat"
-for binary in (hostname_binary, uname_binary, cat_binary):
+for binary in (python_binary, hostname_binary, uname_binary, cat_binary):
     info = pathlib.Path(binary).lstat()
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_uid != 0 or info.st_mode & 0o022
@@ -1855,6 +2027,29 @@ payload = {
             "reversible": False,
             "targets": ["ods-host"],
             "argv": [cat_binary, "/etc/os-release"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "ods.extensions.search": {
+            "description": "Search the installable ODS extension catalog. Use query 'all' to list the bounded first page. This read-only action does not install or configure anything.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "parameters": {
+                "query": {
+                    "pattern": "^[A-Za-z0-9 _/+:#.-]{1,80}$",
+                    "maxLength": 80,
+                },
+            },
+            "argv": [
+                python_binary,
+                "/opt/pixel-ops-broker/ods-extension-search.py",
+                "/opt/pixel-ops-broker/ods-extension-catalog.json",
+                "{query}",
+            ],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },
@@ -2046,14 +2241,26 @@ PY
 }
 
 _ods_pixel_install_ingress() {
-    local owner="$1" home="$2" plugin_root="$3"
+    local owner="$1" home="$2" plugin_root="$3" extension_catalog="$4"
     local token_file="$home/.openclaw/openclaw.json"
     local runtime_token_file="/run/ods-pixel/openclaw.json"
+    local extension_helper="$plugin_root/host/extension_search.py"
+    local installed_extension_helper="/opt/pixel-ops-broker/ods-extension-search.py"
+    local installed_extension_catalog="/opt/pixel-ops-broker/ods-extension-catalog.json"
     local ods_version="${VERSION:-2.6.0}"
     [[ "$ods_version" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
     [[ "$(stat -c '%u' -- "$token_file")" == "$(id -u "$owner")" ]] || return 1
     (( (8#$(stat -c '%a' -- "$token_file") & 0077) == 0 )) || return 1
+    local projection_source kind uid mode size
+    for projection_source in "$extension_helper" "$extension_catalog"; do
+        [[ -f "$projection_source" && ! -L "$projection_source" ]] || return 1
+        IFS='|' read -r kind uid mode size < <(stat -c '%F|%u|%a|%s' -- "$projection_source")
+        [[ "$kind" == "regular file" && "$uid" == "$(id -u "$owner")" \
+            && "$size" =~ ^[0-9]+$ && "$size" -le 2097152 ]] || return 1
+        (( (8#$mode & 0022) == 0 )) || return 1
+    done
+    (( (8#$(stat -c '%a' -- "$extension_catalog") & 0077) == 0 )) || return 1
 
     local app_port
     for app_port in \
@@ -2066,7 +2273,7 @@ _ods_pixel_install_ingress() {
         (( app_port >= 1 && app_port <= 65535 )) || return 1
     done
 
-    local stage
+    local stage extension_probe
     stage="$(mktemp -d)" || return 1
     python3 - "$plugin_root/host/pixel-ingress.service" "$stage/pixel-ingress.service" "$owner" "$token_file" "$runtime_token_file" <<'PY'
 import pathlib, sys
@@ -2108,6 +2315,18 @@ PIXEL_ODS_HERMES_PROXY_PORT=${HERMES_PROXY_PORT:-9120}
 EOF
     chmod 0640 "$stage/pixel-agent.env"
     ods_sudo install -d -m 0755 /usr/local/libexec /etc/ods
+    ods_sudo test -d /opt/pixel-ops-broker
+    ods_sudo test ! -L /opt/pixel-ops-broker
+    ods_sudo install -o root -g root -m 0755 "$extension_helper" "$installed_extension_helper"
+    ods_sudo install -o root -g pixel-ops -m 0640 "$extension_catalog" "$installed_extension_catalog"
+    ods_sudo cmp -s -- "$extension_helper" "$installed_extension_helper"
+    ods_sudo cmp -s -- "$extension_catalog" "$installed_extension_catalog"
+    extension_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
+        "$installed_extension_helper" "$installed_extension_catalog" all)" || return 1
+    jq -e '.schemaVersion == 1 and .kind == "ods-pixel-extension-search"
+        and .query == "all" and (.totalCatalog | type == "number") and .totalCatalog > 0
+        and (.matches | type == "array") and (.matches | length) <= 10
+        and (.boundary | type == "string")' <<<"$extension_probe" >/dev/null || return 1
     ods_sudo install -o root -g root -m 0755 "$plugin_root/host/pixel_ingress.mjs" /usr/local/libexec/ods-pixel-ingress.mjs
     ods_sudo install -o root -g ods-pixel -m 0640 "$stage/pixel-agent.env" /etc/ods/pixel-agent.env
     ods_sudo install -o root -g root -m 0644 "$stage/pixel-ingress.service" /etc/systemd/system/pixel-ingress.service
@@ -2143,7 +2362,7 @@ _ods_pixel_wait_ingress() {
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers operations_policy openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
+    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -2156,6 +2375,7 @@ ods_pixel_install_default_agent() {
     plugin_root="${INSTALL_DIR:?}/extensions/services/pixel-agent"
     [[ -f "$plugin_root/plugin/openclaw.plugin.json" \
         && -f "$plugin_root/host/pixel_ingress.mjs" \
+        && -f "$plugin_root/host/extension_search.py" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
     if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then
@@ -2195,6 +2415,11 @@ ods_pixel_install_default_agent() {
 
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
     operations_policy="$INSTALL_DIR/data/pixel/operations-policy.json"
+    extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
+    if ! _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"; then
+        ai_bad "Could not write Pixel's secret-free ODS extension catalog."
+        return 1
+    fi
     if ! _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"; then
         ai_bad "Could not write the owner-private ODS Pixel Operations policy."
         return 1
@@ -2356,7 +2581,7 @@ ods_pixel_install_default_agent() {
         ai_bad "Could not bind the verified Pixel contract for retry-safe ingress setup."
         return 1
     fi
-    if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root"; then
+    if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root" "$extension_catalog"; then
         ai_bad "Could not install and start the private Pixel ingress."
         return 1
     fi
