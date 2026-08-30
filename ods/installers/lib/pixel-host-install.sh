@@ -1738,8 +1738,12 @@ payload = {
             "backend": "local",
             "environment": "unclassified",
             "expectedHostname": hostname,
-            "defaultCwd": install_root,
-            "allowedRoots": [install_root, workspace],
+            # The broker service intentionally uses ProtectHome=true. Fixed
+            # host observations do not need an owner-home cwd, so start them
+            # inside the broker's root-custodied state tree instead of making
+            # /home visible to the privileged execution service.
+            "defaultCwd": "/var/lib/pixel-ops-broker",
+            "allowedRoots": [install_root, workspace, "/var/lib/pixel-ops-broker"],
             "writableRoots": [workspace],
             "shell": "/bin/bash",
             "allowRaw": False,

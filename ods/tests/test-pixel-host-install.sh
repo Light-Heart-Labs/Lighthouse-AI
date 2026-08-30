@@ -388,7 +388,8 @@ assert {"example.com","github.com","githubusercontent.com","hf.co","huggingface.
 target=v["targets"]["ods-host"]
 assert target["backend"] == "local" and target["expectedHostname"] == socket.gethostname()
 assert target["allowRaw"] is False and target["writableRoots"] == [sys.argv[3]]
-assert target["allowedRoots"] == [sys.argv[2],sys.argv[3]]
+assert target["defaultCwd"] == "/var/lib/pixel-ops-broker"
+assert target["allowedRoots"] == [sys.argv[2],sys.argv[3],"/var/lib/pixel-ops-broker"]
 broker=v["targets"]["broker"]
 assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False

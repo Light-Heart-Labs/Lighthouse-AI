@@ -132,7 +132,9 @@ leases, private state, or SSH material.
 
 The default policy provides five read-only named actions: `host.identity`,
 `host.kernel`, `host.architecture`, `host.platform`, and `host.os-release`.
-Raw shell is disabled. It also permits bounded automatic
+These observations execute from the broker's protected state directory so the
+broker does not need access to the owner's home directory. Raw shell is
+disabled. The policy also permits bounded automatic
 staging from a finite set of common public artifact hosts:
 
 - `example.com` for deterministic qualification;
