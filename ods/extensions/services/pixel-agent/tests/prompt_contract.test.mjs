@@ -35,6 +35,9 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /read the exact error/);
   assert.match(result.appendSystemContext, /rerun that same command/);
   assert.match(result.appendSystemContext, /do not churn through equivalent cwd/);
+  assert.match(result.appendSystemContext, /actual exit status and complete tool output/);
+  assert.match(result.appendSystemContext, /nonzero harness exit, early abort, or missing expected case/);
+  assert.match(result.appendSystemContext, /without global errexit aborting first/);
   assert.match(result.appendSystemContext, /set exec workdir instead of chaining cd/);
   assert.match(result.appendSystemContext, /quote wildcard test patterns/);
   assert.match(result.appendSystemContext, /implementation and test expectations from the owner's exact words/);
@@ -47,6 +50,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /one focused test for each distinct requested behavior/);
   assert.match(result.appendSystemContext, /avoid redundant suites and verbose output/);
   assert.match(result.appendSystemContext, /rerun a focused test before the full suite/);
+  assert.match(result.appendSystemContext, /Once the requested acceptance checks pass/);
+  assert.match(result.appendSystemContext, /do not rerun an unchanged green suite/);
   assert.match(result.appendSystemContext, /Do not call tools merely to discover/);
   assert.match(result.appendSystemContext, /never substitute pixel_ods_status/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);
