@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Fail-closed Pixel default-model selection contract."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SELECTOR = ROOT / "scripts" / "select-model.py"
+CATALOG = ROOT / "config" / "model-library.json"
+
+
+def run_selector(catalog: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SELECTOR),
+            "--catalog",
+            str(catalog),
+            "--backend",
+            "nvidia",
+            "--memory-type",
+            "discrete",
+            "--vram-mb",
+            "8151",
+            "--ram-gb",
+            "31",
+            "--profile",
+            "qwen",
+            "--tier",
+            "0",
+            "--max-size-mb",
+            "1221",
+            "--host-arch",
+            "amd64",
+            "--installable-only",
+            "--agent-ready-only",
+            *extra,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def catalog_model(model_id: str, status: str, *, size_mb: int) -> dict[str, object]:
+    return {
+        "id": model_id,
+        "name": model_id,
+        "family": "qwen",
+        "llm_model_name": model_id,
+        "gguf_file": f"{model_id}.gguf",
+        "gguf_url": f"https://huggingface.co/ods/{model_id}/resolve/main/{model_id}.gguf",
+        "gguf_sha256": "a" * 64,
+        "size_mb": size_mb,
+        "vram_required_gb": 4,
+        "context_length": 65536,
+        "app_compatibility": {
+            "agent_viability": {"status": status},
+        },
+    }
+
+
+def main() -> int:
+    result = run_selector(CATALOG)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    selected = payload["selected"]
+    assert selected["id"] == "qwen3.5-4b-q4", selected
+    assert selected["agent_viability_status"] == "verified"
+    assert selected["size_mb"] > 1221
+    assert payload["policy"].endswith("+pixel-agent-viability-v1")
+    assert "overrides --tier 0's 1221MB model size preference" in payload["reason"]
+
+    with tempfile.TemporaryDirectory() as directory:
+        catalog = Path(directory) / "catalog.json"
+        catalog.write_text(
+            json.dumps(
+                {
+                    "models": [
+                        catalog_model("failed-small", "not_agent_viable", size_mb=900),
+                        catalog_model("verified-larger", "verified", size_mb=1800),
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_selector(catalog)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["selected"]["id"] == "verified-larger"
+
+        catalog.write_text(
+            json.dumps(
+                {
+                    "models": [
+                        catalog_model("failed-only", "not_agent_viable", size_mb=900),
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_selector(catalog)
+        assert result.returncode == 2
+        assert not result.stdout.strip()
+        assert "no explicitly verified Pixel agent model fits" in result.stderr
+
+    detection = (ROOT / "installers" / "phases" / "02-detection.sh").read_text(
+        encoding="utf-8"
+    )
+    features = (ROOT / "installers" / "phases" / "03-features.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--agent-ready-only" in detection
+    assert "PIXEL_AGENT_MODEL_READY=false" in detection
+    assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
+    assert "selected Hermes because no catalog-verified agent model fits" in features
+
+    print("Pixel model selector tests passed: 4")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

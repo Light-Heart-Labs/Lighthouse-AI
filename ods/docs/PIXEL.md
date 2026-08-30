@@ -7,6 +7,13 @@ Hermes remains installed by default as the portable fallback and rollback
 agent. Deprecated OpenClaw and the OpenCode coding UI remain separately
 selectable; this integration does not delete either one.
 
+On a fresh Pixel-enabled install, ODS selects only a pinned catalog model with
+an explicit verified agent-viability verdict. If a lightweight tier's model
+size preference would otherwise choose a model that failed agent or
+application probes, agent readiness takes precedence while hardware memory-fit
+checks remain enforced. An explicit `--pixel` install fails closed when no
+verified agent model fits; automatic enablement falls back to Hermes.
+
 ## Legal and release boundary
 
 Pixel's repository currently uses a proprietary, all-rights-reserved license.

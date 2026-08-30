@@ -557,18 +557,46 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "${TIER:-}" !=
             fi
         fi
         if [[ -n "$_selector_python" ]]; then
-            _selector_env="$("$_selector_python" "$_selector_script" \
-                --catalog "$_selector_catalog" \
-                --backend "${GPU_BACKEND:-unknown}" \
-                --memory-type "${GPU_MEMORY_TYPE:-discrete}" \
-                --vram-mb "${GPU_VRAM:-0}" \
-                --ram-gb "${RAM_GB:-0}" \
-                --profile "${MODEL_PROFILE_EFFECTIVE:-${MODEL_PROFILE:-qwen}}" \
-                --tier "${TIER:-1}" \
-                --max-size-mb "${LLM_MODEL_SIZE_MB:-0}" \
-                --host-arch "${HOST_ARCH:-unknown}" \
-                --installable-only \
-                --env 2>>"$LOG_FILE" || true)"
+            _selector_agent_args=()
+            PIXEL_AGENT_MODEL_READY=unknown
+            if declare -F ods_pixel_resolve_enablement >/dev/null 2>&1 \
+                && [[ "${ODS_MODE:-local}" == "local" ]] \
+                && [[ -z "${EXTERNAL_LLM_URL:-}" ]] \
+                && [[ "${LEMONADE_EXTERNAL:-false}" != "true" ]] \
+                && [[ "$(ods_pixel_resolve_enablement "${ENABLE_PIXEL:-auto}" 2>/dev/null || true)" == "pixel" ]]; then
+                _selector_agent_args+=(--agent-ready-only)
+            fi
+            _run_catalog_selector() {
+                "$_selector_python" "$_selector_script" \
+                    --catalog "$_selector_catalog" \
+                    --backend "${GPU_BACKEND:-unknown}" \
+                    --memory-type "${GPU_MEMORY_TYPE:-discrete}" \
+                    --vram-mb "${GPU_VRAM:-0}" \
+                    --ram-gb "${RAM_GB:-0}" \
+                    --profile "${MODEL_PROFILE_EFFECTIVE:-${MODEL_PROFILE:-qwen}}" \
+                    --tier "${TIER:-1}" \
+                    --max-size-mb "${LLM_MODEL_SIZE_MB:-0}" \
+                    --host-arch "${HOST_ARCH:-unknown}" \
+                    --installable-only \
+                    "$@" \
+                    --env
+            }
+            _selector_env="$(_run_catalog_selector "${_selector_agent_args[@]}" 2>>"$LOG_FILE" || true)"
+            if (( ${#_selector_agent_args[@]} > 0 )); then
+                if [[ -n "$_selector_env" ]]; then
+                    PIXEL_AGENT_MODEL_READY=true
+                elif [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
+                    ai_bad "Pixel was explicitly requested, but no catalog-verified agent model fits this hardware."
+                    return 1 2>/dev/null || exit 1
+                else
+                    PIXEL_AGENT_MODEL_READY=false
+                    log "Pixel auto-gate will use Hermes because no catalog-verified agent model fits this hardware"
+                    _selector_env="$(_run_catalog_selector 2>>"$LOG_FILE" || true)"
+                fi
+            fi
+            export PIXEL_AGENT_MODEL_READY
+            unset -f _run_catalog_selector
+            unset _selector_agent_args
             if [[ -n "$_selector_env" ]]; then
                 if command -v load_model_selector_env_from_output >/dev/null 2>&1; then
                     load_model_selector_env_from_output <<< "$_selector_env"

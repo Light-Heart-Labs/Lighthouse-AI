@@ -104,6 +104,9 @@ jobs:
       - name: Active Model Preservation Tests
         run: python3 tests/test-preserve-active-model.py
 
+      - name: Pixel Agent Model Selection Tests
+        run: python3 tests/test-pixel-model-selector.py
+
       - name: Service Registry Tests
         run: bash tests/test-service-registry.sh
 

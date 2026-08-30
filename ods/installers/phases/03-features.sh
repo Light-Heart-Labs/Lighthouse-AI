@@ -109,7 +109,14 @@ if ! PIXEL_AGENT_MODE="$(ods_pixel_resolve_enablement "${ENABLE_PIXEL:-auto}" 2>
 fi
 ENABLE_PIXEL_RUNTIME=false
 if [[ "$PIXEL_AGENT_MODE" == "pixel" ]]; then
-    if [[ "${ODS_MODE:-local}" != "local" || -n "${EXTERNAL_LLM_URL:-}" || "${LEMONADE_EXTERNAL:-false}" == "true" ]]; then
+    if [[ "${PIXEL_AGENT_MODEL_READY:-unknown}" == "false" ]]; then
+        if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
+            ai_bad "Pixel was explicitly required, but no catalog-verified agent model fits this hardware."
+            return 1 2>/dev/null || exit 1
+        fi
+        PIXEL_AGENT_MODE=hermes
+        log "Pixel auto-gate selected Hermes because no catalog-verified agent model fits this hardware"
+    elif [[ "${ODS_MODE:-local}" != "local" || -n "${EXTERNAL_LLM_URL:-}" || "${LEMONADE_EXTERNAL:-false}" == "true" ]]; then
         if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
             ai_bad "Pixel currently requires the bundled local ODS model route."
             return 1 2>/dev/null || exit 1
