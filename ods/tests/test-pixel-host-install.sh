@@ -23,6 +23,56 @@ ai_bad() { :; }
 ai_ok() { :; }
 ai() { :; }
 
+probe_program="$TEST_ROOT/manager-probe.py"
+probe_counter="$TEST_ROOT/manager-probe.count"
+cat > "$probe_program" <<'PY'
+import json, os, pathlib, sys
+
+counter = pathlib.Path(os.environ["PIXEL_TEST_COUNTER"])
+calls = int(counter.read_text() if counter.exists() else "0") + 1
+counter.write_text(str(calls), encoding="utf-8")
+if calls == 1 and os.environ.get("PIXEL_TEST_BAD") != "true":
+    raise SystemExit(1)
+extension_id = "wrong" if os.environ.get("PIXEL_TEST_BAD") == "true" else sys.argv[4]
+print(json.dumps({
+    "schemaVersion": 1,
+    "kind": "ods-pixel-extension-lifecycle",
+    "action": "inspect",
+    "extensionId": extension_id,
+    "outcome": "ready",
+    "previousStatus": "not_installed",
+    "currentStatus": "not_installed",
+    "changed": False,
+    "externalEffectOccurred": False,
+    "requiredConfiguration": [],
+    "optionalConfiguration": [],
+    "missingConfiguration": [],
+    "rollback": {"attempted": False, "succeeded": None},
+    "boundary": "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, credential, arbitrary HTTP, or data-purge authority.",
+}))
+PY
+if (
+    ods_sudo() { shift 2; "$@"; }
+    export PIXEL_TEST_COUNTER="$probe_counter"
+    _ods_pixel_wait_extension_manager_probe "$probe_program" crewai 3 0
+); then
+    pass "extension manager readiness retries a transient failure"
+else
+    fail "extension manager readiness retries a transient failure"
+fi
+check test "$(cat "$probe_counter")" = 2
+rm -f -- "$probe_counter"
+if (
+    ods_sudo() { shift 2; "$@"; }
+    export PIXEL_TEST_COUNTER="$probe_counter" PIXEL_TEST_BAD=true
+    _ods_pixel_wait_extension_manager_probe "$probe_program" crewai 2 0
+); then
+    fail "extension manager readiness rejects structurally mismatched receipts"
+else
+    pass "extension manager readiness rejects structurally mismatched receipts"
+fi
+check test "$(cat "$probe_counter")" = 2
+
 home="$TEST_ROOT/home"
 mkdir -p "$home/.openclaw"
 printf '%s\n' '{"gateway":{"bind":"loopback"},"preserve":{"value":7}}' > "$home/.openclaw/openclaw.json"
@@ -1315,6 +1365,7 @@ assert "ods-extension-manager.py" in text
 assert "pixel-extension-manager.service" in text
 assert "manage-extensions" in text
 assert "ods_sudo -u pixel-ops-broker /usr/bin/python3" in text
+assert "_ods_pixel_wait_extension_manager_probe" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text

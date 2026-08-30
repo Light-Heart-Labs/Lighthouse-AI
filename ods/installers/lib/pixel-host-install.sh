@@ -2418,6 +2418,38 @@ PY
     return "$write_status"
 }
 
+_ods_pixel_wait_extension_manager_probe() {
+    local program="$1" extension_id="$2" attempts="${3:-30}" delay="${4:-1}"
+    local manager_probe attempt
+    [[ "$program" == /* && -f "$program" && ! -L "$program" \
+        && "$extension_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ \
+        && "$extension_id" != *. \
+        && "$attempts" =~ ^[0-9]+$ && "$attempts" -ge 1 && "$attempts" -le 60 \
+        && "$delay" =~ ^[0-9]+$ && "$delay" -le 5 ]] || return 1
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if manager_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
+            "$program" client /run/ods-pixel-manager/extension-manager.sock \
+            inspect "$extension_id" 2>/dev/null)" \
+            && jq -e --arg id "$extension_id" '.schemaVersion == 1
+                and .kind == "ods-pixel-extension-lifecycle"
+                and .action == "inspect" and .extensionId == $id
+                and (.outcome == "ready" or .outcome == "blocked")
+                and .changed == false and .externalEffectOccurred == false
+                and (.requiredConfiguration | type == "array")
+                and (.optionalConfiguration | type == "array")
+                and (.missingConfiguration | type == "array")
+                and .rollback == {"attempted": false, "succeeded": null}
+                and .boundary == "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, credential, arbitrary HTTP, or data-purge authority."' \
+                <<<"$manager_probe" >/dev/null; then
+            return 0
+        fi
+        if (( attempt < attempts && delay > 0 )); then
+            sleep "$delay"
+        fi
+    done
+    return 1
+}
+
 _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3" extension_catalog="$4"
     local rendered_extension_manager_unit="$5"
@@ -2534,21 +2566,11 @@ EOF
     ods_sudo systemctl restart pixel-ingress.service || return 1
     ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service \
         pixel-extension-manager.service || return 1
-    local extension_id manager_probe
+    local extension_id
     extension_id="$(jq -er '.matches[0].id | select(type == "string")' \
         <<<"$extension_probe")" || return 1
     [[ "$extension_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ && "$extension_id" != *. ]] || return 1
-    manager_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
-        "$installed_extension_manager" client \
-        /run/ods-pixel-manager/extension-manager.sock inspect "$extension_id")" || return 1
-    jq -e --arg id "$extension_id" '.schemaVersion == 1
-        and .kind == "ods-pixel-extension-lifecycle"
-        and .action == "inspect" and .extensionId == $id
-        and (.outcome == "ready" or .outcome == "blocked")
-        and .changed == false and .externalEffectOccurred == false
-        and (.requiredConfiguration | type == "array")
-        and (.missingConfiguration | type == "array")
-        and (.boundary | type == "string")' <<<"$manager_probe" >/dev/null
+    _ods_pixel_wait_extension_manager_probe "$installed_extension_manager" "$extension_id"
 }
 
 _ods_pixel_wait_ingress() {
