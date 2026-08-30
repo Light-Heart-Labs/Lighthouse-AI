@@ -313,6 +313,28 @@ function completedProcessResult(event) {
   return { sessionId: details.sessionId, failed: details.exitCode !== 0 };
 }
 
+function canonicalPendingProcessSessionId(params, pendingSessions) {
+  if (
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    typeof params.sessionId !== "string" ||
+    !params.sessionId ||
+    !(pendingSessions instanceof Map)
+  ) {
+    return undefined;
+  }
+  if (pendingSessions.has(params.sessionId)) return params.sessionId;
+  // Small local models sometimes combine OpenClaw's human-facing output
+  // ("session fast-breeze, pid 95242") into the invented identifier
+  // "session-fast-breeze-95242". Correct only that exact shape and only when
+  // the embedded label is already a pending execution created by this run.
+  // This cannot widen session visibility or select an unrelated process.
+  const alias = params.sessionId.match(/^session-(.+)-([1-9][0-9]*)$/);
+  if (!alias || !pendingSessions.has(alias[1])) return undefined;
+  return alias[1];
+}
+
 function toolCallFailed(event) {
   if (event?.error) return true;
   const result = event?.result;
@@ -689,10 +711,20 @@ export function createToolLoopGuard({
     // capable of aborting a long model continuation after the first tool.
     observeRun(context, agentId);
     const toolName = context?.toolName ?? event?.toolName;
-    const normalizedParams = normalizeWorkspaceParams(toolName, event?.params);
+    let normalizedParams = normalizeWorkspaceParams(toolName, event?.params);
 
     const { runId, sessionId } = runIdentity(event, context);
     const state = runId && sessionId ? stateFor(runId) : undefined;
+    if (toolName === "process" && state) {
+      const params = normalizedParams ?? event?.params;
+      const canonicalSessionId = canonicalPendingProcessSessionId(
+        params,
+        state.pendingExecSessions
+      );
+      if (canonicalSessionId && canonicalSessionId !== params?.sessionId) {
+        normalizedParams = { ...params, sessionId: canonicalSessionId };
+      }
+    }
 
     if (state?.clientCancelled) {
       return { block: true, blockReason: CLIENT_CANCELLED_REASON };

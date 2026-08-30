@@ -810,6 +810,48 @@ test("counts verification failures that finish through process polling", () => {
   );
 });
 
+test("normalizes a model-invented process alias only to this run's pending session", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    command: "python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", {
+    event: {
+      params,
+      result: {
+        isError: false,
+        details: { status: "running", sessionId: "fast-breeze" },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    call(guard, "process", {
+      event: {
+        params: { action: "poll", sessionId: "session-fast-breeze-95242" },
+      },
+    }),
+    { params: { action: "poll", sessionId: "fast-breeze" } }
+  );
+  assert.equal(
+    call(guard, "process", {
+      event: {
+        params: { action: "poll", sessionId: "session-other-run-95242" },
+      },
+    }),
+    undefined
+  );
+  assert.equal(
+    call(guard, "process", {
+      event: { params: { action: "poll", sessionId: "fast-breeze" } },
+    }),
+    undefined
+  );
+});
+
 test("a passing background verification clears prior process failures", () => {
   const guard = createToolLoopGuard({
     limits: { failedExecRetries: 3, failedVerificationAttempts: 2 },
