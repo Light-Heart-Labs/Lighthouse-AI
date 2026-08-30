@@ -625,8 +625,11 @@ if not isinstance(normalized_defaults, dict) or not isinstance(normalized_sessio
 # other candidate change still fails closed below.
 normalized_provider["timeoutSeconds"] = 1800
 normalized_defaults["timeoutSeconds"] = 1800
-normalized_defaults["bootstrapMaxChars"] = 4000
-normalized_defaults["bootstrapTotalMaxChars"] = 14000
+# Preserve Pixel's complete workspace operating and tool contracts. The
+# shipped AGENTS.md and TOOLS.md files are both larger than 4,000 characters;
+# a smaller ODS override silently removes most of their instructions.
+normalized_defaults["bootstrapMaxChars"] = 32000
+normalized_defaults["bootstrapTotalMaxChars"] = 96000
 normalized_defaults["contextInjection"] = "continuation-skip"
 normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
@@ -993,8 +996,8 @@ if (not isinstance(search, dict) or search.get("provider") != "searxng"
     raise SystemExit("ODS Pixel private web search is not bound to local SearXNG")
 updated_provider["timeoutSeconds"] = 1800
 updated_defaults["timeoutSeconds"] = 1800
-updated_defaults["bootstrapMaxChars"] = 4000
-updated_defaults["bootstrapTotalMaxChars"] = 14000
+updated_defaults["bootstrapMaxChars"] = 32000
+updated_defaults["bootstrapTotalMaxChars"] = 96000
 updated_defaults["contextInjection"] = "continuation-skip"
 context_window = updated_model.get("contextWindow")
 model_max_tokens = updated_model.get("maxTokens")

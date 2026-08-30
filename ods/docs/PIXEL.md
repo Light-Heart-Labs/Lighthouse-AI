@@ -271,6 +271,14 @@ persisted and current registry views, then restarts and verifies the gateway.
 Pixel source drift or runtime-configuration drift takes the ordinary
 configure/plan/apply path and remains fail closed.
 
+The managed runtime preserves Pixel's upstream workspace-bootstrap ceilings
+(`bootstrapMaxChars=32000` and `bootstrapTotalMaxChars=96000`). These are
+ceilings, not forced prompt sizes. They prevent the shipped `AGENTS.md` and
+`TOOLS.md` operating contracts from being silently truncated while still
+letting OpenClaw inject only the files that are present. A gateway warning that
+either file was truncated is a qualification failure for the default ODS
+workspace.
+
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel
 onboarding record, active release, runtime attestation, or gateway systemd unit
@@ -377,6 +385,8 @@ head:
 - a clean supported-host install with PID1 systemd;
 - a real Open WebUI `pixel/default` chat;
 - a real Dashboard `/pixel` streaming chat;
+- a fresh first turn with no workspace-bootstrap truncation warning and a
+  visible `Working` state while a tool turn is active;
 - cancellation of a real long-running sandbox command, proving a clean
   `[DONE]` stream, status 130, marker cleanup, no surviving descendant, and a
   successful fresh command afterward;
