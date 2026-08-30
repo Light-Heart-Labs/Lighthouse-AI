@@ -31,6 +31,7 @@ from routed_telemetry import (
     routed_event_to_usage,
     validate_routed_event,
 )
+from upstream_url import openai_api_base_url
 
 # Database backend selection: sqlite (default) or postgres
 DB_BACKEND = os.environ.get("DB_BACKEND", "sqlite").lower()
@@ -75,6 +76,8 @@ if not OPENAI_UPSTREAM:
         OPENAI_UPSTREAM = UPSTREAM_BASE_URL
     else:
         OPENAI_UPSTREAM = UPSTREAM_BASE_URL  # fallback: same upstream
+
+OPENAI_UPSTREAM = openai_api_base_url(OPENAI_UPSTREAM)
 
 LOCAL_PROVIDER_NAMES = {"local", "ollama", "llama", "llama.cpp", "llama-server", "vllm"}
 LOCAL_UPSTREAM_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal", "llama-server", "ollama"}
@@ -339,7 +342,7 @@ def get_moonshot_client() -> httpx.AsyncClient:
     global _openai_client
     if _openai_client is None or _openai_client.is_closed:
         _openai_client = httpx.AsyncClient(
-            base_url=OPENAI_UPSTREAM,
+            base_url=f"{OPENAI_UPSTREAM.rstrip('/')}/",
             timeout=_CLIENT_TIMEOUT,
             limits=_CLIENT_LIMITS,
         )
@@ -942,7 +945,7 @@ async def _handle_openai_streaming(client, raw_body, headers, model, sys_analysi
         logged = False
         try:
             async with client.stream(
-                "POST", "/v1/chat/completions",
+                "POST", "chat/completions",
                 content=raw_body,
                 headers=headers,
             ) as upstream:
@@ -1013,7 +1016,7 @@ async def _handle_openai_non_streaming(client, raw_body, headers, model, sys_ana
     """Handle non-streaming OpenAI-format requests."""
     try:
         resp = await client.request(
-            "POST", "/v1/chat/completions",
+            "POST", "chat/completions",
             content=raw_body,
             headers=headers,
         )

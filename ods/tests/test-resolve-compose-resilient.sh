@@ -656,6 +656,25 @@ if $consumer_routes_ok; then
     pass "All direct external-LLM consumers define a Linux host-gateway route"
 fi
 
+if ROOT_DIR="$ROOT_DIR" python3 - <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["ROOT_DIR"], "extensions", "services", "token-spy"))
+from upstream_url import openai_api_base_url
+
+assert openai_api_base_url("http://llama-server:8080") == "http://llama-server:8080/v1"
+assert openai_api_base_url("http://lemonade:8000/api/v1") == "http://lemonade:8000/api/v1"
+assert openai_api_base_url("http://host.docker.internal:12434/engines/v1") == (
+    "http://host.docker.internal:12434/engines/v1"
+)
+PY
+then
+    pass "Token Spy preserves provider-specific OpenAI API roots"
+else
+    fail "Token Spy provider-specific OpenAI API root contract"
+fi
+
 # ============================================================================
 # 26. The real external-LLM stack renders without local inference dependencies
 # ============================================================================
@@ -682,6 +701,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
         export EXTERNAL_LLM_MODEL="ai/qwen3.5-9b"
         export LLM_API_BASE_PATH="/engines/v1"
         export LLM_API_URL="$EXTERNAL_LLM_CONTAINER_URL"
+        export OPEN_WEBUI_LLM_BASE_URL="${EXTERNAL_LLM_CONTAINER_URL}${LLM_API_BASE_PATH}"
         export HERMES_LLM_BASE_URL="${EXTERNAL_LLM_CONTAINER_URL}${LLM_API_BASE_PATH}"
         export HERMES_DASHBOARD_SESSION_TOKEN="external-llm-hermes-dashboard-session-token"
         export WEBUI_SECRET="external-llm-compose-test"
@@ -753,6 +773,28 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
         fi
     else
         fail "Real AMD external-LLM stack failed docker compose config"
+    fi
+
+    managed_amd_consumers="$TEMP_DIR/managed-amd-consumers.yml"
+    if (
+        cd "$ROOT_DIR"
+        export LLM_API_URL="http://litellm:4000"
+        export LLM_API_BASE_PATH="/api/v1"
+        export OPEN_WEBUI_LLM_BASE_URL=""
+        docker compose \
+            -f extensions/services/privacy-shield/compose.yaml \
+            -f extensions/services/token-spy/compose.yaml \
+            config > "$managed_amd_consumers"
+    ); then
+        if ! grep -Fq 'TARGET_API_URL: http://litellm:4000/v1' "$managed_amd_consumers"; then
+            fail "Managed AMD Privacy Shield route inherited Lemonade's private /api/v1 path"
+        elif ! grep -Fq 'OPENAI_UPSTREAM: http://litellm:4000/v1' "$managed_amd_consumers"; then
+            fail "Managed AMD Token Spy route inherited Lemonade's private /api/v1 path"
+        else
+            pass "Managed AMD OpenAI consumers retain the LiteLLM /v1 route"
+        fi
+    else
+        fail "Managed AMD consumer Compose stack failed to render"
     fi
 else
     skip "Docker Compose unavailable; real external-LLM render skipped"
