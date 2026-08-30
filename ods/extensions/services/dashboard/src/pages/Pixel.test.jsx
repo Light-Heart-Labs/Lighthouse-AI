@@ -412,9 +412,56 @@ describe('Pixel', () => {
     fireEvent.click(screen.getByTitle('Stop'))
 
     const stopped = await screen.findByText('Response stopped')
-    expect(stopped.closest('div')).not.toHaveClass('bg-red-500/10')
+    expect(stopped.parentElement).toHaveClass('bg-amber-500/10')
+    expect(stopped.parentElement).not.toHaveClass('bg-red-500/10')
+    expect(screen.getByText('Stopped by you. Workspace changes completed before cancellation were preserved.')).toBeInTheDocument()
     expect(screen.getByText('Available')).toBeInTheDocument()
     expect(screen.getByTitle('Send')).toBeDisabled()
+  })
+
+  it('keeps partial output but marks it durably when the owner stops a response', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    const encoder = new TextEncoder()
+    let reads = 0
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            reads += 1
+            if (reads === 1) {
+              return {
+                done: false,
+                value: encoder.encode('data: {"choices":[{"delta":{"content":"Partial verified work"}}]}\n\n'),
+              }
+            }
+            return new Promise(() => {})
+          },
+          releaseLock: () => {},
+        }),
+      },
+      headers: new Map([['content-type', 'text/event-stream']]),
+    })
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'long task with partial output' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+    await screen.findByText('Partial verified work')
+    fireEvent.click(screen.getByTitle('Stop'))
+
+    expect(await screen.findByText('Response stopped')).toBeInTheDocument()
+    expect(screen.getByText('Partial verified work')).toBeInTheDocument()
+    expect(screen.getByText('Stopped by you. Workspace changes completed before cancellation were preserved.')).toBeInTheDocument()
+    await waitFor(() => {
+      const stored = JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1'))
+      expect(stored.messages.at(-1).content).toContain('Stopped by you.')
+    })
   })
 
   it('enforces input limit', async () => {

@@ -39,6 +39,7 @@ const MAX_REQUEST_MESSAGES = 50
 const MAX_TOTAL_MESSAGE_BYTES = 256 * 1024
 const CHAT_STORAGE_KEY = 'ods.pixel.chat.v1'
 const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,128}$/
+const STOPPED_NOTICE = 'Stopped by you. Workspace changes completed before cancellation were preserved.'
 let fallbackChatSequence = 0
 
 const SUGGESTED_TASKS = [
@@ -93,6 +94,13 @@ function replaceLastAssistant(messages, update) {
   const next = [...messages]
   next[index] = { ...next[index], ...update }
   return next
+}
+
+function stoppedContent(content) {
+  const partial = typeof content === 'string' ? content.trimEnd() : ''
+  if (!partial) return STOPPED_NOTICE
+  if (partial.includes(STOPPED_NOTICE)) return partial
+  return `${partial}\n\n---\n\n_${STOPPED_NOTICE}_`
 }
 
 function loadStoredChat() {
@@ -309,7 +317,7 @@ export default function Pixel({ systemStatus = null }) {
     abortRef.current?.abort()
     abortRef.current = null
     setMessages(previous => replaceLastAssistant(previous, {
-      content: previous.at(-1)?.content || 'Response stopped',
+      content: stoppedContent(previous.at(-1)?.content),
       status: 'stopped',
     }))
     setSending(false)
@@ -463,8 +471,16 @@ export default function Pixel({ systemStatus = null }) {
                 ? 'bg-theme-accent text-white shadow-lg shadow-black/10'
                 : message.status === 'error'
                   ? 'border border-red-500/25 bg-red-500/10 text-red-200'
+                  : message.status === 'stopped'
+                    ? 'border border-amber-500/30 bg-amber-500/10 text-theme-text-secondary shadow-lg shadow-black/10'
                   : 'border border-theme-border bg-theme-card text-theme-text-secondary shadow-lg shadow-black/10'
             }`}>
+              {message.status === 'stopped' && (
+                <div role="status" className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-amber-300">
+                  <Square className="h-3 w-3 fill-current" />
+                  Response stopped
+                </div>
+              )}
               {message.role === 'assistant' && message.content ? (
                 <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
               ) : (
