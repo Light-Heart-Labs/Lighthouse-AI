@@ -84,6 +84,9 @@ to completion, repair failures, and report only verified truth.
   background command to terminal completion, but seven tests finished with two
   failures: TTL expiry was refreshed incorrectly and `__len__` did not reclaim
   expired entries. Independent replay reproduced the same two failures.
+- Its attempted repair duplicated the clock read, did not address expired-entry
+  reclamation, and the following model request timed out. Pixel returned to
+  `Available` without any owner-facing terminal report.
 - No verified passing result was produced.
 - Verdict: `not_agent_viable` on `windows-laptop` for this runtime.
 
