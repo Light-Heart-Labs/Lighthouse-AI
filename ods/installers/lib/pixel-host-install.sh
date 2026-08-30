@@ -1580,8 +1580,7 @@ _ods_pixel_wait_http() {
 
 _ods_pixel_gateway_model_alias() {
     case "${ODS_MODEL_SWITCHBOARD:-observe}" in
-        enabled) printf '%s\n' 'ods/current' ;;
-        legacy|observe|"") printf '%s\n' 'default' ;;
+        legacy|observe|enabled|"") printf '%s\n' 'ods/current' ;;
         *) return 1 ;;
     esac
 }

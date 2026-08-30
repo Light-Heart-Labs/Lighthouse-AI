@@ -90,6 +90,8 @@ def test_all_selects_one_mode_config() -> None:
         payload = run_renderer("--surface", "all", "--ods-mode", mode)
         surfaces = {item["surface"] for item in payload["files"]}
         assert surfaces & all_mode_surfaces == {expected_surface}
+        mode_config = file_by_surface(payload, expected_surface)["content"]
+        assert "model_name: ods/current" in mode_config
 
 
 def test_cloud_enabled_never_renders_local_switchboard() -> None:
@@ -261,6 +263,7 @@ def test_native_local_projection_uses_host_route_and_concrete_model() -> None:
         "http://host.docker.internal:13306/v1",
     )
     content = file_by_surface(payload, "litellm-local-native")["content"]
+    assert "model_name: ods/current" in content
     assert "model: openai/Native-Model.gguf" in content
     assert "api_base: http://host.docker.internal:13306/v1" in content
     assert "enable_thinking: false" in content
@@ -376,6 +379,7 @@ def test_lemonade_disables_thinking_and_uses_extra_alias() -> None:
         "sk-test",
     )
     content = file_by_surface(payload, "litellm-lemonade")["content"]
+    assert "model_name: ods/current" in content
     assert "model: openai/extra.Model.gguf" in content
     assert "api_key: sk-test" in content
     assert "enable_thinking: false" in content

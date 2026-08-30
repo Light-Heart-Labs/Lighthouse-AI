@@ -89,9 +89,9 @@ Browser
                          +-----------------------+-------------------+
                          |                                           |
                          v                                           v
-       exact-digest ODS plugin, three read-only tools       ods-gateway/default
-                         |                                  (ods/current when the
-                         v                                   Switchboard is enabled)
+       exact-digest ODS plugin, three read-only tools       ods-gateway/ods/current
+                         |                                           |
+                         v                                           v
        /run/ods-pixel/ods-status.json (mode 0640)                     |
                                                                      v
                                                  authenticated LiteLLM on loopback
@@ -207,8 +207,9 @@ allowlist or make custom tools replay-safe.
 
 Pixel follows the same model gateway as the rest of ODS. Its private OpenClaw
 provider is `ods-gateway`, bound only to authenticated LiteLLM on
-`127.0.0.1`. In legacy and observe modes it requests the stable `default`
-alias; with the Model Switchboard enabled it requests `ods/current`. Provider
+`127.0.0.1`. It always requests ODS's stable `ods/current` alias. Every
+supported LiteLLM mode publishes that alias, and the Model Switchboard can
+move its concrete backend without changing Pixel's persisted route. Provider
 credentials, arbitrary URLs, and browser-supplied model IDs cannot rewrite
 that route.
 

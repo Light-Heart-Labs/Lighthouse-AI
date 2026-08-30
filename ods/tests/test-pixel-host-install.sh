@@ -372,8 +372,8 @@ assert v["capabilityProfile"] == "minimal"
 assert v["modelProvider"] == "ods-gateway"
 assert v["modelBaseUrl"] == "http://127.0.0.1:4000/v1"
 assert v["modelApiKey"] == "test-litellm-secret"
-assert v["modelId"] == "default"
-assert v["modelName"] == "ODS Default (qwen-test)"
+assert v["modelId"] == "ods/current"
+assert v["modelName"] == "ODS Current (qwen-test)"
 assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
 assert v["modelReasoning"] is False
@@ -400,10 +400,10 @@ fi
 if (
     curl() {
         [[ "$*" != *"test-litellm-secret"* && "$*" == *"@/dev/fd/"* ]] || return 1
-        printf '%s\n' '{"data":[{"id":"default"}]}'
+        printf '%s\n' '{"data":[{"id":"ods/current"}]}'
     }
     sleep() { :; }
-    _ods_pixel_wait_model_gateway "test gateway" 4000 test-litellm-secret default 1
+    _ods_pixel_wait_model_gateway "test gateway" 4000 test-litellm-secret ods/current 1
 ); then
     pass "authenticated Pixel model-gateway alias preflight accepted"
 else
@@ -420,7 +420,7 @@ python3 - "$TEST_ROOT/gateway-name-control.json" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 value = json.loads(path.read_text())
-value["modelName"] = "ODS Default (qwen-test)\nforged"
+value["modelName"] = "ODS Current (qwen-test)\nforged"
 path.write_text(json.dumps(value) + "\n")
 PY
 chmod 0600 "$TEST_ROOT/gateway-name-control.json"
@@ -860,15 +860,15 @@ provider["apiKey"] = "test-litellm-secret"
 provider["baseUrl"] = "http://127.0.0.1:4000/v1"
 model = provider["models"][0]
 model.update({
-    "id": "default",
-    "name": "ODS Default (qwen-gateway)",
+    "id": "ods/current",
+    "name": "ODS Current (qwen-gateway)",
     "contextWindow": 65536,
     "maxTokens": 4096,
     "reasoning": False,
 })
 model.pop("compat", None)
 agent = next(item for item in value["agents"]["list"] if item.get("id") == "pixel")
-agent["model"] = "ods-gateway/default"
+agent["model"] = "ods-gateway/ods/current"
 agent.pop("thinkingDefault", None)
 target.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 PY
@@ -910,7 +910,7 @@ else
 fi
 _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$gateway_answers" \
     qwen-gateway-next 131072 8192 true
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-gateway" and v["modelId"] == "default" and v["modelName"] == "ODS Default (qwen-gateway-next)" and v["modelContextWindow"] == 131072 and v["modelMaxTokens"] == 8192 and v["modelReasoning"] is True' \
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelProvider"] == "ods-gateway" and v["modelId"] == "ods/current" and v["modelName"] == "ODS Current (qwen-gateway-next)" and v["modelContextWindow"] == 131072 and v["modelMaxTokens"] == 8192 and v["modelReasoning"] is True' \
     "$gateway_answers"
 
 linked_answers="$TEST_ROOT/onboarding-linked.json"

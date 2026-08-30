@@ -146,6 +146,12 @@ def opencode_key(inputs: RenderInputs) -> str:
 
 def render_litellm_local(inputs: RenderInputs) -> RenderedFile:
     content = """model_list:
+  - model_name: ods/current
+    litellm_params:
+      model: openai/default
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
   - model_name: default
     litellm_params:
       model: openai/default
@@ -175,6 +181,15 @@ def render_litellm_local_native(inputs: RenderInputs) -> RenderedFile:
     model = inputs.gguf_file or inputs.model
     api_base = inputs.llm_base_url.rstrip("/") or "http://host.docker.internal:8080/v1"
     content = f"""model_list:
+  - model_name: ods/current
+    litellm_params:
+      model: openai/{model}
+      api_base: {api_base}
+      api_key: not-needed
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
   - model_name: default
     litellm_params:
       model: openai/{model}
@@ -296,6 +311,12 @@ litellm_settings:
 
 def render_litellm_hybrid(inputs: RenderInputs) -> RenderedFile:
     content = """model_list:
+  - model_name: ods/current
+    litellm_params:
+      model: openai/default
+      api_base: http://llama-server:8080/v1
+      api_key: not-needed
+
   - model_name: local
     litellm_params:
       model: openai/default
@@ -349,6 +370,15 @@ def render_litellm_lemonade(inputs: RenderInputs) -> RenderedFile:
     model = lemonade_model_id(inputs)
     api_base = inputs.lemonade_api_base.rstrip("/") or "http://llama-server:8080/api/v1"
     content = f"""model_list:
+  - model_name: ods/current
+    litellm_params:
+      model: openai/{model}
+      api_base: {api_base}
+      api_key: {inputs.litellm_key}
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
   - model_name: default
     litellm_params:
       model: openai/{model}
