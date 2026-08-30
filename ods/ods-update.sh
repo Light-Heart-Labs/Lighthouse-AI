@@ -74,7 +74,8 @@ env_file_value() {
 compose_flags_files_exist() {
     local flags="$1"
     local prev="" tok
-    for tok in $flags; do
+    # Use a while loop with read to handle spaces in paths
+    while read -r tok; do
         if [[ "$prev" == "-f" ]]; then
             if [[ "$tok" = /* ]]; then
                 [[ -f "$tok" ]] || return 1
@@ -83,7 +84,7 @@ compose_flags_files_exist() {
             fi
         fi
         prev="$tok"
-    done
+    done <<< "$(echo "$flags" | xargs -n1)"
     return 0
 }
 
@@ -941,7 +942,7 @@ cmd_health() {
         return 1
     fi
     
-    for service in $services; do
+    while read -r service; do
         local status
         status=$("${compose_cmd[@]}" "${compose_args[@]}" ps --format json "$service" 2>/dev/null \
             | jq -r 'if type == "array" then (.[0].State // "unknown") else (.State // "unknown") end' 2>/dev/null \
