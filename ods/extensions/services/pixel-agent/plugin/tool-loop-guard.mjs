@@ -1138,36 +1138,28 @@ export function createToolLoopGuard({
     }
   }
 
-  function verificationCommandLabel(fingerprint) {
-    if (typeof fingerprint !== "string" || !fingerprint) return "";
-    try {
-      const [command, workdir] = JSON.parse(fingerprint);
-      if (typeof command !== "string" || !command) return "";
-      return typeof workdir === "string" && workdir
-        ? ` Verification command: ${command} (in ${workdir}).`
-        : ` Verification command: ${command}.`;
-    } catch {
-      return "";
+  function verificationForRun(runId) {
+    if (typeof runId !== "string" || !runId) return { status: "none" };
+    const state = runs.get(runId);
+    if (!state) return { status: "none" };
+    if (state.latestVerificationStatus === "pending") {
+      return { status: "pending", text: VERIFICATION_PENDING_DELIVERY_PREFIX };
     }
+    if (state.latestVerificationStatus === "failed") {
+      return { status: "failed", text: VERIFICATION_FAILED_DELIVERY_PREFIX };
+    }
+    if (state.latestVerificationStatus === "passed") return { status: "passed" };
+    return { status: "none" };
   }
 
   function replyPayloadSending(event) {
     if (event?.kind !== "final") return undefined;
-    const runId = event?.runId;
-    if (typeof runId !== "string" || !runId) return undefined;
-    const state = runs.get(runId);
-    if (!state) return undefined;
-    const prefix =
-      state.latestVerificationStatus === "pending"
-        ? VERIFICATION_PENDING_DELIVERY_PREFIX
-        : state.latestVerificationStatus === "failed"
-          ? VERIFICATION_FAILED_DELIVERY_PREFIX
-          : undefined;
-    if (!prefix) return undefined;
+    const verification = verificationForRun(event?.runId);
+    if (!verification.text) return undefined;
     return {
       payload: {
         ...(event.payload ?? {}),
-        text: `${prefix}${verificationCommandLabel(state.latestVerificationFingerprint)}`,
+        text: verification.text,
       },
       reason: "Pixel replaced an unverified terminal reply with host-authoritative verification truth.",
     };
@@ -1179,6 +1171,7 @@ export function createToolLoopGuard({
     replyPayloadSending,
     observeRun,
     abortUserRun,
+    verificationForRun,
     verificationStatus: (runId) => runs.get(runId)?.latestVerificationStatus,
     trackedRunCount: () => runs.size,
     trackedUserCount: () => activeUsers.size,

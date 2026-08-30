@@ -82,6 +82,14 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
 - **Visible post-tool replies.** The plugin adds a Pixel-only system prompt
   contract requiring a visible final response after either projection tool.
   The status remains untrusted evidence and never becomes action authority.
+- **Host-authoritative verification truth.** OpenClaw's OpenAI-compatible HTTP
+  route does not dispatch channel delivery hooks. Before releasing a completion,
+  the private ingress therefore asks the plugin for the exact run's bounded
+  verification state over a gateway-authenticated loopback route. Failed or
+  still-running verification replaces model-authored success text with an
+  honest host-authored result. Streaming responses are bounded and buffered
+  until that check completes, so false content is never released and then
+  retracted.
 
 ## Configuration (nonsecret)
 

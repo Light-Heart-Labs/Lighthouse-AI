@@ -35,6 +35,7 @@ import { createPublicWebExtractTool } from "./web-extract.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
+const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const toolLoopGuardRegistry = createToolLoopGuardRegistry();
 const execCancellationControl = createExecCancellationControl();
 
@@ -138,6 +139,35 @@ async function readAbortUser(req) {
   }
 }
 
+async function readVerificationRun(req) {
+  if (req.method !== "POST") return { status: 405 };
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  if (contentType.split(";", 1)[0].trim() !== "application/json") return { status: 415 };
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > ABORT_BODY_LIMIT) return { status: 413 };
+    chunks.push(chunk);
+  }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks, total).toString("utf8"));
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      typeof body.runId !== "string" ||
+      !OPENAI_RUN_ID.test(body.runId)
+    ) {
+      return { status: 400 };
+    }
+    return { status: 200, runId: body.runId };
+  } catch {
+    return { status: 400 };
+  }
+}
+
 export default definePluginEntry({
   id: "pixel-ods",
   name: "Pixel ODS Integration",
@@ -192,6 +222,24 @@ export default definePluginEntry({
           return true;
         }
         sendJson(res, 200, { aborted: await toolLoopGuard.abortUserRun(parsed.user) });
+        return true;
+      },
+    });
+    // The OpenAI-compatible gateway route does not dispatch channel delivery
+    // hooks. Give the private host ingress a narrow, authenticated way to ask
+    // for the host-observed terminal verification state before it releases a
+    // response to the dashboard.
+    api.registerHttpRoute({
+      path: "/pixel-ods/verification",
+      auth: "gateway",
+      match: "exact",
+      handler: async (req, res) => {
+        const parsed = await readVerificationRun(req);
+        if (parsed.status !== 200) {
+          sendJson(res, parsed.status, { error: "invalid verification request" });
+          return true;
+        }
+        sendJson(res, 200, toolLoopGuard.verificationForRun(parsed.runId));
         return true;
       },
     });

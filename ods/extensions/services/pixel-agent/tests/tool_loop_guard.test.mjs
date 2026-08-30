@@ -872,9 +872,11 @@ test("final delivery replaces a model claim while verification is pending", () =
   });
 
   const terminal = reply(guard);
-  assert.ok(terminal.payload.text.startsWith(VERIFICATION_PENDING_DELIVERY_PREFIX));
-  assert.match(terminal.payload.text, /python3 -m unittest -v/);
-  assert.match(terminal.payload.text, /\/workspace\/project/);
+  assert.equal(terminal.payload.text, VERIFICATION_PENDING_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "pending",
+    text: VERIFICATION_PENDING_DELIVERY_PREFIX,
+  });
   assert.deepEqual(terminal.payload.metadata, { preserved: true });
 });
 
@@ -887,8 +889,11 @@ test("final delivery replaces a model claim after failed verification", () => {
   });
 
   const terminal = reply(guard);
-  assert.ok(terminal.payload.text.startsWith(VERIFICATION_FAILED_DELIVERY_PREFIX));
-  assert.match(terminal.payload.text, /python3 -m unittest -v/);
+  assert.equal(terminal.payload.text, VERIFICATION_FAILED_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: VERIFICATION_FAILED_DELIVERY_PREFIX,
+  });
   assert.doesNotMatch(terminal.payload.text, /claimed success/i);
 });
 
@@ -901,12 +906,14 @@ test("final delivery preserves a model response after passing verification", () 
   });
 
   assert.equal(reply(guard), undefined);
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" });
 });
 
 test("verification delivery hook ignores non-final payloads and unknown runs", () => {
   const guard = createToolLoopGuard();
   assert.equal(reply(guard), undefined);
   assert.equal(reply(guard, { event: { kind: "tool" } }), undefined);
+  assert.deepEqual(guard.verificationForRun("missing"), { status: "none" });
 });
 
 test("ignores terminal process results that were not started by this run", () => {

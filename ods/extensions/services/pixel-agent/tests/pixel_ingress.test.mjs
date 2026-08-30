@@ -41,6 +41,7 @@ const DIR = path.join(os.tmpdir(), `pixel-ingress-test-${process.pid}-${Date.now
 fs.mkdirSync(DIR, { recursive: true });
 const SOCKET = path.join(DIR, "pixel-ingress.sock");
 const TOKEN = "test-gateway-token-0123456789abcdef";
+const TEST_RUN_ID = "chatcmpl_11111111-2222-4333-8444-555555555555";
 const EUID = typeof process.geteuid === "function"
   ? process.geteuid()
   : (typeof process.getuid === "function" ? process.getuid() : 0);
@@ -49,7 +50,7 @@ let socketCounter = 0;
 // A fake upstream gateway that records exactly what it receives and returns a
 // canned completion. Used to assert forced model, header stripping, hashed
 // user, and streaming/nonstream bounds.
-function fakeGateway({ onRequest } = {}) {
+function fakeGateway({ onRequest, onVerificationRequest, verification = { status: "none" } } = {}) {
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -60,6 +61,12 @@ function fakeGateway({ onRequest } = {}) {
         headers: req.headers,
         body: body ? JSON.parse(body) : null,
       };
+      if (req.url === "/pixel-ods/verification") {
+        if (onVerificationRequest) onVerificationRequest(captured);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(verification));
+        return;
+      }
       if (onRequest) onRequest(captured);
       if (req.url === "/pixel-ods/abort") {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -68,12 +75,12 @@ function fakeGateway({ onRequest } = {}) {
       }
       if (req.headers.accept === "text/event-stream") {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.write("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n");
+        res.write(`data: ${JSON.stringify({ id: TEST_RUN_ID, model: "openclaw/default", created: 1, choices: [{ delta: { content: "a" } }] })}\n\n`);
         res.end("data: [DONE]\n\n");
         return;
       }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ id: "x", choices: [{ message: { content: "ok" } }] }));
+      res.end(JSON.stringify({ id: TEST_RUN_ID, choices: [{ message: { content: "ok" } }] }));
     });
   });
   return new Promise((resolve) => {
@@ -502,6 +509,58 @@ test("streaming request forwards accept and returns SSE", async () => {
   }
 });
 
+test("non-stream response replaces a false success with host verification truth", async () => {
+  let verificationRequest;
+  const safeText = "Pixel could not complete this task because verification failed.";
+  const gw = await fakeGateway({
+    verification: { status: "failed", text: safeText },
+    onVerificationRequest: (value) => (verificationRequest = value),
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "claim success" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      const completion = JSON.parse(response.body);
+      assert.equal(completion.id, TEST_RUN_ID);
+      assert.equal(completion.choices[0].message.content, safeText);
+      assert.equal(completion.choices[0].finish_reason, "stop");
+      assert.deepEqual(verificationRequest.body, { runId: TEST_RUN_ID });
+      assert.equal(verificationRequest.headers.authorization, `Bearer ${TOKEN}`);
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("streaming response is buffered and replaced before false content is released", async () => {
+  const safeText = "Pixel stopped before verification reached a terminal result.";
+  const gw = await fakeGateway({ verification: { status: "pending", text: safeText } });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ stream: true, messages: [{ role: "user", content: "hi" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers["content-type"], "text/event-stream");
+      assert.ok(response.body.includes(safeText));
+      assert.equal(response.body.includes('"content":"a"'), false);
+      assert.ok(response.body.includes("[DONE]"));
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("closing a silent downstream stream closes the active gateway transport", async () => {
   let markUpstreamClosed;
   const upstreamClosed = new Promise((resolve) => {
@@ -590,12 +649,21 @@ test("core gateway transport preserves a delayed response body", async () => {
 test("chat waits for delayed gateway headers after the loopback connection succeeds", async () => {
   const armedTimeouts = [];
   const deps = {
-    fetch: (_url, options) =>
+    fetch: (url, options) =>
       new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
+          if (url.endsWith("/pixel-ods/verification")) {
+            resolve(
+              new Response(JSON.stringify({ status: "none" }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              })
+            );
+            return;
+          }
           resolve(
             new Response(
-              JSON.stringify({ id: "slow", choices: [{ message: { content: "ok" } }] }),
+              JSON.stringify({ id: TEST_RUN_ID, choices: [{ message: { content: "ok" } }] }),
               { status: 200, headers: { "Content-Type": "application/json" } }
             )
           );

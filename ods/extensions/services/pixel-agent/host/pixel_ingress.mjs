@@ -23,7 +23,10 @@ import { pathToFileURL } from "node:url";
 
 const MAX_BODY = 2 * 1024 * 1024; // 2 MiB request body cap
 const MAX_NONSTREAM_RESPONSE = 2 * 1024 * 1024; // 2 MiB non-stream response cap
+const MAX_STREAM_RESPONSE = 4 * 1024 * 1024; // 4 MiB buffered SSE cap
 const MAX_SSE_LINE = 1024 * 1024; // 1 MiB stream line cap
+const MAX_VERIFICATION_RESPONSE = 4096;
+const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONNECT_TIMEOUT_MS = 5000;
 // OpenClaw's ODS-owned provider is capped at 30 minutes. Keep the private
 // ingress one bounded step outside that ceiling so CPU-only prefill can finish
@@ -588,47 +591,137 @@ async function readBounded(stream, limit) {
   }
 }
 
-async function streamSse(stream, res) {
-  const reader = stream.getReader();
-  let buffered = Buffer.alloc(0);
+function parseVerificationResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(502, "verification state unavailable");
+  }
+  const status = value.status;
+  if (!["none", "passed", "pending", "failed"].includes(status)) {
+    throw new HttpError(502, "verification state unavailable");
+  }
+  const expectedKeys = status === "pending" || status === "failed"
+    ? ["status", "text"]
+    : ["status"];
+  if (
+    Object.keys(value).sort().join("\n") !== expectedKeys.sort().join("\n") ||
+    ((status === "pending" || status === "failed") &&
+      (typeof value.text !== "string" ||
+        value.text.length < 1 ||
+        value.text.length > 2048 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value.text)))
+  ) {
+    throw new HttpError(502, "verification state unavailable");
+  }
+  return value;
+}
+
+async function verificationForRun(runId, token, gatewayPort, signal, deps) {
+  if (typeof runId !== "string" || !OPENAI_RUN_ID.test(runId)) {
+    throw new HttpError(502, "invalid upstream response");
+  }
+  const response = await deps.fetch(
+    `http://127.0.0.1:${gatewayPort}/pixel-ods/verification`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ runId }),
+      redirect: "error",
+      signal,
+    }
+  );
+  if (response.status < 200 || response.status >= 300) {
+    await drain(response.body);
+    throw new HttpError(502, "verification state unavailable");
+  }
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    await drain(response.body);
+    throw new HttpError(502, "verification state unavailable");
+  }
+  let parsed;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffered = Buffer.concat([buffered, Buffer.from(value)]);
-      for (;;) {
-        const newline = buffered.indexOf(0x0a);
-        if (newline === -1) break;
-        const line = buffered.subarray(0, newline + 1);
-        if (line.length - 1 > MAX_SSE_LINE) {
-          throw new HttpError(502, "upstream stream failed");
-        }
-        if (!res.write(line)) {
-          await new Promise((resolve, reject) => {
-            res.once("drain", resolve);
-            res.once("error", reject);
-          });
-        }
-        buffered = buffered.subarray(newline + 1);
-      }
-      if (buffered.length > MAX_SSE_LINE) {
+    parsed = JSON.parse((await readBounded(response.body, MAX_VERIFICATION_RESPONSE)).toString("utf8"));
+  } catch {
+    throw new HttpError(502, "verification state unavailable");
+  }
+  return parseVerificationResponse(parsed);
+}
+
+function applyVerificationToCompletion(completion, verification) {
+  if (!verification.text) return completion;
+  return {
+    ...completion,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: verification.text },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
+function parseBufferedSse(body) {
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw new HttpError(502, "upstream stream failed");
+  }
+  let runId;
+  let model = "openclaw/default";
+  let created = Math.floor(Date.now() / 1000);
+  let sawDone = false;
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (Buffer.byteLength(line, "utf8") > MAX_SSE_LINE) {
+      throw new HttpError(502, "upstream stream failed");
+    }
+    if (!line || line.startsWith(":")) continue;
+    if (!line.startsWith("data:")) throw new HttpError(502, "upstream stream failed");
+    const data = line.slice(5).trimStart();
+    if (data === "[DONE]") {
+      sawDone = true;
+      continue;
+    }
+    let event;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      throw new HttpError(502, "upstream stream failed");
+    }
+    if (typeof event?.id === "string") {
+      if (!OPENAI_RUN_ID.test(event.id) || (runId && event.id !== runId)) {
         throw new HttpError(502, "upstream stream failed");
       }
+      runId = event.id;
     }
-    if (buffered.length) res.write(buffered);
-    res.end();
-  } catch {
-    if (!res.destroyed && !res.writableEnded) {
-      res.write('data: {"error":{"message":"upstream stream failed","type":"pixel_ingress_error"}}\n\n');
-      res.end("data: [DONE]\n\n");
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* already released */
-    }
+    if (typeof event?.model === "string" && event.model.length <= 256) model = event.model;
+    if (Number.isSafeInteger(event?.created) && event.created > 0) created = event.created;
   }
+  if (!sawDone || !runId) throw new HttpError(502, "upstream stream failed");
+  return { runId, model, created };
+}
+
+function verificationSse({ runId, model, created }, text) {
+  const envelope = (delta, finishReason) => JSON.stringify({
+    id: runId,
+    object: "chat.completion.chunk",
+    created,
+    model,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  });
+  return Buffer.from(
+    `data: ${envelope({ role: "assistant" }, null)}\n\n` +
+      `data: ${envelope({ content: text }, null)}\n\n` +
+      `data: ${envelope({}, "stop")}\n\n` +
+      "data: [DONE]\n\n",
+    "utf8"
+  );
 }
 
 async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps) {
@@ -673,7 +766,23 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
         "X-Accel-Buffering": "no",
       });
       res.flushHeaders?.();
-      await streamSse(upstream.body, res);
+      try {
+        const body = await readBounded(upstream.body, MAX_STREAM_RESPONSE);
+        const envelope = parseBufferedSse(body);
+        const verification = await verificationForRun(
+          envelope.runId,
+          token,
+          gatewayPort,
+          controller.signal,
+          deps
+        );
+        res.end(verification.text ? verificationSse(envelope, verification.text) : body);
+      } catch {
+        if (!res.destroyed && !res.writableEnded) {
+          res.write('data: {"error":{"message":"upstream stream failed","type":"pixel_ingress_error"}}\n\n');
+          res.end("data: [DONE]\n\n");
+        }
+      }
       return;
     }
 
@@ -683,17 +792,28 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
       return;
     }
     const body = await readBounded(upstream.body, MAX_NONSTREAM_RESPONSE);
+    let completion;
     try {
-      JSON.parse(body.toString("utf8"));
+      completion = JSON.parse(body.toString("utf8"));
     } catch {
       sendError(res, 502, "invalid upstream response");
       return;
     }
+    const verification = await verificationForRun(
+      completion?.id,
+      token,
+      gatewayPort,
+      controller.signal,
+      deps
+    );
+    const responseBody = verification.text
+      ? Buffer.from(JSON.stringify(applyVerificationToCompletion(completion, verification)), "utf8")
+      : body;
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
     });
-    res.end(body);
+    res.end(responseBody);
   } catch (error) {
     if (!res.headersSent) {
       const message = error instanceof HttpError ? error.message : "upstream unavailable";
