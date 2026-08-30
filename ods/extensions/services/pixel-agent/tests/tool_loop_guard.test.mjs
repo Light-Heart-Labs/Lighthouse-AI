@@ -16,6 +16,9 @@ import {
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   PRIVATE_URL_REQUEST_REASON,
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
+  RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
+  VERIFICATION_FAILED_DELIVERY_PREFIX,
+  VERIFICATION_PENDING_DELIVERY_PREFIX,
   WEB_BUDGET_EXHAUSTED_REASON,
   WEB_FETCH_REPEAT_PIVOT_REASON,
   WEB_FETCH_TRUNCATED_PIVOT_REASON,
@@ -26,6 +29,7 @@ import {
   createToolLoopGuardRegistry,
   githubReadmeUrl,
   textRequestsPrivateUrlAccess,
+  userMessageAuthorizesRecursiveDelete,
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
@@ -86,6 +90,16 @@ function afterCall(guard, toolName, overrides = {}) {
     ...(overrides.context ?? {}),
   };
   guard.afterToolCall(event, context, "pixel");
+}
+
+function reply(guard, overrides = {}) {
+  const event = {
+    runId: "run-1",
+    kind: "final",
+    payload: { text: "Model claimed success.", metadata: { preserved: true } },
+    ...(overrides.event ?? {}),
+  };
+  return guard.replyPayloadSending(event);
 }
 
 test("allows bounded web research then returns a terminal final-answer instruction", () => {
@@ -536,6 +550,37 @@ test("normalizes sandbox-root file paths and exec workdirs", () => {
   );
 });
 
+test("blocks recursive forced deletion unless the owner explicitly names the workspace tree", () => {
+  const guard = createToolLoopGuard();
+  const destructive = {
+    command: "rm -rf /workspace/project && mkdir /workspace/project",
+    workdir: "/workspace",
+  };
+
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Create the implementation from scratch in /workspace/project." }
+  );
+  assert.equal(
+    call(guard, "exec", { event: { params: destructive } }).blockReason,
+    RECURSIVE_DELETE_REQUIRES_OWNER_REASON
+  );
+
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Delete the directory /workspace/project recursively." }
+  );
+  assert.deepEqual(call(guard, "exec", { event: { params: destructive } }), {
+    params: { command: destructive.command },
+  });
+  assert.equal(
+    userMessageAuthorizesRecursiveDelete([], "Remove /workspace/project and all its contents."),
+    true
+  );
+});
+
 test("wraps exec in exact run cancellation control without weakening retry detection", () => {
   const prepared = [];
   const guard = createToolLoopGuard({
@@ -809,6 +854,59 @@ test("a passing background verification clears prior process failures", () => {
     }
   }
   assert.equal(call(guard, "exec", { event: { params } }), undefined);
+});
+
+test("final delivery replaces a model claim while verification is pending", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    command: "python3 -m unittest -v",
+    workdir: "/workspace/project",
+    background: true,
+  };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", {
+    event: {
+      params,
+      result: { isError: false, details: { status: "running", sessionId: "pending-test" } },
+    },
+  });
+
+  const terminal = reply(guard);
+  assert.ok(terminal.payload.text.startsWith(VERIFICATION_PENDING_DELIVERY_PREFIX));
+  assert.match(terminal.payload.text, /python3 -m unittest -v/);
+  assert.match(terminal.payload.text, /\/workspace\/project/);
+  assert.deepEqual(terminal.payload.metadata, { preserved: true });
+});
+
+test("final delivery replaces a model claim after failed verification", () => {
+  const guard = createToolLoopGuard();
+  const params = { command: "python3 -m unittest -v", workdir: "/workspace/project" };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", {
+    event: { params, result: { isError: true, details: { exitCode: 1 } } },
+  });
+
+  const terminal = reply(guard);
+  assert.ok(terminal.payload.text.startsWith(VERIFICATION_FAILED_DELIVERY_PREFIX));
+  assert.match(terminal.payload.text, /python3 -m unittest -v/);
+  assert.doesNotMatch(terminal.payload.text, /claimed success/i);
+});
+
+test("final delivery preserves a model response after passing verification", () => {
+  const guard = createToolLoopGuard();
+  const params = { command: "python3 -m unittest -v", workdir: "/workspace/project" };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", {
+    event: { params, result: { isError: false, details: { exitCode: 0 } } },
+  });
+
+  assert.equal(reply(guard), undefined);
+});
+
+test("verification delivery hook ignores non-final payloads and unknown runs", () => {
+  const guard = createToolLoopGuard();
+  assert.equal(reply(guard), undefined);
+  assert.equal(reply(guard, { event: { kind: "tool" } }), undefined);
 });
 
 test("ignores terminal process results that were not started by this run", () => {

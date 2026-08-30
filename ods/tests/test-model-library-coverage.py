@@ -51,7 +51,11 @@ def _agent_viable_for_release(model, host=None):
     if str(model.get("source") or "").strip().lower() not in {"", "curated"}:
         return False
     compatibility = model.get("app_compatibility") or {}
-    for entry in compatibility.values():
+    for key, entry in compatibility.items():
+        # Pixel has a stricter real tool-loop verdict and its own selector.
+        # Generic release viability remains the app/Talk compatibility view.
+        if key == "pixel_agent":
+            continue
         entry = entry or {}
         status = str((entry or {}).get("status") or "").strip().lower()
         if status not in BLOCKING_AGENT_STATUSES or _has_runtime_scope(entry):
@@ -740,13 +744,16 @@ def test_ministral3_8b_is_recommended_after_six_host_validation():
     compatibility = model["app_compatibility"]
     assert model.get("install_recommendation") is True
     assert {
-        app: entry["status"] for app, entry in compatibility.items()
+        app: entry["status"]
+        for app, entry in compatibility.items()
+        if app != "pixel_agent"
     } == {
         "openai_chat": "verified",
         "hermes_talk": "verified",
         "perplexica": "verified",
         "agent_viability": "verified",
     }
+    assert compatibility["pixel_agent"]["status"] == "not_agent_viable"
     evidence = compatibility["agent_viability"]
     assert "2026-07-27T06-31-36Z" in evidence["evidence"]
     assert evidence["productSha"] == "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a"
@@ -1032,3 +1039,24 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
     assert expected_switchboard_only <= set(by_id)
     for model_id in expected_switchboard_only:
         assert by_id[model_id].get("install_recommendation") is False, model_id
+
+
+def test_real_pixel_failures_are_separate_from_generic_agent_evidence():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    expected_sessions = {
+        "nvidia-nemotron3-nano-4b-q4": "nvidia-nemotron-3-nano-4b",
+        "ministral3-8b-instruct-2512-q4": "ministral-3-8b-instruct-2512",
+        "qwen2.5-coder-3b-128k-q4": "qwen-25-coder-3b-128k",
+        "qwen3.5-4b-q4": "qwen-35-4b",
+    }
+
+    for model_id, evidence_anchor in expected_sessions.items():
+        compatibility = by_id[model_id]["app_compatibility"]
+        assert compatibility["agent_viability"]["status"] == "verified"
+        pixel = compatibility["pixel_agent"]
+        assert pixel["status"] == "not_agent_viable"
+        assert pixel["hostScope"] == ["windows-laptop"]
+        assert pixel["productSha"] == "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b"
+        assert pixel["pixelSha"] == "f1f811d02bffd5a1589eb6feb34323f6dadf7832"
+        assert pixel["evidence"].endswith(f"#{evidence_anchor}")

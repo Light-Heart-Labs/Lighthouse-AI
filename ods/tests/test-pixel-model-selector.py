@@ -48,7 +48,13 @@ def run_selector(catalog: Path, *extra: str) -> subprocess.CompletedProcess[str]
     )
 
 
-def catalog_model(model_id: str, status: str, *, size_mb: int) -> dict[str, object]:
+def catalog_model(
+    model_id: str,
+    pixel_status: str | None,
+    *,
+    size_mb: int,
+    generic_status: str = "verified",
+) -> dict[str, object]:
     return {
         "id": model_id,
         "name": model_id,
@@ -61,21 +67,21 @@ def catalog_model(model_id: str, status: str, *, size_mb: int) -> dict[str, obje
         "vram_required_gb": 4,
         "context_length": 65536,
         "app_compatibility": {
-            "agent_viability": {"status": status},
+            "agent_viability": {"status": generic_status},
+            **(
+                {"pixel_agent": {"status": pixel_status}}
+                if pixel_status is not None
+                else {}
+            ),
         },
     }
 
 
 def main() -> int:
     result = run_selector(CATALOG)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    selected = payload["selected"]
-    assert selected["id"] == "qwen3.5-4b-q4", selected
-    assert selected["agent_viability_status"] == "verified"
-    assert selected["size_mb"] > 1221
-    assert payload["policy"].endswith("+pixel-agent-viability-v1")
-    assert "overrides --tier 0's 1221MB model size preference" in payload["reason"]
+    assert result.returncode == 2
+    assert not result.stdout.strip()
+    assert "no explicitly verified Pixel agent model fits" in result.stderr
 
     with tempfile.TemporaryDirectory() as directory:
         catalog = Path(directory) / "catalog.json"
@@ -92,7 +98,11 @@ def main() -> int:
         )
         result = run_selector(catalog)
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["selected"]["id"] == "verified-larger"
+        payload = json.loads(result.stdout)
+        assert payload["selected"]["id"] == "verified-larger"
+        assert payload["selected"]["pixel_agent_status"] == "verified"
+        assert payload["policy"].endswith("+pixel-agent-capability-v1")
+        assert "overrides --tier 0's 1221MB model size preference" in payload["reason"]
 
         catalog.write_text(
             json.dumps(
@@ -109,6 +119,25 @@ def main() -> int:
         assert not result.stdout.strip()
         assert "no explicitly verified Pixel agent model fits" in result.stderr
 
+        catalog.write_text(
+            json.dumps(
+                {
+                    "models": [
+                        catalog_model(
+                            "generic-agent-only",
+                            None,
+                            size_mb=900,
+                            generic_status="verified",
+                        ),
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = run_selector(catalog)
+        assert result.returncode == 2
+        assert "no explicitly verified Pixel agent model fits" in result.stderr
+
     detection = (ROOT / "installers" / "phases" / "02-detection.sh").read_text(
         encoding="utf-8"
     )
@@ -120,7 +149,7 @@ def main() -> int:
     assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
     assert "selected Hermes because no catalog-verified agent model fits" in features
 
-    print("Pixel model selector tests passed: 4")
+    print("Pixel model selector tests passed: 5")
     return 0
 
 

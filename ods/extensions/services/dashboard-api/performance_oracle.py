@@ -404,20 +404,21 @@ def _app_compatibility_payload_key(key: Any) -> str:
     if not raw:
         return ""
     aliases = {
-        "agent_viability": "agentViability",
-        "hermes_talk": "hermesTalk",
-        "openai_chat": "openaiChat",
+        "agent-viability": "agentViability",
+        "hermes-talk": "hermesTalk",
+        "openai-chat": "openaiChat",
+        "pixel-agent": "pixelAgent",
     }
     if raw in aliases:
         return aliases[raw]
-    parts = [part for part in raw.split("_") if part]
+    parts = [part for part in raw.split("-") if part]
     if not parts:
         return ""
     return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
 
 
 def _app_compatibility_default_label(key: Any) -> str:
-    parts = [part for part in normalize_key(str(key or "")).split("_") if part]
+    parts = [part for part in normalize_key(str(key or "")).split("-") if part]
     if not parts:
         return "App compatibility untested"
     acronyms = {"api": "API", "llm": "LLM", "ui": "UI"}
@@ -458,6 +459,7 @@ def model_app_compatibility(
         "openaiChat": _app_compatibility_entry(raw.get("openai_chat"), "Direct chat untested", runtime_context),
         "hermesTalk": hermes_talk,
         "agentViability": _agent_viability_entry(raw.get("agent_viability"), hermes_talk, runtime_context),
+        "pixelAgent": _app_compatibility_entry(raw.get("pixel_agent"), "Pixel agent untested", runtime_context),
     }
     for raw_key, raw_value in raw.items():
         payload_key = _app_compatibility_payload_key(raw_key)
@@ -478,6 +480,11 @@ def model_app_compatibility(
         compatibility["agentViability"] = {
             "status": "not_agent_viable",
             "label": "Too slow for agents",
+            "reason": exact_speed_block["reason"],
+        }
+        compatibility["pixelAgent"] = {
+            "status": "not_agent_viable",
+            "label": "Too slow for Pixel",
             "reason": exact_speed_block["reason"],
         }
     return compatibility

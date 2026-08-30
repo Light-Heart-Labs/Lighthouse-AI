@@ -1708,9 +1708,24 @@ function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
       tone: 'amber',
     }
   }
+  const pixelAgent = getPixelAgentCompatibility(model)
+  if (isAgentViabilityBlocked(pixelAgent)) {
+    return {
+      label: 'Direct chat only',
+      detail: 'Pixel blocked',
+      tone: 'amber',
+    }
+  }
+  if (!isPixelAgentVerified(pixelAgent)) {
+    return {
+      label: 'Pixel unverified',
+      detail: 'Test before default',
+      tone: 'amber',
+    }
+  }
   const talkCompatibility = getHermesTalkCompatibility(model)
   if (isHermesTalkVerified(talkCompatibility)) {
-    return { label: 'Talk ready', detail: model.recommended || model.status === 'loaded' ? 'Best' : 'Verified', tone: 'green' }
+    return { label: 'Pixel ready', detail: model.recommended || model.status === 'loaded' ? 'Best' : 'Verified', tone: 'green' }
   }
   if (model.recommended || model.status === 'loaded') {
     return { label: model.fitLabel || 'Fits GPU', detail: 'Best', tone: 'green' }
@@ -1729,6 +1744,10 @@ function getOpenAiChatCompatibility(model) {
 
 function getAgentViabilityCompatibility(model) {
   return model?.appCompatibility?.agentViability || getHermesTalkCompatibility(model)
+}
+
+function getPixelAgentCompatibility(model) {
+  return model?.appCompatibility?.pixelAgent || null
 }
 
 function getBlockedAppCompatibility(model) {
@@ -1779,6 +1798,7 @@ const CORE_MODEL_COMPATIBILITY_KEYS = new Set([
   'agentViability',
   'hermesTalk',
   'openaiChat',
+  'pixelAgent',
 ])
 
 function isHermesTalkBlocked(compatibility) {
@@ -1789,6 +1809,11 @@ function isHermesTalkBlocked(compatibility) {
 function isHermesTalkVerified(compatibility) {
   const status = String(compatibility?.status || '').toLowerCase()
   return ['supported', 'verified'].includes(status)
+}
+
+function isPixelAgentVerified(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return ['pixel_agent_viable', 'supported', 'verified'].includes(status)
 }
 
 function getSpeedDisplay(model) {

@@ -56,6 +56,15 @@ export const CODING_RETRY_EXHAUSTED_REASON =
 export const CODING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another coding tool after the repeated-command limit was reached. Start a fresh message to continue from the preserved workspace with a different approach.";
 
+export const VERIFICATION_PENDING_DELIVERY_PREFIX =
+  "Pixel stopped before the verification process reached a terminal result, so success is unverified. The workspace is preserved; ask Pixel to continue the run or inspect the process.";
+
+export const VERIFICATION_FAILED_DELIVERY_PREFIX =
+  "Pixel could not complete this task successfully because the latest verification check failed. The workspace is preserved; ask Pixel to continue with a focused repair.";
+
+export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
+  "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
+
 export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
   "Pixel could not establish the exact cancellation boundary for this command. Do not call another tool in this turn; explain that execution is temporarily unavailable.";
 
@@ -412,6 +421,28 @@ function currentUserText(messages, prompt = undefined) {
   return messageContentText(userMessage?.content);
 }
 
+export function userMessageAuthorizesRecursiveDelete(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text) return false;
+  return /\b(?:delete|remove|erase|wipe)\s+(?:the\s+)?(?:directory|folder|tree|workspace\s+tree)?\s*(?:at\s+)?["'`]?\/workspace(?:\/[A-Za-z0-9._/-]+)?["'`]?\s+(?:recursively|and\s+(?:all\s+)?(?:its\s+)?contents)\b/i.test(
+    text
+  );
+}
+
+function requestsRecursiveForcedDelete(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+  const command = params.command;
+  if (typeof command !== "string" || !command.trim()) return false;
+  const invocations = command.matchAll(/(?:^|[;&|]\s*)rm\s+((?:(?:--[A-Za-z-]+|-[A-Za-z]+)\s+)+)/gim);
+  for (const match of invocations) {
+    const options = match[1];
+    const recursive = /--recursive\b/i.test(options) || /(?:^|\s)-[A-Za-z]*[rR][A-Za-z]*(?:\s|$)/.test(options);
+    const forced = /--force\b/i.test(options) || /(?:^|\s)-[A-Za-z]*f[A-Za-z]*(?:\s|$)/.test(options);
+    if (recursive && forced) return true;
+  }
+  return false;
+}
+
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return [];
@@ -589,9 +620,8 @@ export function createToolLoopGuard({
 } = {}) {
   const effective = normalizedLimits(limits);
   // This intentionally stays plugin-local. OpenClaw's runContext write API is
-  // disabled for this non-bundled hook path, while its agent_end hook requires
-  // broader conversation access. Bound the cache itself instead of requesting
-  // that permission merely for cleanup.
+  // disabled for this non-bundled hook path. Bound the cache itself instead of
+  // requesting conversation access merely for cleanup.
   const runs = new Map();
   const activeUsers = new Map();
 
@@ -639,6 +669,8 @@ export function createToolLoopGuard({
         failedExec: new Map(),
         failedVerificationAttempts: 0,
         latestVerificationStatus: undefined,
+        latestVerificationFingerprint: undefined,
+        recursiveDeleteAuthorized: false,
         pendingExecSessions: new Map(),
         execOriginalByWrapped: new Map(),
         verificationOriginalByWrapped: new Map(),
@@ -664,6 +696,14 @@ export function createToolLoopGuard({
 
     if (state?.clientCancelled) {
       return { block: true, blockReason: CLIENT_CANCELLED_REASON };
+    }
+
+    if (
+      toolName === "exec" &&
+      requestsRecursiveForcedDelete(normalizedParams ?? event?.params) &&
+      !state?.recursiveDeleteAuthorized
+    ) {
+      return { block: true, blockReason: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
     }
 
     if (state?.privateNetworkPrompt) {
@@ -924,6 +964,12 @@ export function createToolLoopGuard({
     }
     if (typeof runId === "string" && runId) {
       const state = stateFor(runId);
+      if (currentUserText(event?.messages, event?.prompt)) {
+        state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
+          event?.messages,
+          event?.prompt
+        );
+      }
       if (!state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
         if (requirements.length > 0) {
@@ -1059,6 +1105,9 @@ export function createToolLoopGuard({
       state.verificationOriginalByWrapped.delete(observedFingerprint);
     }
     if (!fingerprint && !verificationFingerprint) return;
+    if (verificationFingerprint) {
+      state.latestVerificationFingerprint = verificationFingerprint;
+    }
     const pendingSessionId = runningExecSessionId(event);
     if (pendingSessionId) {
       if (state.pendingExecSessions.size >= MAX_PENDING_EXEC_SESSIONS) {
@@ -1089,9 +1138,45 @@ export function createToolLoopGuard({
     }
   }
 
+  function verificationCommandLabel(fingerprint) {
+    if (typeof fingerprint !== "string" || !fingerprint) return "";
+    try {
+      const [command, workdir] = JSON.parse(fingerprint);
+      if (typeof command !== "string" || !command) return "";
+      return typeof workdir === "string" && workdir
+        ? ` Verification command: ${command} (in ${workdir}).`
+        : ` Verification command: ${command}.`;
+    } catch {
+      return "";
+    }
+  }
+
+  function replyPayloadSending(event) {
+    if (event?.kind !== "final") return undefined;
+    const runId = event?.runId;
+    if (typeof runId !== "string" || !runId) return undefined;
+    const state = runs.get(runId);
+    if (!state) return undefined;
+    const prefix =
+      state.latestVerificationStatus === "pending"
+        ? VERIFICATION_PENDING_DELIVERY_PREFIX
+        : state.latestVerificationStatus === "failed"
+          ? VERIFICATION_FAILED_DELIVERY_PREFIX
+          : undefined;
+    if (!prefix) return undefined;
+    return {
+      payload: {
+        ...(event.payload ?? {}),
+        text: `${prefix}${verificationCommandLabel(state.latestVerificationFingerprint)}`,
+      },
+      reason: "Pixel replaced an unverified terminal reply with host-authoritative verification truth.",
+    };
+  }
+
   return {
     beforeToolCall,
     afterToolCall,
+    replyPayloadSending,
     observeRun,
     abortUserRun,
     verificationStatus: (runId) => runs.get(runId)?.latestVerificationStatus,

@@ -176,6 +176,11 @@ export default definePluginEntry({
     api.on("after_tool_call", (event, context) =>
       toolLoopGuard.afterToolCall(event, context, AGENT_ID)
     );
+    // Delivery rewriting is limited to host-authoritative failed or pending
+    // verification state. It neither requests nor receives conversation data.
+    api.on("reply_payload_sending", (event) =>
+      toolLoopGuard.replyPayloadSending(event)
+    );
     api.registerHttpRoute({
       path: "/pixel-ods/abort",
       auth: "gateway",

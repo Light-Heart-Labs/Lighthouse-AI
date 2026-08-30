@@ -685,6 +685,44 @@ test('allows explicit Talk-incompatible models to run with an agent-readiness wa
   expect(deleteButton).toBeEnabled()
 })
 
+test('distinguishes generic agent compatibility from real Pixel qualification', () => {
+  useModelsMock.mockReturnValue(baseState({
+    models: [
+      model({
+        id: 'pixel-blocked',
+        name: 'Pixel Blocked',
+        appCompatibility: {
+          agentViability: { status: 'verified' },
+          pixelAgent: { status: 'not_agent_viable' },
+        },
+      }),
+      model({
+        id: 'pixel-untested',
+        name: 'Pixel Untested',
+        appCompatibility: {
+          agentViability: { status: 'verified' },
+        },
+      }),
+      model({
+        id: 'pixel-ready',
+        name: 'Pixel Ready',
+        appCompatibility: {
+          agentViability: { status: 'verified' },
+          hermesTalk: { status: 'verified' },
+          pixelAgent: { status: 'verified' },
+        },
+      }),
+    ],
+  }))
+
+  renderModels()
+
+  expect(screen.getByText('Pixel blocked')).toBeInTheDocument()
+  expect(screen.getByText('Pixel unverified')).toBeInTheDocument()
+  expect(screen.getByText('Test before default')).toBeInTheDocument()
+  expect(screen.getByText('Pixel ready', { selector: 'span' })).toBeInTheDocument()
+})
+
 test('blocks direct-chat-incompatible models before Run', () => {
   const loadModel = vi.fn()
   const deleteModel = vi.fn()

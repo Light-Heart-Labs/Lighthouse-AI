@@ -19,7 +19,7 @@ from typing import Any
 
 VRAM_FIT_TOLERANCE_GB = 0.25
 POLICY = "context-aware-largest-capable-general-v1"
-PIXEL_AGENT_POLICY = "pixel-agent-viability-v1"
+PIXEL_AGENT_POLICY = "pixel-agent-capability-v1"
 SPARK_AARCH64_POLICY = "spark-aarch64-nv-ultra-a3b-v1"
 SPARK_AARCH64_MODEL_ID = "qwen3.6-35b-a3b-ud-q4"
 # Unified-memory hosts (Strix Halo SH_LARGE, future AMD/NV unified-memory
@@ -104,6 +104,11 @@ def normalize_model(raw: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(app_compatibility.get("agent_viability"), dict)
         else {}
     )
+    pixel_agent = (
+        app_compatibility.get("pixel_agent")
+        if isinstance(app_compatibility.get("pixel_agent"), dict)
+        else {}
+    )
     return {
         "id": str(model_id),
         "name": raw.get("name") or str(model_id),
@@ -121,6 +126,7 @@ def normalize_model(raw: dict[str, Any]) -> dict[str, Any] | None:
         "llama_server_image": raw.get("llama_server_image") or "",
         "install_recommendation": value_enabled(raw.get("install_recommendation", True)),
         "agent_viability_status": normalize_key(agent_viability.get("status")),
+        "pixel_agent_status": normalize_key(pixel_agent.get("status")),
         "runtime_profiles": raw.get("runtime_profiles") if isinstance(raw.get("runtime_profiles"), list) else [],
     }
 
@@ -276,10 +282,10 @@ def install_recommendation_allowed(model: dict[str, Any]) -> bool:
 
 
 def pixel_agent_ready(model: dict[str, Any]) -> bool:
-    """Require an explicit curated-catalog agent viability verdict for Pixel."""
-    return normalize_key(model.get("agent_viability_status")) in {
+    """Require an explicit real-Pixel capability verdict for the Pixel route."""
+    return normalize_key(model.get("pixel_agent_status")) in {
         "verified",
-        "agent-viable",
+        "pixel-agent-viable",
     }
 
 
@@ -522,7 +528,7 @@ def main() -> int:
     parser.add_argument(
         "--agent-ready-only",
         action="store_true",
-        help="Select only models with an explicit verified agent viability verdict; "
+        help="Select only models with an explicit verified Pixel capability verdict; "
              "used for the Pixel default route.",
     )
     parser.add_argument("--env", action="store_true", help="print shell assignments")
@@ -576,7 +582,7 @@ def main() -> int:
         source = "catalog_runtime_profile_pre_download" if selected.get("_runtime_profile") else "catalog_fit_pre_download"
         reason = recommendation_reason(selected, capacity_gb, memory_label, args.backend, confidence)
         if args.agent_ready_only:
-            reason += " Pixel default selection requires an explicit verified agent viability verdict."
+            reason += " Pixel default selection requires an explicit verified Pixel capability verdict."
         if args.max_size_mb > 0 and size_within_ceiling(selected, args.max_size_mb):
             reason += (
                 f" Bounded by --tier {args.tier}'s model size ceiling "
@@ -585,7 +591,7 @@ def main() -> int:
             )
         elif args.max_size_mb > 0:
             reason += (
-                f" Pixel agent readiness overrides --tier {args.tier}'s "
+                f" Pixel capability readiness overrides --tier {args.tier}'s "
                 f"{args.max_size_mb:g}MB model size preference because no verified "
                 "agent model fits beneath it."
             )

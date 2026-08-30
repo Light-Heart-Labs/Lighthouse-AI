@@ -619,6 +619,16 @@
           "productSha": "651e048b61d9a5cc2133f342014b9ceb64800d41",
           "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
           "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "pixel_agent": {
+          "status": "not_agent_viable",
+          "label": "Pixel tool loop failed on Windows",
+          "reason": "A real Pixel coding turn created an incorrect TTL/LRU cache, retained two independently reproduced test failures, made no useful repair, and failed to provide a concise honest terminal result. Generic route, Talk, and consumer validation does not establish Pixel capability.",
+          "evidence": "docs/pixel/model-capability-qualification.md#nvidia-nemotron-3-nano-4b",
+          "recordedAt": "2026-08-30T06:30:00Z",
+          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
+          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"]
         }
       },
       "install_recommendation": true
@@ -996,6 +1006,16 @@
           "productSha": "7629cd20c0ec75a274187aea52b8cc9ad6fa2a2a",
           "harnessSha": "19d43e6f9f2533e8768ed85b33de9f4ace232129",
           "hostScope": ["tower2", "strix-halo", "spark", "m5-mbp", "windows-laptop", "strixy"]
+        },
+        "pixel_agent": {
+          "status": "not_agent_viable",
+          "label": "Pixel tool loop failed on Windows",
+          "reason": "A real Pixel coding turn wrote tests to the wrong directory, ran the wrong verification command, hallucinated a filename correction after an import failure, emitted invalid and ineffective edits, and recursively deleted the requested project tree without owner authorization.",
+          "evidence": "docs/pixel/model-capability-qualification.md#ministral-3-8b-instruct-2512",
+          "recordedAt": "2026-08-30T06:50:00Z",
+          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
+          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"]
         }
       },
       "install_recommendation": true
@@ -1396,6 +1416,16 @@
           "recordedAt": "2026-07-24T18:30:00Z",
           "hostScope": ["windows-laptop"]
         },
+        "pixel_agent": {
+          "status": "not_agent_viable",
+          "label": "Pixel protocol failed on Windows",
+          "reason": "A real Pixel coding turn made no tool calls, created no files, and returned malformed mock example protocol text instead of operating the requested workspace.",
+          "evidence": "docs/pixel/model-capability-qualification.md#qwen-25-coder-3b-128k",
+          "recordedAt": "2026-08-30T06:25:00Z",
+          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
+          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"]
+        },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "label": "ODS Talk revalidation required on Tower2 and M5",
@@ -1636,6 +1666,16 @@
           "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
           "hostScope": ["windows-laptop"],
           "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "pixel_agent": {
+          "status": "not_agent_viable",
+          "label": "Pixel repair loop failed on Windows",
+          "reason": "A real Pixel coding turn reached a unittest NameError, made one ineffective duplicate edit, exhausted its bounded tool loop, and ended without rerunning verification or reporting the remaining failure honestly. Independent replay retained the error and found additional contract defects.",
+          "evidence": "docs/pixel/model-capability-qualification.md#qwen-35-4b",
+          "recordedAt": "2026-08-30T06:20:00Z",
+          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
+          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"]
         }
       },
       "runtime_profiles": [
