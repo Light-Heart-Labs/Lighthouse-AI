@@ -125,6 +125,38 @@ to completion, repair failures, and report only verified truth.
   broader contract defects.
 - Verdict: `not_agent_viable` on `windows-laptop` for the tested 24K runtime.
 
+### Qwen 3.5 9B
+
+- Pixel session: `551719d8-dfd9-421b-9da2-d1d3ecf30613`
+- A direct OpenAI-compatible request at 24K produced a valid structured `exec`
+  call in about 1.2 seconds, and the first full Pixel turn reached a real tool
+  action in about 9.5 seconds. This established responsive tool syntax, not a
+  successful agent workflow.
+- The 24K turn created the requested module and seven-test suite, ran the exact
+  unittest command in the background, and polled it to completion. Five tests
+  failed, and the final one-token response was stopped for length after the
+  accumulated prompt reached the active context envelope. The truth-preserving
+  ingress correctly exposed failure instead of the truncated model text.
+- ODS then atomically reconfigured the same artifact to its NVIDIA 8 GB 32K
+  Q8-KV profile. The model identity, llama.cpp `n_ctx=32768`, OpenClaw
+  `contextWindow=32768`, 4,096-token maximum output, sandbox persistence, and
+  post-restart service health were all confirmed before continuing.
+- The focused 32K continuation read the preserved source, performed two rewrite
+  and verification cycles, and polled canonical background-process sessions.
+  Its first rewrite caused seven `UnboundLocalError` results. Its second rewrite
+  restored execution, but independent exact replay still ran seven tests with
+  four failures. The implementation extended TTL on `get`, while the generated
+  tests inverted the required `clock() >= deadline` boundary and assumed
+  distinct deadlines for keys created at the same fake time.
+- The final model call was truncated after its per-turn generation budget, and
+  a third evidence-guided continuation was rejected by OpenClaw's context
+  precheck before any model or tool action because the preserved chat no longer
+  fit in 32K. The UI reported `Context overflow` and recommended a reset or a
+  larger-context model.
+- Verdict: `not_agent_viable` on `windows-laptop` for the tested 24K and 32K
+  profiles. The artifact remains suitable for direct chat; a 64K-or-larger
+  profile may be revalidated separately.
+
 ## Revalidation
 
 A model may be promoted only by a later evidence entry that names the exact ODS

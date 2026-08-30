@@ -628,7 +628,9 @@
           "recordedAt": "2026-08-30T06:30:00Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "hostScope": ["windows-laptop"]
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
         }
       },
       "install_recommendation": true
@@ -1015,7 +1017,9 @@
           "recordedAt": "2026-08-30T06:50:00Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "hostScope": ["windows-laptop"]
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
         }
       },
       "install_recommendation": true
@@ -1249,7 +1253,9 @@
           "recordedAt": "2026-08-30T08:10:12Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "hostScope": ["windows-laptop"]
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
         }
       },
       "runtime_profiles": [
@@ -1434,7 +1440,9 @@
           "recordedAt": "2026-08-30T06:25:00Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "hostScope": ["windows-laptop"]
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
@@ -1685,7 +1693,9 @@
           "recordedAt": "2026-08-30T06:20:00Z",
           "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
           "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "hostScope": ["windows-laptop"]
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
         }
       },
       "runtime_profiles": [
@@ -1779,6 +1789,20 @@
       "tokens_per_sec_estimate": 90,
       "llm_model_name": "qwen3.5-9b",
       "llama_server_image": null,
+      "app_compatibility": {
+        "pixel_agent": {
+          "status": "not_agent_viable",
+          "label": "Pixel repair loop exhausted 32K context on Windows",
+          "reason": "A real Pixel coding turn at 24K created and exercised a workspace but failed verification. After atomically reconfiguring the same model to the NVIDIA 8GB 32K profile, a focused continuation still left four of seven tests failing, extended TTL on get contrary to the owner contract, and inverted exact-boundary assertions. The next evidence-guided continuation was rejected by OpenClaw's context precheck because the preserved session no longer fit in 32K. Independent replay reproduced the four failures, so direct chat and structured tool support do not establish Pixel-agent viability for this profile.",
+          "evidence": "docs/pixel/model-capability-qualification.md#qwen-35-9b",
+          "recordedAt": "2026-08-30T08:36:00Z",
+          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
+          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "hostScope": ["windows-laptop"],
+          "expiresAt": "2026-09-30T00:00:00Z"
+        }
+      },
       "runtime_profiles": [
         {
           "id": "nvidia-8gb-32k-q8-kv",

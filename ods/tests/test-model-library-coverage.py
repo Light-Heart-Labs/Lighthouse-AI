@@ -1049,14 +1049,21 @@ def test_real_pixel_failures_are_separate_from_generic_agent_evidence():
         "ministral3-8b-instruct-2512-q4": "ministral-3-8b-instruct-2512",
         "qwen2.5-coder-3b-128k-q4": "qwen-25-coder-3b-128k",
         "qwen3.5-4b-q4": "qwen-35-4b",
+        "qwen3.5-9b-q4": "qwen-35-9b",
     }
+    generic_agent_verified = set(expected_sessions) - {"qwen3.5-9b-q4"}
 
     for model_id, evidence_anchor in expected_sessions.items():
         compatibility = by_id[model_id]["app_compatibility"]
-        assert compatibility["agent_viability"]["status"] == "verified"
+        if model_id in generic_agent_verified:
+            assert compatibility["agent_viability"]["status"] == "verified"
         pixel = compatibility["pixel_agent"]
         assert pixel["status"] == "not_agent_viable"
         assert pixel["hostScope"] == ["windows-laptop"]
         assert pixel["productSha"] == "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b"
         assert pixel["pixelSha"] == "f1f811d02bffd5a1589eb6feb34323f6dadf7832"
         assert pixel["evidence"].endswith(f"#{evidence_anchor}")
+
+    qwen_9b_reason = by_id["qwen3.5-9b-q4"]["app_compatibility"]["pixel_agent"]["reason"]
+    assert "32K" in qwen_9b_reason
+    assert "context precheck" in qwen_9b_reason
