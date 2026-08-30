@@ -975,7 +975,7 @@ handoff = (
 )
 assert handoff in phase
 assert phase.index(handoff) < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
-assert "PIXEL_SOURCE_REF \"90a3f33a9d8ca234248ce9546c1cf3827c1b4a8a\"" in phase
+assert "PIXEL_SOURCE_REF \"f1f811d02bffd5a1589eb6feb34323f6dadf7832\"" in phase
 ' "$ROOT/installers/phases/06-directories.sh"
 check python3 -c '
 import pathlib,sys
