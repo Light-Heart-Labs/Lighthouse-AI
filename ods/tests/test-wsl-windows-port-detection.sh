@@ -20,14 +20,25 @@ printf 'ODS_WINDOWS_PORT_SCAN_OK\r\n'
 STUB
 chmod +x "$tmp/powershell.exe"
 
+cat > "$tmp/docker" <<'STUB'
+#!/bin/bash
+if [[ "${1:-}" == "ps" && "$*" == *"publish=3000"* ]]; then
+    printf 'owned-container\n'
+elif [[ "${1:-}" == "inspect" && "${*: -1}" == "owned-container" ]]; then
+    printf '%s\n' "${INSTALL_DIR:?}"
+fi
+STUB
+chmod +x "$tmp/docker"
+
 export PATH="$tmp:$PATH"
 export ODS_TEST_PS_COUNT_FILE="$tmp/calls"
 export ODS_WSL_HOST_OVERRIDE=true
+export INSTALL_DIR="$tmp/install"
 SCRIPT_DIR="$ROOT_DIR"
 source "$ROOT_DIR/installers/lib/detection.sh"
 warn() { :; }
 _port_check_warned=false
-source <(sed -n '/^check_port_conflict\s*()\s*{/,/^}/p' \
+source <(sed -n '/^_phase04_current_install_owns_docker_port\s*()\s*{/,/^}/p;/^check_port_conflict\s*()\s*{/,/^}/p' \
     "$ROOT_DIR/installers/phases/04-requirements.sh")
 
 ods_windows_host_port_in_use 9000
@@ -41,6 +52,11 @@ ods_windows_host_port_in_use 3000
 check_port_conflict 9000
 [[ "$PORT_CONFLICT" == "true" ]]
 [[ "$PORT_CONFLICT_PROC" == "Windows host process" ]]
+if check_port_conflict 3000; then
+    printf 'FAIL: current installation container was reported as a conflict\n' >&2
+    exit 1
+fi
+[[ "$PORT_CONFLICT" == "false" ]]
 if check_port_conflict 9100; then
     printf 'FAIL: unexpected combined listener conflict on 9100\n' >&2
     exit 1
