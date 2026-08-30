@@ -560,8 +560,6 @@ echo "[contract] optional extension compose files are installer-gated"
 # Bundled optional/recommended services that ship compose.yaml must not enter
 # a Core Only install just because their compose file exists in the source tree.
 for spec in \
-  'ENABLE_RECOMMENDED:litellm' \
-  'ENABLE_RECOMMENDED:searxng' \
   'ENABLE_RECOMMENDED:token-spy' \
   'ENABLE_HERMES:hermes' \
   'ENABLE_HERMES:hermes-proxy' \
@@ -577,6 +575,19 @@ do
   svc="${spec##*:}"
   grep -qE "_sync_extension_compose +\"\\\$\\{${flag}:-[^}]*\\}\" +$svc\\b|_sync_extension_compose +\"\\\$\\{${flag}:-\\}\" +$svc\\b" "$features_phase" \
     || { echo "[FAIL] $svc compose is not gated by $flag in $features_phase"; exit 1; }
+done
+
+# Pixel is installed as the default agent independently of the Recommended
+# preset, but it requires LiteLLM and SearXNG. Protect the composite gate so a
+# Core Only install still excludes both services while either supported path
+# includes them.
+grep -Fq '_pixel_support_services="${ENABLE_RECOMMENDED:-false}"' "$features_phase" \
+  || { echo "[FAIL] Pixel support gate must inherit ENABLE_RECOMMENDED"; exit 1; }
+grep -Fq '[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && _pixel_support_services=true' "$features_phase" \
+  || { echo "[FAIL] Pixel support gate must include ENABLE_PIXEL_RUNTIME"; exit 1; }
+for svc in litellm searxng; do
+  grep -qE "_sync_extension_compose +\"\\\$_pixel_support_services\" +$svc\\b" "$features_phase" \
+    || { echo "[FAIL] $svc compose is not gated by Pixel or Recommended services in $features_phase"; exit 1; }
 done
 
 windows_plan="installers/windows/lib/service-plan.ps1"
