@@ -300,6 +300,22 @@ else
     fail "valid managed Pixel cleanup failed"
 fi
 
+write_fixture
+rm -f -- "$SYSTEMD_DIR/pixel-ingress.service" "$ETC_DIR/pixel-agent.env" \
+    "$LIBEXEC_DIR/ods-pixel-ingress.mjs"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    if [[ "$(sed -n '1p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
+        && "$(grep -c '^disable --now pixel-ingress.service$' "$SYSTEMCTL_LOG" || true)" == 0 \
+        && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" \
+        && ! -e "$SYSTEMD_DIR/openclaw-gateway.service" ]]; then
+        pass "interrupted first install with no ingress unit is safely removed"
+    else
+        fail "gateway-only interrupted install cleanup was incomplete or touched absent ingress"
+    fi
+else
+    fail "interrupted first install with no ingress unit could not be cleaned"
+fi
+
 write_active_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     pixel_install="$HOME_DIR/.local/share/pixel"

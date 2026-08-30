@@ -533,12 +533,16 @@ PY
     if [[ -e "$gateway_unit" || -e "$ingress_unit" ]]; then
         # Stop the ingress before the gateway it proxies to. Keep these as
         # separate calls so the shutdown order is an enforced contract rather
-        # than an argument-order hint to systemctl.
-        if ! timeout 30s sudo systemctl disable --now pixel-ingress.service; then
+        # than an argument-order hint to systemctl. An interrupted first install
+        # can have created the gateway before it creates ingress, so only ask
+        # systemd to disable unit files whose exact reviewed artifacts exist.
+        if [[ -e "$ingress_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now pixel-ingress.service; then
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
-        if ! timeout 30s sudo systemctl disable --now openclaw-gateway.service; then
+        if [[ -e "$gateway_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now openclaw-gateway.service; then
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
