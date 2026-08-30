@@ -22,11 +22,22 @@ ods_pixel_uninstall_managed() {
     local etc_dir="${ODS_PIXEL_UNINSTALL_ETC_DIR:-/etc/ods}"
     local libexec_dir="${ODS_PIXEL_UNINSTALL_LIBEXEC_DIR:-/usr/local/libexec}"
     local root_uid="${ODS_PIXEL_UNINSTALL_ROOT_UID:-0}"
+    local root_gid="${ODS_PIXEL_UNINSTALL_ROOT_GID:-0}"
     local gateway_unit="$systemd_dir/openclaw-gateway.service"
     local ingress_unit="$systemd_dir/pixel-ingress.service"
     local ingress_env="$etc_dir/pixel-agent.env"
     local ingress_program="$libexec_dir/ods-pixel-ingress.mjs"
     local source_program="$install_dir/extensions/services/pixel-agent/host/pixel_ingress.mjs"
+    local ops_user="pixel-ops-broker"
+    local ops_group="pixel-ops"
+    local ops_unit="$systemd_dir/pixel-ops-broker.service"
+    local ops_env="${ODS_PIXEL_UNINSTALL_OPS_ENV:-/etc/pixel-ops-broker.env}"
+    local ops_policy="${ODS_PIXEL_UNINSTALL_OPS_POLICY:-/etc/pixel-ops-broker/policy.json}"
+    local ops_policy_dir="${ops_policy%/*}"
+    local ops_install="${ODS_PIXEL_UNINSTALL_OPS_INSTALL_DIR:-/opt/pixel-ops-broker}"
+    local ops_program="$ops_install/broker.py"
+    local ops_state="${ODS_PIXEL_UNINSTALL_OPS_STATE_DIR:-/var/lib/pixel-ops-broker}"
+    local ops_owner_policy="$install_dir/data/pixel/operations-policy.json"
     local openclaw_config="$owner_home/.openclaw/openclaw.json"
     local exec_control="$owner_home/.openclaw/.ods-exec-control"
     local gateway_env="$owner_home/.config/pixel-agent/gateway.env"
@@ -38,8 +49,10 @@ ods_pixel_uninstall_managed() {
     local staged_attestation="$pixel_install/.ods-uninstall-runtime-attestation"
     local deployment_lock="$pixel_install/.deployment.lock"
     local retired_releases="$pixel_install/retired-ods-releases"
-    local cleanup_plan cleanup_state release_version sandbox_image sandbox_image_id release_path
+    local cleanup_plan cleanup_state release_version sandbox_image sandbox_image_id release_path marker_state pixel_source_ref
     local release_identity_sha256 install_manifest_sha256 retired_release_path
+    local ops_plan="absent||||" ops_state_status ops_uid ops_gid ops_user_present ops_group_present
+    local ops_passwd_entry="" ops_group_entry="" ops_user_group_ids="" ops_user_group_names="" ops_artifacts_present=false
     local pixel_lock_fd="" owner_uid
     local root_artifacts_present=false
 
@@ -51,7 +64,24 @@ ods_pixel_uninstall_managed() {
         log_error "Refusing Pixel cleanup for an invalid owner home"
         return 1
     }
-    [[ "$root_uid" =~ ^[0-9]+$ ]] || return 1
+    [[ "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]] || return 1
+    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state"; do
+        [[ "$path" == /* && "$path" != / ]] || {
+            log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
+            return 1
+        }
+    done
+    [[ "$ops_program" == "$ops_install/broker.py" \
+        && "$ops_unit" == "$systemd_dir/pixel-ops-broker.service" \
+        && "$ops_policy" == "$ops_policy_dir/policy.json" \
+        && "${ops_policy_dir##*/}" == pixel-ops-broker \
+        && "${ops_install##*/}" == pixel-ops-broker \
+        && "${ops_state##*/}" == pixel-ops-broker \
+        && "$ops_policy" != "$ops_state"/* \
+        && "$ops_install" != "$ops_state"/* ]] || {
+        log_error "Refusing Pixel Operations cleanup for overlapping targets"
+        return 1
+    }
 
     if [[ ! -e "$marker" && ! -L "$marker" ]]; then
         return 0
@@ -65,7 +95,7 @@ ods_pixel_uninstall_managed() {
     if ! cleanup_plan="$(python3 - \
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
-        "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" \
+        "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
         "$retired_releases" <<'PY'
 import hashlib
@@ -91,6 +121,7 @@ import sys
     gateway_env_raw,
     onboarding_raw,
     exec_control_raw,
+    ops_owner_policy_raw,
     current_raw,
     runtime_attestation_raw,
     staged_current_raw,
@@ -292,6 +323,7 @@ if cleanup[0] != "none":
 openclaw_config = pathlib.Path(openclaw_config_raw)
 gateway_env = pathlib.Path(gateway_env_raw)
 onboarding = pathlib.Path(onboarding_raw)
+ops_owner_policy = pathlib.Path(ops_owner_policy_raw)
 for path in (openclaw_config, gateway_env, onboarding):
     if path.exists() or path.is_symlink():
         regular(path, owner_uid, 2 * 1024 * 1024, private=True)
@@ -305,7 +337,7 @@ if exec_control.exists() or exec_control.is_symlink():
         raise SystemExit("unsafe ODS-managed Pixel execution control root")
     for item in exec_control.iterdir():
         item_info = item.lstat()
-        is_wrapper = item.name == "cancellable-exec.sh"
+        is_wrapper = item.name in {"cancellable-exec.sh", "sudo"}
         is_marker = bool(re.fullmatch(r"[0-9a-f]{64}\.cancel", item.name))
         is_temporary = bool(re.fullmatch(r"\.[0-9a-f]{64}\.[0-9]+\.[0-9a-f]{16}\.tmp", item.name))
         if (not stat.S_ISREG(item_info.st_mode) or stat.S_ISLNK(item_info.st_mode)
@@ -317,8 +349,9 @@ if exec_control.exists() or exec_control.is_symlink():
         if not is_wrapper and item_info.st_size != 0:
             raise SystemExit("unsafe ODS-managed Pixel execution marker")
     wrapper = exec_control / "cancellable-exec.sh"
-    if not wrapper.exists():
-        raise SystemExit("ODS-managed Pixel execution wrapper is missing")
+    sudo_adapter = exec_control / "sudo"
+    if not wrapper.exists() or not sudo_adapter.exists():
+        raise SystemExit("ODS-managed Pixel execution control is incomplete")
 
 if openclaw_config.exists():
     config = json.loads(openclaw_config.read_text(encoding="utf-8"))
@@ -356,6 +389,14 @@ if openclaw_config.exists():
 elif cleanup[0] != "none" and state != "deactivating":
     raise SystemExit("ODS-managed active Pixel configuration is missing")
 
+ops_policy_present = ops_owner_policy.exists() or ops_owner_policy.is_symlink()
+if ops_policy_present:
+    regular(ops_owner_policy, owner_uid, 2 * 1024 * 1024, private=True)
+    policy_value = json.loads(ops_owner_policy.read_text(encoding="utf-8"))
+    if (not isinstance(policy_value, dict) or policy_value.get("schemaVersion") != 2
+            or policy_value.get("deployment") != "ods-default"):
+        raise SystemExit("ODS Pixel Operations policy is not an ODS-managed policy")
+
 if onboarding.exists():
     answers = json.loads(onboarding.read_text(encoding="utf-8"))
     extensions = answers.get("gatewayExtensions") if isinstance(answers, dict) else None
@@ -365,6 +406,12 @@ if onboarding.exists():
         for item in extensions
     ):
         raise SystemExit("Pixel onboarding is not bound to this ODS install")
+    operations_enabled = answers.get("operationsLimbEnabled") is True
+    if operations_enabled:
+        if answers.get("operationsPolicyFile") != str(ops_owner_policy) or not ops_policy_present:
+            raise SystemExit("Pixel onboarding is not bound to the ODS Operations policy")
+    elif ops_policy_present and state != "installing":
+        raise SystemExit("ODS Operations policy exists without an enabled onboarding contract")
     if cleanup[0] != "none":
         observed = hashlib.sha256(b"ods-pixel-contract-v1\0" + onboarding.read_bytes()).hexdigest()
         if value.get("contract_sha256") != observed:
@@ -421,20 +468,286 @@ if ingress_program.exists():
         raise SystemExit("ODS Pixel ingress source is unavailable for cleanup verification")
     if ingress_program.read_bytes() != source_program.read_bytes():
         raise SystemExit("installed Pixel ingress program drifted from this ODS install")
-print("|".join(cleanup))
+print("|".join((*cleanup, state, source_ref)))
 PY
     )"; then
         log_error "ODS-managed Pixel validation failed; leaving every Pixel artifact untouched"
         return 1
     fi
     IFS='|' read -r cleanup_state release_version sandbox_image sandbox_image_id release_path \
-        release_identity_sha256 install_manifest_sha256 retired_release_path <<<"$cleanup_plan"
+        release_identity_sha256 install_manifest_sha256 retired_release_path marker_state pixel_source_ref <<<"$cleanup_plan"
     [[ "$cleanup_state" == none || "$cleanup_state" == active || "$cleanup_state" == staged \
         || "$cleanup_state" == staging-attestation || "$cleanup_state" == staging-link \
         || "$cleanup_state" == retiring || "$cleanup_state" == retired ]] || {
         log_error "ODS-managed Pixel cleanup plan is invalid"
         return 1
     }
+    [[ "$marker_state" == installing || "$marker_state" == ready || "$marker_state" == deactivating ]] || {
+        log_error "ODS-managed Pixel marker state is invalid"
+        return 1
+    }
+    [[ "$pixel_source_ref" =~ ^[0-9a-f]{40}$ ]] || {
+        log_error "ODS-managed Pixel source binding is invalid"
+        return 1
+    }
+
+    # Pixel's Operations Broker deliberately crosses the owner/root boundary.
+    # Inspect its protected bytes as root, but bind them to this exact ODS
+    # install's generated Pixel source and private policy before stopping any
+    # service. A ready deployment must be complete; only an installing or
+    # deactivating marker may describe a resumable partial broker lifecycle.
+    if command -v getent >/dev/null 2>&1; then
+        ops_passwd_entry="$(getent passwd "$ops_user" 2>/dev/null || true)"
+        ops_group_entry="$(getent group "$ops_group" 2>/dev/null || true)"
+    fi
+    if [[ -n "$ops_passwd_entry" ]]; then
+        ops_user_group_ids="$(id -G "$ops_user" 2>/dev/null || true)"
+        ops_user_group_names="$(id -nG "$ops_user" 2>/dev/null || true)"
+    fi
+    if [[ -n "$ops_passwd_entry" || -n "$ops_group_entry" ]]; then
+        ops_artifacts_present=true
+    fi
+    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" "$ops_owner_policy"; do
+        if [[ -e "$path" || -L "$path" ]]; then
+            ops_artifacts_present=true
+        fi
+    done
+    if [[ "$ops_artifacts_present" == true ]]; then
+        command -v sudo >/dev/null 2>&1 || {
+            log_error "sudo is required to validate ODS-managed Pixel Operations artifacts"
+            return 1
+        }
+        if ! ops_plan="$(sudo python3 - \
+            "$root_uid" "$root_gid" "$owner_uid" "$marker_state" "$ops_user" "$ops_group" \
+            "$ops_passwd_entry" "$ops_group_entry" "$ops_user_group_ids" "$ops_user_group_names" \
+            "${ODS_PIXEL_UNINSTALL_OPS_UID:-}" "${ODS_PIXEL_UNINSTALL_OPS_GID:-}" \
+            "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state" \
+            "$ops_owner_policy" \
+            "$install_dir/data/pixel/source-$pixel_source_ref/.generated/pixel-ops-broker.service" \
+            "$install_dir/data/pixel/source-$pixel_source_ref/.generated/ops-broker.env" \
+            "$install_dir/data/pixel/source-$pixel_source_ref/deploy/ops-broker/broker.py" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+(
+    root_uid_raw,
+    root_gid_raw,
+    owner_uid_raw,
+    marker_state,
+    ops_user,
+    ops_group,
+    passwd_entry,
+    group_entry,
+    user_group_ids,
+    user_group_names,
+    uid_override,
+    gid_override,
+    unit_raw,
+    env_raw,
+    policy_raw,
+    install_raw,
+    program_raw,
+    state_raw,
+    owner_policy_raw,
+    expected_unit_raw,
+    expected_env_raw,
+    expected_program_raw,
+) = sys.argv[1:]
+
+root_uid = int(root_uid_raw)
+root_gid = int(root_gid_raw)
+owner_uid = int(owner_uid_raw)
+unit = pathlib.Path(unit_raw)
+environment = pathlib.Path(env_raw)
+policy = pathlib.Path(policy_raw)
+install_dir = pathlib.Path(install_raw)
+program = pathlib.Path(program_raw)
+state_dir = pathlib.Path(state_raw)
+owner_policy = pathlib.Path(owner_policy_raw)
+expected_unit = pathlib.Path(expected_unit_raw)
+expected_env = pathlib.Path(expected_env_raw)
+expected_program = pathlib.Path(expected_program_raw)
+
+
+def exists(path: pathlib.Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def parse_passwd(value: str):
+    if not value:
+        return None
+    fields = value.split(":")
+    if len(fields) != 7 or fields[0] != ops_user or not fields[2].isdigit() or not fields[3].isdigit():
+        raise SystemExit("unsafe Pixel Operations Broker user identity")
+    return fields
+
+
+def parse_group(value: str):
+    if not value:
+        return None
+    fields = value.split(":")
+    if len(fields) != 4 or fields[0] != ops_group or not fields[2].isdigit() or fields[3]:
+        raise SystemExit("unsafe Pixel Operations Broker group identity")
+    return fields
+
+
+passwd = parse_passwd(passwd_entry)
+group = parse_group(group_entry)
+if bool(passwd) != bool(group) and marker_state not in {"installing", "deactivating"}:
+    raise SystemExit("partial Pixel Operations Broker identity")
+
+broker_uid = int(uid_override) if uid_override else (int(passwd[2]) if passwd else 0)
+broker_gid = int(gid_override) if gid_override else (int(group[2]) if group else 0)
+if passwd:
+    observed_uid = int(passwd[2])
+    observed_gid = int(passwd[3])
+    if uid_override:
+        if observed_uid != broker_uid:
+            raise SystemExit("Pixel Operations Broker user UID drifted")
+    elif observed_uid <= 0 or observed_uid == owner_uid or observed_uid >= 65536:
+        raise SystemExit("unsafe Pixel Operations Broker system UID")
+    if (not group or observed_gid != int(group[2]) or observed_gid != broker_gid
+            or passwd[5] != str(state_dir) or passwd[6] != "/usr/sbin/nologin"):
+        raise SystemExit("Pixel Operations Broker user identity drifted")
+    if not uid_override and ({int(item) for item in user_group_ids.split()} != {broker_gid}
+            or set(user_group_names.split()) != {ops_group}):
+        raise SystemExit("Pixel Operations Broker user has unexpected supplementary groups")
+if group:
+    observed_gid = int(group[2])
+    if gid_override:
+        if observed_gid != broker_gid:
+            raise SystemExit("Pixel Operations Broker group GID drifted")
+    elif observed_gid <= 0 or observed_gid >= 65536:
+        raise SystemExit("unsafe Pixel Operations Broker system GID")
+
+paths = (unit, environment, policy, install_dir, state_dir)
+present = [exists(path) for path in paths]
+if marker_state == "ready" and (not all(present) or not passwd or not group):
+    raise SystemExit("ready Pixel Operations Broker deployment is partial")
+if any(present) and (not passwd or not group):
+    raise SystemExit("Pixel Operations Broker files lack their exact isolated identity")
+
+
+def exact_file(path: pathlib.Path, uid: int, gid: int, mode: int, maximum: int) -> None:
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != uid or info.st_gid != gid
+            or stat.S_IMODE(info.st_mode) != mode or info.st_size > maximum):
+        raise SystemExit(f"unsafe Pixel Operations Broker artifact: {path}")
+
+
+def owner_source(path: pathlib.Path, maximum: int, private: bool = False) -> None:
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != owner_uid
+            or info.st_size > maximum or info.st_mode & 0o022
+            or (private and info.st_mode & 0o077)):
+        raise SystemExit(f"unsafe ODS Pixel Operations source: {path}")
+
+
+if exists(unit):
+    exact_file(unit, root_uid, root_gid, 0o644, 256 * 1024)
+    owner_source(expected_unit, 256 * 1024)
+    if unit.read_bytes() != expected_unit.read_bytes():
+        raise SystemExit("Pixel Operations Broker unit drifted from the exact generated source")
+if exists(environment):
+    exact_file(environment, root_uid, broker_gid, 0o640, 64 * 1024)
+    owner_source(expected_env, 64 * 1024)
+    if environment.read_bytes() != expected_env.read_bytes():
+        raise SystemExit("Pixel Operations Broker environment drifted from the exact generated source")
+if exists(policy):
+    exact_file(policy, root_uid, broker_gid, 0o640, 2 * 1024 * 1024)
+    owner_source(owner_policy, 2 * 1024 * 1024, private=True)
+    if policy.read_bytes() != owner_policy.read_bytes():
+        raise SystemExit("Pixel Operations Broker policy drifted from the ODS private policy")
+if exists(install_dir):
+    info = install_dir.lstat()
+    contents = {item.name for item in install_dir.iterdir()}
+    allowed_contents = ({"broker.py"}, set()) if marker_state in {"installing", "deactivating"} else ({"broker.py"},)
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != root_uid or stat.S_IMODE(info.st_mode) != 0o755
+            or info.st_gid != root_gid
+            or contents not in allowed_contents):
+        raise SystemExit("unsafe Pixel Operations Broker install directory")
+    if exists(program):
+        exact_file(program, root_uid, root_gid, 0o755, 2 * 1024 * 1024)
+        owner_source(expected_program, 2 * 1024 * 1024)
+        if program.read_bytes() != expected_program.read_bytes():
+            raise SystemExit("Pixel Operations Broker program drifted from the exact Pixel source")
+elif exists(program):
+    raise SystemExit("Pixel Operations Broker program escaped its install directory")
+
+policy_parent = policy.parent
+if exists(policy_parent):
+    info = policy_parent.lstat()
+    contents = {item.name for item in policy_parent.iterdir()}
+    expected_contents = {"policy.json"} if exists(policy) else set()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != root_uid or stat.S_IMODE(info.st_mode) != 0o755
+            or info.st_gid != root_gid
+            or contents != expected_contents):
+        raise SystemExit("unsafe Pixel Operations Broker policy directory")
+
+if exists(state_dir):
+    root = state_dir.lstat()
+    if (not stat.S_ISDIR(root.st_mode) or stat.S_ISLNK(root.st_mode)
+            or root.st_uid != broker_uid or root.st_gid != broker_gid
+            or stat.S_IMODE(root.st_mode) != 0o750):
+        raise SystemExit("unsafe Pixel Operations Broker state root")
+    state_absolute = pathlib.Path(os.path.abspath(state_dir))
+    try:
+        mount_lines = pathlib.Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise SystemExit("cannot inspect mounts before Pixel Operations cleanup") from error
+    for line in mount_lines:
+        fields = line.split()
+        if len(fields) < 5:
+            raise SystemExit("invalid mount table while validating Pixel Operations state")
+        mount_text = fields[4]
+        for encoded, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", "\\")):
+            mount_text = mount_text.replace(encoded, decoded)
+        mount_path = pathlib.Path(os.path.abspath(mount_text))
+        if mount_path == state_absolute or state_absolute in mount_path.parents:
+            raise SystemExit(f"mount inside Pixel Operations Broker state: {mount_path}")
+    root_device = root.st_dev
+    for current, directories, files in os.walk(state_dir, topdown=True, followlinks=False):
+        for name in (*directories, *files):
+            path = pathlib.Path(current) / name
+            info = path.lstat()
+            if (stat.S_ISLNK(info.st_mode) or info.st_dev != root_device
+                    or info.st_uid not in {broker_uid, owner_uid}
+                    or info.st_gid != broker_gid or info.st_mode & 0o007):
+                raise SystemExit(f"unsafe Pixel Operations Broker state entry: {path}")
+            if stat.S_ISDIR(info.st_mode):
+                if info.st_mode & (stat.S_ISUID | stat.S_ISVTX):
+                    raise SystemExit(f"unsafe Pixel Operations Broker state directory: {path}")
+            elif stat.S_ISREG(info.st_mode):
+                if info.st_nlink != 1 or info.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+                    raise SystemExit(f"unsafe Pixel Operations Broker state file: {path}")
+            else:
+                raise SystemExit(f"special file in Pixel Operations Broker state: {path}")
+
+print("present|{}|{}|{}|{}".format(
+    broker_uid,
+    broker_gid,
+    "true" if passwd else "false",
+    "true" if group else "false",
+))
+PY
+        )"; then
+            log_error "ODS-managed Pixel Operations validation failed; leaving every Pixel artifact untouched"
+            return 1
+        fi
+        IFS='|' read -r ops_state_status ops_uid ops_gid ops_user_present ops_group_present <<<"$ops_plan"
+        [[ "$ops_state_status" == present && "$ops_uid" =~ ^[0-9]+$ && "$ops_gid" =~ ^[0-9]+$ \
+            && ( "$ops_user_present" == true || "$ops_user_present" == false ) \
+            && ( "$ops_group_present" == true || "$ops_group_present" == false ) ]] || {
+            log_error "ODS-managed Pixel Operations cleanup plan is invalid"
+            return 1
+        }
+    fi
 
     (
     local candidate_image observed_image shared_image_present=true sandbox_container_list
@@ -522,7 +835,8 @@ PY
     if [[ -e "$gateway_unit" || -L "$gateway_unit" \
         || -e "$ingress_unit" || -L "$ingress_unit" \
         || -e "$ingress_env" || -L "$ingress_env" \
-        || -e "$ingress_program" || -L "$ingress_program" ]]; then
+        || -e "$ingress_program" || -L "$ingress_program" \
+        || "$ops_artifacts_present" == true ]]; then
         root_artifacts_present=true
         command -v sudo >/dev/null 2>&1 || {
             log_error "sudo is required to remove ODS-managed Pixel system artifacts"
@@ -530,7 +844,7 @@ PY
         }
     fi
 
-    if [[ -e "$gateway_unit" || -e "$ingress_unit" ]]; then
+    if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ops_unit" ]]; then
         # Stop the ingress before the gateway it proxies to. Keep these as
         # separate calls so the shutdown order is an enforced contract rather
         # than an argument-order hint to systemctl. An interrupted first install
@@ -546,8 +860,14 @@ PY
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
+        if [[ -e "$ops_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now pixel-ops-broker.service; then
+            log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
+            return 1
+        fi
         if systemctl is-active --quiet openclaw-gateway.service \
-            || systemctl is-active --quiet pixel-ingress.service; then
+            || systemctl is-active --quiet pixel-ingress.service \
+            || systemctl is-active --quiet pixel-ops-broker.service; then
             log_error "ODS-managed Pixel system services are still active; no Pixel files were removed"
             return 1
         fi
@@ -702,6 +1022,105 @@ PY
         fi
     fi
 
+    if [[ "$ops_artifacts_present" == true ]]; then
+        # Remove the broker's bounded state only after the service is inactive.
+        # The privileged helper rechecks every entry immediately before the
+        # recursive operation and rejects links, devices, mounts, hardlinks,
+        # foreign identities, and world-accessible mutable state.
+        if ! sudo python3 - "$ops_state" "$ops_uid" "$ops_gid" "$owner_uid" <<'PY'
+import os
+import pathlib
+import shutil
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+broker_uid = int(sys.argv[2])
+broker_gid = int(sys.argv[3])
+owner_uid = int(sys.argv[4])
+if not root.is_absolute() or root == pathlib.Path("/"):
+    raise SystemExit("unsafe Pixel Operations Broker cleanup root")
+if not root.exists() and not root.is_symlink():
+    raise SystemExit(0)
+root_info = root.lstat()
+if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != broker_uid or root_info.st_gid != broker_gid
+        or stat.S_IMODE(root_info.st_mode) != 0o750):
+    raise SystemExit("unsafe Pixel Operations Broker cleanup state root")
+root_absolute = pathlib.Path(os.path.abspath(root))
+try:
+    mount_lines = pathlib.Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+except OSError as error:
+    raise SystemExit("cannot inspect mounts before Pixel Operations cleanup") from error
+for line in mount_lines:
+    fields = line.split()
+    if len(fields) < 5:
+        raise SystemExit("invalid mount table while cleaning Pixel Operations state")
+    mount_text = fields[4]
+    for encoded, decoded in ((r"\040", " "), (r"\011", "\t"), (r"\012", "\n"), (r"\134", "\\")):
+        mount_text = mount_text.replace(encoded, decoded)
+    mount_path = pathlib.Path(os.path.abspath(mount_text))
+    if mount_path == root_absolute or root_absolute in mount_path.parents:
+        raise SystemExit(f"mount inside Pixel Operations Broker cleanup state: {mount_path}")
+root_device = root_info.st_dev
+for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+    for name in (*directories, *files):
+        path = pathlib.Path(current) / name
+        info = path.lstat()
+        if (stat.S_ISLNK(info.st_mode) or info.st_dev != root_device
+                or info.st_uid not in {broker_uid, owner_uid}
+                or info.st_gid != broker_gid or info.st_mode & 0o007):
+            raise SystemExit(f"unsafe Pixel Operations Broker cleanup entry: {path}")
+        if stat.S_ISDIR(info.st_mode):
+            if info.st_mode & (stat.S_ISUID | stat.S_ISVTX):
+                raise SystemExit(f"unsafe Pixel Operations Broker cleanup directory: {path}")
+        elif stat.S_ISREG(info.st_mode):
+            if info.st_nlink != 1 or info.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+                raise SystemExit(f"unsafe Pixel Operations Broker cleanup file: {path}")
+        else:
+            raise SystemExit(f"special file in Pixel Operations Broker cleanup state: {path}")
+shutil.rmtree(root)
+PY
+        then
+            log_error "Could not remove the verified Pixel Operations Broker state"
+            return 1
+        fi
+        if ! sudo rm -f -- "$ops_unit" "$ops_env" "$ops_policy" "$ops_program" \
+            || ! { [[ ! -e "$ops_install" && ! -L "$ops_install" ]] || sudo rmdir -- "$ops_install"; } \
+            || ! { [[ ! -e "$ops_policy_dir" && ! -L "$ops_policy_dir" ]] || sudo rmdir -- "$ops_policy_dir"; }; then
+            log_error "Could not remove the verified Pixel Operations Broker artifacts"
+            return 1
+        fi
+        if [[ "$ops_user_present" == true ]]; then
+            [[ "$(getent passwd "$ops_user" 2>/dev/null || true)" == "$ops_passwd_entry" ]] || {
+                log_error "Pixel Operations Broker user changed before removal"
+                return 1
+            }
+            if ! timeout 30s sudo userdel "$ops_user"; then
+                log_error "Could not remove the isolated Pixel Operations Broker user"
+                return 1
+            fi
+        fi
+        if [[ "$ops_group_present" == true ]]; then
+            [[ "$(getent group "$ops_group" 2>/dev/null || true)" == "$ops_group_entry" ]] || {
+                log_error "Pixel Operations Broker group changed before removal"
+                return 1
+            }
+            if ! timeout 30s sudo groupdel "$ops_group"; then
+                log_error "Could not remove the isolated Pixel Operations Broker group"
+                return 1
+            fi
+        fi
+        if [[ -e "$ops_unit" || -L "$ops_unit" || -e "$ops_env" || -L "$ops_env" \
+            || -e "$ops_policy" || -L "$ops_policy" || -e "$ops_install" || -L "$ops_install" \
+            || -e "$ops_state" || -L "$ops_state" \
+            || -n "$(getent passwd "$ops_user" 2>/dev/null || true)" \
+            || -n "$(getent group "$ops_group" 2>/dev/null || true)" ]]; then
+            log_error "Pixel Operations Broker cleanup was incomplete"
+            return 1
+        fi
+    fi
+
     if [[ "$root_artifacts_present" == "true" ]]; then
         if ! sudo rm -f -- "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" \
             || ! sudo systemctl daemon-reload; then
@@ -726,7 +1145,7 @@ if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
     raise SystemExit("unsafe ODS-managed Pixel execution control cleanup")
 for item in root.iterdir():
     item_info = item.lstat()
-    is_wrapper = item.name == "cancellable-exec.sh"
+    is_wrapper = item.name in {"cancellable-exec.sh", "sudo"}
     is_marker = bool(re.fullmatch(r"[0-9a-f]{64}\.cancel", item.name))
     is_temporary = bool(re.fullmatch(r"\.[0-9a-f]{64}\.[0-9]+\.[0-9a-f]{16}\.tmp", item.name))
     if (not (is_wrapper or is_marker or is_temporary)
@@ -742,8 +1161,9 @@ for item in root.iterdir():
 root.rmdir()
 PY
     fi
-    rm -f -- "$openclaw_config" "$gateway_env" "$onboarding"
+    rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy"
     if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
+        || -e "$ops_owner_policy" || -L "$ops_owner_policy" \
         || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1

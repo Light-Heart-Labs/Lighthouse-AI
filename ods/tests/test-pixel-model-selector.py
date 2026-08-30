@@ -146,8 +146,12 @@ def main() -> int:
     )
     assert "--agent-ready-only" in detection
     assert "PIXEL_AGENT_MODEL_READY=false" in detection
+    assert "No catalog-verified Pixel agent model fits" in detection
+    assert "Explicit Pixel request accepted an unqualified local model" in detection
+    assert '_selector_env="$(_run_catalog_selector' in detection
     assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
     assert "selected Hermes because no catalog-verified agent model fits" in features
+    assert "explicitly selected but catalog-unqualified local model" in features
     assert "ods_pixel_model_route_class" in features
     assert '"$_pixel_model_route_class" == "unmanaged-external"' in features
     assert '"${ENABLE_PIXEL_RUNTIME:-false}" == "true"' in features

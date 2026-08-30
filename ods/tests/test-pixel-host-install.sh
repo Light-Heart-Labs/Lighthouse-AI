@@ -214,19 +214,23 @@ rm -f "$plugin_tree/linked.json"
 
 exec_control_home="$TEST_ROOT/exec-control-home"
 exec_control_source="$TEST_ROOT/cancellable-exec.sh"
+exec_control_sudo_source="$TEST_ROOT/noninteractive-sudo.sh"
 install -m 0644 "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh" \
     "$exec_control_source"
+install -m 0644 "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh" \
+    "$exec_control_sudo_source"
 mkdir -m 0700 -p "$exec_control_home/.openclaw"
 check _ods_pixel_install_exec_control "$owner" "$exec_control_home" \
-    "$exec_control_source"
+    "$exec_control_source" "$exec_control_sudo_source"
 check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control")" = 700
 check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control/cancellable-exec.sh")" = 500
+check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control/sudo")" = 500
 exec_control_bad_home="$TEST_ROOT/exec-control-bad-home"
 mkdir -m 0700 -p "$exec_control_bad_home/.openclaw" "$TEST_ROOT/exec-control-link-target"
 ln -s "$TEST_ROOT/exec-control-link-target" \
     "$exec_control_bad_home/.openclaw/.ods-exec-control"
 if _ods_pixel_install_exec_control "$owner" "$exec_control_bad_home" \
-    "$exec_control_source" >/dev/null 2>&1; then
+    "$exec_control_source" "$exec_control_sudo_source" >/dev/null 2>&1; then
     fail "symlink Pixel execution control root rejected"
 else
     pass "symlink Pixel execution control root rejected"
@@ -236,10 +240,20 @@ mkdir -m 0700 -p "$exec_control_bad_wrapper_home/.openclaw/.ods-exec-control"
 ln -s "$TEST_ROOT/exec-control-link-target" \
     "$exec_control_bad_wrapper_home/.openclaw/.ods-exec-control/cancellable-exec.sh"
 if _ods_pixel_install_exec_control "$owner" "$exec_control_bad_wrapper_home" \
-    "$exec_control_source" >/dev/null 2>&1; then
+    "$exec_control_source" "$exec_control_sudo_source" >/dev/null 2>&1; then
     fail "symlink Pixel execution wrapper rejected"
 else
     pass "symlink Pixel execution wrapper rejected"
+fi
+exec_control_bad_sudo_home="$TEST_ROOT/exec-control-bad-sudo-home"
+mkdir -m 0700 -p "$exec_control_bad_sudo_home/.openclaw/.ods-exec-control"
+ln -s "$TEST_ROOT/exec-control-link-target" \
+    "$exec_control_bad_sudo_home/.openclaw/.ods-exec-control/sudo"
+if _ods_pixel_install_exec_control "$owner" "$exec_control_bad_sudo_home" \
+    "$exec_control_source" "$exec_control_sudo_source" >/dev/null 2>&1; then
+    fail "symlink Pixel noninteractive sudo adapter rejected"
+else
+    pass "symlink Pixel noninteractive sudo adapter rejected"
 fi
 
 plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
@@ -361,6 +375,39 @@ export LITELLM_PORT=4000
 export LITELLM_KEY=test-litellm-secret
 export ODS_MODEL_SWITCHBOARD=observe
 digest="$(printf 'a%.0s' {1..64})"
+operations_policy="$TEST_ROOT/operations-policy.json"
+_ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"
+check test "$(stat -c '%a' "$operations_policy")" = 600
+check python3 -c '
+import json,pathlib,socket,sys
+v=json.load(open(sys.argv[1]))
+assert v["schemaVersion"] == 2 and v["deployment"] == "ods-default"
+assert v["download"]["stagingRoot"] == "/var/lib/pixel-ops-broker/artifacts"
+assert v["download"]["maxBytes"] == 536870912 and v["download"]["maxRedirects"] == 5
+assert {"example.com","github.com","githubusercontent.com","hf.co","huggingface.co","nodejs.org","npmjs.org","pypi.org","pythonhosted.org"} == set(v["download"]["allowedDomains"])
+target=v["targets"]["ods-host"]
+assert target["backend"] == "local" and target["expectedHostname"] == socket.gethostname()
+assert target["allowRaw"] is False and target["writableRoots"] == [sys.argv[3]]
+assert target["allowedRoots"] == [sys.argv[2],sys.argv[3]]
+broker=v["targets"]["broker"]
+assert broker["backend"] == "local" and broker["environment"] == "lab"
+assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
+assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
+assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
+assert set(v["actions"]) == {"host.identity","host.platform"}
+assert all(action["tier"] == "read" and action["defaultAuthority"] == "observe" for action in v["actions"].values())
+assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
+assert v["actions"]["host.platform"]["argv"] == ["/usr/bin/uname", "-a"]
+assert v["authority"]["defaultLevel"] == "propose"
+assert v["authority"]["grants"] == [{"id":"ods-approved-downloads","level":"bounded-auto","actions":["download.stage"],"targets":["broker"],"tiers":["staging"],"environments":["lab"],"maxExecutions":100,"windowSeconds":86400,"maxConcurrent":2,"maxRuntimeSeconds":600,"maxFailures":10,"maxArtifactBytes":536870912}]
+' "$operations_policy" "$INSTALL_DIR" "$home/.openclaw/workspace-pixel"
+printf '%s\n' '{}' > "$TEST_ROOT/policy-symlink-target.json"
+ln -s "$TEST_ROOT/policy-symlink-target.json" "$TEST_ROOT/linked-operations-policy.json"
+if _ods_pixel_write_operations_policy "$owner" "$home" "$TEST_ROOT/linked-operations-policy.json" >/dev/null 2>&1; then
+    fail "symlink Operations policy rejected"
+else
+    pass "symlink Operations policy rejected"
+fi
 _ods_pixel_write_onboarding "$owner" "$home" "$answers" /usr/bin/openclaw /opt/ods/pixel-plugin "$digest"
 observed_contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"
 check test "$observed_contract_sha256" = "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"
@@ -368,7 +415,7 @@ check test "${#observed_contract_sha256}" = 64
 check python3 -c '
 import json,sys
 v=json.load(open(sys.argv[1]))
-assert v["capabilityProfile"] == "minimal"
+assert v["capabilityProfile"] == "engineering-operator"
 assert v["modelProvider"] == "ods-gateway"
 assert v["modelBaseUrl"] == "http://127.0.0.1:4000/v1"
 assert v["modelApiKey"] == "test-litellm-secret"
@@ -378,9 +425,11 @@ assert v["modelContextWindow"] == 32768
 assert v["modelMaxTokens"] == 4096
 assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
+assert v["operationsPolicyFile"] == sys.argv[2]
 assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_web_extract"]}]
-assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","operationsLimbEnabled","frontierLimbEnabled"))
-' "$answers"
+assert v["operationsLimbEnabled"] is True
+assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","frontierLimbEnabled"))
+' "$answers" "$operations_policy"
 check test "$(stat -c '%a' "$answers")" = 600
 check test -z "$(find "${answers%/*}" -maxdepth 1 -name '.pixel-gateway-key.*' -print -quit)"
 
@@ -1041,6 +1090,14 @@ check node --check "$plugin/tool-content.mjs"
 check node --check "$plugin/tool-loop-guard.mjs"
 check node --check "$plugin/web-extract.mjs"
 check sh -n "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh"
+check bash -n "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "trusted_sudo=/usr/bin/sudo" in text
+assert "if [[ $# == 1 && \"$1\" == -v ]]" in text
+assert "exec \"$trusted_sudo\" -n \"$@\"" in text
+' "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh"
 check python3 -c '
 import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
@@ -1070,7 +1127,12 @@ assert "_ods_pixel_wait_ingress \"$owner\" \"$home\"" in installer
 assert installer.index("_ods_pixel_wait_ingress \"$owner\" \"$home\"") < installer.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
 assert "pixel\" configure --answers \"$answers\" --force" in text
 assert "pixel\" plan" in text
-assert "pixel\" apply --confirm &&" in text
+assert text.count("pixel\" ops-broker --confirm") == 2
+assert "Pixel could not install and verify the isolated Operations Broker" in text
+assert "PATH=\"$home/.openclaw/.ods-exec-control:$PATH\"" in text
+assert "pixel\" apply --confirm </dev/null &&" in text
+assert "_ods_pixel_write_operations_policy" in text
+assert "Could not write the owner-private ODS Pixel Operations policy" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text

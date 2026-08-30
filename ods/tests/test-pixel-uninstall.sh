@@ -24,6 +24,14 @@ INSTALL_DIR="$TEST_ROOT/install"
 SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
 DOCKER_LOG="$TEST_ROOT/docker.log"
 DOCKER_STATE="$TEST_ROOT/docker-live-state"
+OPS_ENV="$TEST_ROOT/pixel-ops-broker.env"
+OPS_POLICY_DIR="$TEST_ROOT/etc/pixel-ops-broker"
+OPS_POLICY="$OPS_POLICY_DIR/policy.json"
+OPS_INSTALL="$TEST_ROOT/opt/pixel-ops-broker"
+OPS_STATE="$TEST_ROOT/var/lib/pixel-ops-broker"
+OPS_IDENTITY_LOG="$TEST_ROOT/ops-identity.log"
+OPS_PASSWD_STATE="$TEST_ROOT/ops-passwd"
+OPS_GROUP_STATE="$TEST_ROOT/ops-group"
 mkdir -p "$MOCK_BIN" "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR"
 
 cat >"$MOCK_BIN/sudo" <<'SH'
@@ -71,13 +79,43 @@ case "${1:-} ${2:-}" in
     *) exit 1 ;;
 esac
 SH
-chmod +x "$MOCK_BIN/sudo" "$MOCK_BIN/systemctl" "$MOCK_BIN/docker"
+cat >"$MOCK_BIN/getent" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}:${2:-}" in
+    passwd:pixel-ops-broker) [[ -f "$OPS_PASSWD_STATE" ]] && cat "$OPS_PASSWD_STATE" ;;
+    group:pixel-ops) [[ -f "$OPS_GROUP_STATE" ]] && cat "$OPS_GROUP_STATE" ;;
+    *) exec /usr/bin/getent "$@" ;;
+esac
+SH
+cat >"$MOCK_BIN/userdel" <<'SH'
+#!/usr/bin/env bash
+[[ "${1:-}" == pixel-ops-broker && -f "$OPS_PASSWD_STATE" ]] || exit 1
+printf 'userdel %s\n' "$1" >>"$OPS_IDENTITY_LOG"
+rm -f -- "$OPS_PASSWD_STATE"
+SH
+cat >"$MOCK_BIN/groupdel" <<'SH'
+#!/usr/bin/env bash
+[[ "${1:-}" == pixel-ops && -f "$OPS_GROUP_STATE" ]] || exit 1
+printf 'groupdel %s\n' "$1" >>"$OPS_IDENTITY_LOG"
+rm -f -- "$OPS_GROUP_STATE"
+SH
+chmod +x "$MOCK_BIN/sudo" "$MOCK_BIN/systemctl" "$MOCK_BIN/docker" \
+    "$MOCK_BIN/getent" "$MOCK_BIN/userdel" "$MOCK_BIN/groupdel"
 export PATH="$MOCK_BIN:$PATH" SYSTEMCTL_LOG DOCKER_LOG DOCKER_STATE
+export OPS_IDENTITY_LOG OPS_PASSWD_STATE OPS_GROUP_STATE
 export ODS_PIXEL_UNINSTALL_SYSTEMD_DIR="$SYSTEMD_DIR"
 export ODS_PIXEL_UNINSTALL_ETC_DIR="$ETC_DIR"
 export ODS_PIXEL_UNINSTALL_LIBEXEC_DIR="$LIBEXEC_DIR"
+export ODS_PIXEL_UNINSTALL_OPS_ENV="$OPS_ENV"
+export ODS_PIXEL_UNINSTALL_OPS_POLICY="$OPS_POLICY"
+export ODS_PIXEL_UNINSTALL_OPS_INSTALL_DIR="$OPS_INSTALL"
+export ODS_PIXEL_UNINSTALL_OPS_STATE_DIR="$OPS_STATE"
 ODS_PIXEL_UNINSTALL_ROOT_UID="$(id -u)"
-export ODS_PIXEL_UNINSTALL_ROOT_UID
+ODS_PIXEL_UNINSTALL_ROOT_GID="$(id -g)"
+ODS_PIXEL_UNINSTALL_OPS_UID="$(id -u)"
+ODS_PIXEL_UNINSTALL_OPS_GID="$(id -g)"
+export ODS_PIXEL_UNINSTALL_ROOT_UID ODS_PIXEL_UNINSTALL_ROOT_GID \
+    ODS_PIXEL_UNINSTALL_OPS_UID ODS_PIXEL_UNINSTALL_OPS_GID
 
 if python3 - "$ROOT_DIR/ods-uninstall.sh" <<'PY'
 import pathlib
@@ -131,7 +169,9 @@ else
 fi
 
 write_fixture() {
-    rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR"
+    rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR" \
+        "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE"
+    rm -f -- "$OPS_ENV" "$OPS_IDENTITY_LOG" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
     : >"$SYSTEMCTL_LOG"
     : >"$DOCKER_LOG"
     rm -f -- "$DOCKER_STATE"
@@ -198,7 +238,8 @@ write_active_fixture() {
     image_id="sha256:$(printf 'd%.0s' {1..64})"
     mkdir -m 0700 "$exec_control"
     printf '%s\n' '#!/bin/sh' >"$exec_control/cancellable-exec.sh"
-    chmod 0500 "$exec_control/cancellable-exec.sh"
+    printf '%s\n' '#!/bin/sh' >"$exec_control/sudo"
+    chmod 0500 "$exec_control/cancellable-exec.sh" "$exec_control/sudo"
     : >"$exec_control/$(printf 'e%.0s' {1..64}).cancel"
     chmod 0600 "$exec_control/$(printf 'e%.0s' {1..64}).cancel"
     mkdir -p "$release"
@@ -235,6 +276,87 @@ JSON
     chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
     : >"$DOCKER_STATE"
     : >"$DOCKER_LOG"
+}
+
+write_ops_fixture() {
+    write_active_fixture
+    local source_ref="d2a2b6be552126f294fb30ee5fb46872acf82c89"
+    local source="$INSTALL_DIR/data/pixel/source-$source_ref"
+    local uid gid contract_sha256
+    uid="$(id -u)"
+    gid="$(id -g)"
+    mkdir -p "$source/.generated" "$source/deploy/ops-broker" "$INSTALL_DIR/data/pixel"
+    cat >"$INSTALL_DIR/data/pixel/operations-policy.json" <<JSON
+{"schemaVersion":2,"deployment":"ods-default","download":{"stagingRoot":"$OPS_STATE/artifacts"},"targets":{"broker":{"backend":"local","writableRoots":["$OPS_STATE/artifacts"]}},"authority":{"defaultLevel":"propose"}}
+JSON
+    chmod 0600 "$INSTALL_DIR/data/pixel/operations-policy.json"
+    cat >"$source/.generated/pixel-ops-broker.service" <<UNIT
+[Unit]
+Description=Pixel Operations Broker - isolated fleet execution and workflow service
+[Service]
+User=pixel-ops-broker
+Group=pixel-ops
+ExecStart="$OPS_INSTALL/broker.py"
+WorkingDirectory=$OPS_STATE
+EnvironmentFile=$OPS_ENV
+[Install]
+WantedBy=multi-user.target
+UNIT
+    cat >"$source/.generated/ops-broker.env" <<ENV
+PIXEL_OPS_POLICY_PATH='$OPS_POLICY'
+PIXEL_OPS_STATE_DIR='$OPS_STATE'
+PYTHONDONTWRITEBYTECODE='1'
+ENV
+    printf '%s\n' '#!/usr/bin/env python3' 'print("managed broker")' \
+        >"$source/deploy/ops-broker/broker.py"
+    chmod 0600 "$source/.generated/pixel-ops-broker.service" \
+        "$source/.generated/ops-broker.env"
+    chmod 0644 "$source/deploy/ops-broker/broker.py"
+
+    mkdir -p "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE"
+    cp "$source/.generated/pixel-ops-broker.service" "$SYSTEMD_DIR/pixel-ops-broker.service"
+    cp "$source/.generated/ops-broker.env" "$OPS_ENV"
+    cp "$source/deploy/ops-broker/broker.py" "$OPS_INSTALL/broker.py"
+    cp "$INSTALL_DIR/data/pixel/operations-policy.json" "$OPS_POLICY"
+    chmod 0644 "$SYSTEMD_DIR/pixel-ops-broker.service"
+    chmod 0640 "$OPS_ENV" "$OPS_POLICY"
+    chmod 0755 "$OPS_INSTALL" "$OPS_INSTALL/broker.py" "$OPS_POLICY_DIR"
+    chmod 0750 "$OPS_STATE"
+    mkdir -m 2770 "$OPS_STATE/requests" "$OPS_STATE/cancel"
+    mkdir -m 2750 "$OPS_STATE/results" "$OPS_STATE/events" "$OPS_STATE/artifacts"
+    mkdir -m 0700 "$OPS_STATE/private" "$OPS_STATE/authority"
+    printf '%s\n' '{"status":"succeeded"}' >"$OPS_STATE/results/ops-test.json"
+    chmod 0640 "$OPS_STATE/results/ops-test.json"
+
+    printf 'pixel-ops-broker:x:%s:%s:Pixel Operations Broker:%s:/usr/sbin/nologin\n' \
+        "$uid" "$gid" "$OPS_STATE" >"$OPS_PASSWD_STATE"
+    printf 'pixel-ops:x:%s:\n' "$gid" >"$OPS_GROUP_STATE"
+    python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" \
+        "$INSTALL_DIR/data/pixel/operations-policy.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["capabilityProfile"] = "engineering-operator"
+value["operationsLimbEnabled"] = True
+value["operationsPolicyFile"] = sys.argv[2]
+path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+    chmod 0600 "$HOME_DIR/.config/pixel-deployment/onboarding.json"
+    contract_sha256="$(python3 - "$HOME_DIR/.config/pixel-deployment/onboarding.json" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(b"ods-pixel-contract-v1\0" + pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+    python3 - "$HOME_DIR/.config/ods/pixel-managed.json" "$contract_sha256" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["contract_sha256"] = sys.argv[2]
+path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+    chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
+    : >"$SYSTEMCTL_LOG"
+    : >"$OPS_IDENTITY_LOG"
 }
 
 write_fixture
@@ -342,6 +464,112 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
         || fail "managed Pixel Docker state was not retired exactly"
 else
     fail "fully bound ODS Pixel active state was not safely deactivated"
+fi
+
+write_ops_fixture
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    if [[ ! -e "$SYSTEMD_DIR/pixel-ops-broker.service" \
+        && ! -e "$OPS_ENV" && ! -e "$OPS_POLICY_DIR" \
+        && ! -e "$OPS_INSTALL" && ! -e "$OPS_STATE" \
+        && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
+        && ! -e "$OPS_PASSWD_STATE" && ! -e "$OPS_GROUP_STATE" \
+        && "$(sed -n '1p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ingress.service" \
+        && "$(sed -n '2p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
+        && "$(sed -n '3p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ops-broker.service" \
+        && "$(sed -n '1p' "$OPS_IDENTITY_LOG")" == "userdel pixel-ops-broker" \
+        && "$(sed -n '2p' "$OPS_IDENTITY_LOG")" == "groupdel pixel-ops" ]]; then
+        pass "verified Operations Broker service, authority state, and identities are removed in bounded order"
+    else
+        fail "Operations Broker cleanup left privileged state or removed it out of order"
+    fi
+else
+    fail "verified Operations Broker deployment could not be removed"
+fi
+
+for drift_target in program unit environment policy; do
+    write_ops_fixture
+    case "$drift_target" in
+        program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
+        unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
+        environment) printf '%s\n' 'UNEXPECTED=1' >>"$OPS_ENV" ;;
+        policy) printf '%s\n' ' ' >>"$OPS_POLICY" ;;
+    esac
+    if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+        fail "drifted Operations Broker $drift_target was accepted"
+    else
+        [[ -L "$HOME_DIR/.local/share/pixel/current" \
+            && -e "$SYSTEMD_DIR/pixel-ops-broker.service" \
+            && -e "$OPS_STATE" && -e "$OPS_PASSWD_STATE" \
+            && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+            && pass "Operations Broker $drift_target drift fails before service or Docker mutation" \
+            || fail "Operations Broker $drift_target drift caused partial cleanup"
+    fi
+done
+
+for unsafe_state in symlink hardlink; do
+    write_ops_fixture
+    if [[ "$unsafe_state" == symlink ]]; then
+        ln -s /etc/passwd "$OPS_STATE/requests/escaped"
+    else
+        ln "$OPS_STATE/results/ops-test.json" "$OPS_STATE/results/ops-test-linked.json"
+    fi
+    if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+        fail "unsafe Operations Broker $unsafe_state state was accepted"
+    else
+        [[ -L "$HOME_DIR/.local/share/pixel/current" \
+            && -e "$OPS_STATE" && -e "$SYSTEMD_DIR/pixel-ops-broker.service" \
+            && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+            && pass "Operations Broker $unsafe_state state fails before mutation" \
+            || fail "Operations Broker $unsafe_state refusal caused partial cleanup"
+    fi
+done
+
+write_ops_fixture
+rm -f -- "$OPS_ENV"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "partial ready Operations Broker deployment was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$SYSTEMD_DIR/pixel-ops-broker.service" && -e "$OPS_STATE" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "partial ready Operations Broker deployment fails closed before mutation" \
+        || fail "partial ready Operations Broker refusal caused mutation"
+fi
+
+write_ops_fixture
+rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
+    "$OPS_INSTALL/broker.py" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
+rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
+rm -rf -- "$OPS_STATE"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    fail "owner-policy-only ready Operations Broker deployment was accepted"
+else
+    [[ -L "$HOME_DIR/.local/share/pixel/current" \
+        && -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
+        && ! -s "$SYSTEMCTL_LOG" && ! -s "$DOCKER_LOG" ]] \
+        && pass "owner-policy-only ready Operations deployment fails closed before mutation" \
+        || fail "owner-policy-only ready Operations refusal caused mutation"
+fi
+
+write_ops_fixture
+python3 - "$HOME_DIR/.config/ods/pixel-managed.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["state"] = "installing"
+path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
+rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
+    "$OPS_INSTALL/broker.py" "$OPS_PASSWD_STATE"
+rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
+rm -rf -- "$OPS_STATE"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    [[ ! -e "$OPS_GROUP_STATE" && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" ]] \
+        && pass "interrupted installing Operations group-only state is resumably removed" \
+        || fail "installing Operations partial cleanup left managed state"
+else
+    fail "interrupted installing Operations group-only state was not resumable"
 fi
 
 write_active_fixture

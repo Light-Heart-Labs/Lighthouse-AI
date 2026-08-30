@@ -87,13 +87,22 @@ export const ODS_TOOL_ROUTING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another tool after the ODS projection route was enforced. Start a fresh message to continue.";
 
 export const EXACT_DOWNLOAD_REQUIRES_BROKER_REASON =
-  "Pixel cannot turn web_fetch or another transformed page view into an exact-byte download. Do not call another tool or create a substitute artifact in this turn. Exact-byte downloads require the separately exposed, policy-approved pixel_ops_download_stage path with its digest contract; tell the owner that capability is unavailable in this session.";
+  "Pixel cannot turn web_fetch or another transformed page view into an exact-byte download. Call pixel_ops_download_stage now with the owner's exact HTTPS URL, filename, and expected digest when one was supplied. This is the only permitted correction; do not create a workspace substitute or claim success without a matching terminal broker receipt.";
 
 export const EXACT_DOWNLOAD_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another tool after the exact-download provenance boundary was enforced. Start a fresh message with an approved staged-download capability or ask for a non-byte-exact page summary.";
 
 export const EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX =
-  "Pixel did not create the requested artifact because this session has no verified exact-byte download path. web_fetch and page extraction return transformed, safety-marked evidence rather than origin bytes. Enable and qualify the policy-approved staged-download capability, or provide a trusted local artifact and digest.";
+  "Pixel did not submit the requested exact-byte download through a verified broker path. No downloadable artifact was created. web_fetch and page extraction return transformed, safety-marked evidence rather than origin bytes; retry with the policy-approved staged-download capability or provide a trusted local artifact and digest.";
+
+export const EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel did not verify that the requested artifact was staged. A broker request may have been submitted, but exact-byte success requires a matching terminal succeeded Operations receipt with an absolute quarantine path, byte count, SHA-256 digest, HTTPS source, and non-executable artifact evidence. Continue or retry the broker job; do not treat a workspace substitute as the download.";
+
+export const EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX =
+  "Pixel's staged-download job reached a verified terminal failure. No artifact was created, and Pixel did not claim success.";
+
+export const EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX =
+  "Pixel staged the requested download as an immutable plan, but external approval is required. No artifact was created, and Pixel did not self-approve it.";
 
 const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
@@ -383,6 +392,148 @@ function toolCallFailed(event) {
       !Array.isArray(result) &&
       result.isError === true
   );
+}
+
+const OPS_JOB_ID = /^ops-[0-9]{13}-[a-f0-9]{12}$/;
+const OPS_ARTIFACT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+
+function exactDownloadSubmission(event) {
+  if (toolCallFailed(event)) return undefined;
+  const params = event?.params;
+  const details = event?.result?.details;
+  if (
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    typeof params.url !== "string" ||
+    typeof params.filename !== "string" ||
+    !OPS_ARTIFACT_FILENAME.test(params.filename) ||
+    (params.expectedSha256 !== undefined &&
+      (typeof params.expectedSha256 !== "string" || !SHA256.test(params.expectedSha256))) ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.status !== "submitted" ||
+    details.kind !== "download" ||
+    typeof details.jobId !== "string" ||
+    !OPS_JOB_ID.test(details.jobId)
+  ) {
+    return undefined;
+  }
+  let parsed;
+  try {
+    parsed = new URL(params.url);
+  } catch {
+    return undefined;
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash ||
+    !parsed.hostname
+  ) {
+    return undefined;
+  }
+  return {
+    jobId: details.jobId,
+    url: params.url,
+    safeSource: params.url.split("?", 1)[0],
+    filename: params.filename,
+    expectedSha256: params.expectedSha256,
+  };
+}
+
+function exactDownloadTerminalArtifact(event, submissions) {
+  if (toolCallFailed(event) || !(submissions instanceof Map)) return undefined;
+  const requestedJobId = event?.params?.jobId;
+  const details = event?.result?.details;
+  const submission = submissions.get(requestedJobId);
+  if (
+    typeof requestedJobId !== "string" ||
+    !submission ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.jobId !== requestedJobId ||
+    details.status !== "succeeded" ||
+    details.waitTimedOut === true ||
+    !Array.isArray(details.steps) ||
+    details.steps.length !== 1
+  ) {
+    return undefined;
+  }
+  const step = details.steps[0];
+  const artifact = step?.artifact;
+  if (
+    !step ||
+    typeof step !== "object" ||
+    Array.isArray(step) ||
+    step.action !== "download.stage" ||
+    step.target !== "broker" ||
+    step.exitCode !== 0 ||
+    !artifact ||
+    typeof artifact !== "object" ||
+    Array.isArray(artifact) ||
+    typeof artifact.path !== "string" ||
+    artifact.path !==
+      `/var/lib/pixel-ops-broker/artifacts/${requestedJobId}/${submission.filename}` ||
+    typeof artifact.filename !== "string" ||
+    artifact.filename !== submission.filename ||
+    !Number.isSafeInteger(artifact.bytes) ||
+    artifact.bytes < 0 ||
+    typeof artifact.sha256 !== "string" ||
+    !SHA256.test(artifact.sha256) ||
+    typeof artifact.source !== "string" ||
+    !artifact.source.startsWith("https://") ||
+    !Array.isArray(artifact.redirects) ||
+    (artifact.redirects.length === 0 && artifact.source !== submission.safeSource) ||
+    (artifact.redirects.length > 0 && artifact.redirects[0] !== submission.safeSource) ||
+    artifact.redirects.some((source) =>
+      typeof source !== "string" || !source.startsWith("https://")
+    ) ||
+    (submission.expectedSha256 !== undefined &&
+      (artifact.sha256 !== submission.expectedSha256 ||
+        artifact.expectedSha256Matched !== true)) ||
+    artifact.executable !== false
+  ) {
+    return undefined;
+  }
+  return artifact;
+}
+
+function exactDownloadTerminalOutcome(event, submissions) {
+  if (toolCallFailed(event) || !(submissions instanceof Map)) return undefined;
+  const requestedJobId = event?.params?.jobId;
+  const details = event?.result?.details;
+  if (
+    typeof requestedJobId !== "string" ||
+    !submissions.has(requestedJobId) ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.jobId !== requestedJobId ||
+    details.waitTimedOut === true ||
+    !["failed", "cancelled", "rejected", "awaiting-approval"].includes(details.status)
+  ) {
+    return undefined;
+  }
+  if (details.status === "awaiting-approval") {
+    if (details.approvalRequired !== true || typeof details.planHash !== "string" || !SHA256.test(details.planHash)) {
+      return undefined;
+    }
+    return { jobId: requestedJobId, status: details.status, planHash: details.planHash };
+  }
+  return { jobId: requestedJobId, status: details.status };
+}
+
+function exactDownloadTerminalText(outcome) {
+  if (!outcome) return undefined;
+  if (outcome.status === "awaiting-approval") {
+    return `${EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX} Job: ${outcome.jobId}. Plan SHA-256: ${outcome.planHash}.`;
+  }
+  return `${EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX} Job: ${outcome.jobId}. Terminal status: ${outcome.status}.`;
 }
 
 function webFetchWasTruncated(event) {
@@ -819,7 +970,10 @@ export function createToolLoopGuard({
         odsRoutingExhausted: false,
         odsRoutingTerminalBlocks: 0,
         exactDownloadRequested: false,
+        exactDownloadSubmissions: new Map(),
         exactDownloadBrokerObserved: false,
+        exactDownloadArtifact: undefined,
+        exactDownloadTerminalOutcome: undefined,
         exactDownloadTerminalBlocks: 0,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
@@ -1254,11 +1408,29 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
-    if (
-      toolName === "pixel_ops_download_stage" &&
-      !toolCallFailed(event)
-    ) {
-      state.exactDownloadBrokerObserved = true;
+    if (toolName === "pixel_ops_download_stage") {
+      const submission = exactDownloadSubmission(event);
+      if (submission) state.exactDownloadSubmissions.set(submission.jobId, submission);
+    }
+    if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+      const artifact = exactDownloadTerminalArtifact(
+        event,
+        state.exactDownloadSubmissions
+      );
+      if (artifact) {
+        state.exactDownloadBrokerObserved = true;
+        state.exactDownloadArtifact = artifact;
+        state.exactDownloadTerminalOutcome = undefined;
+      } else {
+        const outcome = exactDownloadTerminalOutcome(
+          event,
+          state.exactDownloadSubmissions
+        );
+        if (outcome) {
+          state.exactDownloadBrokerObserved = true;
+          state.exactDownloadTerminalOutcome = outcome;
+        }
+      }
     }
     if (
       state.githubReadmeUrl &&
@@ -1356,8 +1528,17 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
-    if (state.exactDownloadRequested && !state.exactDownloadBrokerObserved) {
-      return { status: "failed", text: EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX };
+    if (state.exactDownloadRequested) {
+      const terminalText = exactDownloadTerminalText(state.exactDownloadTerminalOutcome);
+      if (terminalText) return { status: "failed", text: terminalText };
+      if (!state.exactDownloadBrokerObserved) {
+        return {
+          status: "failed",
+          text: state.exactDownloadSubmissions.size > 0
+            ? EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX
+            : EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
+        };
+      }
     }
     if (state.latestVerificationStatus === "pending") {
       return { status: "pending", text: VERIFICATION_PENDING_DELIVERY_PREFIX };

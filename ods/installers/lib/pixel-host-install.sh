@@ -992,12 +992,15 @@ _ods_pixel_verify_plugin_loaded() {
 }
 
 _ods_pixel_install_exec_control() {
-    local owner="$1" home="$2" source="$3"
+    local owner="$1" home="$2" source="$3" sudo_source="$4"
     local parent="$home/.openclaw" root="$home/.openclaw/.ods-exec-control"
-    [[ -f "$source" && ! -L "$source" \
-        && "$(stat -c '%U' -- "$source")" == "$owner" \
-        && "$(stat -c '%h' -- "$source")" == 1 ]] || return 1
-    (( (8#$(stat -c '%a' -- "$source") & 0022) == 0 )) || return 1
+    local candidate
+    for candidate in "$source" "$sudo_source"; do
+        [[ -f "$candidate" && ! -L "$candidate" \
+            && "$(stat -c '%U' -- "$candidate")" == "$owner" \
+            && "$(stat -c '%h' -- "$candidate")" == 1 ]] || return 1
+        (( (8#$(stat -c '%a' -- "$candidate") & 0022) == 0 )) || return 1
+    done
     [[ -d "$parent" && ! -L "$parent" \
         && "$(stat -c '%U' -- "$parent")" == "$owner" ]] || return 1
     (( (8#$(stat -c '%a' -- "$parent") & 0022) == 0 )) || return 1
@@ -1005,21 +1008,29 @@ _ods_pixel_install_exec_control() {
         [[ -d "$root" && ! -L "$root" && "$(stat -c '%U' -- "$root")" == "$owner" \
             && "$(stat -c '%a' -- "$root")" == 700 ]] || return 1
     fi
-    if [[ -e "$root/cancellable-exec.sh" || -L "$root/cancellable-exec.sh" ]]; then
-        [[ -f "$root/cancellable-exec.sh" && ! -L "$root/cancellable-exec.sh" \
-            && "$(stat -c '%U' -- "$root/cancellable-exec.sh")" == "$owner" \
-            && "$(stat -c '%h' -- "$root/cancellable-exec.sh")" == 1 ]] || return 1
-    fi
+    for candidate in "$root/cancellable-exec.sh" "$root/sudo"; do
+        if [[ -e "$candidate" || -L "$candidate" ]]; then
+            [[ -f "$candidate" && ! -L "$candidate" \
+                && "$(stat -c '%U' -- "$candidate")" == "$owner" \
+                && "$(stat -c '%h' -- "$candidate")" == 1 ]] || return 1
+        fi
+    done
     ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "$root" || return 1
     ods_pixel_run_as_owner "$owner" "$home" install -m 0500 -- \
         "$source" "$root/cancellable-exec.sh" || return 1
-    [[ -d "$root" && ! -L "$root" && -f "$root/cancellable-exec.sh" \
-        && ! -L "$root/cancellable-exec.sh" \
+    ods_pixel_run_as_owner "$owner" "$home" install -m 0500 -- \
+        "$sudo_source" "$root/sudo" || return 1
+    [[ -d "$root" && ! -L "$root" \
+        && -f "$root/cancellable-exec.sh" && ! -L "$root/cancellable-exec.sh" \
+        && -f "$root/sudo" && ! -L "$root/sudo" \
         && "$(stat -c '%U' -- "$root")" == "$owner" \
         && "$(stat -c '%U' -- "$root/cancellable-exec.sh")" == "$owner" \
+        && "$(stat -c '%U' -- "$root/sudo")" == "$owner" \
         && "$(stat -c '%a' -- "$root")" == 700 \
         && "$(stat -c '%h' -- "$root/cancellable-exec.sh")" == 1 \
-        && "$(stat -c '%a' -- "$root/cancellable-exec.sh")" == 500 ]]
+        && "$(stat -c '%a' -- "$root/cancellable-exec.sh")" == 500 \
+        && "$(stat -c '%h' -- "$root/sudo")" == 1 \
+        && "$(stat -c '%a' -- "$root/sudo")" == 500 ]]
 }
 
 _ods_pixel_recreate_agent_sandbox() {
@@ -1646,6 +1657,172 @@ finally:
 PY
 }
 
+_ods_pixel_write_operations_policy() {
+    local owner="$1" home="$2" policy="$3" install_root="${INSTALL_DIR:?}"
+    local workspace="$home/.openclaw/workspace-pixel"
+
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${policy%/*}" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$policy" "$install_root" "$workspace" <<'PY'
+import json, os, pathlib, re, socket, stat, sys, tempfile
+
+out, install_root, workspace = sys.argv[1:]
+path = pathlib.Path(out)
+if not path.is_absolute() or path == pathlib.Path("/"):
+    raise SystemExit("ODS Pixel Operations policy path must be absolute and non-root")
+parent_info = path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o077):
+    raise SystemExit("unsafe ODS Pixel Operations policy directory")
+if path.is_symlink():
+    raise SystemExit("ODS Pixel Operations policy cannot be a symlink")
+if path.exists():
+    info = path.stat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or info.st_size > 2 * 1024 * 1024):
+        raise SystemExit("unsafe existing ODS Pixel Operations policy")
+
+hostname = socket.gethostname()
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", hostname):
+    raise SystemExit("unsafe ODS host name for Pixel Operations policy")
+
+def normalized_root(value, label):
+    candidate = pathlib.Path(value)
+    if not candidate.is_absolute() or candidate == pathlib.Path("/"):
+        raise SystemExit(f"{label} must be an absolute non-root path")
+    return os.path.normpath(str(candidate))
+
+install_root = normalized_root(install_root, "ODS install root")
+workspace = normalized_root(workspace, "Pixel workspace")
+hostname_binary = "/usr/bin/hostname"
+uname_binary = "/usr/bin/uname"
+for binary in (hostname_binary, uname_binary):
+    info = pathlib.Path(binary).lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0 or info.st_mode & 0o022
+            or not os.access(binary, os.X_OK)):
+        raise SystemExit(f"unsafe Pixel Operations executable: {binary}")
+
+payload = {
+    "schemaVersion": 2,
+    "deployment": "ods-default",
+    "maxWorkers": 4,
+    "workflowWorkers": 4,
+    "maxWorkflowSteps": 32,
+    "defaultTimeoutSeconds": 60,
+    "maxTimeoutSeconds": 3600,
+    "maxOutputBytes": 262144,
+    "planTtlMinutes": 30,
+    "identityCacheSeconds": 30,
+    "sshBinary": "/usr/bin/ssh",
+    "download": {
+        "stagingRoot": "/var/lib/pixel-ops-broker/artifacts",
+        "maxBytes": 536870912,
+        "maxRedirects": 5,
+        "allowedDomains": [
+            "example.com",
+            "github.com",
+            "githubusercontent.com",
+            "hf.co",
+            "huggingface.co",
+            "nodejs.org",
+            "npmjs.org",
+            "pypi.org",
+            "pythonhosted.org",
+        ],
+    },
+    "targets": {
+        "ods-host": {
+            "enabled": True,
+            "backend": "local",
+            "environment": "unclassified",
+            "expectedHostname": hostname,
+            "defaultCwd": install_root,
+            "allowedRoots": [install_root, workspace],
+            "writableRoots": [workspace],
+            "shell": "/bin/bash",
+            "allowRaw": False,
+            "labels": ["ods-host"],
+            "capabilities": ["inspect", "stage-download"],
+        },
+        "broker": {
+            "enabled": True,
+            "backend": "local",
+            "environment": "lab",
+            "expectedHostname": hostname,
+            "defaultCwd": "/var/lib/pixel-ops-broker",
+            "allowedRoots": ["/var/lib/pixel-ops-broker"],
+            "writableRoots": ["/var/lib/pixel-ops-broker/artifacts"],
+            "shell": "/bin/sh",
+            "allowRaw": False,
+            "labels": ["broker-quarantine"],
+            "capabilities": ["stage-download"],
+        },
+    },
+    "actions": {
+        "host.identity": {
+            "description": "Verify and report the ODS host name.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [hostname_binary],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.platform": {
+            "description": "Report the ODS host kernel and architecture.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [uname_binary, "-a"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+    },
+    "authority": {
+        "defaultLevel": "propose",
+        "grants": [{
+            "id": "ods-approved-downloads",
+            "level": "bounded-auto",
+            "actions": ["download.stage"],
+            "targets": ["broker"],
+            "tiers": ["staging"],
+            "environments": ["lab"],
+            "maxExecutions": 100,
+            "windowSeconds": 86400,
+            "maxConcurrent": 2,
+            "maxRuntimeSeconds": 600,
+            "maxFailures": 10,
+            "maxArtifactBytes": 536870912,
+        }],
+    },
+}
+content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+descriptor, temporary = tempfile.mkstemp(prefix=".pixel-ops-policy.", dir=path.parent)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
@@ -1716,9 +1893,10 @@ if (not gateway_port.isdigit() or not 1 <= int(gateway_port) <= 65535
         or any(ord(character) < 32 or ord(character) == 127 for character in gateway_key)):
     raise SystemExit("invalid ODS Pixel gateway route")
 home = pathlib.Path(home)
+path = pathlib.Path(out)
 payload = {
     "deploymentProfile": "prepared",
-    "capabilityProfile": "minimal",
+    "capabilityProfile": "engineering-operator",
     "ownerName": "ODS Owner",
     "organization": "Local ODS",
     "deploymentName": "ods-default",
@@ -1757,7 +1935,8 @@ payload = {
     "calendarDirectEnabled": False,
     "socialLimbEnabled": False,
     "webLimbEnabled": False,
-    "operationsLimbEnabled": False,
+    "operationsLimbEnabled": True,
+    "operationsPolicyFile": str(path.parent / "operations-policy.json"),
     "frontierLimbEnabled": False,
     "frontierAuthMode": "api-key",
     # Pixel still validates the managed Frontier policy while the limb is
@@ -1768,7 +1947,6 @@ payload = {
     "frontierTaskPacks": [],
     "operationsActionPacks": [],
 }
-path = pathlib.Path(out)
 path.parent.mkdir(parents=True, exist_ok=True)
 if path.is_symlink():
     raise SystemExit("ODS Pixel onboarding contract cannot be a symlink")
@@ -1891,7 +2069,7 @@ _ods_pixel_wait_ingress() {
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
+    local owner home source_root pixel_root plugin_root answers operations_policy openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -1904,12 +2082,14 @@ ods_pixel_install_default_agent() {
     plugin_root="${INSTALL_DIR:?}/extensions/services/pixel-agent"
     [[ -f "$plugin_root/plugin/openclaw.plugin.json" \
         && -f "$plugin_root/host/pixel_ingress.mjs" \
-        && -f "$plugin_root/host/cancellable-exec.sh" ]] || return 1
+        && -f "$plugin_root/host/cancellable-exec.sh" \
+        && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
     if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then
         ai_bad "The ODS Pixel plugin path is not a safe owner-controlled code tree."
         return 1
     fi
-    if ! _ods_pixel_install_exec_control "$owner" "$home" "$plugin_root/host/cancellable-exec.sh"; then
+    if ! _ods_pixel_install_exec_control "$owner" "$home" \
+        "$plugin_root/host/cancellable-exec.sh" "$plugin_root/host/noninteractive-sudo.sh"; then
         ai_bad "Could not install Pixel's owner-private cancellable execution control."
         return 1
     fi
@@ -1940,6 +2120,11 @@ ods_pixel_install_default_agent() {
     [[ "$plugin_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
 
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
+    operations_policy="$INSTALL_DIR/data/pixel/operations-policy.json"
+    if ! _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"; then
+        ai_bad "Could not write the owner-private ODS Pixel Operations policy."
+        return 1
+    fi
     if ! _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"; then
         ai_bad "Could not write the ODS-managed Pixel onboarding contract."
         return 1
@@ -1962,6 +2147,10 @@ ods_pixel_install_default_agent() {
     fi
     if [[ "$reuse_active" == true ]]; then
         ai "The exact ODS-managed Pixel contract is already active; verifying it without reapplying the same release..."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
+            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
+            return 1
+        fi
         if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
             ai_bad "The existing ODS-managed Pixel contract failed exact-source verification. See $LOG_FILE."
             return 1
@@ -1970,6 +2159,10 @@ ods_pixel_install_default_agent() {
         if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force >>"$LOG_FILE" 2>&1 \
             || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan >>"$LOG_FILE" 2>&1; then
             ai_bad "Pixel configure or plan failed. See $LOG_FILE for the exact Pixel error."
+            return 1
+        fi
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
+            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
             return 1
         fi
         if [[ "$same_verified_source" == true ]]; then
@@ -2015,7 +2208,9 @@ ods_pixel_install_default_agent() {
                 fi
             fi
         elif ! {
-            ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" apply --confirm &&
+            ods_pixel_run_as_owner "$owner" "$home" env \
+                PATH="$home/.openclaw/.ods-exec-control:$PATH" \
+                "$pixel_root/pixel" apply --confirm </dev/null &&
             ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
         } >>"$LOG_FILE" 2>&1; then
             ai_bad "Pixel apply or verify failed. See $LOG_FILE for the exact Pixel error."

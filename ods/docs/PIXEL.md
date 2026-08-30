@@ -11,8 +11,10 @@ On a fresh local-model Pixel install, ODS selects only a pinned catalog model
 with an explicit verified agent-viability verdict. If a lightweight tier's
 model size preference would otherwise choose a model that failed agent or
 application probes, agent readiness takes precedence while hardware memory-fit
-checks remain enforced. An explicit local `--pixel` install fails closed when
-no verified agent model fits; automatic enablement falls back to Hermes.
+checks remain enforced. Automatic enablement falls back to Hermes when no
+verified agent model fits. An explicit local `--pixel` request may continue
+with the best installable model, but ODS preserves and displays that model's
+unqualified readiness verdict rather than silently calling it agent-ready.
 Qualified hosts using ODS-managed cloud, hybrid, or external Lemonade routes
 bind Pixel through the same authenticated LiteLLM gateway as other ODS
 consumers. Gateway readiness does not itself qualify an upstream model's agent
@@ -86,18 +88,19 @@ Browser
                                                 v
                            Pixel/OpenClaw gateway on 127.0.0.1:18789
                                                 |
-                         +-----------------------+-------------------+
-                         |                                           |
-                         v                                           v
-       exact-digest ODS plugin, three read-only tools       ods-gateway/ods/current
-                         |                                           |
-                         v                                           v
-       /run/ods-pixel/ods-status.json (mode 0640)                     |
-                                                                     v
-                                                 authenticated LiteLLM on loopback
-                                                                     |
-                                                                     v
-                                                     active ODS model/provider route
+            +--------------------+----------------------+--------------------+
+            |                    |                      |                    |
+            v                    v                      v                    v
+ exact-digest ODS plugin   Operations plugin     sandbox coding      ods-gateway/
+ three projection tools   typed request spool    and public web      ods/current
+            |                    |                                           |
+            v                    v                                           v
+ /run/ods-pixel/         isolated root-owned                         authenticated
+ ods-status.json         Operations Broker                          LiteLLM loopback
+                              |                                          |
+                              v                                          v
+                   quarantined downloads and                 active ODS model/
+                   named policy actions                      provider route
 ```
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
@@ -111,6 +114,44 @@ bounds request, response, stream, and timeout sizes.
 The edge and host ingress health checks fail closed unless the next hop is
 actually ready. Open WebUI is not allowed to advertise `pixel/default` while
 the private ingress is unavailable.
+
+### Operations capability and exact downloads
+
+ODS enables Pixel's `engineering-operator` capability profile but explicitly
+keeps email, Calendar, social, Web Courier, and Frontier limbs disabled until
+their credentials and qualification paths are configured. The Operations limb
+is enabled through Pixel's isolated broker, not by granting the model a host
+shell, Docker socket, or privileged credential.
+
+The installer writes an owner-private, mode-`0600` policy at
+`$INSTALL_DIR/data/pixel/operations-policy.json`. Pixel copies the reviewed
+policy into root-controlled broker custody. The gateway can write typed request
+and cancellation records and read sanitized inventory, event, and result
+projections, but it cannot read broker policy, approvals, credentials, plans,
+leases, private state, or SSH material.
+
+The default policy provides two read-only named actions, `host.identity` and
+`host.platform`. Raw shell is disabled. It also permits bounded automatic
+staging from a finite set of common public artifact hosts:
+
+- `example.com` for deterministic qualification;
+- GitHub and `githubusercontent.com`;
+- Hugging Face and `hf.co`;
+- npm, Node.js, PyPI, and `pythonhosted.org`.
+
+Other public domains do not become silently trusted. The broker compiles them
+as approval-required immutable plans. Credential-bearing URLs, non-HTTPS URLs,
+raw or private addresses, DNS rebinding, redirects outside reviewed domains,
+oversized content, digest mismatches, and emergency-pause or cancellation
+events fail closed.
+
+Successful downloads remain non-executable mode-`0600` artifacts under
+`/var/lib/pixel-ops-broker/artifacts/<job-id>/`. A submission receipt is not
+success. ODS accepts an exact-download claim only after a matching terminal
+broker result reports `succeeded` with the quarantine path, exact byte count,
+SHA-256 digest, HTTPS source, and `executable=false`. A transformed `web_fetch`
+response or model-created workspace substitute can never satisfy this
+contract.
 
 ### Cancellation and sandbox execution
 
@@ -362,21 +403,23 @@ Do not copy generated secrets into issues, logs, support bundles, or PRs.
 ## Health and operations
 
 ```bash
-systemctl status openclaw-gateway.service pixel-ingress.service
+systemctl status openclaw-gateway.service pixel-ingress.service pixel-ops-broker.service
 sudo -u "$USER" curl --unix-socket /run/ods-pixel/pixel-ingress.sock \
   http://localhost/health
 docker inspect --format '{{.State.Health.Status}}' ods-pixel-edge
 docker compose ps
 ```
 
-Expected state is two active system services, `{"status":"ok"}` from the
-private socket, and a healthy `ods-pixel-edge`. The socket is intentionally not
-reachable over a host TCP port.
+Expected state is three active system services, `{"status":"ok"}` from the
+private socket, a current Operations inventory projection, and a healthy
+`ods-pixel-edge`. The socket is intentionally not reachable over a host TCP
+port.
 
 Useful logs:
 
 ```bash
-journalctl -u openclaw-gateway.service -u pixel-ingress.service --since today
+journalctl -u openclaw-gateway.service -u pixel-ingress.service \
+  -u pixel-ops-broker.service --since today
 docker logs ods-pixel-edge
 docker logs ods-dashboard-api
 ```
@@ -398,8 +441,14 @@ healthy, and the authenticated Hermes URL works. This removes the Pixel edge
 Compose layer, model registration, environment, and default route. When the
 private ODS management marker securely binds the active deployment to this
 exact install, rollback also stops and removes the managed host gateway and
-private ingress, removes their active release link and runtime attestation, and
-moves the fully verified release tree into Pixel's private
+private ingress, then stops the isolated Operations Broker. It verifies the
+broker unit, environment, executable, private policy, state-tree identities,
+and dedicated system user/group before removing those privileged artifacts and
+their quarantined downloads, plans, receipts, and authority state. Symlinks,
+hardlinks, special files, foreign ownership, unexpected group membership, or
+byte drift fail closed before deletion. Rollback also removes the active
+release link and runtime attestation, and moves the fully verified release tree
+into Pixel's private
 `retired-ods-releases/` archive. An ambient, legacy, incompletely bound, or
 drifted Pixel/OpenClaw deployment is left untouched. Re-enable only after the
 qualification predicate and written authorization are still valid; ODS then
@@ -417,7 +466,11 @@ drifted Pixel/OpenClaw deployment untouched. For a fully bound ODS-created
 deployment, uninstall holds Pixel's deployment lock, verifies the installed
 release manifest, retires only Pixel's validated sandbox containers, and
 removes the exact live sandbox tag, active-release link, and runtime
-attestation. It moves the byte-verified release tree out of Pixel's active
+attestation. The same bounded teardown removes only a byte-matched Operations
+Broker installation and a recursively validated broker state root; it never
+adopts or recursively deletes a partial ready, drifted, linked, mounted,
+foreign-owned, or special-file-bearing tree. It moves the byte-verified release
+tree out of Pixel's active
 `releases/<version>` namespace into a private
 `retired-ods-releases/<version>-<identity>.<nonce>/release` archive. The exact
 retired bytes, candidate image tag, deployment lock, browser/bootstrap caches,

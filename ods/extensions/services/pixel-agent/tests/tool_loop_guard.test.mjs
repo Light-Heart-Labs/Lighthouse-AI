@@ -13,7 +13,10 @@ import {
   EXEC_PRIVATE_NETWORK_REASON,
   EXACT_DOWNLOAD_LOOP_ABORT_REASON,
   EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
+  EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX,
+  EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX,
   EXACT_DOWNLOAD_UNAVAILABLE_DELIVERY_PREFIX,
+  EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX,
   GITHUB_CANONICAL_FETCH_FAILED_REASON,
   GITHUB_CANONICAL_SOURCE_PREFIX,
   GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
@@ -182,7 +185,23 @@ test("fails closed when transformed web evidence is requested as an exact downlo
   });
 });
 
-test("permits the explicit staged-download broker family for an exact download", () => {
+test("allows one exact correction from transformed web fetch to the staged-download broker", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Download https://example.com byte-for-byte as exact.html." }
+  );
+  assert.deepEqual(
+    call(guard, "web_fetch", {
+      event: { params: { url: "https://example.com/" } },
+    }),
+    { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON }
+  );
+  assert.equal(call(guard, "pixel_ops_download_stage"), undefined);
+});
+
+test("requires terminal artifact evidence after a staged-download submission", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -191,9 +210,256 @@ test("permits the explicit staged-download broker family for an exact download",
   );
   assert.equal(call(guard, "pixel_ops_download_stage"), undefined);
   afterCall(guard, "pixel_ops_download_stage", {
-    event: { result: { details: { status: "submitted" } } },
+    event: {
+      params: { url: "https://example.com/", filename: "exact.html" },
+      result: {
+        details: {
+          jobId: "ops-1234567890123-abcdef123456",
+          status: "submitted",
+          kind: "download",
+        },
+      },
+    },
+  });
+  assert.equal(call(guard, "pixel_ops_job_wait"), undefined);
+  assert.deepEqual(reply(guard), {
+    payload: {
+      text: EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX,
+      metadata: { preserved: true },
+    },
+    reason:
+      "Pixel replaced an unverified terminal reply with host-authoritative evidence truth.",
+  });
+});
+
+test("accepts a matching terminal staged-download artifact receipt", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Download https://example.com byte-for-byte and report the exact digest." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: { url: "https://example.com/", filename: "example.html" },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId, timeoutSeconds: 20 },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            action: "download.stage",
+            target: "broker",
+            exitCode: 0,
+            artifact: {
+              path: `/var/lib/pixel-ops-broker/artifacts/${jobId}/example.html`,
+              filename: "example.html",
+              bytes: 559,
+              sha256: "a".repeat(64),
+              source: "https://example.com/",
+              redirects: [],
+              executable: false,
+            },
+          }],
+        },
+      },
+    },
   });
   assert.equal(reply(guard), undefined);
+});
+
+test("rejects mismatched or malformed staged-download terminal evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Save exact origin bytes from this HTTPS URL and give me the SHA-256." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: { url: "https://example.com/", filename: "substitute.html" },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          steps: [{
+            action: "download.stage",
+            target: "broker",
+            exitCode: 0,
+            artifact: {
+              path: "workspace/substitute.html",
+              filename: "substitute.html",
+              bytes: 12,
+              sha256: "b".repeat(64),
+              source: "https://example.com/",
+              redirects: [],
+              executable: false,
+            },
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX);
+});
+
+test("binds staged-download success to the submitted expected digest", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Download the exact bytes and verify the supplied SHA-256." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: {
+        url: "https://example.com/",
+        filename: "exact.html",
+        expectedSha256: "d".repeat(64),
+      },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          steps: [{
+            action: "download.stage",
+            target: "broker",
+            exitCode: 0,
+            artifact: {
+              path: `/var/lib/pixel-ops-broker/artifacts/${jobId}/exact.html`,
+              filename: "exact.html",
+              bytes: 559,
+              sha256: "e".repeat(64),
+              source: "https://example.com/",
+              redirects: [],
+              expectedSha256Matched: true,
+              executable: false,
+            },
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX);
+});
+
+test("reports a matching staged-download terminal failure without claiming an artifact", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Download these exact bytes and report the staged artifact digest." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: { url: "https://example.com/", filename: "exact.html" },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId, timeoutSeconds: 20 },
+      result: {
+        details: {
+          jobId,
+          status: "failed",
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `${EXACT_DOWNLOAD_FAILED_DELIVERY_PREFIX} Job: ${jobId}. Terminal status: failed.`
+  );
+});
+
+test("reports a matching immutable staged-download plan that needs owner approval", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "c".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Download these exact bytes and report the staged artifact digest." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: { url: "https://example.com/", filename: "exact.html" },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "awaiting-approval",
+          approvalRequired: true,
+          planHash,
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `${EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX} Job: ${jobId}. Plan SHA-256: ${planHash}.`
+  );
+});
+
+test("rejects malformed staged-download approval evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Fetch the exact origin bytes and save the resulting artifact." }
+  );
+  afterCall(guard, "pixel_ops_download_stage", {
+    event: {
+      params: { url: "https://example.com/", filename: "exact.html" },
+      result: { details: { jobId, status: "submitted", kind: "download" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "awaiting-approval",
+          approvalRequired: true,
+          planHash: "not-a-digest",
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, EXACT_DOWNLOAD_UNVERIFIED_DELIVERY_PREFIX);
 });
 
 test("routes explicit ODS facts through projections before mixed workspace work", () => {

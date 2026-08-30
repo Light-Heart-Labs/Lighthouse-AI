@@ -117,11 +117,14 @@ if [[ "$PIXEL_AGENT_MODE" == "pixel" ]]; then
     if [[ "${PIXEL_AGENT_MODEL_READY:-unknown}" == "false" \
         && "$_pixel_model_route_class" == "local" ]]; then
         if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
-            ai_bad "Pixel was explicitly required, but no catalog-verified agent model fits this hardware."
-            return 1 2>/dev/null || exit 1
+            ENABLE_PIXEL_RUNTIME=true
+            ai_warn "Pixel will use an explicitly selected but catalog-unqualified local model."
+            ai_warn "Model swapping remains available; the Dashboard readiness verdict must not describe this model as qualified."
+            log "Pixel selected by explicit owner request with an unqualified local model; Hermes remains available as rollback when enabled"
+        else
+            PIXEL_AGENT_MODE=hermes
+            log "Pixel auto-gate selected Hermes because no catalog-verified agent model fits this hardware"
         fi
-        PIXEL_AGENT_MODE=hermes
-        log "Pixel auto-gate selected Hermes because no catalog-verified agent model fits this hardware"
     elif [[ "$_pixel_model_route_class" == "unmanaged-external" ]]; then
         if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
             ai_bad "Pixel requires an ODS-managed LiteLLM route; generic external-model reuse is not yet eligible."
