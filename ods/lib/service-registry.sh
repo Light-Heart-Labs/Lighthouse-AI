@@ -330,7 +330,7 @@ sr_compose_flags() {
     local flags=""
     for sid in "${SERVICE_IDS[@]}"; do
         local cf="${SERVICE_COMPOSE[$sid]}"
-        [[ -n "$cf" && -f "$cf" ]] && flags="$flags -f $cf"
+        [[ -n "$cf" && -f "$cf" ]] && flags="$flags -f \"$cf\""
     done
 
     # Store in cache
