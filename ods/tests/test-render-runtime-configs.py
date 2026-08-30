@@ -78,6 +78,18 @@ def test_switchboard_surface_gated_on_enabled_mode() -> None:
     assert switchboard["content"].count("http://model-router:9099/v1") == 4
 
 
+def test_local_profiles_allow_long_agent_streams() -> None:
+    local = run_renderer("--surface", "litellm-local")
+    local_config = file_by_surface(local, "litellm-local")["content"]
+    assert "request_timeout: 900" in local_config
+    assert "stream_timeout: 900" in local_config
+
+    hybrid = run_renderer("--surface", "litellm-hybrid", "--ods-mode", "hybrid")
+    hybrid_config = file_by_surface(hybrid, "litellm-hybrid")["content"]
+    assert "request_timeout: 900" in hybrid_config
+    assert "stream_timeout: 900" in hybrid_config
+
+
 def test_all_selects_one_mode_config() -> None:
     expected = {
         "local": "litellm-local",
@@ -592,6 +604,7 @@ def main() -> int:
     tests = [
         test_all_surfaces_render,
         test_switchboard_surface_gated_on_enabled_mode,
+        test_local_profiles_allow_long_agent_streams,
         test_all_selects_one_mode_config,
         test_cloud_enabled_never_renders_local_switchboard,
         test_remote_cloud_projection_uses_internal_egress_and_state_receipt,

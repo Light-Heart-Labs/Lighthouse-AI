@@ -170,8 +170,8 @@ general_settings:
 litellm_settings:
   drop_params: true
   set_verbose: false
-  request_timeout: 120
-  stream_timeout: 60
+  request_timeout: 900
+  stream_timeout: 900
 """
     return RenderedFile("litellm-local", "config/litellm/local.yaml", content)
 
@@ -359,8 +359,8 @@ general_settings:
 litellm_settings:
   drop_params: true
   set_verbose: false
-  request_timeout: 120
-  stream_timeout: 60
+  request_timeout: 900
+  stream_timeout: 900
 """
     return RenderedFile("litellm-hybrid", "config/litellm/hybrid.yaml", content)
 
