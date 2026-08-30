@@ -78,6 +78,23 @@ function formatContext(value) {
   return `${context.toLocaleString()} context`
 }
 
+export function formatElapsed(value) {
+  const totalSeconds = Math.max(0, Math.floor(Number(value) || 0))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function workingDetail(elapsedSeconds) {
+  if (elapsedSeconds < 15) return 'Starting the owner-agent turn'
+  if (elapsedSeconds < 60) return 'Pixel is working with the active model'
+  return 'Still working — local model and tool turns can take several minutes'
+}
+
 function makeChatId() {
   const cryptoApi = globalThis.crypto
   if (cryptoApi?.randomUUID) return cryptoApi.randomUUID()
@@ -156,6 +173,7 @@ export default function Pixel({ systemStatus = null }) {
   const [messages, setMessages] = useState(() => initialChat?.messages || [])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
@@ -200,6 +218,20 @@ export default function Pixel({ systemStatus = null }) {
   }, [])
 
   useEffect(() => () => abortRef.current?.abort(), [])
+
+  useEffect(() => {
+    if (!sending) {
+      setWorkingElapsedSeconds(0)
+      return undefined
+    }
+    const startedAt = Date.now()
+    const updateElapsed = () => {
+      setWorkingElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
+    }
+    updateElapsed()
+    const timer = globalThis.setInterval(updateElapsed, 1000)
+    return () => globalThis.clearInterval(timer)
+  }, [sending])
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView?.({ behavior: 'smooth' })
@@ -369,6 +401,7 @@ export default function Pixel({ systemStatus = null }) {
   const inputOver = input.length > MAX_INPUT_LEN
   const inputEmpty = !input.trim()
   const isDisabled = sending || status !== 'available'
+  const workingElapsed = formatElapsed(workingElapsedSeconds)
   const statusLabel = sending
     ? 'Working'
     : status === 'available'
@@ -436,6 +469,7 @@ export default function Pixel({ systemStatus = null }) {
               }`} />
             )}
             {statusLabel}
+            {sending && <span className="font-mono text-[10px] opacity-80">{workingElapsed}</span>}
           </span>
         </div>
       </div>
@@ -526,9 +560,14 @@ export default function Pixel({ systemStatus = null }) {
                 <span className="break-words whitespace-pre-wrap">{message.content}</span>
               )}
               {message.status === 'streaming' && !message.content && (
-                <span className="inline-flex items-center gap-2 text-theme-text-muted">
+                <span role="status" className="inline-flex items-start gap-2 text-theme-text-muted">
                   <Loader2 className="h-4 w-4 animate-spin text-theme-accent-light" />
-                  <span>Pixel is working…</span>
+                  <span>
+                    <span className="block">{workingDetail(workingElapsedSeconds)}</span>
+                    <span className="mt-0.5 block text-xs text-theme-text-muted/80">
+                      {workingElapsed} elapsed · You can stop safely at any time.
+                    </span>
+                  </span>
                 </span>
               )}
             </div>
@@ -582,7 +621,7 @@ export default function Pixel({ systemStatus = null }) {
           )}
           </div>
           <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-theme-text-muted/70">
-            <span>{sending ? 'Pixel is using the active ODS model and tools.' : 'Enter to send • Shift+Enter for a new line'}</span>
+            <span>{sending ? `Pixel is using the active ODS model and tools · ${workingElapsed} elapsed` : 'Enter to send • Shift+Enter for a new line'}</span>
             <span className={inputOver ? 'text-red-400' : ''}>{input.length.toLocaleString()} / {MAX_INPUT_LEN.toLocaleString()}</span>
           </div>
         </div>

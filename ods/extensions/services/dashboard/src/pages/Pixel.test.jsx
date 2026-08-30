@@ -3,7 +3,7 @@ import { render } from '../test/test-utils'
 
 // The repository's base ESLint profile does not mark JSX identifiers as uses.
 // eslint-disable-next-line no-unused-vars
-import Pixel from './Pixel'
+import Pixel, { formatElapsed } from './Pixel'
 
 const response = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -52,6 +52,12 @@ describe('Pixel', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('formats short and long owner-agent turn durations', () => {
+    expect(formatElapsed(0)).toBe('0:00')
+    expect(formatElapsed(71)).toBe('1:11')
+    expect(formatElapsed(3671)).toBe('1:01:11')
   })
 
   it('shows unavailable state when status fails', async () => {
@@ -418,6 +424,8 @@ describe('Pixel', () => {
       const ta = screen.getByPlaceholderText('Message Pixel...')
       expect(ta).toBeDisabled()
       expect(screen.getByText('Working')).toBeInTheDocument()
+      expect(screen.getAllByText(/0:00 elapsed/).length).toBeGreaterThan(0)
+      expect(screen.getByText('Starting the owner-agent turn')).toBeInTheDocument()
       expect(screen.queryByText('Available')).not.toBeInTheDocument()
     })
   })
