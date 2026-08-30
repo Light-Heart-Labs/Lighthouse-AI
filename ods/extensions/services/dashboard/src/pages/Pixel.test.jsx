@@ -381,6 +381,8 @@ describe('Pixel', () => {
       expect(screen.queryByTitle('Send')).not.toBeInTheDocument()
       const ta = screen.getByPlaceholderText('Message Pixel...')
       expect(ta).toBeDisabled()
+      expect(screen.getByText('Working')).toBeInTheDocument()
+      expect(screen.queryByText('Available')).not.toBeInTheDocument()
     })
   })
 
@@ -411,6 +413,7 @@ describe('Pixel', () => {
 
     const stopped = await screen.findByText('Response stopped')
     expect(stopped.closest('div')).not.toHaveClass('bg-red-500/10')
+    expect(screen.getByText('Available')).toBeInTheDocument()
     expect(screen.getByTitle('Send')).toBeDisabled()
   })
 

@@ -331,6 +331,13 @@ export default function Pixel({ systemStatus = null }) {
   const inputOver = input.length > MAX_INPUT_LEN
   const inputEmpty = !input.trim()
   const isDisabled = sending || status !== 'available'
+  const statusLabel = sending
+    ? 'Working'
+    : status === 'available'
+      ? 'Available'
+      : status === 'loading'
+        ? 'Connecting...'
+        : 'Degraded'
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden text-theme-text">
@@ -371,19 +378,24 @@ export default function Pixel({ systemStatus = null }) {
               <span className="hidden sm:inline">New chat</span>
             </button>
           )}
-          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-            status === 'available'
+          <span
+            aria-live="polite"
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+            sending
+              ? 'border-theme-accent/35 bg-theme-accent/15 text-theme-accent-light'
+              : status === 'available'
               ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-400'
               : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
-          }`}>
-            {status === 'loading' ? (
+          }`}
+          >
+            {sending || status === 'loading' ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <span className={`h-1.5 w-1.5 rounded-full ${
                 status === 'available' ? 'bg-emerald-400' : 'bg-amber-300'
               }`} />
             )}
-            {status === 'available' ? 'Available' : status === 'loading' ? 'Connecting...' : 'Degraded'}
+            {statusLabel}
           </span>
         </div>
       </div>
