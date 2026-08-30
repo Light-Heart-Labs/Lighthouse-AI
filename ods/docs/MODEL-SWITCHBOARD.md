@@ -93,7 +93,7 @@ Lemonade's deterministic `collection.router` behavior is a strong fit for AMD/Le
 
 ### LiteLLM alone
 
-LiteLLM already provides the public gateway and model aliases, but ODS v1.81.3 is configured from a read-only YAML mount with no database-backed management plane. Today that YAML contains the concrete model ID, so changing the alias still requires rewriting the file and restarting LiteLLM. Enabling LiteLLM's database management stack solely for one mutable local alias would add a database, migration, and admin surface to every ODS installation.
+LiteLLM already provides the public gateway and model aliases, but ODS's pinned LiteLLM is configured from a read-only YAML mount with no database-backed management plane. Today that YAML contains the concrete model ID, so changing the alias still requires rewriting the file and restarting LiteLLM. Enabling LiteLLM's database management stack solely for one mutable local alias would add a database, migration, and admin surface to every ODS installation.
 
 Keep LiteLLM for auth, OpenAI compatibility, policy, and provider translation. Put ODS's small mutable routing decision behind it, where ODS can test and version the behavior independently.
 

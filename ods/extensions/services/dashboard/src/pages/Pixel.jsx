@@ -173,6 +173,8 @@ export default function Pixel({ systemStatus = null }) {
   const [messages, setMessages] = useState(() => initialChat?.messages || [])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState('')
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
 
   const abortRef = useRef(null)
@@ -274,6 +276,8 @@ export default function Pixel({ systemStatus = null }) {
     setMessages([...conversation, { role: 'assistant', content: '', status: 'streaming' }])
     setInput('')
     setSending(true)
+    setStopping(false)
+    setStopError('')
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -370,20 +374,57 @@ export default function Pixel({ systemStatus = null }) {
       }
     } finally {
       setSending(false)
+      setStopping(false)
+      setStopError('')
       if (abortRef.current === controller) abortRef.current = null
       reader?.releaseLock?.()
     }
   }, [input, messages, sending, status])
 
-  const stopStreaming = useCallback(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
-    setMessages(previous => replaceLastAssistant(previous, {
-      content: stoppedContent(previous.at(-1)?.content),
-      status: 'stopped',
-    }))
-    setSending(false)
-  }, [])
+  const stopStreaming = useCallback(async () => {
+    const controller = abortRef.current
+    if (!controller || stopping) return
+
+    setStopping(true)
+    setStopError('')
+    try {
+      const response = await fetch('/api/pixel/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatIdRef.current }),
+      })
+      let payload = null
+      if (typeof response?.json === 'function') {
+        try {
+          payload = await response.json()
+        } catch {
+          // The exact acknowledgement check below fails closed.
+        }
+      }
+      if (!response?.ok || !payload || Object.keys(payload).length !== 1 || payload.aborted !== true) {
+        throw new Error('cancellation was not acknowledged')
+      }
+
+      // A normal terminal response may win the cancellation race. Do not
+      // rewrite that completed answer as owner-stopped.
+      if (abortRef.current !== controller) return
+      controller.abort()
+      abortRef.current = null
+      setMessages(previous => replaceLastAssistant(previous, {
+        content: stoppedContent(previous.at(-1)?.content),
+        status: 'stopped',
+      }))
+      setSending(false)
+    } catch {
+      // Keep the live stream attached and Stop retryable. Claiming success
+      // without an exact acknowledgement could leave tools or inference active.
+      if (abortRef.current === controller) {
+        setStopError('Stop was not confirmed. Pixel is still connected; retry Stop.')
+      }
+    } finally {
+      setStopping(false)
+    }
+  }, [stopping])
 
   const startNewChat = useCallback(() => {
     if (sending) return
@@ -402,8 +443,10 @@ export default function Pixel({ systemStatus = null }) {
   const inputEmpty = !input.trim()
   const isDisabled = sending || status !== 'available'
   const workingElapsed = formatElapsed(workingElapsedSeconds)
-  const statusLabel = sending
-    ? 'Working'
+  const statusLabel = stopping
+    ? 'Stopping'
+    : sending
+      ? 'Working'
     : status === 'available'
       ? 'Available'
       : status === 'switching'
@@ -604,10 +647,11 @@ export default function Pixel({ systemStatus = null }) {
           {sending ? (
             <button
               onClick={stopStreaming}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-red-500 text-white transition hover:bg-red-600"
-              title="Stop"
+              disabled={stopping}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-red-500 text-white transition hover:bg-red-600 disabled:cursor-wait disabled:opacity-70"
+              title={stopping ? 'Stopping' : 'Stop'}
             >
-              <Square className="h-4 w-4" />
+              {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
             </button>
           ) : (
             <button
@@ -620,8 +664,9 @@ export default function Pixel({ systemStatus = null }) {
             </button>
           )}
           </div>
+          {stopError && <p role="alert" className="mt-1.5 px-1 text-xs text-amber-300">{stopError}</p>}
           <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-theme-text-muted/70">
-            <span>{sending ? `Pixel is using the active ODS model and tools · ${workingElapsed} elapsed` : 'Enter to send • Shift+Enter for a new line'}</span>
+            <span>{stopping ? 'Waiting for exact cancellation acknowledgement' : sending ? `Pixel is using the active ODS model and tools · ${workingElapsed} elapsed` : 'Enter to send • Shift+Enter for a new line'}</span>
             <span className={inputOver ? 'text-red-400' : ''}>{input.length.toLocaleString()} / {MAX_INPUT_LEN.toLocaleString()}</span>
           </div>
         </div>

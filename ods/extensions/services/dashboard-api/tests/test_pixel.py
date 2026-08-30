@@ -170,6 +170,10 @@ def test_request_schema_forbids_extra_fields_and_unsafe_ids():
         pixel.ChatStreamRequest.model_validate(
             {"chat_id": "safe", "messages": [{"role": "tool", "content": "ok"}]}
         )
+    with pytest.raises(ValidationError):
+        pixel.ChatCancelRequest.model_validate({"chat_id": "../../escape"})
+    with pytest.raises(ValidationError):
+        pixel.ChatCancelRequest.model_validate({"chat_id": "safe", "extra": True})
 
 
 def test_request_aggregate_is_bounded_in_utf8_bytes():
@@ -192,6 +196,35 @@ def test_routes_require_dashboard_auth():
     client = TestClient(app)
     assert client.get("/api/pixel/status").status_code in {401, 403}
     assert client.post("/api/pixel/chat/stream", json={}).status_code in {401, 403}
+    assert client.post("/api/pixel/chat/cancel", json={"chat_id": "safe"}).status_code in {401, 403}
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancel_forwards_only_validated_chat_id_and_edge_key():
+    calls = []
+    body = pixel.ChatCancelRequest.model_validate({"chat_id": "conversation_1"})
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        return_value=CancelAwareClient(FakeResponse(), calls),
+    ):
+        result = await pixel.pixel_chat_cancel(body)
+
+    assert result == {"aborted": True}
+    assert len(calls) == 1
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"] == "http://pixel-edge:9595/v1/chat/cancel"
+    assert calls[0]["json"] == {"user": "conversation_1"}
+    assert calls[0]["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
+    assert "dashboard-test-key" not in json.dumps(calls)
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancel_reports_unconfirmed_without_inventing_success():
+    body = pixel.ChatCancelRequest.model_validate({"chat_id": "conversation_1"})
+    upstream = FakeResponse(content_type="application/json", chunks=[b'{"aborted":false}'])
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(upstream)):
+        assert await pixel.pixel_chat_cancel(body) == {"aborted": False}
 
 
 @pytest.mark.asyncio

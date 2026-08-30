@@ -50,7 +50,13 @@ let socketCounter = 0;
 // A fake upstream gateway that records exactly what it receives and returns a
 // canned completion. Used to assert forced model, header stripping, hashed
 // user, and streaming/nonstream bounds.
-function fakeGateway({ onRequest, onVerificationRequest, verification = { status: "none" } } = {}) {
+function fakeGateway({
+  onRequest,
+  onVerificationRequest,
+  verification = { status: "none" },
+  abortReplies = [true],
+} = {}) {
+  let abortIndex = 0;
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -70,7 +76,9 @@ function fakeGateway({ onRequest, onVerificationRequest, verification = { status
       if (onRequest) onRequest(captured);
       if (req.url === "/pixel-ods/abort") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end('{"aborted":true}');
+        const aborted = abortReplies[Math.min(abortIndex, abortReplies.length - 1)];
+        abortIndex += 1;
+        res.end(JSON.stringify({ aborted }));
         return;
       }
       if (req.headers.accept === "text/event-stream") {
@@ -346,6 +354,36 @@ test("cancel validates the raw chat id and forwards only its opaque digest", asy
   }
 });
 
+test("cancel survives the bounded OpenClaw run-mapping startup race", async () => {
+  const captured = [];
+  const gw = await fakeGateway({
+    onRequest: (value) => captured.push(value),
+    abortReplies: [false, false, true],
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/cancel", {
+        body: JSON.stringify({ user: "early-stop-chat" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(JSON.parse(response.body), { aborted: true });
+      assert.equal(captured.length, 3);
+      assert.ok(captured.every((call) => call.url === "/pixel-ods/abort"));
+      assert.deepEqual(
+        new Set(captured.map((call) => call.body.user)).size,
+        1,
+        "every retry must retain the exact opaque user mapping"
+      );
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("health fails closed when the Pixel gateway is unreachable", async () => {
   const deps = {
     fetch: async () => { throw new Error("offline"); },
@@ -600,6 +638,58 @@ test("closing a silent downstream stream closes the active gateway transport", a
       client.end(JSON.stringify({
         stream: true,
         messages: [{ role: "user", content: "cancel me" }],
+      }));
+    });
+    assert.equal(
+      await Promise.race([
+        upstreamClosed,
+        new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
+      ]),
+      true
+    );
+  } finally {
+    await new Promise((resolve) => ingress.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+test("stream headers expose cancellation before gateway response headers exist", async () => {
+  let markUpstreamClosed;
+  const upstreamClosed = new Promise((resolve) => {
+    markUpstreamClosed = resolve;
+  });
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    res.on("close", () => markUpstreamClosed(!res.writableEnded));
+    // Deliberately never send response headers. The downstream SSE response
+    // must still become cancellable while OpenClaw is starting the model turn.
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const ingress = await startIngress({ gatewayPort: upstream.address().port });
+  try {
+    await new Promise((resolve, reject) => {
+      const client = http.request(
+        {
+          socketPath: ingress.address(),
+          method: "POST",
+          path: "/v1/chat/completions",
+          headers: { "Content-Type": "application/json" },
+        },
+        (response) => {
+          assert.equal(response.statusCode, 200);
+          assert.match(String(response.headers["content-type"]), /^text\/event-stream/);
+          response.once("error", () => {});
+          response.destroy();
+          resolve();
+        }
+      );
+      client.once("error", (error) => {
+        if (error.code === "ECONNRESET") resolve();
+        else reject(error);
+      });
+      client.end(JSON.stringify({
+        stream: true,
+        messages: [{ role: "user", content: "cancel before headers" }],
       }));
     });
     assert.equal(

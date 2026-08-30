@@ -107,6 +107,19 @@ class ChatStreamRequest(BaseModel):
         return messages
 
 
+class ChatCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    chat_id: str
+
+    @field_validator("chat_id")
+    @classmethod
+    def _chat_id(cls, value: str) -> str:
+        if not _SAFE_CHAT_ID.fullmatch(value):
+            raise ValueError("invalid chat_id")
+        return value
+
+
 router = APIRouter(prefix="/api/pixel", tags=["pixel"])
 
 
@@ -223,6 +236,21 @@ async def _cancel_edge_run(edge_url: str, key: str, chat_id: str) -> bool:
         TypeError,
     ):
         return False
+
+
+@router.post("/chat/cancel", dependencies=[Depends(verify_api_key)])
+async def pixel_chat_cancel(body: ChatCancelRequest) -> dict[str, bool]:
+    """Cancel only the active run for this validated dashboard conversation.
+
+    The explicit endpoint makes the owner's Stop action independent of HTTP
+    disconnect propagation. The stream finalizer retains the same cancellation
+    call as an idempotent fallback for tab closes and network failures.
+    """
+    config = _pixel_config()
+    if config is None:
+        raise HTTPException(status_code=503, detail="Pixel is not enabled")
+    edge_url, key = config
+    return {"aborted": await _cancel_edge_run(edge_url, key, body.chat_id)}
 
 
 class _ClientDisconnected(Exception):

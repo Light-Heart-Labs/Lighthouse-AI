@@ -33,6 +33,8 @@ const CONNECT_TIMEOUT_MS = 5000;
 const TOTAL_TIMEOUT_MS = 1920000;
 const GATEWAY_PROBE_TIMEOUT_MS = 2000;
 const GATEWAY_ABORT_TIMEOUT_MS = 5000;
+const GATEWAY_ABORT_RETRY_MS = 100;
+const GATEWAY_ABORT_MAX_ATTEMPTS = 30;
 const DOCKER_TIMEOUT_MS = 10000;
 const MAX_TOKEN_LEN = 4096;
 const MAX_CANCEL_BODY = 256;
@@ -529,38 +531,53 @@ async function abortGatewayRun(user, token, gatewayPort, deps) {
   const controller = new AbortController();
   const timer = deps.setTimeout(() => controller.abort(), GATEWAY_ABORT_TIMEOUT_MS);
   try {
-    const response = await deps.fetch(
-      `http://127.0.0.1:${gatewayPort}/pixel-ods/abort`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify({ user }),
-        redirect: "error",
-        signal: controller.signal,
+    for (let attempt = 0; attempt < GATEWAY_ABORT_MAX_ATTEMPTS; attempt += 1) {
+      const response = await deps.fetch(
+        `http://127.0.0.1:${gatewayPort}/pixel-ods/abort`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({ user }),
+          redirect: "error",
+          signal: controller.signal,
+        }
+      );
+      if (response.status < 200 || response.status >= 300) {
+        await drain(response.body);
+        return false;
       }
-    );
-    if (response.status < 200 || response.status >= 300) {
-      await drain(response.body);
-      return false;
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.startsWith("application/json")) {
+        await drain(response.body);
+        return false;
+      }
+      const body = await readBounded(response.body, 1024);
+      const result = JSON.parse(body.toString("utf8"));
+      if (
+        !result ||
+        typeof result !== "object" ||
+        Array.isArray(result) ||
+        Object.keys(result).length !== 1 ||
+        typeof result.aborted !== "boolean"
+      ) {
+        return false;
+      }
+      if (result.aborted) return true;
+      // before_prompt_build can run before OpenClaw publishes the active
+      // user-to-session mapping. Preserve an early Stop across that narrow
+      // startup race, but keep both attempts and the total request bounded.
+      if (attempt + 1 < GATEWAY_ABORT_MAX_ATTEMPTS) {
+        await new Promise((resolve) => {
+          const retry = deps.setTimeout(resolve, GATEWAY_ABORT_RETRY_MS);
+          retry.unref?.();
+        });
+      }
     }
-    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-    if (!contentType.startsWith("application/json")) {
-      await drain(response.body);
-      return false;
-    }
-    const body = await readBounded(response.body, 1024);
-    const result = JSON.parse(body.toString("utf8"));
-    return Boolean(
-      result &&
-      typeof result === "object" &&
-      !Array.isArray(result) &&
-      Object.keys(result).length === 1 &&
-      result.aborted === true
-    );
+    return false;
   } catch {
     return false;
   } finally {
@@ -711,6 +728,19 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
   // bytes until host verification completes, so request one terminal upstream
   // completion and synthesize SSE for downstream streaming clients.
   const gatewayOutgoing = wantsStream ? { ...outgoing, stream: false } : outgoing;
+  if (wantsStream) {
+    // Commit only the SSE headers before OpenClaw's terminal completion is
+    // available. This lets every downstream layer enter its disconnect-aware
+    // streaming lifecycle immediately while answer bytes remain withheld for
+    // verification and terminal-only delivery.
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-store",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+  }
   try {
     const upstream = await deps.fetch(
       `http://127.0.0.1:${gatewayPort}/v1/chat/completions`,
@@ -724,24 +754,27 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
     );
     if (upstream.status < 200 || upstream.status >= 300) {
       await drain(upstream.body);
-      sendError(res, upstream.status >= 400 && upstream.status < 500 ? 400 : 502, "pixel request rejected");
+      if (wantsStream) {
+        res.write('data: {"error":{"message":"pixel request rejected","type":"pixel_ingress_error"}}\n\n');
+        res.end("data: [DONE]\n\n");
+      } else {
+        sendError(res, upstream.status >= 400 && upstream.status < 500 ? 400 : 502, "pixel request rejected");
+      }
       return;
     }
 
     const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
     if (!contentType.startsWith("application/json")) {
       await drain(upstream.body);
-      sendError(res, 502, "invalid upstream response");
+      if (wantsStream) {
+        res.write('data: {"error":{"message":"invalid upstream response","type":"pixel_ingress_error"}}\n\n');
+        res.end("data: [DONE]\n\n");
+      } else {
+        sendError(res, 502, "invalid upstream response");
+      }
       return;
     }
     if (wantsStream) {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-store",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-      res.flushHeaders?.();
       try {
         const body = await readBounded(upstream.body, MAX_STREAM_RESPONSE);
         const completion = JSON.parse(body.toString("utf8"));

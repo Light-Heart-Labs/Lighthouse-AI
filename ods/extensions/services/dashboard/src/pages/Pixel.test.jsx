@@ -445,6 +445,7 @@ describe('Pixel', () => {
       },
       headers: new Map([['content-type', 'text/event-stream']]),
     })
+    globalThis.fetch.mockResolvedValueOnce(response({ aborted: true }))
 
     render(<Pixel />)
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
@@ -456,6 +457,9 @@ describe('Pixel', () => {
     fireEvent.click(screen.getByTitle('Stop'))
 
     const stopped = await screen.findByText('Response stopped')
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/pixel/chat/cancel', expect.objectContaining({
+      method: 'POST',
+    }))
     expect(stopped.parentElement).toHaveClass('bg-amber-500/10')
     expect(stopped.parentElement).not.toHaveClass('bg-red-500/10')
     expect(screen.getByText('Stopped by you. Workspace changes completed before cancellation were preserved.')).toBeInTheDocument()
@@ -489,6 +493,7 @@ describe('Pixel', () => {
       },
       headers: new Map([['content-type', 'text/event-stream']]),
     })
+    globalThis.fetch.mockResolvedValueOnce(response({ aborted: true }))
 
     render(<Pixel />)
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
@@ -506,6 +511,41 @@ describe('Pixel', () => {
       const stored = JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1'))
       expect(stored.messages.at(-1).content).toContain('Stopped by you.')
     })
+  })
+
+  it('keeps the live stream attached and Stop retryable without an exact acknowledgement', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => new Promise(() => {}),
+          releaseLock: () => {},
+        }),
+      },
+      headers: new Map([['content-type', 'text/event-stream']]),
+    })
+    globalThis.fetch.mockResolvedValueOnce(response({ aborted: false }))
+    globalThis.fetch.mockResolvedValueOnce(response({ aborted: true }))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'long task' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+    await waitFor(() => expect(screen.getByTitle('Stop')).toBeInTheDocument())
+    fireEvent.click(screen.getByTitle('Stop'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Stop was not confirmed. Pixel is still connected; retry Stop.'
+    )
+    expect(screen.queryByText('Response stopped')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Stop'))
+    expect(await screen.findByText('Response stopped')).toBeInTheDocument()
   })
 
   it('enforces input limit', async () => {
