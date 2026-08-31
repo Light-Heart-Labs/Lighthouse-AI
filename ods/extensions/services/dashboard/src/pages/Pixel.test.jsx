@@ -260,6 +260,30 @@ describe('Pixel', () => {
     )
   })
 
+  it('keeps the incompatible-model explanation visible with stored chat history', async () => {
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1,
+      chatId: 'stored_chat',
+      messages: [
+        { role: 'user', content: 'old request' },
+        { role: 'assistant', content: 'old response' },
+      ],
+    }))
+    globalThis.fetch.mockResolvedValue(response({
+      available: false,
+      model: null,
+      state: 'model_incompatible',
+      detail: 'This model failed Pixel tool qualification.',
+    }))
+
+    render(<Pixel />)
+
+    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent('Active model is not Pixel-ready')
+    expect(screen.getByRole('alert')).toHaveTextContent('This model failed Pixel tool qualification.')
+    expect(screen.getByRole('link', { name: 'Choose model' })).toHaveAttribute('href', '/models')
+  })
+
   it('restores an unsent draft when model activation wins the chat race', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })

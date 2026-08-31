@@ -1904,6 +1904,8 @@ def _switchboard_state_needs_current_env_verification(
         llm_model_name=llm_model_name,
     ):
         return True
+    if active.get("contextLength") != identity.get("contextLength"):
+        return True
 
     backend_kind, endpoint_id, _native_route = _initial_switchboard_backend(env)
     backend = active.get("backend")

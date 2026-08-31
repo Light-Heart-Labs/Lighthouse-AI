@@ -3641,6 +3641,53 @@ class TestModelActivationOwnership:
         assert _mod._model_agent_viable(generic, 65536) is True
         assert _mod._model_agent_viable(revoked, 65536) is False
 
+    def test_switchboard_route_requires_reproof_when_context_changes(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir = tmp_path / "ods"
+        (install_dir / "data").mkdir(parents=True)
+        (install_dir / "config").mkdir()
+        model = {
+            "id": "same-model",
+            "gguf_file": "same-model.gguf",
+            "llm_model_name": "same-model",
+            "gguf_url": "https://huggingface.co/example/same-model.gguf",
+        }
+        (install_dir / "config" / "model-library.json").write_text(
+            json.dumps({"models": [model]}),
+            encoding="utf-8",
+        )
+        (install_dir / ".env").write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=cpu\n"
+            "GGUF_FILE=same-model.gguf\n"
+            "LLM_MODEL=same-model\n"
+            "CTX_SIZE=65536\n",
+            encoding="utf-8",
+        )
+        state_path = install_dir / "data" / "model-state.json"
+        _mod._switchboard_state.record_verified_route(
+            state_path,
+            catalog_id="same-model",
+            runtime_model_id="same-model.gguf",
+            backend_kind="llama-server",
+            endpoint_id="llama-server-default",
+            context_length=32768,
+            capabilities={
+                "chat": True,
+                "tools": False,
+                "vision": False,
+                "agentViable": False,
+            },
+            proof_identity="same-model.gguf",
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+        assert _mod._switchboard_state_needs_current_env_verification(state_path) is True
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload == {"status": "idle"}
+
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
         handler = _FakeHandler(json.dumps({"model_id": "target-a"}).encode("utf-8"))
