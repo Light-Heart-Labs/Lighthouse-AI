@@ -28,12 +28,19 @@ def test_daily_digest_public_enable_imports_a_runnable_dual_trigger_graph(
 
     create_response = AsyncMock()
     create_response.status = 201
-    create_response.json = AsyncMock(return_value={"data": {"id": "daily-1"}})
+    create_response.json = AsyncMock(
+        return_value={"id": "daily-1", "data": {"id": "daily-1"}}
+    )
     activate_response = AsyncMock()
     activate_response.status = 200
 
     session = AsyncMock()
-    session.post = MagicMock(return_value=_response_context(create_response))
+    session.post = MagicMock(
+        side_effect=[
+            _response_context(create_response),
+            _response_context(activate_response),
+        ]
+    )
     session.patch = MagicMock(return_value=_response_context(activate_response))
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
@@ -46,7 +53,7 @@ def test_daily_digest_public_enable_imports_a_runnable_dual_trigger_graph(
 
     assert response.status_code == 200
     assert response.json()["activated"] is True
-    assert session.post.call_args.kwargs["json"] == workflow
+    assert session.post.call_args_list[0].kwargs["json"] == workflow
 
     by_name = {node["name"]: node for node in workflow["nodes"]}
     assert by_name["Capture Event"]["type"] == "n8n-nodes-base.webhook"
