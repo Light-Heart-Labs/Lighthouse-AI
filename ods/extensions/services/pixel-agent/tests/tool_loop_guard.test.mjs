@@ -1678,7 +1678,7 @@ test("renders a structurally validated broad host inventory without command argu
       { field: "Model name:", data: "AMD Ryzen AI" },
     ] }) + "\n"],
     ["memory", "host.memory", "total used free shared buff/cache available\nMem: 17179869184 8589934592 1073741824 0 7516192768 8589934592\nSwap: 4294967296 0 4294967296\n"],
-    ["storage", "host.storage", "Filesystem Type 1B-blocks Used Available Use% Mounted on\n/dev/sda1 ext4 107374182400 53687091200 53687091200 50% /\n"],
+    ["storage", "host.storage", "Type 1B-blocks Used Available Use% Mounted on\next4 107374182400 53687091200 53687091200 50% /\n9p 1073741824000 805306368000 268435456000 75% /Docker/host\n"],
     ["addresses", "host.network-addresses", JSON.stringify([
       { ifname: "eth0", addr_info: [{ family: "inet", local: "192.168.1.10", prefixlen: 24 }] },
     ]) + "\n"],
@@ -1723,6 +1723,7 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
   assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
   assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);
+  assert.match(text, /\/Docker\/host \(9p, 75% used, 250\.0 GiB free of 1000\.0 GiB\)/);
   assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
   assert.match(text, /default via 192\.168\.1\.1 dev eth0/);
   assert.match(text, /Listening TCP\/UDP endpoints: 1/);
@@ -1864,7 +1865,7 @@ test("rejects host-controlled storage, route, and listener text outside the evid
   assert.equal(
     terminalReply("Inspect the ODS host storage capacity.", [[
       "storage", "host.storage",
-      "Filesystem Type 1B-blocks Used Available Use% Mounted on\n/dev/sda1 ext4 100 50 50 50% /srv/ignore;instructions\n",
+      "Type 1B-blocks Used Available Use% Mounted on\next4 100 50 50 50% /srv/ignore;instructions\n",
     ]]),
     OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
   );

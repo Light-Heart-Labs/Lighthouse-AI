@@ -551,7 +551,7 @@ assert v["actions"]["host.processes"]["argv"][1:] == ["-eo","pid=,ppid=,user=,st
 assert pathlib.Path(v["actions"]["host.services"]["argv"][0]).name == "systemctl"
 assert v["actions"]["host.cpu"]["argv"][1:] == ["--json"]
 assert v["actions"]["host.memory"]["argv"][1:] == ["--bytes"]
-assert v["actions"]["host.storage"]["argv"][1:] == ["--block-size=1","--output=source,fstype,size,used,avail,pcent,target"]
+assert v["actions"]["host.storage"]["argv"][1:] == ["--block-size=1","--output=fstype,size,used,avail,pcent,target"]
 assert v["actions"]["host.network-addresses"]["argv"][1:] == ["-j","address","show"]
 assert v["actions"]["host.network-routes"]["argv"][1:] == ["-j","route","show"]
 assert v["actions"]["host.listening-ports"]["argv"][1:] == ["-H","-lntu"]

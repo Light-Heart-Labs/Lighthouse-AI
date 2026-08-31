@@ -2243,7 +2243,7 @@ payload = {
             "reversible": False,
             "targets": ["ods-host"],
             "argv": [
-                df_binary, "--block-size=1", "--output=source,fstype,size,used,avail,pcent,target",
+                df_binary, "--block-size=1", "--output=fstype,size,used,avail,pcent,target",
             ],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,

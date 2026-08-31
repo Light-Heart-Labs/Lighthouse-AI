@@ -943,17 +943,19 @@ function memoryEvidence(step) {
 
 function storageEvidence(step) {
   const lines = safeHostLines(step, 512);
-  if (!lines || !/^Filesystem\s+Type\s+/.test(lines[0])) return undefined;
+  if (!lines || !/^Type\s+1B-blocks\s+Used\s+Available\s+Use%\s+Mounted on$/.test(lines[0])) {
+    return undefined;
+  }
   const mounts = [];
   for (const line of lines.slice(1)) {
-    const match = line.match(/^(\S+)\s+(\S+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]{1,3}%)\s+(.+)$/);
+    const match = line.match(/^(\S+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]{1,3}%)\s+(.+)$/);
     if (!match) return undefined;
-    const type = cleanSingleLine(match[2], /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$/, 64);
-    const mount = cleanSingleLine(match[7], /^\/(?:[A-Za-z0-9_./:@+,-]{0,510})$/, 512);
-    const size = formatHostBytes(Number(match[3]));
-    const available = formatHostBytes(Number(match[5]));
+    const type = cleanSingleLine(match[1], /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$/, 64);
+    const mount = cleanSingleLine(match[6], /^\/(?:[A-Za-z0-9_./:@+,-]{0,510})$/, 512);
+    const size = formatHostBytes(Number(match[2]));
+    const available = formatHostBytes(Number(match[4]));
     if (!type || !mount || !size || !available) return undefined;
-    mounts.push(`${mount} (${type}, ${match[6]} used, ${available} free of ${size})`);
+    mounts.push(`${mount} (${type}, ${match[5]} used, ${available} free of ${size})`);
   }
   return mounts.length ? `Storage mounts: ${mounts.slice(0, 12).join("; ")}.` : undefined;
 }
