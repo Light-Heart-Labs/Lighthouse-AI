@@ -217,7 +217,12 @@ async def enable_workflow(workflow_id: str, api_key: str = Depends(verify_api_ke
                             headers=headers,
                         ) as activate_resp:
                             activated = activate_resp.status == 200
-                    return {"status": "success", "workflowId": workflow_id, "n8nId": n8n_id, "activated": activated, "message": f"{wf_info['name']} is now active!"}
+                    message = (
+                        f"{wf_info['name']} is now active!"
+                        if activated
+                        else f"{wf_info['name']} was imported but could not be activated."
+                    )
+                    return {"status": "success", "workflowId": workflow_id, "n8nId": n8n_id, "activated": activated, "message": message}
                 else:
                     error_text = await resp.text()
                     raise HTTPException(status_code=resp.status, detail=f"n8n API error: {error_text}")
