@@ -19,6 +19,8 @@ set -uo pipefail
 
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface/hub}"
 COLD_DIR="${COLD_DIR:-$HOME/llm-cold-storage}"
+# Maximum cold storage size in GB (0 = no limit)
+MAX_COLD_STORAGE_GB="${MAX_COLD_STORAGE_GB:-0}"
 LOG_FILE="${LOG_FILE:-$HOME/.local/log/llm-cold-storage.log}"
 MAX_IDLE_DAYS=7
 
