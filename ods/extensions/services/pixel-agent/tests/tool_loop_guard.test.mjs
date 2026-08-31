@@ -1121,6 +1121,92 @@ test("renders missing extension configuration as a verified no-effect result", (
   assert.match(text, /no change or external effect occurred/);
 });
 
+test("accepts verified lifecycle no-ops when inspection already satisfies the request", async (t) => {
+  const cases = [
+    ["install", "Install the ODS extension continue.", "enabled"],
+    ["enable", "Inspect and enable the installed ODS extension continue.", "cli_installed"],
+    ["disable", "Disable the ODS extension continue.", "disabled"],
+    ["remove", "Remove the ODS extension continue.", "not_installed"],
+  ];
+  for (const [action, prompt, status] of cases) {
+    await t.test(action, () => {
+      const guard = createToolLoopGuard();
+      const inspectJob = "ops-1234567890123-abcdef123456";
+      const parameters = { serviceId: "continue" };
+      guard.observeRun(
+        { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+        "pixel",
+        { prompt }
+      );
+      afterCall(guard, "pixel_ops_run", {
+        event: {
+          params: { target: "ods-host", action: "ods.extensions.inspect", parameters },
+          result: { details: { jobId: inspectJob, status: "submitted", kind: "action" } },
+        },
+      });
+      afterCall(guard, "pixel_ops_job_wait", {
+        event: {
+          params: { jobId: inspectJob },
+          result: {
+            details: {
+              jobId: inspectJob,
+              status: "succeeded",
+              waitTimedOut: false,
+              steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+                extensionId: "continue",
+                previousStatus: status,
+                currentStatus: status,
+              }))],
+            },
+          },
+        },
+      });
+
+      const text = reply(guard)?.payload?.text;
+      assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+      assert.match(text, new RegExp(`Requested action: \`${action}\`; verified outcome: already satisfied`));
+      assert.match(text, new RegExp(`State: \`${status}\`; no mutation or external effect was needed`));
+      assert.match(text, new RegExp(inspectJob));
+    });
+  }
+});
+
+test("does not treat an inspection in the wrong state as a lifecycle no-op", () => {
+  const guard = createToolLoopGuard();
+  const inspectJob = "ops-1234567890123-abcdef123456";
+  const parameters = { serviceId: "continue" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Inspect and enable the installed ODS extension continue." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.inspect", parameters },
+      result: { details: { jobId: inspectJob, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: inspectJob },
+      result: {
+        details: {
+          jobId: inspectJob,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+            extensionId: "continue",
+            previousStatus: "disabled",
+            currentStatus: "disabled",
+          }))],
+        },
+      },
+    },
+  });
+
+  assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
+});
+
 test("reports an immutable lifecycle approval without claiming completion", () => {
   const guard = createToolLoopGuard();
   const inspectJob = "ops-1234567890123-abcdef123456";

@@ -1251,6 +1251,12 @@ function parsedLifecycleOutcome(terminalJobs, action) {
   return result ? { outcome, result } : undefined;
 }
 
+function inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction) {
+  const action = mutationAction?.replace(/^ods\.extensions\./, "");
+  return inspection?.result?.outcome === "ready" &&
+    EXTENSION_LIFECYCLE_SUCCESS.get(action)?.has(inspection.result.currentStatus) === true;
+}
+
 function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   const mutationActions = [...requiredActions].filter(
     (action) => action.startsWith("ods.extensions.") && action !== "ods.extensions.inspect"
@@ -1285,7 +1291,24 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   }
   const mutationAction = mutationActions[0];
   const mutationOutcome = lifecycleOutcomeForAction(terminalJobs, mutationAction);
-  if (!mutationOutcome) return undefined;
+  if (!mutationOutcome) {
+    if (
+      terminalJobs.size !== 1 ||
+      !inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction)
+    ) {
+      return undefined;
+    }
+    const requestedAction = mutationAction.replace(/^ods\.extensions\./, "");
+    return [
+      OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+      `- Extension: \`${inspection.result.extensionId}\`.`,
+      `- Requested action: \`${requestedAction}\`; verified outcome: already satisfied.`,
+      `- State: \`${inspection.result.currentStatus}\`; no mutation or external effect was needed.`,
+      `- Missing required configuration keys: ${inspection.result.missingConfiguration.length ? inspection.result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+      `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
+      `- Inspection job: \`${inspection.outcome.jobId}\`.`,
+    ].join("\n");
+  }
   if (mutationOutcome.status === "awaiting-approval") {
     return `Pixel prepared the exact ${mutationAction} plan for extension ${inspection.result.extensionId}, but external approval is required. No lifecycle change was executed. Job: ${mutationOutcome.jobId}. Plan SHA-256: ${mutationOutcome.planHash}.`;
   }
