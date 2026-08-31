@@ -1595,6 +1595,26 @@ test("routes host evidence through Operations and requires a matching terminal j
     })?.blockReason,
     new RegExp(OPERATIONS_WRONG_ACTION_REASON)
   );
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: { params: { target: "host", action: "host.identity" } },
+    }),
+    { params: { target: "ods-host", action: "host.identity" } }
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_workflow_submit", {
+      event: {
+        params: {
+          steps: [{ id: "identity", target: "host", action: "host.identity" }],
+        },
+      },
+    }),
+    {
+      params: {
+        steps: [{ id: "identity", target: "ods-host", action: "host.identity" }],
+      },
+    }
+  );
   assert.equal(
     call(guard, "pixel_ops_run", {
       event: { params: { target: "ods-host", action: "host.identity" } },
@@ -1977,6 +1997,16 @@ test("fails closed when Operations work is not submitted or routing is ignored",
     block: true,
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
   });
+  assert.deepEqual(call(guard, "read"), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  assert.deepEqual(aborts, []);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Use the Operations Broker to inspect the ODS host platform." }
+  );
   assert.deepEqual(call(guard, "read"), {
     block: true,
     blockReason: OPERATIONS_LOOP_ABORT_REASON,

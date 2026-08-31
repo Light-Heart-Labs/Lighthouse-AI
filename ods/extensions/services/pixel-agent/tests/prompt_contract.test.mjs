@@ -86,6 +86,9 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /host\.identity, host\.kernel, host\.architecture/);
   assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.memory, host\.storage/);
   assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, and host\.listening-ports/);
+  assert.match(result.appendSystemContext, /literal target ods-host/);
+  assert.match(result.appendSystemContext, /never shorten it to host or local/);
+  assert.match(result.appendSystemContext, /Do not mix exec, pixel_ods_status, pixel_ods_apps_list/);
   assert.match(result.appendSystemContext, /process action intentionally omits command arguments and environments/);
   assert.match(result.appendSystemContext, /Submit the exact required actions with pixel_ops_run/);
   assert.match(result.appendSystemContext, /broad request to explore or inventory the host uses identity, kernel, platform/);

@@ -2302,6 +2302,8 @@ export function createToolLoopGuard({
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
+        operationsPromptRound: 0,
+        operationsCorrectionPromptRound: undefined,
         failedExec: new Map(),
         failedVerificationAttempts: 0,
         latestVerificationStatus: undefined,
@@ -2448,8 +2450,15 @@ export function createToolLoopGuard({
     }
 
     if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
-      if (state.operationsTerminalBlocks === 0) {
-        state.operationsTerminalBlocks = 1;
+      // One model response may contain several parallel tool calls. Return the
+      // same correction to every disallowed call in that response instead of
+      // treating the second sibling call as a second ignored correction. A
+      // later model continuation that still ignores the boundary is aborted.
+      if (
+        state.operationsCorrectionPromptRound === undefined ||
+        state.operationsCorrectionPromptRound === state.operationsPromptRound
+      ) {
+        state.operationsCorrectionPromptRound = state.operationsPromptRound;
         return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
       }
       let aborted = false;
@@ -2514,6 +2523,43 @@ export function createToolLoopGuard({
             }
           }
         }
+      }
+      // Some otherwise-capable models shorten the single local ODS target to
+      // `host`. Canonicalize only that exact alias, only for host.* actions the
+      // current owner request already requires, and never for a different
+      // target, action, parameter, tier, or authority level.
+      if (
+        toolName === "pixel_ops_run" &&
+        params?.target === "host" &&
+        typeof params?.action === "string" &&
+        params.action.startsWith("host.") &&
+        state.operationsRequiredActions.has(params.action)
+      ) {
+        params = { ...params, target: "ods-host" };
+        normalizedParams = params;
+      } else if (
+        toolName === "pixel_ops_workflow_submit" &&
+        Array.isArray(params?.steps) &&
+        params.steps.length > 0 &&
+        params.steps.some((step) => step?.target === "host") &&
+        params.steps.every(
+          (step) =>
+            step &&
+            typeof step === "object" &&
+            !Array.isArray(step) &&
+            ["host", "ods-host"].includes(step.target) &&
+            typeof step.action === "string" &&
+            step.action.startsWith("host.") &&
+            state.operationsRequiredActions.has(step.action)
+        )
+      ) {
+        params = {
+          ...params,
+          steps: params.steps.map((step) =>
+            step.target === "host" ? { ...step, target: "ods-host" } : step
+          ),
+        };
+        normalizedParams = params;
       }
       let actions = [];
       if (toolName === "pixel_ops_run") {
@@ -2832,6 +2878,7 @@ export function createToolLoopGuard({
     }
     if (typeof runId === "string" && runId) {
       const state = stateFor(runId);
+      if (event !== undefined) state.operationsPromptRound += 1;
       if (currentUserText(event?.messages, event?.prompt)) {
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
