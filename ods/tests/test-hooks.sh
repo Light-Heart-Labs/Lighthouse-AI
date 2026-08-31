@@ -91,8 +91,10 @@ touch "$EXT_DIR/old-setup.sh"
 mkdir -p "$EXT_DIR/hooks"
 touch "$EXT_DIR/hooks/new-setup.sh"
 
-export SCRIPT_DIR="$PROJECT_DIR"
-export EXTENSIONS_DIR="$TMPDIR_TEST/extensions/services"
+# service-registry.sh derives EXTENSIONS_DIR while it is sourced. Point its
+# public SCRIPT_DIR contract at the fixture root; exporting EXTENSIONS_DIR
+# directly is ineffective because the library initializes that variable.
+export SCRIPT_DIR="$TMPDIR_TEST"
 
 # Source registry and load
 # Reset loaded flag

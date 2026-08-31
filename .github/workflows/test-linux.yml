@@ -115,6 +115,11 @@ jobs:
           bash tests/test-validate-manifests.sh
           bash tests/test-validate-manifest-schema.sh
 
+      - name: Extension Hook and Template Contracts
+        run: |
+          bash tests/test-hooks.sh
+          bash tests/test-templates.sh
+
       - name: Health Check Tests
         run: bash tests/test-health-check.sh
 
