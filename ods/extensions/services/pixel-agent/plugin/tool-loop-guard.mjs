@@ -943,7 +943,7 @@ function memoryEvidence(step) {
 
 function storageEvidence(step) {
   const lines = safeHostLines(step, 512);
-  if (!lines || !/^Type\s+1B-blocks\s+Used\s+Available\s+Use%\s+Mounted on$/.test(lines[0])) {
+  if (!lines || !/^Type\s+1B-blocks\s+Used\s+Avail\s+Use%\s+Mounted on$/.test(lines[0])) {
     return undefined;
   }
   const mounts = [];
