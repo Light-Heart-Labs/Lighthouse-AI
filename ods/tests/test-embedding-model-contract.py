@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EMBEDDING_ENV = {
     "EMBEDDING_MODEL": "BAAI/bge-m3",
+    "EMBEDDING_MODEL_REVISION": "refs/pr/42",
     "RAG_EMBEDDING_MODEL": "external-embedding-v2",
     "RAG_OPENAI_API_BASE_URL": "https://embeddings.example.test/v1",
     "RAG_OPENAI_API_KEY": "external-test-key",
@@ -42,6 +43,7 @@ def render_compose(**overrides: str) -> dict:
     env.update({
         "WEBUI_SECRET": "test-webui-secret",
         "EMBEDDING_MODEL": "BAAI/bge-m3",
+        "EMBEDDING_MODEL_REVISION": "refs/pr/42",
         "EMBEDDINGS_MEMORY_LIMIT": "6G",
     })
     env.update(overrides)
@@ -72,6 +74,7 @@ def test_bundled_rag_inherits_canonical_model() -> None:
     webui = config["services"]["open-webui"]
 
     assert embeddings["environment"]["MODEL_ID"] == "BAAI/bge-m3"
+    assert embeddings["environment"]["REVISION"] == "refs/pr/42"
     assert webui["environment"]["RAG_EMBEDDING_MODEL"] == "BAAI/bge-m3"
     assert embeddings["deploy"]["resources"]["limits"]["memory"] == "6442450944"
 
@@ -97,11 +100,15 @@ def test_installers_write_or_backfill_canonical_model() -> None:
     windows = (ROOT / "installers/windows/lib/env-generator.ps1").read_text(encoding="utf-8")
 
     assert 'EMBEDDING_MODEL_VALUE=$(_env_get EMBEDDING_MODEL "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}")' in linux
+    assert 'EMBEDDING_MODEL_REVISION_VALUE=$(_env_get EMBEDDING_MODEL_REVISION "${EMBEDDING_MODEL_REVISION:-main}")' in linux
     assert "EMBEDDING_MODEL=${EMBEDDING_MODEL_VALUE}" in linux
+    assert "EMBEDDING_MODEL_REVISION=${EMBEDDING_MODEL_REVISION_VALUE}" in linux
     assert 'upsert_env_value "$env_path" "EMBEDDING_MODEL" "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}"' in macos
     assert "EMBEDDING_MODEL=${embedding_model}" in macos
+    assert "EMBEDDING_MODEL_REVISION=${embedding_model_revision}" in macos
     assert '$embeddingModel = Get-EnvOrNew "EMBEDDING_MODEL" $embeddingModelDefault' in windows
     assert "EMBEDDING_MODEL=$embeddingModel" in windows
+    assert "EMBEDDING_MODEL_REVISION=$embeddingModelRevision" in windows
 
     for key in (
         "RAG_EMBEDDING_MODEL",

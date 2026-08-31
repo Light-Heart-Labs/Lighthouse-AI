@@ -880,6 +880,9 @@ function New-ODSEnv {
     $embeddingModelDefault = [Environment]::GetEnvironmentVariable("EMBEDDING_MODEL")
     if ([string]::IsNullOrWhiteSpace($embeddingModelDefault)) { $embeddingModelDefault = "BAAI/bge-base-en-v1.5" }
     $embeddingModel = Get-EnvOrNew "EMBEDDING_MODEL" $embeddingModelDefault
+    $embeddingModelRevisionDefault = [Environment]::GetEnvironmentVariable("EMBEDDING_MODEL_REVISION")
+    if ([string]::IsNullOrWhiteSpace($embeddingModelRevisionDefault)) { $embeddingModelRevisionDefault = "main" }
+    $embeddingModelRevision = Get-EnvOrNew "EMBEDDING_MODEL_REVISION" $embeddingModelRevisionDefault
     $ragEmbeddingModel = Get-EnvOrNewAllowEmpty "RAG_EMBEDDING_MODEL" ([Environment]::GetEnvironmentVariable("RAG_EMBEDDING_MODEL"))
     $ragOpenAiApiBaseUrl = Get-EnvOrNewAllowEmpty "RAG_OPENAI_API_BASE_URL" ([Environment]::GetEnvironmentVariable("RAG_OPENAI_API_BASE_URL"))
     $ragOpenAiApiKey = Get-EnvOrNewAllowEmpty "RAG_OPENAI_API_KEY" ([Environment]::GetEnvironmentVariable("RAG_OPENAI_API_KEY"))
@@ -1045,6 +1048,7 @@ TTS_VOICE=en_US-lessac-medium
 # Open WebUI uses this canonical model at first boot unless an explicit
 # external-provider override is configured.
 EMBEDDING_MODEL=$embeddingModel
+EMBEDDING_MODEL_REVISION=$embeddingModelRevision
 RAG_EMBEDDING_MODEL=$ragEmbeddingModel
 RAG_OPENAI_API_BASE_URL=$ragOpenAiApiBaseUrl
 RAG_OPENAI_API_KEY=$ragOpenAiApiKey
