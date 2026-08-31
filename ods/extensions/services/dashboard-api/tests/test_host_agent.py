@@ -2916,6 +2916,84 @@ class TestRemoteProviderLifecycle:
         with pytest.raises(RuntimeError, match="contract is invalid"):
             _mod._read_remote_provider_activation_state()
 
+    def test_active_remote_pixel_runtime_requires_current_proven_custody_join(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        runtime = {
+            "model": "dream-fleet-agent",
+            "contextLength": 131072,
+            "maxTokens": 16384,
+            "reasoning": False,
+        }
+        route = {
+            "provider": {
+                "transport": "ssh",
+                "baseUrl": "http://127.0.0.1:18080/v1",
+                **runtime,
+            },
+            "status": {
+                "proven": True,
+                "lastProbe": {
+                    "schema": _mod._REMOTE_PROVIDER_PROBE_RECEIPT_SCHEMA,
+                    "ok": True,
+                    "verifiedAt": "2026-08-31T16:19:55Z",
+                    "endpoint": "/v1/models",
+                    "httpStatus": 200,
+                    "modelCount": 1,
+                    "resolution": {"ok": True, "addressCount": 0},
+                },
+            },
+        }
+        activation = {
+            "phase": "active",
+            "remote": runtime,
+            "routeFingerprint": _mod._remote_provider_route_fingerprint(route),
+        }
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path / "ods")
+        monkeypatch.setattr(
+            _mod, "_read_remote_provider_route_state_for_update", lambda: route,
+        )
+        monkeypatch.setattr(
+            _mod, "_read_remote_provider_activation_state", lambda: activation,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "load_env",
+            lambda _path: {"ODS_MODE": "cloud", "LLM_API_URL": "http://litellm:4000"},
+        )
+        monkeypatch.setattr(_mod, "_managed_pixel_runtime_contract", lambda: runtime)
+
+        assert _mod._active_remote_provider_pixel_runtime() == runtime
+
+        activation["routeFingerprint"] = "0" * 64
+        assert _mod._active_remote_provider_pixel_runtime() is None
+        activation["routeFingerprint"] = _mod._remote_provider_route_fingerprint(route)
+
+        monkeypatch.setattr(
+            _mod,
+            "_managed_pixel_runtime_contract",
+            lambda: {**runtime, "maxTokens": 8192},
+        )
+        assert _mod._active_remote_provider_pixel_runtime() is None
+        monkeypatch.setattr(_mod, "_managed_pixel_runtime_contract", lambda: runtime)
+
+        monkeypatch.setattr(
+            _mod,
+            "load_env",
+            lambda _path: {"ODS_MODE": "local", "LLM_API_URL": "http://llama-server:8080"},
+        )
+        assert _mod._active_remote_provider_pixel_runtime() is None
+        monkeypatch.setattr(
+            _mod,
+            "load_env",
+            lambda _path: {"ODS_MODE": "cloud", "LLM_API_URL": "http://litellm:4000"},
+        )
+
+        route["status"]["proven"] = False
+        assert _mod._active_remote_provider_pixel_runtime() is None
+
     def test_consumer_activation_and_deactivation_restore_exact_prior_route(
         self,
         monkeypatch,
@@ -3648,6 +3726,33 @@ class TestModelActivationOwnership:
         assert response == {"status": "idle", "activeAgentViable": False}
         assert "runtimeModelId" not in response
         assert "capabilities" not in response
+
+    def test_model_status_projects_active_remote_runtime_over_local_rollback(
+        self, tmp_path, monkeypatch,
+    ):
+        runtime = {
+            "model": "dream-fleet-agent",
+            "contextLength": 131072,
+            "maxTokens": 16384,
+            "reasoning": False,
+        }
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path / "ods")
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        monkeypatch.setattr(
+            _mod,
+            "_active_remote_provider_pixel_runtime",
+            lambda: runtime,
+        )
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response() == {
+            "status": "idle",
+            "activeAgentViable": True,
+            "activeRuntime": {"source": "remote-provider", **runtime},
+        }
 
     def test_model_status_applies_new_pixel_specific_revocation(
         self, tmp_path, monkeypatch,

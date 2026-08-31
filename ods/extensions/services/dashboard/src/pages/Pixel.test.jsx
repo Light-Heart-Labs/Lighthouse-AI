@@ -383,6 +383,64 @@ describe('Pixel', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('shows the active remote Pixel runtime instead of the local rollback model', async () => {
+    globalThis.fetch.mockResolvedValue(
+      response({
+        available: true,
+        model: 'pixel/default',
+        detail: 'Owner agent ready',
+        runtime: {
+          source: 'remote-provider',
+          model: 'dream-fleet-agent',
+          contextLength: 131072,
+          maxTokens: 16384,
+          reasoning: false,
+        },
+      })
+    )
+
+    render(<Pixel systemStatus={{
+      inference: {
+        loadedModel: 'Qwen3.5-9B-Q4_K_M.gguf',
+        contextSize: 32768,
+      },
+    }} />)
+
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('dream-fleet-agent')).toBeInTheDocument()
+    expect(screen.getByText('128K context')).toBeInTheDocument()
+    expect(screen.queryByText('Qwen3.5-9B-Q4_K_M.gguf')).not.toBeInTheDocument()
+  })
+
+  it('ignores a non-remote runtime projection and keeps the live local identity', async () => {
+    globalThis.fetch.mockResolvedValue(
+      response({
+        available: true,
+        model: 'pixel/default',
+        detail: 'Owner agent ready',
+        runtime: {
+          source: 'local',
+          model: 'forged-runtime',
+          contextLength: 131072,
+          maxTokens: 16384,
+          reasoning: false,
+        },
+      })
+    )
+
+    render(<Pixel systemStatus={{
+      inference: {
+        loadedModel: 'Qwen3.5-9B-Q4_K_M.gguf',
+        contextSize: 32768,
+      },
+    }} />)
+
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('Qwen3.5-9B-Q4_K_M.gguf')).toBeInTheDocument()
+    expect(screen.getByText('32K context')).toBeInTheDocument()
+    expect(screen.queryByText('forged-runtime')).not.toBeInTheDocument()
+  })
+
   it('sends exact body to stream endpoint', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })

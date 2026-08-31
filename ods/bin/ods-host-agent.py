@@ -1809,12 +1809,20 @@ def _switchboard_state_path() -> Path:
 
 
 def _project_switchboard_agent_viability(payload: dict) -> None:
-    """Add only the verified active route's Pixel viability to host status.
+    """Add only the verified active model route's Pixel viability to status.
 
-    The switchboard record is host-owned and structurally validated by its
-    stdlib reader.  Missing, stale, or malformed state remains unknown rather
-    than inventing either readiness or failure for legacy installations.
+    Remote activation and local switchboard records are host-owned and
+    structurally validated. Missing, stale, or malformed state remains unknown
+    rather than inventing either readiness or failure for legacy installations.
     """
+    remote_runtime = _active_remote_provider_pixel_runtime()
+    if remote_runtime is not None:
+        payload["activeAgentViable"] = True
+        payload["activeRuntime"] = {
+            "source": "remote-provider",
+            **remote_runtime,
+        }
+        return
     if _switchboard_state is None:
         return
     state_path = _switchboard_state_path()
@@ -2943,6 +2951,44 @@ def _read_remote_provider_activation_state() -> dict | None:
     ):
         raise RuntimeError("Remote-provider activation state contract is invalid")
     return value
+
+
+def _active_remote_provider_pixel_runtime() -> dict[str, object] | None:
+    """Return the active remote runtime only when every custody join matches.
+
+    The local switchboard remains a rollback route, but it is not the model
+    serving Pixel while a proven remote-provider transaction is active. This
+    projection does no network I/O because Dashboard polls model status often;
+    activation already proved LiteLLM and reconciled Pixel before commit.
+    """
+    try:
+        route = _read_remote_provider_route_state_for_update()
+        route_status = route.get("status")
+        if not isinstance(route_status, dict) or route_status.get("proven") is not True:
+            return None
+        _remote_provider_sanitize_probe_receipt(route_status.get("lastProbe"))
+        runtime = _remote_provider_runtime_contract(route)
+        activation = _read_remote_provider_activation_state()
+        if (
+            not isinstance(activation, dict)
+            or activation.get("phase") != "active"
+            or activation.get("remote") != runtime
+            or activation.get("routeFingerprint")
+            != _remote_provider_route_fingerprint(route)
+        ):
+            return None
+        env = load_env(INSTALL_DIR / ".env")
+        if (
+            str(env.get("ODS_MODE") or "") != "cloud"
+            or str(env.get("LLM_API_URL") or "").rstrip("/")
+            != "http://litellm:4000"
+        ):
+            return None
+        if _managed_pixel_runtime_contract() != runtime:
+            return None
+        return runtime
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _write_remote_provider_activation_state(value: dict) -> None:

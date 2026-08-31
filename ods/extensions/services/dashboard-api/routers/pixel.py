@@ -141,16 +141,15 @@ class ChatCancelRequest(BaseModel):
 router = APIRouter(prefix="/api/pixel", tags=["pixel"])
 
 
-async def _model_readiness_issue() -> tuple[str, str] | None:
-    """Return a host-proven model transition or incompatibility, if present.
-
-    A failed lifecycle probe does not falsely take down an otherwise healthy
-    Pixel edge. The edge readiness check remains authoritative in that case.
-    """
+async def _host_model_status() -> dict[str, object] | None:
     try:
         status = await request_agent_json("GET", "/v1/model/status", timeout=2.0)
     except AgentClientError:
         return None
+    return status if isinstance(status, dict) else None
+
+
+def _model_readiness_issue_from_status(status: object) -> tuple[str, str] | None:
     switching = (
         isinstance(status, dict)
         and status.get("activeOperation") == "model_activation"
@@ -161,6 +160,36 @@ async def _model_readiness_issue() -> tuple[str, str] | None:
     if isinstance(status, dict) and status.get("activeAgentViable") is False:
         return "model_incompatible", _MODEL_INCOMPATIBLE_DETAIL
     return None
+
+
+async def _model_readiness_issue() -> tuple[str, str] | None:
+    """Return a host-proven model transition or incompatibility, if present.
+
+    A failed lifecycle probe does not falsely take down an otherwise healthy
+    Pixel edge. The edge readiness check remains authoritative in that case.
+    """
+    return _model_readiness_issue_from_status(await _host_model_status())
+
+
+def _active_runtime_projection(status: object) -> dict[str, object] | None:
+    if not isinstance(status, dict):
+        return None
+    runtime = status.get("activeRuntime")
+    expected = {"source", "model", "contextLength", "maxTokens", "reasoning"}
+    if (
+        not isinstance(runtime, dict)
+        or set(runtime) != expected
+        or runtime.get("source") != "remote-provider"
+        or not isinstance(runtime.get("model"), str)
+        or not 1 <= len(runtime["model"]) <= 256
+        or type(runtime.get("contextLength")) is not int
+        or not 16384 <= runtime["contextLength"] <= 10_000_000
+        or type(runtime.get("maxTokens")) is not int
+        or not 1 <= runtime["maxTokens"] <= runtime["contextLength"]
+        or type(runtime.get("reasoning")) is not bool
+    ):
+        return None
+    return {key: runtime[key] for key in expected}
 
 
 async def _model_activation_in_progress() -> bool:
@@ -186,7 +215,8 @@ async def pixel_status() -> dict[str, object]:
     config = _pixel_config()
     if config is None:
         return {"available": False, "model": None, "detail": "Pixel is not enabled"}
-    readiness_issue = await _model_readiness_issue()
+    host_status = await _host_model_status()
+    readiness_issue = _model_readiness_issue_from_status(host_status)
     if readiness_issue is not None:
         state, detail = readiness_issue
         return {
@@ -214,11 +244,15 @@ async def pixel_status() -> dict[str, object]:
         available = isinstance(models, list) and any(
             isinstance(item, dict) and item.get("id") == _MODEL for item in models
         )
-        return {
+        result: dict[str, object] = {
             "available": available,
             "model": _MODEL if available else None,
             "detail": "Owner agent ready" if available else "pixel/default is unavailable",
         }
+        runtime = _active_runtime_projection(host_status)
+        if available and runtime is not None:
+            result["runtime"] = runtime
+        return result
     except (httpx.HTTPError, asyncio.TimeoutError):
         return {"available": False, "model": None, "detail": "Pixel edge is unavailable"}
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):

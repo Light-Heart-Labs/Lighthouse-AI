@@ -307,6 +307,78 @@ async def test_status_returns_only_fixed_projection():
 
 
 @pytest.mark.asyncio
+async def test_status_projects_only_validated_active_remote_runtime(monkeypatch):
+    async def active_remote_runtime(*_args, **_kwargs):
+        return {
+            "status": "idle",
+            "activeAgentViable": True,
+            "activeRuntime": {
+                "source": "remote-provider",
+                "model": "dream-fleet-agent",
+                "contextLength": 131072,
+                "maxTokens": 16384,
+                "reasoning": False,
+            },
+        }
+
+    monkeypatch.setattr(pixel, "request_agent_json", active_remote_runtime)
+    body = json.dumps({"data": [{"id": "pixel/default"}]}).encode()
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        return_value=FakeClient(FakeResponse(chunks=[body])),
+    ):
+        result = await pixel.pixel_status()
+
+    assert result == {
+        "available": True,
+        "model": "pixel/default",
+        "detail": "Owner agent ready",
+        "runtime": {
+            "source": "remote-provider",
+            "model": "dream-fleet-agent",
+            "contextLength": 131072,
+            "maxTokens": 16384,
+            "reasoning": False,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        {
+            "source": "local",
+            "model": "forged",
+            "contextLength": 131072,
+            "maxTokens": 16384,
+            "reasoning": False,
+        },
+        {
+            "source": "remote-provider",
+            "model": "forged",
+            "contextLength": 131072,
+            "maxTokens": 16384,
+            "reasoning": False,
+            "apiKey": "must-not-project",
+        },
+        {
+            "source": "remote-provider",
+            "model": "forged",
+            "contextLength": 131072,
+            "maxTokens": 131073,
+            "reasoning": False,
+        },
+    ],
+)
+def test_active_runtime_projection_rejects_untrusted_or_malformed_state(runtime):
+    assert pixel._active_runtime_projection({"activeRuntime": runtime}) is None
+    assert "must-not-project" not in json.dumps(
+        pixel._active_runtime_projection({"activeRuntime": runtime})
+    )
+
+
+@pytest.mark.asyncio
 async def test_status_projects_active_model_switch_without_touching_edge(monkeypatch):
     async def active_model_lifecycle(*_args, **_kwargs):
         return {

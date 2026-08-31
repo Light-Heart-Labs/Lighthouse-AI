@@ -345,6 +345,7 @@ export default function Pixel({ systemStatus = null }) {
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
+  const [agentRuntime, setAgentRuntime] = useState(null)
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
@@ -352,9 +353,9 @@ export default function Pixel({ systemStatus = null }) {
   const inputRef = useRef(null)
   const scrollRef = useRef(null)
 
-  const activeModel = systemStatus?.inference?.loadedModel || systemStatus?.model?.name || ''
+  const activeModel = agentRuntime?.model || systemStatus?.inference?.loadedModel || systemStatus?.model?.name || ''
   const activeContext = formatContext(
-    systemStatus?.inference?.contextSize || systemStatus?.model?.contextLength
+    agentRuntime?.contextLength || systemStatus?.inference?.contextSize || systemStatus?.model?.contextLength
   )
 
   useEffect(() => {
@@ -366,6 +367,25 @@ export default function Pixel({ systemStatus = null }) {
         const response = await fetch('/api/pixel/status', { signal: controller.signal })
         if (!response.ok) throw new Error('status unavailable')
         const data = await response.json()
+        const runtime = data?.runtime
+        const runtimeKeys = runtime && typeof runtime === 'object' && !Array.isArray(runtime)
+          ? Object.keys(runtime).sort().join('\n')
+          : ''
+        setAgentRuntime(
+          runtimeKeys === ['contextLength', 'maxTokens', 'model', 'reasoning', 'source'].join('\n')
+          && runtime.source === 'remote-provider'
+          && typeof runtime.model === 'string'
+          && runtime.model.length > 0
+          && runtime.model.length <= 256
+          && Number.isInteger(runtime.contextLength)
+          && runtime.contextLength >= 16384
+          && Number.isInteger(runtime.maxTokens)
+          && runtime.maxTokens >= 1
+          && runtime.maxTokens <= runtime.contextLength
+          && typeof runtime.reasoning === 'boolean'
+            ? runtime
+            : null
+        )
         setStatus(data.available === true
           ? 'available'
           : data.state === 'model_switching'
