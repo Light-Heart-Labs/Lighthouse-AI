@@ -140,11 +140,27 @@ itself is unchanged. Installation fails unless the resulting root-owned,
 mode-`0640` broker policy is byte-for-byte equal to the owner-private source;
 an installer success message is never treated as sufficient custody evidence.
 
-The default policy provides five read-only named actions: `host.identity`,
-`host.kernel`, `host.architecture`, `host.platform`, and `host.os-release`.
-These observations execute from the broker's protected state directory so the
-broker does not need access to the owner's home directory. Raw shell is
-disabled. The policy also permits bounded automatic
+The default policy provides thirteen read-only named host actions. Identity
+and platform observations use `host.identity`, `host.kernel`,
+`host.architecture`, `host.platform`, and `host.os-release`. Broader machine
+exploration uses `host.processes`, `host.services`, `host.cpu`, `host.memory`,
+`host.storage`, `host.network-addresses`, `host.network-routes`, and
+`host.listening-ports`.
+
+These actions intentionally expose useful host state without exposing a raw
+privileged shell. Process observations omit command arguments and environment
+values; service observations omit service environments; storage observation
+reports capacity rather than file contents; and network observation reports
+interfaces, routes, and listening endpoints without process arguments or
+credentials. The actions execute from the broker's protected state directory,
+so the broker still does not need access to the owner's home directory. Raw
+host shell remains disabled in Operations; Pixel's sandbox shell remains
+available for ordinary workspace work. Workspace file tools continue to
+operate only inside Pixel's sandbox; broader owner-file exploration requires a
+separately audited typed read bridge and is not implied by these host inventory
+actions.
+
+The policy also permits bounded automatic
 staging from a finite set of common public artifact hosts:
 
 - `example.com` for deterministic qualification;

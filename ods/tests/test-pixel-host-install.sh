@@ -534,14 +534,24 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
-for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release","ods.extensions.search","ods.extensions.inspect"}:
+host_inventory={"host.processes","host.services","host.cpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports"}
+assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
+for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect"}:
     assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
 assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
 assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
 assert v["actions"]["host.architecture"]["argv"] == ["/usr/bin/uname", "-m"]
 assert v["actions"]["host.platform"]["argv"] == ["/usr/bin/uname", "-a"]
 assert v["actions"]["host.os-release"]["argv"] == ["/usr/bin/cat", "/etc/os-release"]
+assert pathlib.Path(v["actions"]["host.processes"]["argv"][0]).name == "ps"
+assert v["actions"]["host.processes"]["argv"][1:] == ["-eo","pid=,ppid=,user=,stat=,%cpu=,%mem=,comm=","--sort=-%cpu"]
+assert pathlib.Path(v["actions"]["host.services"]["argv"][0]).name == "systemctl"
+assert v["actions"]["host.cpu"]["argv"][1:] == ["--json"]
+assert v["actions"]["host.memory"]["argv"][1:] == ["--bytes"]
+assert v["actions"]["host.storage"]["argv"][1:] == ["--block-size=1","--output=source,fstype,size,used,avail,pcent,target"]
+assert v["actions"]["host.network-addresses"]["argv"][1:] == ["-j","address","show"]
+assert v["actions"]["host.network-routes"]["argv"][1:] == ["-j","route","show"]
+assert v["actions"]["host.listening-ports"]["argv"][1:] == ["-H","-lntu"]
 extension_search=v["actions"]["ods.extensions.search"]
 assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
 assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]

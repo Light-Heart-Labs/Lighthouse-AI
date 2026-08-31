@@ -1995,7 +1995,7 @@ _ods_pixel_write_operations_policy() {
 
     ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${policy%/*}" || return 1
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$policy" "$install_root" "$workspace" <<'PY'
-import json, os, pathlib, re, socket, stat, sys, tempfile
+import json, os, pathlib, re, shutil, socket, stat, sys, tempfile
 
 out, install_root, workspace = sys.argv[1:]
 path = pathlib.Path(out)
@@ -2033,7 +2033,24 @@ python_binary = str(pathlib.Path("/usr/bin/python3").resolve(strict=True))
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
 cat_binary = "/usr/bin/cat"
-for binary in (python_binary, hostname_binary, uname_binary, cat_binary):
+
+def required_binary(name):
+    candidate = shutil.which(name)
+    if not candidate:
+        raise SystemExit(f"required Pixel Operations executable is unavailable: {name}")
+    return str(pathlib.Path(candidate).resolve(strict=True))
+
+ps_binary = required_binary("ps")
+systemctl_binary = required_binary("systemctl")
+lscpu_binary = required_binary("lscpu")
+free_binary = required_binary("free")
+df_binary = required_binary("df")
+ip_binary = required_binary("ip")
+ss_binary = required_binary("ss")
+for binary in (
+    python_binary, hostname_binary, uname_binary, cat_binary, ps_binary,
+    systemctl_binary, lscpu_binary, free_binary, df_binary, ip_binary, ss_binary,
+):
     info = pathlib.Path(binary).lstat()
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_uid != 0 or info.st_mode & 0o022
@@ -2160,6 +2177,109 @@ payload = {
             "reversible": False,
             "targets": ["ods-host"],
             "argv": [cat_binary, "/etc/os-release"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.processes": {
+            "description": "List bounded process identity and resource fields without command arguments or environment values.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [
+                ps_binary, "-eo", "pid=,ppid=,user=,stat=,%cpu=,%mem=,comm=", "--sort=-%cpu",
+            ],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.services": {
+            "description": "List running and failed system services without reading service environments or credentials.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [
+                systemctl_binary, "--no-pager", "--plain", "--legend=no", "list-units",
+                "--type=service", "--state=running,failed",
+            ],
+            "timeoutSeconds": 15,
+            "exclusiveTarget": False,
+        },
+        "host.cpu": {
+            "description": "Report bounded CPU and virtualization inventory as JSON.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [lscpu_binary, "--json"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.memory": {
+            "description": "Report host memory and swap capacity in bytes.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [free_binary, "--bytes"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.storage": {
+            "description": "Report mounted filesystem capacity without reading filesystem contents.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [
+                df_binary, "--block-size=1", "--output=source,fstype,size,used,avail,pcent,target",
+            ],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.network-addresses": {
+            "description": "Report host network interfaces and assigned addresses as JSON.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [ip_binary, "-j", "address", "show"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.network-routes": {
+            "description": "Report the host routing table as bounded JSON.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [ip_binary, "-j", "route", "show"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.listening-ports": {
+            "description": "List listening TCP and UDP endpoints without process arguments or credentials.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [ss_binary, "-H", "-lntu"],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },

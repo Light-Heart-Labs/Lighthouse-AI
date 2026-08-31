@@ -835,6 +835,193 @@ function osPrettyName(value) {
   return cleanSingleLine(text, /^[A-Za-z0-9][A-Za-z0-9 .,_+()/:;~'&-]{0,255}$/, 256);
 }
 
+function safeHostLines(step, maximumLines = 2048, maximumBytes = 256 * 1024) {
+  if (
+    !step ||
+    step.stderr.trim() ||
+    step.riskSignals.length > 0 ||
+    typeof step.stdout !== "string" ||
+    step.stdout.length > maximumBytes ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(step.stdout)
+  ) {
+    return undefined;
+  }
+  const lines = step.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > maximumLines || lines.some((line) => line.length > 2048)) {
+    return undefined;
+  }
+  return lines;
+}
+
+function formatHostBytes(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return undefined;
+  const gib = value / (1024 ** 3);
+  return `${gib.toFixed(gib >= 10 ? 1 : 2)} GiB`;
+}
+
+function processEvidence(step) {
+  const lines = safeHostLines(step);
+  if (!lines) return undefined;
+  const entries = lines.map((line) => {
+    const match = line.match(/^([0-9]+)\s+([0-9]+)\s+([A-Za-z0-9_.+-]{1,64})\s+(\S{1,16})\s+([0-9.]+)\s+([0-9.]+)\s+([A-Za-z0-9_.+:@%()\/-]{1,128})$/);
+    if (!match) return undefined;
+    const cpu = Number(match[5]);
+    const memory = Number(match[6]);
+    if (!Number.isFinite(cpu) || !Number.isFinite(memory)) return undefined;
+    return { pid: match[1], user: match[3], cpu, memory, command: match[7] };
+  });
+  if (entries.some((entry) => !entry)) return undefined;
+  const top = entries.slice(0, 8).map(
+    (entry) => `${entry.command} (pid ${entry.pid}, ${entry.cpu}% CPU, ${entry.memory}% memory)`
+  );
+  return `Processes: ${entries.length} visible; top CPU entries: ${top.join("; ")}.`;
+}
+
+function serviceEvidence(step) {
+  const lines = safeHostLines(step);
+  if (!lines) return undefined;
+  const entries = lines.map((line) => {
+    const match = line.match(/^([A-Za-z0-9@_.:-]{1,256}\.service)\s+(\S{1,32})\s+(\S{1,32})\s+(\S{1,32})(?:\s+.*)?$/);
+    return match ? { unit: match[1], active: match[3], sub: match[4] } : undefined;
+  });
+  if (entries.some((entry) => !entry)) return undefined;
+  const failed = entries.filter((entry) => entry.active === "failed" || entry.sub === "failed");
+  const sample = entries.slice(0, 12).map((entry) => `${entry.unit}=${entry.active}/${entry.sub}`);
+  return `System services: ${entries.length} running or failed; failed: ${failed.length ? failed.map((entry) => entry.unit).join(", ") : "none"}; sample: ${sample.join(", ")}.`;
+}
+
+function cpuEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 64 * 1024) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (!exactKeys(value, ["lscpu"]) || !Array.isArray(value.lscpu) || value.lscpu.length > 128) {
+    return undefined;
+  }
+  const wanted = new Set([
+    "Architecture:", "CPU(s):", "Model name:", "Vendor ID:",
+    "Thread(s) per core:", "Core(s) per socket:", "Socket(s):",
+    "Virtualization:", "Hypervisor vendor:",
+  ]);
+  const fields = [];
+  for (const entry of value.lscpu) {
+    if (!exactKeys(entry, ["field", "data"]) || typeof entry.field !== "string") return undefined;
+    if (!wanted.has(entry.field)) continue;
+    const data = cleanSingleLine(String(entry.data), /^[A-Za-z0-9][A-Za-z0-9 ._+()/:,@-]{0,255}$/, 256);
+    if (!data) return undefined;
+    fields.push(`${entry.field.slice(0, -1)} ${data}`);
+  }
+  return fields.length >= 2 ? `CPU: ${fields.join("; ")}.` : undefined;
+}
+
+function memoryEvidence(step) {
+  const lines = safeHostLines(step, 16, 4096);
+  if (!lines) return undefined;
+  const memory = lines.find((line) => line.startsWith("Mem:"));
+  const swap = lines.find((line) => line.startsWith("Swap:"));
+  const parse = (line) => line?.split(/\s+/).slice(1).map((item) => Number(item));
+  const mem = parse(memory);
+  const swp = parse(swap);
+  if (!mem || mem.length < 3 || mem.some((item) => !Number.isSafeInteger(item) || item < 0)) {
+    return undefined;
+  }
+  const total = formatHostBytes(mem[0]);
+  const used = formatHostBytes(mem[1]);
+  const available = formatHostBytes(mem[5] ?? mem[2]);
+  const swapTotal = swp && swp.length >= 1 ? formatHostBytes(swp[0]) : undefined;
+  if (!total || !used || !available) return undefined;
+  return `Memory: ${used} used of ${total}; ${available} available${swapTotal ? `; swap ${swapTotal}` : ""}.`;
+}
+
+function storageEvidence(step) {
+  const lines = safeHostLines(step, 512);
+  if (!lines || !/^Filesystem\s+Type\s+/.test(lines[0])) return undefined;
+  const mounts = [];
+  for (const line of lines.slice(1)) {
+    const match = line.match(/^(\S+)\s+(\S+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]{1,3}%)\s+(.+)$/);
+    if (!match) return undefined;
+    const type = cleanSingleLine(match[2], /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}$/, 64);
+    const mount = cleanSingleLine(match[7], /^\/(?:[A-Za-z0-9_./:@+,-]{0,510})$/, 512);
+    const size = formatHostBytes(Number(match[3]));
+    const available = formatHostBytes(Number(match[5]));
+    if (!type || !mount || !size || !available) return undefined;
+    mounts.push(`${mount} (${type}, ${match[6]} used, ${available} free of ${size})`);
+  }
+  return mounts.length ? `Storage mounts: ${mounts.slice(0, 12).join("; ")}.` : undefined;
+}
+
+function networkAddressEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 128 * 1024) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > 128) return undefined;
+  const interfaces = [];
+  for (const entry of value) {
+    const name = cleanSingleLine(entry?.ifname, /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,63}$/, 64);
+    if (!name || !Array.isArray(entry.addr_info) || entry.addr_info.length > 64) return undefined;
+    const addresses = [];
+    for (const address of entry.addr_info) {
+      if (!address || !["inet", "inet6"].includes(address.family)) continue;
+      const local = cleanSingleLine(address.local, /^[0-9A-Fa-f:.]{1,64}$/, 64);
+      if (!local || !Number.isInteger(address.prefixlen) || address.prefixlen < 0 || address.prefixlen > 128) {
+        return undefined;
+      }
+      addresses.push(`${local}/${address.prefixlen}`);
+    }
+    interfaces.push(`${name}${addresses.length ? `=${addresses.join(",")}` : "=no address"}`);
+  }
+  return `Network interfaces: ${interfaces.join("; ")}.`;
+}
+
+function networkRouteEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 128 * 1024) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > 512) return undefined;
+  const routes = [];
+  for (const entry of value.slice(0, 24)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const dst = cleanSingleLine(String(entry.dst ?? "default"), /^(?:[0-9A-Fa-f:./]{1,80}|default)$/, 80);
+    const dev = cleanSingleLine(String(entry.dev ?? "unknown"), /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,63}$/, 64);
+    const gateway = entry.gateway === undefined
+      ? undefined
+      : cleanSingleLine(String(entry.gateway), /^[0-9A-Fa-f:.]{1,64}$/, 64);
+    if (!dst || !dev || (entry.gateway !== undefined && !gateway)) return undefined;
+    routes.push(`${dst} via ${gateway ?? "direct"} dev ${dev}`);
+  }
+  return `Network routes: ${value.length}; sample: ${routes.join("; ")}.`;
+}
+
+function listeningPortEvidence(step) {
+  const lines = safeHostLines(step, 4096);
+  if (!lines) return undefined;
+  const endpoints = lines.map((line) => {
+    const match = line.match(/^(tcp|udp)\s+([A-Z-]{1,16})\s+[0-9]+\s+[0-9]+\s+(\S{1,256})\s+\S{1,256}$/);
+    if (!match) return undefined;
+    const local = cleanSingleLine(match[3], /^[A-Za-z0-9.*:%[\]_-]{1,256}$/, 256);
+    return local ? `${match[1]} ${match[2]} ${local}` : undefined;
+  });
+  if (endpoints.some((entry) => !entry)) return undefined;
+  return `Listening TCP/UDP endpoints: ${endpoints.length}; sample: ${endpoints.slice(0, 24).join("; ")}.`;
+}
+
 function operationsHostEvidenceText(requiredActions, terminalJobs) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   if (!(terminalJobs instanceof Map)) return undefined;
@@ -899,6 +1086,23 @@ function operationsHostEvidenceText(requiredActions, terminalJobs) {
     const value = osPrettyName(osRelease.stdout);
     if (!value || osRelease.stderr.trim() || osRelease.riskSignals.length > 0) return undefined;
     lines.push(`- Operating system: \`${value}\` (job \`${osRelease.jobId}\`)`);
+  }
+  const renderers = [
+    ["host.cpu", "Hardware", cpuEvidence],
+    ["host.memory", "Memory", memoryEvidence],
+    ["host.storage", "Storage", storageEvidence],
+    ["host.processes", "Processes", processEvidence],
+    ["host.services", "Services", serviceEvidence],
+    ["host.network-addresses", "Addresses", networkAddressEvidence],
+    ["host.network-routes", "Routes", networkRouteEvidence],
+    ["host.listening-ports", "Listening ports", listeningPortEvidence],
+  ];
+  for (const [action, label, renderer] of renderers) {
+    const step = steps.get(action);
+    if (!step) continue;
+    const value = renderer(step);
+    if (!value) return undefined;
+    lines.push(`- ${label}: ${value} (job \`${step.jobId}\`)`);
   }
   return lines.join("\n");
 }
@@ -1336,6 +1540,8 @@ function operationsEvidenceText(requiredActions, terminalJobs) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
+    "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
+    "host.network-addresses", "host.network-routes", "host.listening-ports",
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
     return operationsHostEvidenceText(requiredActions, terminalJobs);
@@ -1677,6 +1883,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|os (?:signature|release))\b/i.test(
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
+  const hostContext = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i.test(text);
+  const broadHostExploration = hostContext &&
+    /\b(?:explore|inspect|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const actions = [];
@@ -1689,13 +1898,36 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (/\b(?:operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i.test(text)) {
     actions.push("host.os-release");
   }
+  if (broadHostExploration || (hostContext && /\b(?:process|processes|process inventory)\b/i.test(text))) {
+    actions.push("host.processes");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:systemd|system services?|service inventory)\b/i.test(text))) {
+    actions.push("host.services");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:cpu|processor|hardware)\b/i.test(text))) {
+    actions.push("host.cpu");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:memory|ram|swap)\b/i.test(text))) {
+    actions.push("host.memory");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:disk|filesystem|storage|mounts?)\b/i.test(text))) {
+    actions.push("host.storage");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i.test(text))) {
+    actions.push("host.network-addresses", "host.network-routes", "host.listening-ports");
+  }
+  if (broadHostExploration) {
+    actions.push("host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release");
+  }
   if (extensionCatalog) actions.push("ods.extensions.search");
   if (extensionLifecycle) {
     actions.push("ods.extensions.inspect");
     actions.push(`ods.extensions.${extensionLifecycle.action}`);
   }
   return {
-    required: explicitOperations || hostEvidence || extensionCatalog || Boolean(extensionLifecycle),
+    required:
+      explicitOperations || hostEvidence || broadHostExploration ||
+      extensionCatalog || Boolean(extensionLifecycle),
     actions: [...new Set(actions)],
   };
 }

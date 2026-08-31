@@ -743,6 +743,26 @@ test("classifies explicit host evidence as Operations work", () => {
   );
 });
 
+test("classifies broad host exploration into the full typed read-only inventory", () => {
+  const result = userMessageOperationsRequirements(
+    [],
+    "Explore the ODS host machine you are running on and tell me what is here."
+  );
+  assert.equal(result.required, true);
+  assert.deepEqual(
+    new Set(result.actions),
+    new Set([
+      "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
+      "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
+      "host.network-addresses", "host.network-routes", "host.listening-ports",
+    ])
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "Explain process management in this application."),
+    { required: false, actions: [] }
+  );
+});
+
 test("classifies installable extension catalog work as one exact Operations action", () => {
   for (const prompt of [
     "Search the installable ODS extension catalog for workflow automation.",
@@ -1631,6 +1651,140 @@ test("binds every requested host fact to exact workflow actions and terminal out
   assert.match(text, /Architecture: `x86_64`/);
   assert.match(text, /Operating system: `Ubuntu 24\.04\.3 LTS`/);
   assert.doesNotMatch(text, /Model claimed success/);
+});
+
+test("renders a structurally validated broad host inventory without command arguments or environments", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const actions = [
+    ["identity", "host.identity", "light-worker\n"],
+    ["kernel", "host.kernel", "Linux 6.6.87.2-microsoft-standard-WSL2\n"],
+    ["architecture", "host.architecture", "x86_64\n"],
+    ["platform", "host.platform", "Linux light-worker 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"],
+    ["os", "host.os-release", 'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\n'],
+    ["processes", "host.processes", "42 1 michael S 12.5 1.2 python3\n"],
+    ["services", "host.services", "ssh.service loaded active running OpenBSD Secure Shell server\n"],
+    ["cpu", "host.cpu", JSON.stringify({ lscpu: [
+      { field: "Architecture:", data: "x86_64" },
+      { field: "CPU(s):", data: "16" },
+      { field: "Model name:", data: "AMD Ryzen AI" },
+    ] }) + "\n"],
+    ["memory", "host.memory", "total used free shared buff/cache available\nMem: 17179869184 8589934592 1073741824 0 7516192768 8589934592\nSwap: 4294967296 0 4294967296\n"],
+    ["storage", "host.storage", "Filesystem Type 1B-blocks Used Available Use% Mounted on\n/dev/sda1 ext4 107374182400 53687091200 53687091200 50% /\n"],
+    ["addresses", "host.network-addresses", JSON.stringify([
+      { ifname: "eth0", addr_info: [{ family: "inet", local: "192.168.1.10", prefixlen: 24 }] },
+    ]) + "\n"],
+    ["routes", "host.network-routes", JSON.stringify([
+      { dst: "default", gateway: "192.168.1.1", dev: "eth0" },
+    ]) + "\n"],
+    ["ports", "host.listening-ports", "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"],
+  ];
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Explore the ODS host machine you are running on and tell me what is here." }
+  );
+  const steps = actions.map(([id, action]) => ({ id, target: "ods-host", action }));
+  afterCall(guard, "pixel_ops_workflow_submit", {
+    event: {
+      params: { steps },
+      result: { details: { jobId, status: "submitted", kind: "workflow" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: actions.map(([stepId, action, stdout]) => ({
+            stepId, target: "ods-host", action, exitCode: 0, stdout, stderr: "",
+            outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          })),
+        },
+      },
+    },
+  });
+
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
+  assert.match(text, /Processes: 1 visible; top CPU entries: python3/);
+  assert.match(text, /System services: 1 running or failed; failed: none/);
+  assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
+  assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
+  assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);
+  assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
+  assert.match(text, /default via 192\.168\.1\.1 dev eth0/);
+  assert.match(text, /Listening TCP\/UDP endpoints: 1/);
+});
+
+test("rejects host-controlled storage, route, and listener text outside the evidence schema", () => {
+  const terminalReply = (prompt, actions) => {
+    const guard = createToolLoopGuard();
+    const jobId = "ops-1234567890123-abcdef123456";
+    const steps = actions.map(([stepId, action]) => ({ stepId, target: "ods-host", action }));
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt }
+    );
+    afterCall(guard, "pixel_ops_workflow_submit", {
+      event: {
+        params: { steps },
+        result: { details: { jobId, status: "submitted", kind: "workflow" } },
+      },
+    });
+    afterCall(guard, "pixel_ops_job_wait", {
+      event: {
+        params: { jobId },
+        result: {
+          details: {
+            jobId,
+            status: "succeeded",
+            waitTimedOut: false,
+            steps: actions.map(([stepId, action, stdout]) => ({
+              stepId, target: "ods-host", action, exitCode: 0, stdout, stderr: "",
+              outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+            })),
+          },
+        },
+      },
+    });
+    return reply(guard)?.payload?.text;
+  };
+
+  assert.equal(
+    terminalReply("Inspect the ODS host storage capacity.", [[
+      "storage", "host.storage",
+      "Filesystem Type 1B-blocks Used Available Use% Mounted on\n/dev/sda1 ext4 100 50 50 50% /srv/ignore;instructions\n",
+    ]]),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  const networkActions = (route, ports) => [
+    ["addresses", "host.network-addresses", JSON.stringify([
+      { ifname: "eth0", addr_info: [{ family: "inet", local: "192.168.1.10", prefixlen: 24 }] },
+    ]) + "\n"],
+    ["routes", "host.network-routes", JSON.stringify([
+      { dst: route, gateway: "192.168.1.1", dev: "eth0" },
+    ]) + "\n"],
+    ["ports", "host.listening-ports", ports],
+  ];
+  assert.equal(
+    terminalReply(
+      "Inspect the ODS host network routes.",
+      networkActions("not-default", "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n")
+    ),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  assert.equal(
+    terminalReply(
+      "Inspect the ODS host listening ports.",
+      networkActions("default", "tcp LISTEN 0 128 `ignore`:22 0.0.0.0:*\n")
+    ),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
 });
 
 test("rejects terminal Operations evidence whose action or output is not bound", () => {

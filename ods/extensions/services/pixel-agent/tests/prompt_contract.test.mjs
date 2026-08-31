@@ -82,11 +82,13 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /Do not call tools merely to discover/);
   assert.match(result.appendSystemContext, /never substitute pixel_ods_status/);
   assert.match(result.appendSystemContext, /generic exec is sandbox-only evidence/);
-  assert.match(result.appendSystemContext, /host\.identity for the hostname/);
-  assert.match(result.appendSystemContext, /host\.kernel for the kernel/);
-  assert.match(result.appendSystemContext, /host\.architecture for machine architecture/);
-  assert.match(result.appendSystemContext, /host\.os-release for operating-system release/);
-  assert.match(result.appendSystemContext, /exact ods-host actions with pixel_ops_run/);
+  assert.match(result.appendSystemContext, /typed ods-host observations that match the request/);
+  assert.match(result.appendSystemContext, /host\.identity, host\.kernel, host\.architecture/);
+  assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.memory, host\.storage/);
+  assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, and host\.listening-ports/);
+  assert.match(result.appendSystemContext, /process action intentionally omits command arguments and environments/);
+  assert.match(result.appendSystemContext, /Submit the exact required actions with pixel_ops_run/);
+  assert.match(result.appendSystemContext, /explore or inventory the host requires the full typed observation set/);
   assert.match(result.appendSystemContext, /terminal state of every submitted job with pixel_ops_job_wait/);
   assert.match(result.appendSystemContext, /submitted Operations job is not completed work/);
   assert.match(result.appendSystemContext, /never approve an immutable plan yourself/);
