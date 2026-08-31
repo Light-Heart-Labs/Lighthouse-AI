@@ -96,6 +96,16 @@ jobs:
         shell: pwsh
         run: ./tests/contracts/test-windows-runtime-recovery.ps1
 
+      - name: Windows AMD Memory Detection Contract
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test-windows-amd-memory-detection.ps1
+
+      - name: Windows NVIDIA Llama Memory Budget Contract
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test-windows-llama-memory-budget.ps1
+
       - name: Windows Installed Footprint Contract
         if: runner.os == 'Windows'
         shell: pwsh
