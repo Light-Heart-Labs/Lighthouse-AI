@@ -32,6 +32,21 @@ ods_pixel_run_as_owner() {
     fi
 }
 
+ods_pixel_run_as_owner_with_umask() {
+    local owner="$1" home="$2" requested_umask="$3"
+    shift 3
+    [[ "$requested_umask" =~ ^0[0-7]{3}$ && "$#" -gt 0 ]] || return 1
+
+    # Set the mask inside the target owner's process. sudo may apply its own
+    # configured umask, so a caller-side subshell is not sufficient.
+    ods_pixel_run_as_owner "$owner" "$home" sh -c '
+        requested_umask=$1
+        shift
+        umask "$requested_umask"
+        exec "$@"
+    ' sh "$requested_umask" "$@"
+}
+
 _ods_pixel_assert_managed_state() {
     local owner="$1" home="$2" marker marker_dir pixel_install
     marker="$home/.config/ods/pixel-managed.json"
@@ -1671,23 +1686,23 @@ _ods_pixel_source_checkout() {
         stage="$(ods_pixel_run_as_owner "$owner" "$home" mktemp -d "$parent/.pixel-source.XXXXXX")" || return 1
         checkout="$stage/checkout"
         if [[ "$source" == https://github.com/Osmantic/Pixel.git ]]; then
-            if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+            if ! ods_pixel_run_as_owner_with_umask "$owner" "$home" 0022 timeout "${source_timeout}s" \
                 env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
-                clone --filter=blob:none --no-checkout -- "$source" "$checkout" >/dev/null); then
+                clone --filter=blob:none --no-checkout -- "$source" "$checkout" >/dev/null; then
                 ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
                 printf '%s\n' 'error: Pixel source clone failed or timed out; configure authorized Git access or use the documented local checkout' >&2
                 return 1
             fi
         else
-            if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+            if ! ods_pixel_run_as_owner_with_umask "$owner" "$home" 0022 timeout "${source_timeout}s" \
                 env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
-                clone --no-local --no-checkout -- "$source" "$checkout" >/dev/null); then
+                clone --no-local --no-checkout -- "$source" "$checkout" >/dev/null; then
                 ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
                 return 1
             fi
         fi
-        if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout 60s \
-            env GIT_TERMINAL_PROMPT=0 git -C "$checkout" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null) \
+        if ! ods_pixel_run_as_owner_with_umask "$owner" "$home" 0022 timeout 60s \
+            env GIT_TERMINAL_PROMPT=0 git -C "$checkout" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null \
             || ! ods_pixel_run_as_owner "$owner" "$home" mv -T -- "$checkout" "$source_root"; then
             ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
             return 1

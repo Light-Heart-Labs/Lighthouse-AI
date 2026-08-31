@@ -524,6 +524,23 @@ check test "$(git -C "$source_checkout" rev-parse HEAD)" = "$PIXEL_SOURCE_REF"
 check test -z "$(git -C "$source_checkout" status --porcelain)"
 check test "$(stat -c '%a' "$source_checkout/pixel")" = 644
 
+sudo_mask_probe="$TEST_ROOT/sudo-mask-probe"
+if (
+    ods_sudo_available() { return 0; }
+    ods_sudo() {
+        [[ "$1" == -u && "$3" == -- ]] || return 1
+        shift 3
+        umask 0002
+        "$@"
+    }
+    ods_pixel_run_as_owner_with_umask "$owner" "$home" 0022 sh -c \
+        'printf probe > "$1"' sh "$sudo_mask_probe"
+); then
+    check test "$(stat -c '%a' "$sudo_mask_probe")" = 644
+else
+    fail "owner process umask survives sudo policy reset"
+fi
+
 cat > "$mock_bin/git" <<'SH'
 #!/usr/bin/env bash
 sleep 10

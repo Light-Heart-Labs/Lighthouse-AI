@@ -287,25 +287,21 @@ fi
 #=============================================================================
 if ! $DRY_RUN; then
     if [[ -x "$INSTALL_DIR/ods-cli" ]]; then
-        if ! command -v ods &>/dev/null; then
-            if sudo -n ln -sf "$INSTALL_DIR/ods-cli" /usr/local/bin/ods 2>/dev/null; then
-                ai_ok "ods command installed (try: ods status)"
-            else
-                # Fallback: user-local bin directory (no sudo needed)
-                mkdir -p "$HOME/.local/bin"
-                if ln -sf "$INSTALL_DIR/ods-cli" "$HOME/.local/bin/ods" 2>/dev/null; then
-                    ai_ok "ods command installed to ~/.local/bin/ods"
-                    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-                        ai_warn "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
-                    fi
-                else
-                    ai_warn "Could not create 'ods' command. Add manually:"
-                    ai "  sudo ln -sf $INSTALL_DIR/ods-cli /usr/local/bin/ods"
+        _ods_cli_binding="$(ods_bind_cli_command "$INSTALL_DIR" "$HOME" 2>>"$LOG_FILE")" || _ods_cli_binding=""
+        case "$_ods_cli_binding" in
+            existing:*) ai_ok "ods command already targets this install" ;;
+            system:*) ai_ok "ods command installed (try: ods status)" ;;
+            user:*)
+                ai_ok "ods command installed to ~/.local/bin/ods"
+                if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+                    ai_warn "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
                 fi
-            fi
-        else
-            ai_ok "ods command already available"
-        fi
+                ;;
+            *)
+                ai_warn "Could not safely bind the 'ods' command to this install. Add manually:"
+                ai "  sudo ln -sfn $INSTALL_DIR/ods-cli /usr/local/bin/ods"
+                ;;
+        esac
     fi
 fi
 
