@@ -69,7 +69,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 import session_signer
 from config import EXTENSIONS_DIR, GPU_BACKEND, SERVICES, _read_env_value, load_extension_manifests
-from security import verify_api_key
+from security import request_uses_https, verify_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -782,7 +782,7 @@ def redeem_magic_link(token: str, request: Request, response: Response) -> Redir
     # session_signer.issue() — guarded by is_configured() above so we
     # don't reach this line without a usable secret.
     session_token = session_signer.issue(ttl_seconds=SESSION_TTL_SECONDS)
-    secure_cookie = request.url.scheme == "https"
+    secure_cookie = request_uses_https(request)
     cookie_domain = _cookie_domain(record.get("url_mode", "auto"))
 
     logger.info(

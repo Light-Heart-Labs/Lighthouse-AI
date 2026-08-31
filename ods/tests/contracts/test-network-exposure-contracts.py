@@ -207,6 +207,30 @@ def test_dashboard_pre_stages_hsts() -> None:
     )
 
 
+def test_dashboard_preserves_forwarded_https_for_api_cookies() -> None:
+    nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
+
+    assert_true(
+        "map $http_x_forwarded_proto $ods_forwarded_proto" in nginx_conf,
+        "dashboard nginx must derive the original client scheme",
+    )
+    assert_true(
+        "~*^https(?:,|$) https;" in nginx_conf,
+        "dashboard nginx must recognize HTTPS at the first proxy hop",
+    )
+    assert_true(
+        "proxy_set_header X-Forwarded-Proto $scheme;" not in nginx_conf,
+        "dashboard API routes must not overwrite the original HTTPS scheme",
+    )
+    assert_true(
+        nginx_conf.count(
+            "proxy_set_header X-Forwarded-Proto $ods_forwarded_proto;"
+        )
+        == 5,
+        "every dashboard API proxy location must forward the derived scheme",
+    )
+
+
 def test_openclaw_stays_deprecated_optional_and_token_gated() -> None:
     manifest = read(SERVICES / "openclaw" / "manifest.yaml")
     docs = read(ROOT / "docs" / "OPENCLAW-INTEGRATION.md")
@@ -240,6 +264,7 @@ def main() -> int:
         test_ods_proxy_caps_request_body_sizes,
         test_hermes_proxy_caps_request_body,
         test_dashboard_pre_stages_hsts,
+        test_dashboard_preserves_forwarded_https_for_api_cookies,
         test_openclaw_stays_deprecated_optional_and_token_gated,
         test_litellm_gateway_auth_is_enforced,
     ]

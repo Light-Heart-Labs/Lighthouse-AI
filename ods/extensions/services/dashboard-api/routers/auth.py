@@ -34,7 +34,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import session_signer
-from security import verify_api_key
+from security import request_uses_https, verify_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ def admin_session(response: Response, request: Request) -> dict:
         )
 
     session_token = session_signer.issue(ttl_seconds=SESSION_TTL_SECONDS)
-    secure_cookie = request.url.scheme == "https"
+    secure_cookie = request_uses_https(request)
     cookie_domain = _cookie_domain()
 
     cookie_kwargs: dict = dict(
