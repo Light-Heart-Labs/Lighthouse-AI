@@ -37,6 +37,19 @@ RUNTIME_KEYS = (
     "LLAMA_ARG_TENSOR_SPLIT",
 )
 
+# A completed switchboard proof records the exact model and context, but the v1
+# state contract does not record the runtime profile.  After an interrupted
+# installer has already replaced .env, recover only portable, catalog-owned
+# memory controls from one unambiguous profile for that proven context.  GPU
+# placement and speculative/MoE tuning must never be inferred this way.
+PORTABLE_STATE_RECOVERY_KEYS = {
+    "LLAMA_PARALLEL",
+    "LLAMA_SERVER_MEMORY_LIMIT",
+    "LLAMA_ARG_FLASH_ATTN",
+    "LLAMA_ARG_CACHE_TYPE_K",
+    "LLAMA_ARG_CACHE_TYPE_V",
+}
+
 
 def parse_dotenv(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -397,6 +410,7 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
     )
     profile_id = env.get("MODEL_RUNTIME_PROFILE", "") if reuse_env_runtime else ""
     runtime_profile: dict[str, Any] | None = None
+    runtime_defaults_profile: dict[str, Any] | None = None
     if profile_id:
         profiles = model.get("runtime_profiles")
         if not isinstance(profiles, list):
@@ -408,18 +422,57 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
             return None
         if profile_is_eligible(profile_matches[0], args):
             runtime_profile = profile_matches[0]
+            runtime_defaults_profile = runtime_profile
         elif state_authoritative:
-            # The completed switchboard proof is enough to preserve the model,
-            # but a profile that no longer fits freshly observed hardware must
-            # not carry stale GPU, KV-cache, or memory arguments forward.
+            # Exact model/context proof plus a still-matching .env is stronger
+            # than a later best-effort hardware probe (notably under WSL). Keep
+            # the proven runtime values but stop claiming the old profile is a
+            # currently hardware-qualified selection.
+            runtime_defaults_profile = profile_matches[0]
             profile_id = ""
-            reuse_env_runtime = False
         else:
             return None
+    elif state_authoritative:
+        profiles = model.get("runtime_profiles")
+        exact_context_profiles = [
+            item
+            for item in profiles if isinstance(item, dict)
+            and positive_int(item.get("context_length")) == context
+            and isinstance(item.get("id"), str)
+            and item.get("id")
+        ] if isinstance(profiles, list) else []
+        if len(exact_context_profiles) == 1:
+            candidate = exact_context_profiles[0]
+            candidate_env = candidate.get("env")
+            if (
+                isinstance(candidate_env, dict)
+                and set(candidate_env) <= PORTABLE_STATE_RECOVERY_KEYS
+                and all(
+                    value is not None and valid_runtime_value(key, str(value))
+                    for key, value in candidate_env.items()
+                )
+            ):
+                runtime_defaults_profile = candidate
+                candidate_matches_env = all(
+                    env.get(key, "") == str(value)
+                    for key, value in candidate_env.items()
+                ) and all(
+                    not env.get(key, "")
+                    for key in RUNTIME_KEYS if key not in candidate_env
+                )
+                if not candidate_matches_env:
+                    reuse_env_runtime = False
+                if profile_is_eligible(candidate, args):
+                    runtime_profile = candidate
+                    profile_id = str(candidate["id"])
 
     declared_mb = positive_int(model.get("size_mb")) or 0
     actual_mb = max(1, math.ceil(actual_bytes / (1024 * 1024)))
-    profile_env = runtime_profile.get("env") if runtime_profile and isinstance(runtime_profile.get("env"), dict) else {}
+    profile_env = (
+        runtime_defaults_profile.get("env")
+        if runtime_defaults_profile and isinstance(runtime_defaults_profile.get("env"), dict)
+        else {}
+    )
     runtime_values: dict[str, str] = {}
     for key in RUNTIME_KEYS:
         if reuse_env_runtime and key in env:

@@ -212,7 +212,8 @@ def test_verified_switchboard_state_recovers_an_interrupted_installer_env() -> N
         assert values["MAX_CONTEXT"] == "65536"
         assert values["MODEL_SELECTION_SOURCE"] == "dashboard"
         assert values["MODEL_RUNTIME_PROFILE"] == ""
-        assert "LLAMA_ARG_CACHE_TYPE_K" not in values
+        assert values["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
+        assert values["LLAMA_ARG_CACHE_TYPE_V"] == "q4_0"
 
         replace_env(env, "LLM_MODEL=bootstrap-model", "LLM_MODEL=agent-test")
         replace_env(env, "GGUF_FILE=Bootstrap-2B.gguf", "GGUF_FILE=Agent-Test-Q4_K_M.gguf")
@@ -228,8 +229,26 @@ def test_verified_switchboard_state_recovers_an_interrupted_installer_env() -> N
         )
         assert matching_env_values["GGUF_FILE"] == "Agent-Test-Q4_K_M.gguf"
         assert matching_env_values["MODEL_RUNTIME_PROFILE"] == ""
-        assert "LLAMA_ARG_CACHE_TYPE_K" not in matching_env_values
+        assert matching_env_values["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
+        assert matching_env_values["LLAMA_ARG_CACHE_TYPE_V"] == "q4_0"
 
+        replace_env(env, "MODEL_RUNTIME_PROFILE=nvidia-8gb-64k", "MODEL_RUNTIME_PROFILE=")
+        replace_env(env, "LLAMA_ARG_CACHE_TYPE_K=q4_0", "LLAMA_ARG_CACHE_TYPE_K=f16")
+        replace_env(env, "LLAMA_ARG_CACHE_TYPE_V=q4_0", "LLAMA_ARG_CACHE_TYPE_V=f16")
+        profileless_values = run_helper(
+            env,
+            catalog,
+            imports,
+            models_dir,
+            state=state,
+            vram_mb=4096,
+        )
+        assert profileless_values["MODEL_RUNTIME_PROFILE"] == ""
+        assert profileless_values["LLAMA_ARG_CACHE_TYPE_K"] == "q4_0"
+        assert profileless_values["LLAMA_ARG_CACHE_TYPE_V"] == "q4_0"
+
+        replace_env(env, "LLM_MODEL=agent-test", "LLM_MODEL=bootstrap-model")
+        replace_env(env, "GGUF_FILE=Agent-Test-Q4_K_M.gguf", "GGUF_FILE=Bootstrap-2B.gguf")
         payload = json.loads(state.read_text(encoding="utf-8"))
         payload["active"]["proof"]["completion"] = False
         state.write_text(json.dumps(payload) + "\n", encoding="utf-8")
