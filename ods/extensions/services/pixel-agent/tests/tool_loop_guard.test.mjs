@@ -1765,6 +1765,67 @@ test("names a required host observation that the model omitted", () => {
   );
 });
 
+test("accepts a structurally matched host observation after a no-effect rejected attempt", () => {
+  const guard = createToolLoopGuard();
+  const rejectedJobId = "ops-1234567890123-abcdef123456";
+  const succeededJobId = "ops-1234567890124-fedcba654321";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Use Operations to report the ODS host identity." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity", parameters: { reason: "extra" } },
+      result: { details: { jobId: rejectedJobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: rejectedJobId },
+      result: {
+        details: {
+          jobId: rejectedJobId,
+          status: "rejected",
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.match(
+    reply(guard)?.payload?.text,
+    new RegExp(`terminal status rejected\\. Job: ${rejectedJobId}`)
+  );
+
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId: succeededJobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId: succeededJobId },
+      result: {
+        details: {
+          jobId: succeededJobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step", target: "ods-host", action: "host.identity", exitCode: 0,
+            stdout: "light-worker\n", stderr: "",
+            outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `${OPERATIONS_HOST_EVIDENCE_PREFIX}\n- Hostname: \`light-worker\` (job \`${succeededJobId}\`)`
+  );
+});
+
 test("rejects host-controlled storage, route, and listener text outside the evidence schema", () => {
   const terminalReply = (prompt, actions) => {
     const guard = createToolLoopGuard();

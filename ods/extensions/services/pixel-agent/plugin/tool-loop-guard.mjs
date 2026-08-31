@@ -1029,12 +1029,11 @@ function operationsHostEvidenceText(requiredActions, terminalJobs) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   if (!(terminalJobs instanceof Map)) return undefined;
   const steps = new Map();
+  const unsuccessful = [];
   for (const outcome of terminalJobs.values()) {
     if (outcome.status !== "succeeded") {
-      const plan = typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
-        ? ` Plan SHA-256: ${outcome.planHash}.`
-        : "";
-      return `Pixel's required host Operations job reached terminal status ${outcome.status}. Job: ${outcome.jobId}.${plan}`;
+      unsuccessful.push(outcome);
+      continue;
     }
     for (const step of outcome.steps) {
       if (step.target === "ods-host" && requiredActions.has(step.action)) {
@@ -1042,7 +1041,19 @@ function operationsHostEvidenceText(requiredActions, terminalJobs) {
       }
     }
   }
-  if ([...requiredActions].some((action) => !steps.has(action))) return undefined;
+  const missing = [...requiredActions].filter((action) => !steps.has(action));
+  if (missing.length > 0) {
+    const failedRequiredOutcome = unsuccessful.find((outcome) =>
+      outcome.actions.some(({ target, action }) =>
+        target === "ods-host" && missing.includes(action)
+      )
+    );
+    if (!failedRequiredOutcome) return undefined;
+    const plan = typeof failedRequiredOutcome.planHash === "string" && SHA256.test(failedRequiredOutcome.planHash)
+      ? ` Plan SHA-256: ${failedRequiredOutcome.planHash}.`
+      : "";
+    return `Pixel's required host Operations job reached terminal status ${failedRequiredOutcome.status}. Job: ${failedRequiredOutcome.jobId}.${plan}`;
+  }
   const lines = [OPERATIONS_HOST_EVIDENCE_PREFIX];
   const identity = steps.get("host.identity");
   if (identity) {
