@@ -722,7 +722,13 @@ def test_workflow_enable_reports_activation_rejection(test_client, tmp_path, mon
     workflow_dir.mkdir()
     (workflow_dir / "manual-wf.json").write_text(json.dumps({
         "name": "Manual Workflow",
-        "nodes": [{"type": "n8n-nodes-base.manualTrigger"}],
+        "nodes": [
+            {"name": "Start", "type": "n8n-nodes-base.manualTrigger"},
+            {"name": "Do Work", "type": "n8n-nodes-base.set"},
+        ],
+        "connections": {
+            "Start": {"main": [[{"node": "Do Work", "type": "main", "index": 0}]]}
+        },
     }))
     monkeypatch.setattr(wf_mod, "WORKFLOW_DIR", workflow_dir)
 
