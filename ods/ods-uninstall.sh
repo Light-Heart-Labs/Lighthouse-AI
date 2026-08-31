@@ -168,7 +168,10 @@ if command -v docker &>/dev/null; then
         ods_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E '^ods[_-]' || true)
         if [[ -n "$ods_volumes" ]]; then
             log_info "Removing Docker volumes..."
-            echo "$ods_volumes" | xargs docker volume rm 2>/dev/null || true
+            echo "$ods_volumes" | xargs docker volume rm
+# Reclaim disk space from dangling images, networks, and build cache
+docker system prune -f --volumes 2>/dev/null || true
+docker image prune -f 2>/dev/null || true 2>/dev/null || true
         fi
     fi
 
