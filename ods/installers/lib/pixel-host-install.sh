@@ -1437,7 +1437,8 @@ _ods_pixel_restore_model_reconciliation() {
     if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan \
         || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
-        || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
+        || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" \
+        || ! _ods_pixel_restart_ingress_and_verify "$owner" "$home" "$answers"; then
         if [[ -f "$backup/runtime-attestation.json" && ! -L "$backup/runtime-attestation.json" ]]; then
             _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/runtime-attestation.json" \
                 "$home/.local/share/pixel/runtime-attestation.json" || true
@@ -1508,6 +1509,11 @@ ods_pixel_reconcile_promoted_model() {
         && ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
         failed=true
         failure_phase="gateway-restart-verify"
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_restart_ingress_and_verify "$owner" "$home" "$answers"; then
+        failed=true
+        failure_phase="ingress-runtime-refresh"
     fi
     if [[ "$failed" == false ]]; then
         if ! contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")"; then
@@ -2860,6 +2866,85 @@ _ods_pixel_wait_ingress() {
         if (( attempt < attempts && delay > 0 )); then
             sleep "$delay"
         fi
+    done
+    return 1
+}
+
+_ods_pixel_restart_ingress_and_verify() {
+    local owner="$1" home="$2" answers="$3"
+    local previous_pid current_pid unit_user restart_policy owner_uid process_uid attempt
+    [[ "$answers" == /* && -f "$answers" && ! -L "$answers" ]] || return 1
+    if ! systemctl is-active --quiet pixel-ingress.service; then
+        # First installation reconciles the model before it installs ingress.
+        return 0
+    fi
+    previous_pid="$(systemctl show pixel-ingress.service -p MainPID --value 2>/dev/null || true)"
+    [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    if ods_sudo_available; then
+        ods_sudo systemctl restart pixel-ingress.service || return 1
+    else
+        unit_user="$(systemctl show pixel-ingress.service -p User --value 2>/dev/null || true)"
+        restart_policy="$(systemctl show pixel-ingress.service -p Restart --value 2>/dev/null || true)"
+        owner_uid="$(id -u "$owner" 2>/dev/null || true)"
+        process_uid="$(awk '/^Uid:/ { print $2; exit }' "/proc/${previous_pid}/status" 2>/dev/null || true)"
+        [[ "$(id -un)" == "$owner" && "$unit_user" == "$owner" \
+            && "$restart_policy" == "on-failure" && "$owner_uid" =~ ^[0-9]+$ \
+            && "$process_uid" == "$owner_uid" ]] || return 1
+        current_pid="$(systemctl show pixel-ingress.service -p MainPID --value 2>/dev/null || true)"
+        [[ "$current_pid" == "$previous_pid" ]] || return 1
+        kill -HUP "$previous_pid" || return 1
+    fi
+    current_pid=""
+    for attempt in {1..60}; do
+        current_pid="$(systemctl show pixel-ingress.service -p MainPID --value 2>/dev/null || true)"
+        if [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] \
+            && systemctl is-active --quiet pixel-ingress.service; then
+            break
+        fi
+        sleep 1
+    done
+    [[ "$current_pid" =~ ^[1-9][0-9]*$ && "$current_pid" != "$previous_pid" ]] || return 1
+    _ods_pixel_wait_ingress "$owner" "$home" || return 1
+    for attempt in {1..30}; do
+        if ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
+            /run/ods-pixel/ods-status.json <<'PY'
+import json, os, pathlib, re, stat, sys
+
+answers_path = pathlib.Path(sys.argv[1])
+status_path = pathlib.Path(sys.argv[2])
+for path, private in ((answers_path, True), (status_path, False)):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_size > 2 * 1024 * 1024
+            or info.st_mode & 0o022 or (private and info.st_mode & 0o077)):
+        raise SystemExit(1)
+answers = json.loads(answers_path.read_text(encoding="utf-8"))
+status = json.loads(status_path.read_text(encoding="utf-8"))
+provider = answers.get("modelProvider")
+model_id = answers.get("modelId")
+model_name = answers.get("modelName")
+if provider == "ods-local" and model_name == f"ODS Local {model_id}":
+    concrete = model_id
+elif provider == "ods-gateway" and model_id in {"default", "ods/current"}:
+    label = "Current" if model_id == "ods/current" else "Default"
+    match = re.fullmatch(
+        rf"ODS {label} \(([A-Za-z0-9][A-Za-z0-9._+:/ -]{{0,255}})\)",
+        model_name if isinstance(model_name, str) else "",
+    )
+    concrete = match.group(1) if match else None
+else:
+    concrete = None
+context = answers.get("modelContextWindow")
+runtime = status.get("runtime") if isinstance(status, dict) else None
+if (not isinstance(concrete, str) or not 1 <= len(concrete) <= 256
+        or type(context) is not int or not 4096 <= context <= 10_000_000
+        or runtime != {"model": concrete, "context_length": context}):
+    raise SystemExit(1)
+PY
+        then
+            return 0
+        fi
+        (( attempt < 30 )) && sleep 1
     done
     return 1
 }

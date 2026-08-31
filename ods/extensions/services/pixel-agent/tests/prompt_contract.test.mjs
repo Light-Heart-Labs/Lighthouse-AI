@@ -94,6 +94,10 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /broad request to explore or inventory the host uses identity, kernel, platform/);
   assert.match(result.appendSystemContext, /host\.architecture remains available and is required/);
   assert.match(result.appendSystemContext, /terminal state of every submitted job with pixel_ops_job_wait/);
+  assert.match(result.appendSystemContext, /owner requested containers/);
+  assert.match(result.appendSystemContext, /pixel_ods_apps_list exactly once after every broker job is terminal/);
+  assert.match(result.appendSystemContext, /never represents unrelated host containers/);
+  assert.match(result.appendSystemContext, /Do not call pixel_ods_status in a host Operations flow/);
   assert.match(result.appendSystemContext, /submitted Operations job is not completed work/);
   assert.match(result.appendSystemContext, /never approve an immutable plan yourself/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);

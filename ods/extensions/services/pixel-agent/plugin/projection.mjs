@@ -20,7 +20,7 @@ const MAX_STALE_MS = 2 * 60 * 1000; // 2 minute staleness window
 const MAX_APPS = 64;
 const EXPECTED_SERVICE = "pixel-agent";
 const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
-const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255}$/;
 const APP_PORT_KEYS = Object.freeze([
   "dashboard", "webui", "searxng", "perplexica", "whisper", "tts", "n8n",
   "qdrant", "embeddings", "litellm", "llama", "privacy_shield", "token_spy",
@@ -290,7 +290,7 @@ function validRuntime(runtime) {
   return (
     Number.isInteger(runtime.context_length) &&
     runtime.context_length >= 4096 &&
-    runtime.context_length <= 1048576
+    runtime.context_length <= 10_000_000
   );
 }
 
@@ -349,7 +349,7 @@ function validateProjection(obj, nowMs) {
     ({ status }) => status === "healthy" || status === "running"
   ).length;
   if (obj.online_apps !== onlineApps) return "malformed projection";
-  if (obj.docker === "unavailable" && (obj.apps.length !== 0 || obj.runtime !== null)) {
+  if (obj.docker === "unavailable" && obj.apps.length !== 0) {
     return "malformed projection";
   }
   return null;

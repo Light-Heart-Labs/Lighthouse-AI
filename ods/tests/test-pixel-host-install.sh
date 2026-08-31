@@ -421,6 +421,57 @@ else
     pass "unprivileged Pixel restart still rejects a missing owned process"
 fi
 
+ingress_restart_answers="$restart_probe/onboarding.json"
+ingress_restart_status="$restart_probe/ods-status.json"
+python3 - "$ingress_restart_answers" "$ingress_restart_status" <<'PY'
+import json, pathlib, sys
+
+answers, status = map(pathlib.Path, sys.argv[1:])
+answers.write_text(json.dumps({
+    "modelProvider": "ods-gateway",
+    "modelId": "ods/current",
+    "modelName": "ODS Current (org/model:variant)",
+    "modelContextWindow": 2_000_000,
+}) + "\n")
+status.write_text(json.dumps({
+    "runtime": {"model": "org/model:variant", "context_length": 2_000_000},
+}) + "\n")
+PY
+chmod 0600 "$ingress_restart_answers" "$ingress_restart_status"
+if (
+    ingress_restart_state="$restart_probe/ingress-restarted"
+    systemctl() {
+        if [[ "$1" == is-active ]]; then
+            return 0
+        fi
+        if [[ "$1" == show && "$3" == -p && "$4" == MainPID ]]; then
+            [[ -e "$ingress_restart_state" ]] && printf '%s\n' 222 || printf '%s\n' 111
+            return 0
+        fi
+        return 1
+    }
+    ods_sudo_available() { return 0; }
+    ods_sudo() {
+        [[ "$*" == "systemctl restart pixel-ingress.service" ]] || return 1
+        : > "$ingress_restart_state"
+    }
+    _ods_pixel_wait_ingress() { return 0; }
+    ods_pixel_run_as_owner() {
+        local run_owner="$1" run_home="$2"
+        shift 2
+        [[ "$run_owner" == "$owner" && "$run_home" == "$home" ]] || return 1
+        if [[ "$1" == python3 && "$4" == /run/ods-pixel/ods-status.json ]]; then
+            set -- "$1" "$2" "$3" "$ingress_restart_status"
+        fi
+        "$@"
+    }
+    _ods_pixel_restart_ingress_and_verify "$owner" "$home" "$ingress_restart_answers"
+); then
+    pass "Pixel ingress restart refreshes and verifies the selected runtime"
+else
+    fail "Pixel ingress restart refreshes and verifies the selected runtime"
+fi
+
 source_fixture="$TEST_ROOT/pixel-source-fixture"
 mkdir -p "$source_fixture"
 git -C "$source_fixture" init -q
@@ -1478,6 +1529,7 @@ check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "api.on(\"before_prompt_build\"" in text
+assert "api.on(\"model_call_started\"" in text
 assert "promptContractForAgent(context, AGENT_ID, event, {" in text
 assert "verificationStatus: toolLoopGuard.verificationStatus(context?.runId)" in text
 ' "$plugin/index.js"
@@ -1534,6 +1586,7 @@ assert "failure_phase=\"runtime-budget\"" in text
 assert "failure_phase=\"managed-update-validation\"" in text
 assert "failure_phase=\"config-install\"" in text
 assert "failure_phase=\"gateway-restart-verify\"" in text
+assert "failure_phase=\"ingress-runtime-refresh\"" in text
 assert "failure_phase=\"sandbox-recreate\"" in text
 assert "failure_phase=\"contract-hash\"" in text
 assert "failure_phase=\"ready-marker\"" in text

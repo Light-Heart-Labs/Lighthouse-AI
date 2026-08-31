@@ -201,6 +201,9 @@ export default definePluginEntry({
         verificationStatus: toolLoopGuard.verificationStatus(context?.runId),
       });
     });
+    api.on("model_call_started", (event, context) =>
+      toolLoopGuard.observeModelCall(event, context, AGENT_ID)
+    );
     api.on("before_tool_call", (event, context) =>
       toolLoopGuard.beforeToolCall(event, context, AGENT_ID)
     );

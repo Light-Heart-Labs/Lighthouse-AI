@@ -236,10 +236,10 @@ test("stopped deployed applications remain in the total but not the online count
   });
 });
 
-test("docker unavailable requires an empty application and runtime projection", async () => {
+test("docker unavailable requires empty applications but preserves selected runtime truth", async () => {
   const raw = JSON.stringify(goodProjection({
     docker: "unavailable",
-    runtime: null,
+    runtime: { model: "org/model:variant", context_length: 2_000_000 },
     apps: [],
   }));
   const fsImpl = memoryFs({ [FIXED]: makeEntry(raw) });
@@ -247,7 +247,10 @@ test("docker unavailable requires an empty application and runtime projection", 
   assert.equal(out.docker, "unavailable");
   assert.equal(out.app_count, 0);
   assert.equal(out.online_app_count, 0);
-  assert.equal(out.runtime, null);
+  assert.deepEqual(out.runtime, {
+    model: "org/model:variant",
+    context_length: 2_000_000,
+  });
 });
 
 test("accepts unknown version and unavailable runtime without inventing facts", async () => {

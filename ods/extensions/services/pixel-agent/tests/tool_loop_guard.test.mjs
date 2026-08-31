@@ -27,6 +27,7 @@ import {
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT,
   OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX,
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
@@ -64,6 +65,7 @@ import {
   userMessageExtensionLifecycleIntent,
   userMessageOperationsContinuation,
   userMessageRequiresOperations,
+  userMessageRequiresOdsAppsProjection,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsExactByteDownload,
@@ -1776,6 +1778,125 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Listening TCP\/UDP endpoints: 1/);
 });
 
+test("adds only a sanitized ODS container projection after terminal host Operations", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Report the ODS host hostname and Docker containers." }
+  );
+  assert.equal(
+    userMessageRequiresOdsAppsProjection([], "Report the ODS host hostname and Docker containers."),
+    true
+  );
+  assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "identity", target: "ods-host", action: "host.identity", exitCode: 0,
+            stdout: "light-worker\n", stderr: "",
+            outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(call(guard, "pixel_ods_apps_list"), undefined);
+  afterCall(guard, "pixel_ods_apps_list", {
+    event: {
+      result: {
+        details: {
+          projection: {
+            app_count: 2,
+            online_app_count: 1,
+            apps: [
+              {
+                name: "ods-dashboard", status: "healthy", display_name: "Dashboard",
+                purpose: "ODS control center", url: "http://localhost:3001/",
+              },
+              { name: "ods-worker", status: "stopped" },
+            ],
+            timestamp: new Date().toISOString(),
+            stale: false,
+            boundary: "status-only",
+          },
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /Hostname: `light-worker`/);
+  assert.match(text, /ODS container projection: 1 of 2 allowlisted/);
+  assert.match(text, /`ods-dashboard` \(healthy\), `ods-worker` \(stopped\)/);
+  assert.match(text, /does not enumerate unrelated or non-ODS containers/);
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed", text });
+});
+
+test("keeps host evidence but fails the requested container facet on a malformed projection", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Report the ODS host hostname and containers." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId, status: "succeeded", waitTimedOut: false,
+          steps: [{
+            stepId: "identity", target: "ods-host", action: "host.identity", exitCode: 0,
+            stdout: "light-worker\n", stderr: "",
+            outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(call(guard, "pixel_ods_apps_list"), undefined);
+  afterCall(guard, "pixel_ods_apps_list", {
+    event: {
+      result: {
+        details: {
+          projection: {
+            app_count: 1, online_app_count: 1,
+            apps: [{ name: "ods-dashboard", status: "stopped" }],
+            timestamp: new Date().toISOString(), stale: false, boundary: "status-only",
+          },
+        },
+      },
+    },
+  });
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "failed");
+  assert.match(verification.text, /Hostname: `light-worker`/);
+  assert.match(verification.text, new RegExp(OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT));
+});
+
 test("names a required host observation that the model omitted", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
@@ -1993,6 +2114,10 @@ test("fails closed when Operations work is not submitted or routing is ignored",
     "pixel",
     { prompt: "Use the Operations Broker to inspect the ODS host platform." }
   );
+  guard.observeModelCall(
+    { runId: "run-1", callId: "call-1" },
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
+  );
   assert.deepEqual(call(guard, "exec"), {
     block: true,
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
@@ -2002,10 +2127,9 @@ test("fails closed when Operations work is not submitted or routing is ignored",
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
   });
   assert.deepEqual(aborts, []);
-  guard.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    { prompt: "Use the Operations Broker to inspect the ODS host platform." }
+  guard.observeModelCall(
+    { runId: "run-1", callId: "call-2" },
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
   );
   assert.deepEqual(call(guard, "read"), {
     block: true,

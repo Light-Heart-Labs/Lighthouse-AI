@@ -160,6 +160,9 @@ export const OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX =
 export const OPERATIONS_HOST_EVIDENCE_PREFIX =
   "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
 
+export const OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT =
+  "ODS containers: a current sanitized ODS application projection was not obtained. Host Operations facts above remain verified, but Pixel cannot claim a container inventory from them.";
+
 export const OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension catalog result through a structurally matched terminal Operations Broker receipt:";
 
@@ -1027,7 +1030,7 @@ function listeningPortEvidence(step) {
   return `Listening TCP/UDP endpoints: ${endpoints.length}; sample: ${endpoints.slice(0, 24).join("; ")}.`;
 }
 
-function operationsHostEvidenceText(requiredActions, terminalJobs) {
+function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjection = undefined) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   if (!(terminalJobs instanceof Map)) return undefined;
   const steps = new Map();
@@ -1120,6 +1123,17 @@ function operationsHostEvidenceText(requiredActions, terminalJobs) {
     if (!value) return undefined;
     lines.push(`- ${label}: ${value} (job \`${step.jobId}\`)`);
   }
+  if (odsAppsProjection) {
+    const apps = odsAppsProjection.apps
+      .map(({ name, status }) => `\`${name}\` (${status})`)
+      .join(", ");
+    lines.push(
+      `- ODS container projection: ${odsAppsProjection.online_app_count} of ${odsAppsProjection.app_count} allowlisted ODS application containers online; ${apps || "none reported"}.`
+    );
+    lines.push(
+      "- Container boundary: this host-produced status projection covers allowlisted ODS application containers only; it does not enumerate unrelated or non-ODS containers."
+    );
+  }
   return lines.join("\n");
 }
 
@@ -1130,6 +1144,75 @@ function exactKeys(value, keys) {
     !Array.isArray(value) &&
     Object.keys(value).sort().join("\u0000") === [...keys].sort().join("\u0000")
   );
+}
+
+function operationsOdsAppsProjection(event) {
+  if (toolCallFailed(event)) return undefined;
+  const value = event?.result?.details?.projection;
+  if (
+    !exactKeys(value, [
+      "app_count", "online_app_count", "apps", "timestamp", "stale", "boundary",
+    ]) ||
+    value.boundary !== "status-only" ||
+    value.stale !== false ||
+    !Number.isInteger(value.app_count) ||
+    value.app_count < 0 ||
+    value.app_count > 64 ||
+    !Number.isInteger(value.online_app_count) ||
+    value.online_app_count < 0 ||
+    value.online_app_count > value.app_count ||
+    !Array.isArray(value.apps) ||
+    value.apps.length !== value.app_count ||
+    typeof value.timestamp !== "string" ||
+    value.timestamp.length > 64 ||
+    !Number.isFinite(Date.parse(value.timestamp))
+  ) {
+    return undefined;
+  }
+  const apps = [];
+  const names = new Set();
+  for (const app of value.apps) {
+    const keys = Object.keys(app ?? {}).sort().join("\u0000");
+    const minimal = ["name", "status"].sort().join("\u0000");
+    const enriched = ["name", "status", "display_name", "purpose", "url"]
+      .sort()
+      .join("\u0000");
+    if (
+      !app ||
+      typeof app !== "object" ||
+      Array.isArray(app) ||
+      (keys !== minimal && keys !== enriched) ||
+      typeof app.name !== "string" ||
+      !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(app.name) ||
+      names.has(app.name) ||
+      !["running", "healthy", "unhealthy", "starting", "stopped"].includes(app.status)
+    ) {
+      return undefined;
+    }
+    if (
+      keys === enriched &&
+      (typeof app.display_name !== "string" ||
+        !app.display_name ||
+        app.display_name.length > 128 ||
+        typeof app.purpose !== "string" ||
+        !app.purpose ||
+        app.purpose.length > 256 ||
+        typeof app.url !== "string" ||
+        !/^http:\/\/localhost:[1-9][0-9]{0,4}\/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*$/.test(app.url))
+    ) {
+      return undefined;
+    }
+    names.add(app.name);
+    apps.push({ name: app.name, status: app.status });
+  }
+  const online = apps.filter(({ status }) => status === "running" || status === "healthy").length;
+  if (online !== value.online_app_count) return undefined;
+  return {
+    app_count: value.app_count,
+    online_app_count: value.online_app_count,
+    apps,
+    timestamp: value.timestamp,
+  };
 }
 
 function boundedCatalogString(value, pattern, maximum) {
@@ -1552,7 +1635,7 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   return lines.join("\n");
 }
 
-function operationsEvidenceText(requiredActions, terminalJobs) {
+function operationsEvidenceText(requiredActions, terminalJobs, odsAppsProjection = undefined) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
@@ -1560,7 +1643,7 @@ function operationsEvidenceText(requiredActions, terminalJobs) {
     "host.network-addresses", "host.network-routes", "host.listening-ports",
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
-    return operationsHostEvidenceText(requiredActions, terminalJobs);
+    return operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjection);
   }
   if (requiredActions.has("ods.extensions.inspect")) {
     return extensionLifecycleEvidenceText(requiredActions, terminalJobs);
@@ -1992,6 +2075,12 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   };
 }
 
+export function userMessageRequiresOdsAppsProjection(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text || !/\b(?:Docker\s+)?containers?\b/i.test(text)) return false;
+  return userMessageOperationsRequirements(messages, prompt).required;
+}
+
 export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   return textRequestsPrivateUrlAccess(text);
@@ -2302,6 +2391,9 @@ export function createToolLoopGuard({
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
+        operationsRequiresOdsAppsProjection: false,
+        operationsOdsAppsProjectionAttempted: false,
+        operationsOdsAppsProjection: undefined,
         operationsPromptRound: 0,
         operationsCorrectionPromptRound: undefined,
         failedExec: new Map(),
@@ -2449,7 +2541,18 @@ export function createToolLoopGuard({
       return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
     }
 
-    if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
+    const operationsMayReadOdsApps =
+      state?.operationsRequired === true &&
+      state.operationsRequiresOdsAppsProjection === true &&
+      toolName === "pixel_ods_apps_list" &&
+      state.operationsOdsAppsProjectionAttempted === false &&
+      state.operationsSubmittedJobs.size > 0 &&
+      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+        state.operationsTerminalJobs.has(jobId)
+      );
+    if (operationsMayReadOdsApps) {
+      state.operationsOdsAppsProjectionAttempted = true;
+    } else if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
       // One model response may contain several parallel tool calls. Return the
       // same correction to every disallowed call in that response instead of
       // treating the second sibling call as a second ignored correction. A
@@ -2878,7 +2981,6 @@ export function createToolLoopGuard({
     }
     if (typeof runId === "string" && runId) {
       const state = stateFor(runId);
-      if (event !== undefined) state.operationsPromptRound += 1;
       if (currentUserText(event?.messages, event?.prompt)) {
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
@@ -2910,8 +3012,12 @@ export function createToolLoopGuard({
         state.operationsExpectedExtensionLifecycle = state.operationsRequired && !operationsContinuation
           ? userMessageExtensionLifecycleIntent(event?.messages, event?.prompt)
           : undefined;
+        state.operationsRequiresOdsAppsProjection =
+          state.operationsRequired &&
+          !operationsContinuation &&
+          userMessageRequiresOdsAppsProjection(event?.messages, event?.prompt);
       }
-      if (!state.odsRoutingInitialized) {
+      if (!state.operationsRequired && !state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
         if (requirements.length > 0) {
           state.odsRequiredTools = new Set(requirements);
@@ -2948,6 +3054,13 @@ export function createToolLoopGuard({
     if (activeUsers.has(user)) activeUsers.delete(user);
     pruneActiveUsers();
     activeUsers.set(user, { runId, sessionId, sessionKey });
+  }
+
+  function observeModelCall(event, context, agentId = "pixel") {
+    if (context?.agentId !== agentId) return;
+    const runId = context?.runId ?? event?.runId;
+    if (typeof runId !== "string" || !runId) return;
+    stateFor(runId).operationsPromptRound += 1;
   }
 
   async function abortUserRun(user) {
@@ -3014,6 +3127,9 @@ export function createToolLoopGuard({
           state.operationsSubmittedJobs
         );
         if (outcome) state.operationsTerminalJobs.set(outcome.jobId, outcome);
+      }
+      if (toolName === "pixel_ods_apps_list" && state.operationsRequiresOdsAppsProjection) {
+        state.operationsOdsAppsProjection = operationsOdsAppsProjection(event);
       }
     }
     if (toolName === "pixel_ops_download_stage") {
@@ -3204,7 +3320,8 @@ export function createToolLoopGuard({
       }
       const evidenceText = operationsEvidenceText(
         state.operationsRequiredActions,
-        state.operationsTerminalJobs
+        state.operationsTerminalJobs,
+        state.operationsOdsAppsProjection
       );
       if (state.operationsRequiredActions.size > 0) {
         const hostOnly = [...state.operationsRequiredActions].every(
@@ -3226,6 +3343,16 @@ export function createToolLoopGuard({
             text: `${OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX} Missing: ${missingActions
               .map((action) => `\`${action}\``)
               .join(", ")}.`,
+          };
+        }
+        if (hostOnly && state.operationsRequiresOdsAppsProjection && !state.operationsOdsAppsProjection) {
+          const partialText = operationsEvidenceText(
+            state.operationsRequiredActions,
+            state.operationsTerminalJobs
+          );
+          return {
+            status: "failed",
+            text: `${partialText ?? OPERATIONS_UNVERIFIED_DELIVERY_PREFIX}\n- ${OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT}`,
           };
         }
         if (!evidenceText) {
@@ -3287,6 +3414,7 @@ export function createToolLoopGuard({
     afterToolCall,
     replyPayloadSending,
     observeRun,
+    observeModelCall,
     abortUserRun,
     verificationForRun,
     verificationStatus: (runId) => runs.get(runId)?.latestVerificationStatus,

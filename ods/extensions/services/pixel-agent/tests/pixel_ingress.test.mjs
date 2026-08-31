@@ -23,6 +23,8 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 
 import {
+  gatewayRuntimeFromConfig,
+  readGatewayConfiguration,
   readGatewayToken,
   prepareSocketPath,
   createIngressServer,
@@ -242,6 +244,39 @@ test("readGatewayToken reads the owner-private OpenClaw gateway token", () => {
   assert.equal(readGatewayToken(config, EUID), TOKEN);
   fs.writeFileSync(config, `${JSON.stringify({ gateway: { auth: {} } })}\n`, { mode: 0o600 });
   assert.throws(() => readGatewayToken(config, EUID), /missing or empty/);
+});
+
+test("secure OpenClaw configuration projects the concrete selected Pixel runtime", () => {
+  const config = path.join(DIR, "openclaw-runtime.json");
+  const value = {
+    gateway: { auth: { token: TOKEN } },
+    agents: { list: [{ id: "pixel", model: "ods-gateway/ods/current" }] },
+    models: {
+      providers: {
+        "ods-gateway": {
+          models: [{
+            id: "ods/current",
+            name: "ODS Current (org/model:variant)",
+            contextWindow: 2_000_000,
+            maxTokens: 32768,
+            reasoning: true,
+          }],
+        },
+      },
+    },
+  };
+  fs.writeFileSync(config, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  assert.deepEqual(gatewayRuntimeFromConfig(value), {
+    model: "org/model:variant",
+    context_length: 2_000_000,
+  });
+  assert.deepEqual(readGatewayConfiguration(config, EUID), {
+    token: TOKEN,
+    runtime: { model: "org/model:variant", context_length: 2_000_000 },
+    runtimeAuthoritative: true,
+  });
+  value.models.providers["ods-gateway"].models[0].name = "unbound different-model";
+  assert.equal(gatewayRuntimeFromConfig(value), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -1115,6 +1150,78 @@ test("status keeps app health when optional runtime inspection is unavailable", 
   assert.equal(projection.app_ports.n8n, 5678);
   assert.equal(projection.runtime, null);
   assert.deepEqual(projection.apps, [{ name: "ods-dashboard", status: "healthy" }]);
+});
+
+test("status prefers the selected Pixel runtime over the local Docker model", async () => {
+  const statusFile = path.join(DIR, "configured-runtime-status.json");
+  const fakeDocker = (_cmd, args, _opts, callback) => {
+    if (args[0] === "ps") {
+      callback(null, `${JSON.stringify({ Names: "ods-dashboard", Status: "Up (healthy)" })}\n`, "");
+      return;
+    }
+    callback(
+      null,
+      JSON.stringify(["--model", "/models/local-model.gguf", "--ctx-size", "32768"]),
+      ""
+    );
+  };
+  const projection = await writeStatus(
+    true,
+    18999,
+    statusFile,
+    "2.6.0",
+    {
+      fetch: async () => ({ status: 200, body: { cancel: async () => {} } }),
+      execFile: fakeDocker,
+      setTimeout,
+      clearTimeout,
+    },
+    configFromEnv({}).appPorts,
+    { model: "org/model:variant", context_length: 2_000_000 }
+  );
+  assert.deepEqual(projection.runtime, {
+    model: "org/model:variant",
+    context_length: 2_000_000,
+  });
+});
+
+test("start retains a selected remote runtime when Docker is unavailable", async () => {
+  const configFile = path.join(DIR, "remote-start-openclaw.json");
+  fs.writeFileSync(configFile, `${JSON.stringify({
+    gateway: { auth: { token: TOKEN } },
+    agents: { list: [{ id: "pixel", model: "ods-gateway/ods/current" }] },
+    models: { providers: { "ods-gateway": { models: [{
+      id: "ods/current", name: "ODS Current (remote/model)",
+      contextWindow: 131072, maxTokens: 16384, reasoning: false,
+    }] } } },
+  })}\n`, { mode: 0o600 });
+  const sock = path.join(DIR, "remote-start.sock");
+  const statusFile = path.join(DIR, "remote-start-status.json");
+  const h = await start({
+    socketPath: sock,
+    gatewayTokenFile: configFile,
+    gatewayPort: 18999,
+    statusFile,
+    statusIntervalMs: 60000,
+    ingressGid: null,
+    odsVersion: "2.6.0",
+  }, {
+    deps: {
+      fetch: async () => ({ status: 503, body: { cancel: async () => {} } }),
+      execFile: (_command, _args, _options, callback) => callback(new Error("docker unavailable")),
+    },
+    euid: EUID,
+  });
+  try {
+    const projection = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+    assert.equal(projection.docker, "unavailable");
+    assert.deepEqual(projection.runtime, {
+      model: "remote/model",
+      context_length: 131072,
+    });
+  } finally {
+    await h.close();
+  }
 });
 
 test("start writes a safe status projection when docker is unavailable", async () => {

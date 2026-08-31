@@ -48,7 +48,7 @@ const MAX_CANCEL_BODY = 256;
 const MAX_STATUS_INTERVAL_MS = 86400000; // 1 day
 const STATUS_MODE = 0o640; // group-readable, service-owner-writable projection
 const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
-const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+ -]{0,199}$/;
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255}$/;
 
 // Only nonsecret, user-facing ODS ports are projected. Values are captured by
 // the installer after port resolution so Pixel does not guess default ports
@@ -331,7 +331,53 @@ export function configFromEnv(env = process.env) {
 // bounded in length.
 // ---------------------------------------------------------------------------
 
-export function readGatewayToken(
+export function gatewayRuntimeFromConfig(config) {
+  const agents = config?.agents?.list;
+  const providers = config?.models?.providers;
+  if (!Array.isArray(agents) || !providers || typeof providers !== "object" || Array.isArray(providers)) {
+    return null;
+  }
+  const selected = agents.filter((agent) => agent?.id === "pixel");
+  if (selected.length !== 1 || typeof selected[0].model !== "string") return null;
+  const separator = selected[0].model.indexOf("/");
+  if (separator < 1) return null;
+  const providerId = selected[0].model.slice(0, separator);
+  const modelId = selected[0].model.slice(separator + 1);
+  if (!new Set(["ods-local", "ods-gateway"]).has(providerId) || !modelId) return null;
+  const provider = providers[providerId];
+  if (!provider || typeof provider !== "object" || Array.isArray(provider)) return null;
+  if (!Array.isArray(provider.models) || provider.models.length !== 1) return null;
+  const model = provider.models[0];
+  if (!model || typeof model !== "object" || Array.isArray(model) || model.id !== modelId) return null;
+  let concreteModel;
+  if (providerId === "ods-local") {
+    if (model.name !== `ODS Local ${modelId}`) return null;
+    concreteModel = modelId;
+  } else {
+    const label = modelId === "ods/current" ? "Current" : "Default";
+    if (!["default", "ods/current"].includes(modelId) || typeof model.name !== "string") return null;
+    const display = model.name.match(
+      new RegExp(`^ODS ${label} \\(([A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255})\\)$`)
+    );
+    if (!display) return null;
+    concreteModel = display[1];
+  }
+  if (
+    !MODEL_NAME_RE.test(concreteModel) ||
+    !Number.isInteger(model.contextWindow) ||
+    model.contextWindow < 4096 ||
+    model.contextWindow > 10_000_000 ||
+    !Number.isInteger(model.maxTokens) ||
+    model.maxTokens < 1 ||
+    model.maxTokens > model.contextWindow ||
+    typeof model.reasoning !== "boolean"
+  ) {
+    return null;
+  }
+  return { model: concreteModel, context_length: model.contextWindow };
+}
+
+export function readGatewayConfiguration(
   file,
   euid = typeof process.geteuid === "function"
     ? process.geteuid()
@@ -380,6 +426,8 @@ export function readGatewayToken(
     if (fd !== undefined) fs.closeSync(fd);
   }
   let value = "";
+  let runtime = null;
+  let runtimeAuthoritative = false;
   if (raw.trimStart().startsWith("{")) {
     let config;
     try {
@@ -388,6 +436,8 @@ export function readGatewayToken(
       throw new Error("gateway token file contains invalid JSON");
     }
     value = config?.gateway?.auth?.token ?? config?.gateway?.token ?? "";
+    runtime = gatewayRuntimeFromConfig(config);
+    runtimeAuthoritative = true;
   } else {
     for (const line of raw.split(/\r?\n/)) {
       if (!line.trim().startsWith("PIXEL_GATEWAY_TOKEN=")) continue;
@@ -407,7 +457,11 @@ export function readGatewayToken(
   if (value.length > MAX_TOKEN_LEN) {
     throw new Error("token too long");
   }
-  return value;
+  return { token: value, runtime, runtimeAuthoritative };
+}
+
+export function readGatewayToken(file, euid) {
+  return readGatewayConfiguration(file, euid).token;
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,7 +1054,7 @@ export async function dockerRuntime(deps = defaultDeps) {
     !MODEL_NAME_RE.test(model) ||
     !Number.isInteger(contextLength) ||
     contextLength < 4096 ||
-    contextLength > 1048576
+    contextLength > 10_000_000
   ) {
     return null;
   }
@@ -1037,7 +1091,8 @@ export async function writeStatus(
   statusFile,
   odsVersion = "unknown",
   deps = defaultDeps,
-  appPorts = appPortsFromEnv({})
+  appPorts = appPortsFromEnv({}),
+  configuredRuntime = undefined
 ) {
   const gatewayReachable = await checkGatewayReachable(gatewayPort, deps);
   let apps = [];
@@ -1049,7 +1104,9 @@ export async function writeStatus(
   } catch {
     apps = [];
   }
-  if (docker === "ok") {
+  if (configuredRuntime !== undefined) {
+    runtime = configuredRuntime;
+  } else if (docker === "ok") {
     try {
       runtime = await dockerRuntime(deps);
     } catch {
@@ -1223,10 +1280,12 @@ export async function start(cfg = configFromEnv(), opts = {}) {
   const deps = { ...defaultDeps, ...(opts.deps || {}) };
   let startupStage = "configuration";
   let server;
+  let gateway;
   try {
     validateConfig(cfg);
     startupStage = "token-read";
-    const token = readGatewayToken(cfg.gatewayTokenFile, opts.euid);
+    gateway = readGatewayConfiguration(cfg.gatewayTokenFile, opts.euid);
+    const token = gateway.token;
     startupStage = "socket-prepare";
     prepareSocketPath(cfg.socketPath);
     server = createIngressServer({ token, gatewayPort: cfg.gatewayPort, deps });
@@ -1235,7 +1294,15 @@ export async function start(cfg = configFromEnv(), opts = {}) {
     startupStage = "runtime-state";
     fs.chmodSync(cfg.socketPath, 0o660);
     if (cfg.ingressGid !== null) fs.chownSync(cfg.socketPath, -1, cfg.ingressGid);
-    await writeStatus(true, cfg.gatewayPort, cfg.statusFile, cfg.odsVersion, deps, cfg.appPorts);
+    await writeStatus(
+      true,
+      cfg.gatewayPort,
+      cfg.statusFile,
+      cfg.odsVersion,
+      deps,
+      cfg.appPorts,
+      gateway.runtimeAuthoritative ? gateway.runtime : undefined
+    );
   } catch (error) {
     if (server?.listening) {
       await new Promise((resolve) => server.close(resolve));
@@ -1256,7 +1323,8 @@ export async function start(cfg = configFromEnv(), opts = {}) {
       cfg.statusFile,
       cfg.odsVersion,
       deps,
-      cfg.appPorts
+      cfg.appPorts,
+      gateway.runtimeAuthoritative ? gateway.runtime : undefined
     ).catch(() => {});
   }, cfg.statusIntervalMs);
   interval.unref();
