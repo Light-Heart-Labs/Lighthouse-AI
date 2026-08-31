@@ -40,6 +40,9 @@ ods_pixel_uninstall_managed() {
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
+    local ops_dropin_dir="$systemd_dir/pixel-ops-broker.service.d"
+    local ops_dropin="$ops_dropin_dir/10-ods-host-observation.conf"
+    local ops_dropin_source="$install_dir/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     local ops_env="${ODS_PIXEL_UNINSTALL_OPS_ENV:-/etc/pixel-ops-broker.env}"
     local ops_policy="${ODS_PIXEL_UNINSTALL_OPS_POLICY:-/etc/pixel-ops-broker/policy.json}"
     local ops_policy_dir="${ops_policy%/*}"
@@ -79,7 +82,8 @@ ods_pixel_uninstall_managed() {
         return 1
     }
     [[ "$root_uid" =~ ^[0-9]+$ && "$root_gid" =~ ^[0-9]+$ ]] || return 1
-    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
+    for path in "$ops_unit" "$ops_dropin_dir" "$ops_dropin" "$ops_dropin_source" \
+        "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
         "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" "$ops_state" \
         "$extension_manager_unit" "$extension_manager_program" \
         "$artifact_promoter_unit" "$artifact_promoter_program"; do
@@ -90,6 +94,8 @@ ods_pixel_uninstall_managed() {
     done
     [[ "$ops_program" == "$ops_install/broker.py" \
         && "$ops_unit" == "$systemd_dir/pixel-ops-broker.service" \
+        && "$ops_dropin" == "$ops_dropin_dir/10-ods-host-observation.conf" \
+        && "$ops_dropin_dir" == "$systemd_dir/pixel-ops-broker.service.d" \
         && "$ops_policy" == "$ops_policy_dir/policy.json" \
         && "${ops_policy_dir##*/}" == pixel-ops-broker \
         && "${ops_install##*/}" == pixel-ops-broker \
@@ -702,7 +708,7 @@ PY
     if [[ -n "$ops_passwd_entry" || -n "$ops_group_entry" ]]; then
         ops_artifacts_present=true
     fi
-    for path in "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" \
+    for path in "$ops_unit" "$ops_dropin" "$ops_env" "$ops_policy" "$ops_install" "$ops_state" \
         "$ops_owner_policy" "$ops_owner_extension_catalog" "$ops_extension_manager" \
         "$extension_manager_owner_unit" "$artifact_promoter_owner_unit"; do
         if [[ -e "$path" || -L "$path" ]]; then
@@ -723,6 +729,7 @@ PY
             "$ops_extension_manager" "$ops_extension_source_program" \
             "$ops_owner_extension_catalog" "$extension_manager_source" \
             "$extension_manager_owner_unit" \
+            "$ops_dropin" "$ops_dropin_source" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/pixel-ops-broker.service" \
             "$install_dir/data/pixel/source-$pixel_source_ref/.generated/ops-broker.env" \
             "$install_dir/data/pixel/source-$pixel_source_ref/deploy/ops-broker/broker.py" <<'PY'
@@ -758,6 +765,8 @@ import sys
     owner_extension_catalog_raw,
     expected_extension_manager_raw,
     owner_extension_manager_unit_raw,
+    dropin_raw,
+    expected_dropin_raw,
     expected_unit_raw,
     expected_env_raw,
     expected_program_raw,
@@ -780,6 +789,8 @@ expected_extension_program = pathlib.Path(expected_extension_program_raw)
 owner_extension_catalog = pathlib.Path(owner_extension_catalog_raw)
 expected_extension_manager = pathlib.Path(expected_extension_manager_raw)
 owner_extension_manager_unit = pathlib.Path(owner_extension_manager_unit_raw)
+dropin = pathlib.Path(dropin_raw)
+expected_dropin = pathlib.Path(expected_dropin_raw)
 expected_unit = pathlib.Path(expected_unit_raw)
 expected_env = pathlib.Path(expected_env_raw)
 expected_program = pathlib.Path(expected_program_raw)
@@ -842,8 +853,9 @@ if projection_source_present and not exists(expected_extension_program):
 lifecycle_source_present = exists(owner_extension_manager_unit)
 if lifecycle_source_present and not exists(expected_extension_manager):
     raise SystemExit("Pixel extension lifecycle source is partial")
+dropin_source_present = exists(expected_dropin)
 
-paths = (unit, environment, policy, install_dir, state_dir)
+paths = (unit, dropin, environment, policy, install_dir, state_dir)
 present = [exists(path) for path in paths]
 if marker_state == "ready" and (not all(present) or not passwd or not group):
     raise SystemExit("ready Pixel Operations Broker deployment is partial")
@@ -873,6 +885,22 @@ if exists(unit):
     owner_source(expected_unit, 256 * 1024)
     if unit.read_bytes() != expected_unit.read_bytes():
         raise SystemExit("Pixel Operations Broker unit drifted from the exact generated source")
+if exists(dropin):
+    exact_file(dropin, root_uid, root_gid, 0o644, 64 * 1024)
+    owner_source(expected_dropin, 64 * 1024)
+    if dropin.read_bytes() != expected_dropin.read_bytes():
+        raise SystemExit("Pixel Operations Broker ODS drop-in drifted from the exact source")
+dropin_parent = dropin.parent
+if exists(dropin_parent):
+    info = dropin_parent.lstat()
+    contents = {item.name for item in dropin_parent.iterdir()}
+    expected_contents = {dropin.name} if exists(dropin) else set()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != root_uid or info.st_gid != root_gid
+            or stat.S_IMODE(info.st_mode) != 0o755 or contents != expected_contents):
+        raise SystemExit("unsafe Pixel Operations Broker ODS drop-in directory")
+elif dropin_source_present and marker_state == "ready":
+    raise SystemExit("ready Pixel Operations Broker ODS drop-in is missing")
 if exists(environment):
     exact_file(environment, root_uid, broker_gid, 0o640, 64 * 1024)
     owner_source(expected_env, 64 * 1024)
@@ -1348,8 +1376,9 @@ PY
             log_error "Could not remove the verified Pixel Operations Broker state"
             return 1
         fi
-        if ! sudo rm -f -- "$ops_unit" "$ops_env" "$ops_policy" "$ops_program" \
+        if ! sudo rm -f -- "$ops_unit" "$ops_dropin" "$ops_env" "$ops_policy" "$ops_program" \
             "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" \
+            || ! { [[ ! -e "$ops_dropin_dir" && ! -L "$ops_dropin_dir" ]] || sudo rmdir -- "$ops_dropin_dir"; } \
             || ! { [[ ! -e "$ops_install" && ! -L "$ops_install" ]] || sudo rmdir -- "$ops_install"; } \
             || ! { [[ ! -e "$ops_policy_dir" && ! -L "$ops_policy_dir" ]] || sudo rmdir -- "$ops_policy_dir"; }; then
             log_error "Could not remove the verified Pixel Operations Broker artifacts"
@@ -1375,7 +1404,9 @@ PY
                 return 1
             fi
         fi
-        if [[ -e "$ops_unit" || -L "$ops_unit" || -e "$ops_env" || -L "$ops_env" \
+        if [[ -e "$ops_unit" || -L "$ops_unit" || -e "$ops_dropin" || -L "$ops_dropin" \
+            || -e "$ops_dropin_dir" || -L "$ops_dropin_dir" \
+            || -e "$ops_env" || -L "$ops_env" \
             || -e "$ops_policy" || -L "$ops_policy" || -e "$ops_install" || -L "$ops_install" \
             || -e "$ops_state" || -L "$ops_state" \
             || -n "$(getent passwd "$ops_user" 2>/dev/null || true)" \

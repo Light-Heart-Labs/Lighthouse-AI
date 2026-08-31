@@ -276,13 +276,14 @@ _ods_pixel_contract_sha256() {
     local extension_manager_unit="${INSTALL_DIR:?}/data/pixel/extension-manager.service"
     local artifact_promoter="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/artifact_promoter.py"
     local artifact_promoter_unit="${INSTALL_DIR:?}/data/pixel/artifact-promoter.service"
+    local operations_service_dropin="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     local approval_helper="${INSTALL_DIR:?}/bin/ods-pixel-approve"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" \
         "$extension_helper" "$extension_manager" "$extension_manager_unit" "$approval_helper" \
-        "$artifact_promoter" "$artifact_promoter_unit" <<'PY'
+        "$artifact_promoter" "$artifact_promoter_unit" "$operations_service_dropin" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path = map(pathlib.Path, sys.argv[1:9])
+path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path = map(pathlib.Path, sys.argv[1:10])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -304,7 +305,7 @@ if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_p
 policy_payload = read_private_regular(expected_policy, "Operations policy")
 catalog_payload = read_private_regular(catalog_path, "extension catalog")
 helper_payloads = []
-for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path):
+for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path):
     helper_info = helper.lstat()
     if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
             or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
@@ -312,7 +313,7 @@ for helper in (helper_path, manager_path, manager_unit_path, approval_path, prom
         raise SystemExit("invalid ODS Pixel extension helper")
     helper_payloads.append(helper.read_bytes())
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v6\0")
+digest.update(b"ods-pixel-contract-v7\0")
 for payload in (answers_payload, policy_payload, catalog_payload, *helper_payloads):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
@@ -2668,6 +2669,9 @@ _ods_pixel_install_ingress() {
     local system_extension_manager="/usr/local/libexec/ods-pixel-extension-manager.py"
     local artifact_promoter="$plugin_root/host/artifact_promoter.py"
     local system_artifact_promoter="/usr/local/libexec/ods-pixel-artifact-promoter.py"
+    local operations_service_dropin="$plugin_root/host/pixel-ops-broker-ods.conf"
+    local operations_service_dropin_dir="/etc/systemd/system/pixel-ops-broker.service.d"
+    local installed_operations_service_dropin="$operations_service_dropin_dir/10-ods-host-observation.conf"
     local ods_version="${VERSION:-2.6.0}"
     [[ "$ods_version" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ -f "$token_file" && ! -L "$token_file" ]] || return 1
@@ -2676,7 +2680,8 @@ _ods_pixel_install_ingress() {
     local projection_source kind uid mode size
     for projection_source in "$extension_helper" "$extension_catalog" \
         "$extension_manager" "$rendered_extension_manager_unit" \
-        "$artifact_promoter" "$rendered_artifact_promoter_unit"; do
+        "$artifact_promoter" "$rendered_artifact_promoter_unit" \
+        "$operations_service_dropin"; do
         [[ -f "$projection_source" && ! -L "$projection_source" ]] || return 1
         IFS='|' read -r kind uid mode size < <(stat -c '%F|%u|%a|%s' -- "$projection_source")
         [[ "$kind" == "regular file" && "$uid" == "$(id -u "$owner")" \
@@ -2745,11 +2750,24 @@ EOF
     ods_sudo install -o root -g root -m 0755 "$extension_manager" "$installed_extension_manager"
     ods_sudo install -o root -g root -m 0755 "$extension_manager" "$system_extension_manager"
     ods_sudo install -o root -g root -m 0755 "$artifact_promoter" "$system_artifact_promoter"
+    if ods_sudo test -e "$operations_service_dropin_dir" \
+        || ods_sudo test -L "$operations_service_dropin_dir"; then
+        ods_sudo test -d "$operations_service_dropin_dir" || return 1
+        ods_sudo test ! -L "$operations_service_dropin_dir" || return 1
+    else
+        ods_sudo install -d -o root -g root -m 0755 "$operations_service_dropin_dir" || return 1
+    fi
+    [[ "$(ods_sudo stat -c '%U:%G:%a' -- "$operations_service_dropin_dir")" == "root:root:755" ]] \
+        || return 1
+    ods_sudo install -o root -g root -m 0644 "$operations_service_dropin" \
+        "$installed_operations_service_dropin" || return 1
     ods_sudo cmp -s -- "$extension_helper" "$installed_extension_helper"
     ods_sudo cmp -s -- "$extension_catalog" "$installed_extension_catalog"
     ods_sudo cmp -s -- "$extension_manager" "$installed_extension_manager"
     ods_sudo cmp -s -- "$extension_manager" "$system_extension_manager"
     ods_sudo cmp -s -- "$artifact_promoter" "$system_artifact_promoter"
+    ods_sudo cmp -s -- "$operations_service_dropin" "$installed_operations_service_dropin" \
+        || return 1
     extension_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
         "$installed_extension_helper" "$installed_extension_catalog" all)" || return 1
     jq -e '.schemaVersion == 1 and .kind == "ods-pixel-extension-search"
@@ -2770,6 +2788,20 @@ EOF
     rm -f -- "$stage/pixel-agent.env" "$stage/pixel-ingress.service"
     rmdir -- "$stage"
     ods_sudo systemctl daemon-reload || return 1
+    ods_sudo systemctl restart pixel-ops-broker.service || return 1
+    local operations_address_families operations_capabilities
+    operations_address_families="$(ods_sudo systemctl show pixel-ops-broker.service \
+        --property=RestrictAddressFamilies --value)" || return 1
+    operations_capabilities="$(ods_sudo systemctl show pixel-ops-broker.service \
+        --property=CapabilityBoundingSet --value)" || return 1
+    python3 - "$operations_address_families" "$operations_capabilities" <<'PY'
+import sys
+
+if set(sys.argv[1].split()) != {"AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"}:
+    raise SystemExit("unexpected Pixel Operations address-family boundary")
+if sys.argv[2]:
+    raise SystemExit("Pixel Operations capability boundary is not empty")
+PY
     ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service \
         pixel-extension-manager.service pixel-artifact-promoter.service || return 1
     ods_sudo systemctl start openclaw-gateway.service || return 1
@@ -2827,6 +2859,7 @@ ods_pixel_install_default_agent() {
         && -f "$plugin_root/host/pixel-extension-manager.service" \
         && -f "$plugin_root/host/artifact_promoter.py" \
         && -f "$plugin_root/host/pixel-artifact-promoter.service" \
+        && -f "$plugin_root/host/pixel-ops-broker-ods.conf" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
     if ! _ods_pixel_secure_plugin_tree "$owner" "$home" "$plugin_root/plugin"; then

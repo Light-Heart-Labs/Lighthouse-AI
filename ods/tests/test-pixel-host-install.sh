@@ -439,11 +439,14 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
+  cp "$ROOT/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
   chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
-      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
   chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
 printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
 cat >"$INSTALL_DIR/config/extensions-catalog.json" <<'JSON'
@@ -671,6 +674,16 @@ else
 fi
 mv "$TEST_ROOT/artifact-promoter-unit.original.service" "$artifact_promoter_unit"
 chmod 0600 "$artifact_promoter_unit"
+operations_service_dropin="$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
+cp "$operations_service_dropin" "$TEST_ROOT/pixel-ops-broker-ods.original.conf"
+printf '\n# changed\n' >>"$operations_service_dropin"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds Operations service drop-in bytes"
+else
+    pass "managed contract hash binds Operations service drop-in bytes"
+fi
+mv "$TEST_ROOT/pixel-ops-broker-ods.original.conf" "$operations_service_dropin"
+chmod 0644 "$operations_service_dropin"
 installed_policy="$TEST_ROOT/installed-operations-policy.json"
 cp "$operations_policy" "$installed_policy"
 chmod 0640 "$installed_policy"
@@ -1388,6 +1401,11 @@ check sh -n "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh"
 check bash -n "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh"
 check python3 -c '
 import pathlib,sys
+lines=[line for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line and not line.startswith("#")]
+assert lines == ["[Service]","RestrictAddressFamilies=","RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"]
+' "$ROOT/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
+check python3 -c '
+import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()
 assert "trusted_sudo=/usr/bin/sudo" in text
 assert "if [[ $# == 1 && \"$1\" == -v ]]" in text
@@ -1435,7 +1453,11 @@ assert "_ods_pixel_write_extension_manager_unit" in text
 assert "owner-private ODS Pixel extension manager service" in text
 assert "_ods_pixel_write_artifact_promoter_unit" in text
 assert "owner-private ODS Pixel artifact promoter service" in text
-assert "ods-pixel-contract-v6" in text
+assert "ods-pixel-contract-v7" in text
+assert "pixel-ops-broker-ods.conf" in text
+for family in ("AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"):
+    assert family in text
+assert "CapabilityBoundingSet --value" in text
 assert "bin/ods-pixel-approve" in text
 assert "ods_sudo install -o root -g pixel-ops -m 0640 \"$extension_catalog\" \"$installed_extension_catalog\"" in text
 assert "ods-extension-manager.py" in text

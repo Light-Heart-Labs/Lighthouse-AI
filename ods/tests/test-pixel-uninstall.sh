@@ -17,6 +17,8 @@ TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 MOCK_BIN="$TEST_ROOT/bin"
 SYSTEMD_DIR="$TEST_ROOT/systemd"
+OPS_DROPIN_DIR="$SYSTEMD_DIR/pixel-ops-broker.service.d"
+OPS_DROPIN="$OPS_DROPIN_DIR/10-ods-host-observation.conf"
 ETC_DIR="$TEST_ROOT/etc"
 LIBEXEC_DIR="$TEST_ROOT/libexec"
 HOME_DIR="$TEST_ROOT/home"
@@ -303,6 +305,8 @@ JSON
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
     cp "$ROOT_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+    cp "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     python3 - "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
         "$INSTALL_DIR/data/pixel/extension-manager.service" "$INSTALL_DIR" "$(id -un)" <<'PY'
 import pathlib, sys
@@ -325,6 +329,7 @@ PY
     chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
     chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+    chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     chmod 0600 "$INSTALL_DIR/data/pixel/extension-manager.service" \
         "$INSTALL_DIR/data/pixel/artifact-promoter.service"
     cat >"$source/.generated/pixel-ops-broker.service" <<UNIT
@@ -350,8 +355,9 @@ ENV
         "$source/.generated/ops-broker.env"
     chmod 0644 "$source/deploy/ops-broker/broker.py"
 
-    mkdir -p "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE"
+    mkdir -p "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE" "$OPS_DROPIN_DIR"
     cp "$source/.generated/pixel-ops-broker.service" "$SYSTEMD_DIR/pixel-ops-broker.service"
+    cp "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" "$OPS_DROPIN"
     cp "$source/.generated/ops-broker.env" "$OPS_ENV"
     cp "$source/deploy/ops-broker/broker.py" "$OPS_INSTALL/broker.py"
     cp "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
@@ -370,6 +376,8 @@ ENV
         "$SYSTEMD_DIR/pixel-artifact-promoter.service"
     cp "$INSTALL_DIR/data/pixel/operations-policy.json" "$OPS_POLICY"
     chmod 0644 "$SYSTEMD_DIR/pixel-ops-broker.service"
+    chmod 0755 "$OPS_DROPIN_DIR"
+    chmod 0644 "$OPS_DROPIN"
     chmod 0640 "$OPS_ENV" "$OPS_POLICY"
     chmod 0755 "$OPS_INSTALL" "$OPS_INSTALL/broker.py" \
         "$OPS_INSTALL/ods-extension-search.py" "$OPS_INSTALL/ods-extension-manager.py" \
@@ -540,6 +548,7 @@ fi
 write_ops_fixture
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     if [[ ! -e "$SYSTEMD_DIR/pixel-ops-broker.service" \
+        && ! -e "$OPS_DROPIN_DIR" \
         && ! -e "$SYSTEMD_DIR/pixel-extension-manager.service" \
         && ! -e "$LIBEXEC_DIR/ods-pixel-extension-manager.py" \
         && ! -e "$SYSTEMD_DIR/pixel-artifact-promoter.service" \
@@ -569,7 +578,7 @@ fi
 for drift_target in program extension-program extension-catalog extension-manager-client \
     extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
     artifact-promoter-program artifact-promoter-unit artifact-promoter-owner-unit \
-    unit environment policy; do
+    unit dropin dropin-source environment policy; do
     write_ops_fixture
     case "$drift_target" in
         program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
@@ -584,6 +593,8 @@ for drift_target in program extension-program extension-catalog extension-manage
         artifact-promoter-unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-artifact-promoter.service" ;;
         artifact-promoter-owner-unit) printf '%s\n' '# drift' >>"$INSTALL_DIR/data/pixel/artifact-promoter.service" ;;
         unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
+        dropin) printf '%s\n' '# drift' >>"$OPS_DROPIN" ;;
+        dropin-source) printf '%s\n' '# drift' >>"$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" ;;
         environment) printf '%s\n' 'UNEXPECTED=1' >>"$OPS_ENV" ;;
         policy) printf '%s\n' ' ' >>"$OPS_POLICY" ;;
     esac
@@ -631,10 +642,11 @@ fi
 
 write_ops_fixture
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
+    "$OPS_DROPIN" \
     "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
     "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_INSTALL/ods-extension-manager.py" \
     "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
-rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
+rmdir -- "$OPS_DROPIN_DIR" "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     fail "owner-policy-only ready Operations Broker deployment was accepted"
@@ -656,10 +668,11 @@ path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 chmod 0600 "$HOME_DIR/.config/ods/pixel-managed.json"
 rm -f -- "$SYSTEMD_DIR/pixel-ops-broker.service" "$OPS_ENV" "$OPS_POLICY" \
+    "$OPS_DROPIN" \
     "$OPS_INSTALL/broker.py" "$OPS_INSTALL/ods-extension-search.py" \
     "$OPS_INSTALL/ods-extension-catalog.json" "$OPS_INSTALL/ods-extension-manager.py" \
     "$OPS_PASSWD_STATE"
-rmdir -- "$OPS_POLICY_DIR" "$OPS_INSTALL"
+rmdir -- "$OPS_DROPIN_DIR" "$OPS_POLICY_DIR" "$OPS_INSTALL"
 rm -rf -- "$OPS_STATE"
 if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
     [[ ! -e "$OPS_GROUP_STATE" && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
