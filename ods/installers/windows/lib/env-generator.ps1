@@ -920,6 +920,8 @@ ODS_AGENT_HOST=$(Get-EnvOrNew "ODS_AGENT_HOST" "host.docker.internal")
 # The dashboard-api container must call the host agent over Docker Desktop's
 # host gateway. Bearer auth still protects every host-agent endpoint.
 ODS_AGENT_BIND=$(Get-EnvOrNew "ODS_AGENT_BIND" "0.0.0.0")
+# Docker Desktop presents host-owned lifecycle secrets through its root group.
+REMOTE_PROVIDER_DATA_GID=0
 
 #=== LLM Backend Mode ===
 ODS_MODE=$effectiveODSMode

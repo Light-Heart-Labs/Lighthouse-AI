@@ -754,6 +754,13 @@ assert_contains "extensions/services/litellm/compose.apple.yaml" 'ODS_MACOS_HOST
 assert_contains "installers/windows/install-windows.ps1" 'Assert-ODSWindowsManagedContainers' "Windows installer does not assert compose-managed containers"
 assert_contains "installers/windows/install-windows.ps1" 'Docker Compose did not create any managed Windows containers' "Windows installer does not fail loud on zero managed containers"
 assert_contains "installers/windows/install-windows.ps1" 'dashboard", "dashboard-api", "open-webui' "Windows installer does not require core container services"
+assert_contains "bin/ods-host-agent.py" '0o640' "remote-provider lifecycle secrets must be group-readable only to hardened provider services"
+assert_contains "bin/ods-host-agent.py" '_repair_remote_provider_secret_permissions' "legacy remote-provider secrets are not repaired for provider access"
+assert_contains "docker-compose.base.yml" 'REMOTE_PROVIDER_DATA_GID' "remote-provider services must receive the installation data group"
+assert_contains "installers/phases/06-directories.sh" 'REMOTE_PROVIDER_DATA_GID=\$\(id -g' "Linux installer does not derive the current installation data group"
+assert_not_contains "installers/phases/06-directories.sh" 'REMOTE_PROVIDER_DATA_GID=\$\(_env_get' "Linux installer may preserve a stale remote-provider data group"
+assert_contains "installers/windows/lib/env-generator.ps1" 'REMOTE_PROVIDER_DATA_GID=0' "Windows installer does not derive the Docker Desktop provider group"
+assert_not_contains "installers/windows/lib/env-generator.ps1" 'REMOTE_PROVIDER_DATA_GID=\$\(Get-EnvOrNew' "Windows installer may preserve a stale remote-provider data group"
 assert_contains "installers/windows/install-windows.ps1" 'Invoke-ODSWindowsComposeImagePreflight' "Windows installer does not preflight compose images before launch"
 assert_contains "installers/windows/install-windows.ps1" '--pull", "never' "Windows installer still allows implicit compose pulls during install launch"
 

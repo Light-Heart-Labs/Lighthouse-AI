@@ -174,6 +174,18 @@ _REMOTE_PROVIDER_SECRET_REF_TO_FILENAME = {
     "REMOTE_LLM_TLS_CLIENT_CERT": "tls-client-cert.pem",
     "REMOTE_LLM_TLS_CLIENT_KEY": "tls-client-key.pem",
 }
+# Secrets consumed by one of the two hardened remote-provider containers. The
+# peer token is deliberately excluded: it is host/dashboard custody and stays
+# owner-only. Provider containers mount only the remote-provider state subtree
+# read-only and receive the installation data group as a supplementary group.
+_REMOTE_PROVIDER_CONTAINER_SECRET_REFS = frozenset({
+    "REMOTE_LLM_API_KEY",
+    "REMOTE_LLM_SSH_PRIVATE_KEY",
+    "REMOTE_LLM_SSH_KNOWN_HOSTS",
+    "REMOTE_LLM_TLS_CA_PEM",
+    "REMOTE_LLM_TLS_CLIENT_CERT",
+    "REMOTE_LLM_TLS_CLIENT_KEY",
+})
 _windows_gpu_metrics_cache: tuple[float, dict | None] = (0.0, None)
 _windows_dxgi_adapters_cache: tuple[float, list[dict]] = (0.0, [])
 _windows_llm_status_cache: tuple[float, dict | None] = (0.0, None)
@@ -2518,7 +2530,11 @@ def _remote_provider_secret_owner() -> tuple[int | None, int | None]:
         return None, None
     try:
         if os.geteuid() == 0:
-            return _REMOTE_PROVIDER_EGRESS_UID, _REMOTE_PROVIDER_EGRESS_GID
+            # Keep root as owner and grant the hardened provider group read
+            # access. OpenSSH rejects a private key when the current process
+            # owns it and group bits are present; root:provider with 0640 lets
+            # the non-root tunnel read the key without tripping that check.
+            return 0, _REMOTE_PROVIDER_EGRESS_GID
     except OSError:
         pass
     return None, None
@@ -3274,13 +3290,123 @@ def _write_remote_provider_route_state(
 
 def _write_remote_provider_secret(ref: str, value: str) -> None:
     uid, gid = _remote_provider_secret_owner()
+    mode = 0o640 if ref in _REMOTE_PROVIDER_CONTAINER_SECRET_REFS else 0o600
     _atomic_write_text(
         _remote_provider_secret_path(ref),
         value.rstrip("\r\n") + "\n",
-        0o600,
+        mode,
         uid,
         gid,
     )
+
+
+def _repair_remote_provider_secret_permissions() -> list[str]:
+    """Migrate legacy provider-consumed secrets from 0600 to safe 0640.
+
+    Existing installations may have secrets written before provider services
+    received the installation data group. Never follow links or touch a file
+    owned by another account when the host agent is unprivileged. A failure is
+    logged per file so unrelated host-agent operations remain available while
+    the remote route remains naturally fail-closed.
+    """
+    if os.name == "nt" or not hasattr(os, "fchmod"):
+        return []
+    try:
+        effective_uid = os.geteuid()
+    except (AttributeError, OSError):
+        return []
+    try:
+        effective_gid = os.getegid()
+    except (AttributeError, OSError):
+        return []
+    desired_uid = 0 if effective_uid == 0 else effective_uid
+    desired_gid = _REMOTE_PROVIDER_EGRESS_GID if effective_uid == 0 else effective_gid
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        provider_root_fd = os.open(_remote_provider_root(), directory_flags)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        logger.warning("Could not safely open remote-provider state directory: %s", exc)
+        return []
+    try:
+        try:
+            secret_dir_fd = os.open("secrets", directory_flags, dir_fd=provider_root_fd)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logger.warning("Could not safely open remote-provider secret directory: %s", exc)
+            return []
+        try:
+            repaired: list[str] = []
+            file_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            for ref in sorted(_REMOTE_PROVIDER_CONTAINER_SECRET_REFS):
+                filename = _REMOTE_PROVIDER_SECRET_REF_TO_FILENAME[ref]
+                try:
+                    before = os.stat(filename, dir_fd=secret_dir_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    logger.warning("Could not inspect remote-provider secret %s: %s", ref, exc)
+                    continue
+                if stat_mod.S_ISLNK(before.st_mode) or not stat_mod.S_ISREG(before.st_mode):
+                    logger.warning("Refusing to repair unsafe remote-provider secret %s", ref)
+                    continue
+                if effective_uid != 0 and before.st_uid != desired_uid:
+                    logger.warning(
+                        "Cannot repair remote-provider secret %s owned by another user", ref
+                    )
+                    continue
+                if (
+                    stat_mod.S_IMODE(before.st_mode) == 0o640
+                    and before.st_uid == desired_uid
+                    and before.st_gid == desired_gid
+                ):
+                    continue
+                try:
+                    descriptor = os.open(filename, file_flags, dir_fd=secret_dir_fd)
+                    try:
+                        current = os.fstat(descriptor)
+                        if (
+                            not stat_mod.S_ISREG(current.st_mode)
+                            or current.st_dev != before.st_dev
+                            or current.st_ino != before.st_ino
+                            or current.st_uid != before.st_uid
+                            or current.st_gid != before.st_gid
+                        ):
+                            raise RuntimeError("secret changed during permission repair")
+                        if current.st_uid != desired_uid or current.st_gid != desired_gid:
+                            os.fchown(descriptor, desired_uid, desired_gid)
+                        os.fchmod(descriptor, 0o640)
+                        final = os.fstat(descriptor)
+                        if (
+                            final.st_uid != desired_uid
+                            or final.st_gid != desired_gid
+                            or stat_mod.S_IMODE(final.st_mode) != 0o640
+                        ):
+                            raise RuntimeError("secret permission repair did not persist")
+                    finally:
+                        os.close(descriptor)
+                except (OSError, RuntimeError) as exc:
+                    logger.warning("Could not repair remote-provider secret %s: %s", ref, exc)
+                    continue
+                repaired.append(ref)
+                logger.info("Repaired remote-provider secret permissions for %s", ref)
+            return repaired
+        finally:
+            os.close(secret_dir_fd)
+    finally:
+        os.close(provider_root_fd)
 
 
 def _remove_remote_provider_file(path: Path) -> None:
@@ -3305,6 +3431,7 @@ def _remote_provider_mutation_paths(action: str) -> list[Path]:
 def _restore_remote_provider_snapshots(snapshots: dict[Path, dict]) -> None:
     for path, snapshot in reversed(list(snapshots.items())):
         _restore_text_file(path, snapshot)
+    _repair_remote_provider_secret_permissions()
 
 
 def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dict:
@@ -13679,6 +13806,7 @@ def main():
     GPU_COUNT = env.get("GPU_COUNT", "1")
 
     DATA_DIR = Path(env.get("ODS_DATA_DIR", str(INSTALL_DIR / "data")))
+    _repair_remote_provider_secret_permissions()
     USER_EXTENSIONS_DIR = Path(env.get(
         "ODS_USER_EXTENSIONS_DIR",
         str(DATA_DIR / "user-extensions"),

@@ -1587,6 +1587,7 @@ else
     mkdir -p "${INSTALL_DIR}/data/langfuse/clickhouse"
     mkdir -p "${INSTALL_DIR}/data/langfuse/redis"
     mkdir -p "${INSTALL_DIR}/data/langfuse/minio"
+    mkdir -p "${INSTALL_DIR}/data/remote-provider/secrets"
     mkdir -p "${INSTALL_DIR}/bin"
     ai_ok "Created directory structure"
 

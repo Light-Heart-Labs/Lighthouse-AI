@@ -511,6 +511,8 @@ HOST_LAN_IP=${host_lan_ip}
 ODS_DEVICE_NAME=${device_name}
 # Container route to the loopback-only host agent (private Colima bridge or Docker Desktop helper).
 ODS_AGENT_HOST=${ODS_AGENT_HOST:-${agent_host}}
+# Docker Desktop preserves the installation owner's data group on bind mounts.
+REMOTE_PROVIDER_DATA_GID=$(id -g 2>/dev/null || echo 20)
 
 #=== LLM Backend Mode ===
 ODS_MODE=local

@@ -86,6 +86,9 @@ def main() -> int:
         "remote-provider help must advertise SSH transport",
     )
     for option in (
+        "--context-length TOKENS",
+        "--max-tokens TOKENS",
+        "--reasoning true|false",
         "--ssh-host HOST",
         "--ssh-user USER",
         "--ssh-inference-host HOST",
@@ -141,6 +144,21 @@ def main() -> int:
         r"sshKnownHosts: \$secrets\[2\]",
         text,
         "SSH known_hosts must come from streamed secret payload",
+    )
+    require(
+        r"contextLength: \(\$context_length \| tonumber\)",
+        text,
+        "remote-provider CLI must serialize the declared context window",
+    )
+    require(
+        r"maxTokens: \(\$max_tokens \| tonumber\)",
+        text,
+        "remote-provider CLI must serialize the declared output limit",
+    )
+    require(
+        r"reasoning: \$reasoning",
+        text,
+        "remote-provider CLI must serialize the declared reasoning capability",
     )
 
     remote_provider_function = re.search(

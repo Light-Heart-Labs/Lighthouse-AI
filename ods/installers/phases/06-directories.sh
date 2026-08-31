@@ -137,6 +137,7 @@ else
     mkdir -p "$INSTALL_DIR"/data/{open-webui,whisper,tts,n8n,qdrant,models,privacy-shield,ape,token-spy,hermes,persona}
     mkdir -p "$INSTALL_DIR"/data/hermes-proxy/{caddy-data,caddy-config}
     mkdir -p "$INSTALL_DIR"/data/langfuse/{postgres,clickhouse,redis,minio}
+    mkdir -p "$INSTALL_DIR"/data/remote-provider/secrets
     mkdir -p "$INSTALL_DIR"/config/{n8n,litellm,openclaw,searxng}
 
     _phase06_repair_host_path() {
@@ -946,6 +947,9 @@ BIND_ADDRESS=${BIND_ADDRESS}
 # Host LAN IP (populated when BIND_ADDRESS=0.0.0.0; empty otherwise).
 # Containers like openclaw read this to advertise the host's LAN address.
 HOST_LAN_IP=${HOST_LAN_IP}
+# Lets the non-root remote-provider services read only lifecycle secrets that
+# the host agent writes mode 0640 under this installation owner's data group.
+REMOTE_PROVIDER_DATA_GID=$(id -g 2>/dev/null || echo 1000)
 
 #=== LLM Backend Mode ===
 ODS_MODE=${ODS_MODE_VALUE}

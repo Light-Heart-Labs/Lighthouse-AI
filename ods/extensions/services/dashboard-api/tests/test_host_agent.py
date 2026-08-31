@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -2138,6 +2139,71 @@ class TestRemoteProviderLifecycle:
     def _auth(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX secret modes")
+    def test_repairs_legacy_provider_secret_modes_without_widening_peer_token(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        secret_dir = tmp_path / "remote-provider" / "secrets"
+        secret_dir.mkdir(parents=True)
+        provider = secret_dir / "provider-api-key"
+        peer = secret_dir / "peer-token"
+        provider.write_text("provider-secret\n", encoding="utf-8")
+        peer.write_text("peer-secret\n", encoding="utf-8")
+        provider.chmod(0o600)
+        peer.chmod(0o600)
+
+        repaired = _mod._repair_remote_provider_secret_permissions()
+
+        assert repaired == ["REMOTE_LLM_API_KEY"]
+        assert stat.S_IMODE(provider.stat().st_mode) == 0o640
+        assert stat.S_IMODE(peer.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX secret modes")
+    def test_secret_writer_keeps_peer_token_owner_only(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(_mod, "_remote_provider_secret_owner", lambda: (None, None))
+
+        _mod._write_remote_provider_secret("REMOTE_LLM_API_KEY", "provider-secret")
+        _mod._write_remote_provider_secret("REMOTE_ODS_PEER_TOKEN", "peer-secret")
+
+        secret_dir = tmp_path / "remote-provider" / "secrets"
+        assert stat.S_IMODE((secret_dir / "provider-api-key").stat().st_mode) == 0o640
+        assert stat.S_IMODE((secret_dir / "peer-token").stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX secret modes")
+    def test_secret_permission_repair_refuses_symlinks(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        if not can_create_symlinks(tmp_path):
+            pytest.skip("symlinks unavailable")
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        secret_dir = tmp_path / "remote-provider" / "secrets"
+        secret_dir.mkdir(parents=True)
+        target = tmp_path / "outside-secret"
+        target.write_text("outside\n", encoding="utf-8")
+        target.chmod(0o600)
+        (secret_dir / "provider-api-key").symlink_to(target)
+
+        assert _mod._repair_remote_provider_secret_permissions() == []
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX secret ownership")
+    def test_root_secret_owner_uses_provider_group_without_container_ownership(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(_mod.os, "geteuid", lambda: 0)
+
+        assert _mod._remote_provider_secret_owner() == (
+            0,
+            _mod._REMOTE_PROVIDER_EGRESS_GID,
+        )
+
     def _configure_payload(self):
         return {
             "action": "configure",
@@ -2320,6 +2386,8 @@ class TestRemoteProviderLifecycle:
         assert probes[0][0]["provider"]["baseUrl"] == "https://gpu.example.test/v1"
         assert probes[0][1] == "unit-test-provider-token"
         assert secret_path.read_text(encoding="utf-8") == "unit-test-provider-token\n"
+        if os.name != "nt":
+            assert stat.S_IMODE(secret_path.stat().st_mode) == 0o640
         assert "unit-test-provider-token" not in dumped
 
     def test_route_state_preserves_ssh_metadata_without_secret_values(self):
@@ -2389,6 +2457,9 @@ class TestRemoteProviderLifecycle:
         assert (secret_dir / "known_hosts").read_text(encoding="utf-8") == (
             "gpu.example.test ssh-ed25519 AAAATEST\n"
         )
+        if os.name != "nt":
+            for filename in ("provider-api-key", "ssh-identity", "known_hosts"):
+                assert stat.S_IMODE((secret_dir / filename).stat().st_mode) == 0o640
         assert "unit-test-provider-token" not in dumped
         assert "unit-test-key" not in dumped
         assert "AAAATEST" not in dumped
@@ -2760,6 +2831,8 @@ class TestRemoteProviderLifecycle:
         assert state == old_state
         assert activation_public.read_text(encoding="utf-8") == "known-good-activation\n"
         assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+        if os.name != "nt":
+            assert stat.S_IMODE(secret_path.stat().st_mode) == 0o640
         assert "unit-test-provider-token" not in dumped
 
     def test_managed_pixel_runtime_recovers_concrete_gateway_model(

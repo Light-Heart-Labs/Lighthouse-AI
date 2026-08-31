@@ -3826,6 +3826,9 @@ Provider options for configure/test/plan configure/plan test:
   --transport direct|ssh  Provider transport (default direct)
   --base-url URL          OpenAI-compatible base URL, for example https://gpu.example/v1
   --model MODEL           Provider model id
+  --context-length TOKENS Exact provider context window (default 32768)
+  --max-tokens TOKENS     Exact provider output limit (default 4096)
+  --reasoning true|false  Whether the provider route supports reasoning (default false)
   --ssh-host HOST         SSH server host for ssh transport
   --ssh-user USER         SSH server user for ssh transport
   --ssh-port PORT         SSH server port for ssh transport (default 22)
@@ -3954,6 +3957,7 @@ _remote_provider_write_payload() {
     local action="$1" payload_file="$2"
     shift 2
     local transport="direct" base_url="" model="" json_mode="false"
+    local context_length="32768" max_tokens="4096" reasoning="false"
     local api_key_env="REMOTE_LLM_API_KEY" api_key_env_explicit="false" api_key_file="" api_key_stdin="false"
     local ssh_host="" ssh_user="" ssh_port="22" ssh_inference_host="" ssh_inference_port=""
     local ssh_control_host="" ssh_control_port="" ssh_option_seen="false"
@@ -3975,6 +3979,18 @@ _remote_provider_write_payload() {
                 [[ $# -ge 2 ]] || error "--model requires a value"
                 provider_option_seen="true"
                 model="${2:-}"; shift 2 ;;
+            --context-length)
+                [[ $# -ge 2 ]] || error "--context-length requires a value"
+                provider_option_seen="true"
+                context_length="${2:-}"; shift 2 ;;
+            --max-tokens)
+                [[ $# -ge 2 ]] || error "--max-tokens requires a value"
+                provider_option_seen="true"
+                max_tokens="${2:-}"; shift 2 ;;
+            --reasoning)
+                [[ $# -ge 2 ]] || error "--reasoning requires true or false"
+                provider_option_seen="true"
+                reasoning="${2:-}"; shift 2 ;;
             --ssh-host)
                 [[ $# -ge 2 ]] || error "--ssh-host requires a value"
                 provider_option_seen="true"; ssh_option_seen="true"
@@ -4061,6 +4077,19 @@ _remote_provider_write_payload() {
     esac
     [[ -n "$base_url" ]] || error "--base-url is required"
     [[ -n "$model" ]] || error "--model is required"
+    [[ "$context_length" =~ ^[1-9][0-9]{0,7}$ ]] || \
+        error "--context-length must be an integer from 16384 to 10000000"
+    (( context_length >= 16384 && context_length <= 10000000 )) || \
+        error "--context-length must be an integer from 16384 to 10000000"
+    [[ "$max_tokens" =~ ^[1-9][0-9]{0,7}$ ]] || \
+        error "--max-tokens must be a positive integer within the context window"
+    (( max_tokens <= context_length )) || \
+        error "--max-tokens must be a positive integer within the context window"
+    reasoning="$(printf '%s' "$reasoning" | tr '[:upper:]' '[:lower:]')"
+    case "$reasoning" in
+        true|false) ;;
+        *) error "--reasoning must be true or false" ;;
+    esac
     if [[ "$transport" == "direct" && "$ssh_option_seen" == "true" ]]; then
         error "direct remote-provider transport does not accept SSH options"
     fi
@@ -4098,6 +4127,9 @@ _remote_provider_write_payload() {
             --arg transport "$transport" \
             --arg base_url "$base_url" \
             --arg model "$model" \
+            --arg context_length "$context_length" \
+            --arg max_tokens "$max_tokens" \
+            --argjson reasoning "$reasoning" \
             --arg ssh_host "$ssh_host" \
             --arg ssh_user "$ssh_user" \
             --arg ssh_port "$ssh_port" \
@@ -4111,7 +4143,10 @@ _remote_provider_write_payload() {
                 provider: {
                     transport: $transport,
                     baseUrl: $base_url,
-                    model: $model
+                    model: $model,
+                    contextLength: ($context_length | tonumber),
+                    maxTokens: ($max_tokens | tonumber),
+                    reasoning: $reasoning
                 },
                 ssh: {
                     host: $ssh_host,
@@ -4139,12 +4174,18 @@ _remote_provider_write_payload() {
         --arg transport "$transport" \
         --arg base_url "$base_url" \
         --arg model "$model" \
+        --arg context_length "$context_length" \
+        --arg max_tokens "$max_tokens" \
+        --argjson reasoning "$reasoning" \
         '{
             action: $action,
             provider: {
                 transport: $transport,
                 baseUrl: $base_url,
-                model: $model
+                model: $model,
+                contextLength: ($context_length | tonumber),
+                maxTokens: ($max_tokens | tonumber),
+                reasoning: $reasoning
             },
             secrets: {
                 apiKey: .
@@ -4569,7 +4610,11 @@ cmd_remote_provider() {
                 local use_configured_probe="true" arg
                 for arg in "$@"; do
                     case "$arg" in
-                        --transport|--base-url|--model|--api-key|--api-key-stdin|--api-key-file|--api-key-env)
+                        --transport|--base-url|--model|--context-length|--max-tokens|--reasoning)
+                            use_configured_probe="false"
+                            break
+                            ;;
+                        --api-key|--api-key-stdin|--api-key-file|--api-key-env)
                             use_configured_probe="false"
                             break
                             ;;
