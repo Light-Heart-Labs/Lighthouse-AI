@@ -105,6 +105,44 @@ except Exception:
     fi
 }
 
+# A stopped container can retain a Docker Desktop file-bind identity whose
+# source disappeared when the installer refreshed the same install tree. A
+# plain compose up tries to start that stale container and fails before the
+# service can be healthy. Recreate only compose-owned services that are already
+# exited; running services and their dependencies remain untouched.
+_phase11_recreate_exited_services() {
+    local exited_output service
+    local -a exited_services=()
+    local -A observed_services=()
+
+    if ! exited_output="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" \
+        ps --status exited --services 2>>"$LOG_FILE")"; then
+        log "Could not enumerate exited compose services for bounded launch recovery."
+        return 1
+    fi
+
+    while IFS= read -r service; do
+        [[ -n "$service" ]] || continue
+        if [[ ! "$service" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+            log "Refusing malformed exited compose service name during launch recovery."
+            return 1
+        fi
+        [[ -z "${observed_services[$service]:-}" ]] || continue
+        observed_services[$service]=1
+        exited_services+=("$service")
+        if (( ${#exited_services[@]} > 64 )); then
+            log "Refusing more than 64 exited compose services during launch recovery."
+            return 1
+        fi
+    done <<< "$exited_output"
+
+    (( ${#exited_services[@]} > 0 )) || return 0
+    ai_warn "Recreating exited service container(s) with stale runtime state: ${exited_services[*]}"
+    $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-deps \
+        --force-recreate --no-build --pull never "${exited_services[@]}" \
+        >> "$LOG_FILE" 2>&1
+}
+
 _phase11_download_hf_artifact() {
     local url="$1" destination="$2" log_file="$3"
     local helper="$INSTALL_DIR/scripts/download-hf-artifact.py"
@@ -1219,6 +1257,9 @@ MODELS_INI_EOF
             break
         fi
         if [[ $_attempt -lt 3 ]]; then
+            if ! _phase11_recreate_exited_services; then
+                log "Bounded exited-service recreation did not complete; continuing the normal launch retry."
+            fi
             printf "\r  ${AMB}⚠${NC} %-60s\n" "Some services still starting..."
             ai_warn "Some containers need more time. Waiting 30s before retry..."
             sleep 30
