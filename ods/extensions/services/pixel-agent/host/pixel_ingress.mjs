@@ -24,7 +24,12 @@ import { pathToFileURL } from "node:url";
 const MAX_BODY = 2 * 1024 * 1024; // 2 MiB request body cap
 const MAX_NONSTREAM_RESPONSE = 2 * 1024 * 1024; // 2 MiB non-stream response cap
 const MAX_STREAM_RESPONSE = 4 * 1024 * 1024; // 4 MiB terminal completion cap for SSE clients
-const MAX_VERIFICATION_RESPONSE = 4096;
+// A broad typed host report can legitimately include bounded summaries for
+// processes, services, mounts, interfaces, routes, and listening endpoints.
+// Keep this channel far below the normal completion cap while allowing the
+// guard's structurally rendered evidence to cross the private ingress intact.
+const MAX_VERIFICATION_TEXT = 32 * 1024;
+const MAX_VERIFICATION_RESPONSE = 64 * 1024;
 const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE =
   "operations-unavailable-zero-submissions";
@@ -634,7 +639,7 @@ function parseVerificationResponse(value) {
     (carriesAuthoritativeText &&
       (typeof value.text !== "string" ||
         value.text.length < 1 ||
-        value.text.length > 2048 ||
+        value.text.length > MAX_VERIFICATION_TEXT ||
         /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value.text)))
   ) {
     throw new HttpError(502, "verification state unavailable");

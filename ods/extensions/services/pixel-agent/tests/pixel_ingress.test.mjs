@@ -604,6 +604,61 @@ test("non-stream response releases authoritative text from passed Operations ver
   }
 });
 
+test("streaming response releases a bounded broad Operations report above the legacy 2 KiB cap", async () => {
+  const verifiedText = [
+    "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts.",
+    "- Host evidence: " + "x".repeat(8 * 1024),
+  ].join("\n");
+  const gw = await fakeGateway({
+    verification: { status: "passed", text: verifiedText },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({
+          stream: true,
+          messages: [{ role: "user", content: "report broad host facts" }],
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      const frames = response.body
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
+        .map((line) => JSON.parse(line.slice("data: ".length)));
+      assert.equal(frames[1].choices[0].delta.content, verifiedText);
+      assert.equal(response.body.includes('"content":"ok"'), false);
+      assert.ok(response.body.includes("[DONE]"));
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("Operations verification text above the bounded 32 KiB cap remains fail-closed", async () => {
+  const gw = await fakeGateway({
+    verification: { status: "passed", text: "x".repeat(32 * 1024 + 1) },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "report host facts" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 502);
+      assert.equal(JSON.parse(response.body).error.message, "verification state unavailable");
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("passed Operations verification remains fail-closed for extra fields", async () => {
   const gw = await fakeGateway({
     verification: {
