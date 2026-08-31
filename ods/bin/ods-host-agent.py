@@ -2518,6 +2518,13 @@ def _remote_provider_route_state_path() -> Path:
     return _remote_provider_root() / "routing-state.json"
 
 
+_REMOTE_PROVIDER_PROFILE_SCHEMA = "ods.remote-provider-profile.v1"
+
+
+def _remote_provider_profile_path() -> Path:
+    return _remote_provider_root() / "provider-profile.json"
+
+
 def _remote_provider_activation_state_path() -> Path:
     return _remote_provider_root() / "activation-state.json"
 
@@ -2604,6 +2611,7 @@ def _remote_provider_route_state_from_plan(
     plan: dict,
     *,
     probe_receipt: dict | None = None,
+    resume: dict | None = None,
 ) -> dict:
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     enabled = route.get("enabled") is True
@@ -2612,12 +2620,13 @@ def _remote_provider_route_state_from_plan(
         if enabled and route.get("transport") == "ssh"
         else "pending-provider-handshake"
     )
-    return {
+    state = {
         "schema": _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA,
         "enabled": enabled,
         "mode": str(route.get("mode") or "cloud"),
         "provider": route.get("provider") if enabled else None,
         "ssh": route.get("ssh") if enabled and route.get("transport") == "ssh" else None,
+        "peer": route.get("peer") if enabled else None,
         "projection": _remote_provider_projection(route),
         "status": _remote_provider_route_status(
             enabled=enabled,
@@ -2625,6 +2634,13 @@ def _remote_provider_route_state_from_plan(
             probe_receipt=probe_receipt,
         ),
     }
+    # Retain the previously validated pointer through an enabled transition.
+    # Dashboard redacts this object and only advertises it while disabled, but
+    # keeping it here gives an interrupted SSH proof or failed profile rewrite
+    # an exact recovery target.
+    if isinstance(resume, dict):
+        state["resume"] = resume
+    return state
 
 
 def _remote_provider_safe_text(value, *, max_length: int) -> str:
@@ -2682,7 +2698,7 @@ def _remote_provider_probe_receipt_from_egress(payload: dict) -> dict:
     return _remote_provider_sanitize_probe_receipt(payload.get("probe"))
 
 
-def _read_remote_provider_route_state_for_update() -> dict:
+def _read_remote_provider_route_state_document() -> dict:
     path = _remote_provider_route_state_path()
     try:
         raw = path.read_text(encoding="utf-8")
@@ -2698,11 +2714,162 @@ def _read_remote_provider_route_state_for_update() -> dict:
         raise RuntimeError("remote-provider route state root must be an object")
     if state.get("schema") != _REMOTE_PROVIDER_ROUTING_STATE_SCHEMA:
         raise RuntimeError("remote-provider route state schema is unsupported")
+    if type(state.get("enabled")) is not bool:
+        raise RuntimeError("remote-provider route state is missing enabled status")
+    return state
+
+
+def _read_remote_provider_route_state_for_update() -> dict:
+    state = _read_remote_provider_route_state_document()
     if state.get("enabled") is not True:
         raise RuntimeError("remote-provider route is disabled")
     if not isinstance(state.get("provider"), dict):
         raise RuntimeError("remote-provider route state is missing provider metadata")
     return state
+
+
+def _remote_provider_profile_route(route: dict) -> dict:
+    provider = route.get("provider") if isinstance(route.get("provider"), dict) else None
+    if route.get("enabled") is not True or provider is None:
+        raise RuntimeError("remote-provider route cannot be saved for later reactivation")
+    profile_route = {
+        "mode": str(route.get("mode") or "cloud"),
+        "provider": provider,
+        "ssh": route.get("ssh") if provider.get("transport") == "ssh" else None,
+        "peer": route.get("peer") if isinstance(route.get("peer"), dict) else None,
+    }
+    _remote_provider_plan_from_profile_route(profile_route)
+    return profile_route
+
+
+def _remote_provider_plan_from_profile_route(profile_route: dict) -> dict:
+    provider = (
+        profile_route.get("provider")
+        if isinstance(profile_route.get("provider"), dict)
+        else {}
+    )
+    validation_payload = {
+        "action": "configure",
+        **profile_route,
+        "secrets": {"apiKey": "profile-validation-only"},
+    }
+    if provider.get("transport") == "ssh":
+        validation_payload["secrets"].update({
+            "sshPrivateKey": "profile-validation-only",
+            "sshKnownHosts": "profile-validation-only",
+        })
+    if _plan_remote_provider_lifecycle_operation is None:
+        raise RuntimeError("Remote provider lifecycle helper is unavailable")
+    validated = _plan_remote_provider_lifecycle_operation(validation_payload)
+    validated_route = validated.get("route") if isinstance(validated.get("route"), dict) else {}
+    for key in ("mode", "provider", "ssh", "peer"):
+        expected = profile_route.get(key)
+        actual = validated_route.get(key)
+        if expected != actual:
+            raise RuntimeError(f"remote-provider saved profile {key} metadata is invalid")
+    return validated
+
+
+def _write_remote_provider_profile(route: dict) -> dict:
+    profile = {
+        "schema": _REMOTE_PROVIDER_PROFILE_SCHEMA,
+        "savedAt": _iso_now(),
+        "route": _remote_provider_profile_route(route),
+    }
+    raw = json.dumps(profile, indent=2, sort_keys=True) + "\n"
+    _atomic_write_text(_remote_provider_profile_path(), raw, 0o600)
+    return {
+        "available": True,
+        "profileSha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "savedAt": profile["savedAt"],
+    }
+
+
+def _read_remote_provider_profile(resume: object) -> dict:
+    if not isinstance(resume, dict) or resume.get("available") is not True:
+        raise RuntimeError(
+            "remote-provider has no saved route; run remote-provider configure"
+        )
+    expected_digest = _remote_provider_safe_text(
+        resume.get("profileSha256"), max_length=64,
+    )
+    if not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
+        raise RuntimeError("remote-provider saved route fingerprint is invalid")
+    path = _remote_provider_profile_path()
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("remote-provider saved route is missing") from exc
+    except OSError as exc:
+        raise RuntimeError(f"remote-provider saved route is unreadable: {exc}") from exc
+    if (
+        stat_mod.S_ISLNK(metadata.st_mode)
+        or not stat_mod.S_ISREG(metadata.st_mode)
+        or metadata.st_size > 256 * 1024
+        or (os.name != "nt" and stat_mod.S_IMODE(metadata.st_mode) != 0o600)
+    ):
+        raise RuntimeError("remote-provider saved route custody is unsafe")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"remote-provider saved route is unreadable: {exc}") from exc
+    if not secrets.compare_digest(
+        hashlib.sha256(raw.encode("utf-8")).hexdigest(), expected_digest,
+    ):
+        raise RuntimeError("remote-provider saved route fingerprint does not match")
+    try:
+        profile = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError("remote-provider saved route is not valid JSON") from exc
+    if (
+        not isinstance(profile, dict)
+        or profile.get("schema") != _REMOTE_PROVIDER_PROFILE_SCHEMA
+        or not isinstance(profile.get("route"), dict)
+    ):
+        raise RuntimeError("remote-provider saved route contract is invalid")
+    profile_route = profile["route"]
+    synthetic_route = {
+        "enabled": True,
+        **profile_route,
+    }
+    _remote_provider_profile_route(synthetic_route)
+    return _remote_provider_plan_from_profile_route(profile_route)
+
+
+def _read_remote_provider_secret_value(ref: str) -> str:
+    path = _remote_provider_secret_path(ref)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("remote-provider secret custody is incomplete") from exc
+    except OSError as exc:
+        raise RuntimeError(f"remote-provider secret is unreadable: {exc}") from exc
+    if (
+        stat_mod.S_ISLNK(metadata.st_mode)
+        or not stat_mod.S_ISREG(metadata.st_mode)
+        or metadata.st_size < 1
+        or metadata.st_size > 1024 * 1024
+        or (os.name != "nt" and stat_mod.S_IMODE(metadata.st_mode) & 0o027)
+    ):
+        raise RuntimeError("remote-provider secret custody is unsafe")
+    try:
+        value = path.read_text(encoding="utf-8").rstrip("\r\n")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"remote-provider secret is unreadable: {exc}") from exc
+    if not value:
+        raise RuntimeError("remote-provider secret custody is incomplete")
+    return value
+
+
+def _probe_saved_remote_provider_route(plan: dict) -> dict:
+    if _probe_remote_provider_direct is None or _remote_provider_public_probe_receipt is None:
+        raise RuntimeError("Remote provider probe helper is unavailable")
+    route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
+    result = _probe_remote_provider_direct(
+        route,
+        provider_secret=_read_remote_provider_secret_value("REMOTE_LLM_API_KEY"),
+    )
+    return _remote_provider_public_probe_receipt(result, verified_at=_iso_now())
 
 
 def _record_remote_provider_egress_probe(payload: dict) -> dict:
@@ -3322,10 +3489,12 @@ def _write_remote_provider_route_state(
     plan: dict,
     *,
     probe_receipt: dict | None = None,
+    resume: dict | None = None,
 ) -> None:
     state = _remote_provider_route_state_from_plan(
         plan,
         probe_receipt=probe_receipt,
+        resume=resume,
     )
     _atomic_write_text(
         _remote_provider_route_state_path(),
@@ -3466,6 +3635,8 @@ def _remote_provider_mutation_paths(action: str) -> list[Path]:
         _remote_provider_route_state_path(),
         _remote_provider_activation_public_path(),
     ]
+    if action in {"configure", "disable", "remove"}:
+        paths.append(_remote_provider_profile_path())
     if action == "remove":
         paths.extend(
             _remote_provider_secret_path(ref)
@@ -3485,15 +3656,50 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     result = json.loads(json.dumps(plan))
     result["applied"] = False
     result["staged"] = False
-    result["mutated"] = action in {"configure", "disable", "remove"}
+    result["mutated"] = action in {"configure", "enable", "disable", "remove"}
     result["rollback"] = {"attempted": False, "ok": None}
     probe_receipt = None
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
+    saved_state = None
+    resume = None
+    if action in {"enable", "disable"}:
+        try:
+            saved_state = _read_remote_provider_route_state_document()
+        except RuntimeError:
+            if action == "enable":
+                raise
+    if action == "enable":
+        if saved_state.get("enabled") is True:
+            if isinstance(saved_state.get("resume"), dict):
+                resume = saved_state["resume"]
+            profile_route = _remote_provider_profile_route(saved_state)
+            plan = _remote_provider_plan_from_profile_route(profile_route)
+            route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
+            route_status = saved_state.get("status")
+            runtime = _remote_provider_runtime_contract(route)
+            active_runtime = _active_remote_provider_pixel_runtime()
+            if (
+                isinstance(route_status, dict)
+                and route_status.get("proven") is True
+                and active_runtime == runtime
+            ):
+                result["applied"] = True
+                result["unchanged"] = True
+                result["mutated"] = False
+                return result
+        else:
+            resume = saved_state.get("resume")
+            plan = _read_remote_provider_profile(resume)
+            route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     ssh_configure = action == "configure" and route.get("transport") == "ssh"
+    ssh_enable = action == "enable" and route.get("transport") == "ssh"
     if action in {"configure", "test"} and not ssh_configure:
         probe_receipt = _remote_provider_probe_lifecycle_test(payload, plan)
         result["probe"] = probe_receipt
-    if ssh_configure:
+    if action == "enable" and not ssh_enable:
+        probe_receipt = _probe_saved_remote_provider_route(plan)
+        result["probe"] = probe_receipt
+    if ssh_configure or ssh_enable:
         result["proof"] = {
             "required": True,
             "status": "pending",
@@ -3503,7 +3709,7 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
     if action == "test":
         return result
 
-    if action not in {"configure", "disable", "remove"}:
+    if action not in {"configure", "enable", "disable", "remove"}:
         raise _RemoteProviderApplyError(
             f"Unsupported remote-provider lifecycle action: {action}",
             result["rollback"],
@@ -3514,6 +3720,7 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
         mutation_paths = [
             _remote_provider_route_state_path(),
             _remote_provider_activation_public_path(),
+            _remote_provider_profile_path(),
         ]
         mutation_paths.extend(_remote_provider_secret_path(ref) for ref in secret_values)
         mutation_paths = list(dict.fromkeys(mutation_paths))
@@ -3533,6 +3740,8 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
             for ref, secret in secret_values.items():
                 _write_remote_provider_secret(ref, secret)
                 mutation_started = True
+            _write_remote_provider_profile(route)
+            mutation_started = True
             _write_remote_provider_route_state(plan, probe_receipt=probe_receipt)
             mutation_started = True
             if ssh_configure:
@@ -3540,8 +3749,52 @@ def _apply_remote_provider_lifecycle_operation(payload: dict, plan: dict) -> dic
             else:
                 result["activation"] = _activate_remote_provider_route(route)
                 result["applied"] = True
+        elif action == "enable":
+            _write_remote_provider_route_state(
+                plan,
+                probe_receipt=probe_receipt,
+                resume=resume,
+            )
+            mutation_started = True
+            if ssh_enable:
+                result["staged"] = True
+            else:
+                result["activation"] = _activate_remote_provider_route(route)
+                result["applied"] = True
         elif action == "disable":
-            _write_remote_provider_route_state(plan)
+            if isinstance(saved_state, dict) and saved_state.get("enabled") is True:
+                try:
+                    resume = _write_remote_provider_profile(saved_state)
+                    mutation_started = True
+                except RuntimeError as exc:
+                    # Disabling is the fail-safe escape hatch. A malformed or
+                    # partially written route must not prevent restoration of
+                    # the local model path merely because it cannot be saved
+                    # for later reactivation.
+                    logger.warning(
+                        "Remote-provider route could not be preserved while disabling: %s",
+                        exc,
+                    )
+                    prior_resume = saved_state.get("resume")
+                    if isinstance(prior_resume, dict):
+                        try:
+                            _read_remote_provider_profile(prior_resume)
+                            resume = prior_resume
+                        except RuntimeError:
+                            resume = None
+            elif isinstance(saved_state, dict) and isinstance(saved_state.get("resume"), dict):
+                try:
+                    _read_remote_provider_profile(saved_state["resume"])
+                    resume = saved_state["resume"]
+                except RuntimeError as exc:
+                    # A stale pointer can result from an interrupted configure
+                    # between the private-profile and public-state commits.
+                    # Pause safely and require configure once to rebuild it.
+                    logger.warning(
+                        "Remote-provider saved route could not be retained while disabling: %s",
+                        exc,
+                    )
+            _write_remote_provider_route_state(plan, resume=resume)
             mutation_started = True
             result["activation"] = _deactivate_remote_provider_route()
             result["applied"] = True

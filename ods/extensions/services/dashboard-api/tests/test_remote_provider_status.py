@@ -217,7 +217,42 @@ def test_remote_provider_status_missing_state_is_disabled(
     assert body["routeState"]["provider"] is None
     assert body["availableActions"]["configure"] is True
     assert body["availableActions"]["test"] is False
+    assert body["availableActions"]["enable"] is False
     assert body["sshSupervisor"]["status"] == "disabled"
+
+
+def test_disabled_route_exposes_only_saved_profile_availability(monkeypatch, tmp_path):
+    from routers import remote_provider_status as rps
+
+    state_path = tmp_path / "routing-state.json"
+    state_path.write_text(
+        json.dumps({
+            "schema": "ods.remote-routing-state.v1",
+            "enabled": False,
+            "mode": "cloud",
+            "provider": None,
+            "ssh": None,
+            "peer": None,
+            "resume": {
+                "available": True,
+                "profileSha256": "a" * 64,
+                "savedAt": "2026-08-31T19:00:00+00:00",
+                "baseUrl": "https://must-not-leak.example.test/v1",
+            },
+            "status": {"proven": False, "reason": "disabled"},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rps, "_state_path", lambda: state_path)
+
+    state = rps._read_route_state()
+
+    assert state["valid"] is True
+    assert state["enabled"] is False
+    assert state["resumeAvailable"] is True
+    assert state["provider"] is None
+    assert "resume" not in state
+    assert "must-not-leak" not in json.dumps(state)
 
 
 def test_remote_provider_status_sanitizes_egress_secret_health(
@@ -1456,3 +1491,131 @@ def test_remote_provider_apply_preserves_host_agent_validation_errors(
 
     assert resp.status_code == 500
     assert resp.json()["detail"] == "Remote provider apply failed: disk full"
+
+
+def test_remote_provider_enable_completes_staged_ssh_proof(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    calls = []
+
+    async def fake_request(method, path, *, payload, timeout):
+        calls.append((method, path, payload, timeout))
+        return {
+            "schema": "ods.remote-provider-lifecycle-operation.v1",
+            "action": "enable",
+            "ok": True,
+            "applied": False,
+            "staged": True,
+            "mutated": True,
+            "rollback": {"attempted": False, "ok": None},
+        }
+
+    async def fake_probe():
+        return {
+            "ok": True,
+            "probe": {"ok": True, "httpStatus": 200},
+            "routeProof": {
+                "recorded": True,
+                "activation": {"active": True, "proven": True},
+            },
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+    monkeypatch.setattr(rps, "remote_provider_probe", fake_probe)
+
+    resp = test_client.post(
+        "/api/remote-provider/enable",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["action"] == "enable"
+    assert body["applied"] is True
+    assert body["staged"] is False
+    assert body["routeProof"]["recorded"] is True
+    assert calls == [(
+        "POST",
+        "/v1/remote-provider/apply",
+        {"action": "enable"},
+        rps.LIFECYCLE_APPLY_TIMEOUT_SECONDS,
+    )]
+
+
+def test_remote_provider_enable_repauses_after_ssh_probe_failure(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    actions = []
+
+    async def fake_request(_method, _path, *, payload, timeout):
+        assert timeout == rps.LIFECYCLE_APPLY_TIMEOUT_SECONDS
+        actions.append(payload["action"])
+        if payload["action"] == "enable":
+            return {
+                "action": "enable",
+                "applied": False,
+                "staged": True,
+                "mutated": True,
+            }
+        return {"action": "disable", "applied": True, "mutated": True}
+
+    async def failing_probe():
+        raise rps.HTTPException(status_code=503, detail={"type": "ssh_tunnel_not_ready"})
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+    monkeypatch.setattr(rps, "remote_provider_probe", failing_probe)
+
+    resp = test_client.post(
+        "/api/remote-provider/enable",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    assert resp.status_code == 503
+    assert body["detail"]["error"] == "remote_provider_enable_failed"
+    assert body["detail"]["rollback"] == {"attempted": True, "ok": True}
+    assert actions == ["enable", "disable"]
+
+
+def test_remote_provider_enable_reports_unexpected_rollback_failure(
+    test_client,
+    monkeypatch,
+):
+    from routers import remote_provider_status as rps
+
+    actions = []
+
+    async def fake_request(_method, _path, *, payload, timeout):
+        assert timeout == rps.LIFECYCLE_APPLY_TIMEOUT_SECONDS
+        actions.append(payload["action"])
+        if payload["action"] == "enable":
+            return {
+                "action": "enable",
+                "applied": False,
+                "staged": True,
+                "mutated": True,
+            }
+        raise RuntimeError("simulated rollback transport failure")
+
+    async def failing_probe():
+        raise rps.HTTPException(status_code=503, detail={"type": "ssh_tunnel_not_ready"})
+
+    monkeypatch.setattr(rps, "async_request_agent_json", fake_request)
+    monkeypatch.setattr(rps, "remote_provider_probe", failing_probe)
+
+    resp = test_client.post(
+        "/api/remote-provider/enable",
+        headers=test_client.auth_headers,
+    )
+
+    body = resp.json()
+    assert resp.status_code == 503
+    assert body["detail"]["error"] == "remote_provider_enable_failed"
+    assert body["detail"]["rollback"] == {"attempted": True, "ok": False}
+    assert actions == ["enable", "disable"]

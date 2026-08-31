@@ -675,6 +675,11 @@ def test_lifecycle_test_disable_and_remove_write_intent() -> None:
     assert_true(disabled["writes"]["routingState"] is True, "disable must write routing state")
     assert_true(disabled["writes"]["removesSecrets"] is False, "disable must preserve secrets")
 
+    enabled = plan_lifecycle_operation({"action": "enable"})
+    assert_true(enabled["route"]["enabled"] is False, "enable planning must not expose saved route metadata")
+    assert_true(enabled["writes"]["routingState"] is True, "enable must declare a route-state write")
+    assert_true(enabled["writes"]["removesSecrets"] is False, "enable must reuse secret custody")
+
     removed = plan_lifecycle_operation({"action": "remove"})
     assert_true(removed["route"]["enabled"] is False, "remove must produce a disabled public route")
     assert_true(removed["writes"]["routingState"] is False, "remove should delete, not rewrite, route state")

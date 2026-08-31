@@ -1,7 +1,7 @@
 """Typed remote-provider lifecycle operation planning.
 
 This module is intentionally side-effect free.  It gives the host-agent and
-Dashboard/API one shared contract for configure/test/disable/remove before
+Dashboard/API one shared contract for configure/test/enable/disable/remove before
 later slices add file mutation and live probes.
 """
 
@@ -20,17 +20,19 @@ from .policy import (
 
 
 LIFECYCLE_OPERATION_SCHEMA = "ods.remote-provider-lifecycle-operation.v1"
-LIFECYCLE_ACTIONS = frozenset({"configure", "test", "disable", "remove"})
+LIFECYCLE_ACTIONS = frozenset({"configure", "test", "enable", "disable", "remove"})
 
 _ACTION_PHASE = {
     "configure": "stage",
     "test": "validate",
+    "enable": "stage",
     "disable": "commit",
     "remove": "commit",
 }
 _ACTION_DETAIL = {
     "configure": "remote provider route staged",
     "test": "remote provider route validated",
+    "enable": "saved remote provider route requested for reactivation",
     "disable": "remote provider route disabled",
     "remove": "remote provider route removed",
 }
@@ -219,7 +221,7 @@ def _secret_refs_for_action(
 
 def _write_plan(action: str, secret_refs: Mapping[str, str]) -> dict[str, bool]:
     return {
-        "routingState": action in {"configure", "disable"},
+        "routingState": action in {"configure", "enable", "disable"},
         "providerSecret": action == "configure" and "apiKey" in secret_refs,
         "peerToken": action == "configure" and "peerToken" in secret_refs,
         "sshIdentity": action == "configure" and "sshPrivateKey" in secret_refs,

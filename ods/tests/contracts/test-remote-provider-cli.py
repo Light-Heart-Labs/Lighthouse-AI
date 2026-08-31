@@ -30,7 +30,7 @@ def main() -> int:
         "ods-cli must implement remote-provider lifecycle command",
     )
     require(
-        r"remote-provider \[status\|plan\|configure\|test\|disable\|remove\|peer-models\]",
+        r"remote-provider \[status\|plan\|configure\|test\|enable\|disable\|remove\|peer-models\]",
         text,
         "remote-provider command must be visible in top-level help",
     )
@@ -103,7 +103,7 @@ def main() -> int:
     require(
         r"remote-provider \$action does not accept provider or secret options",
         text,
-        "disable/remove must reject irrelevant provider or secret options",
+        "enable/disable/remove must reject irrelevant provider or secret options",
     )
     if "--api-key VALUE" in text or "--api-key <" in text:
         fail("remote-provider help must not advertise raw --api-key values")
@@ -169,7 +169,7 @@ def main() -> int:
     if remote_provider_function is None:
         fail("remote-provider function could not be parsed")
     body = remote_provider_function.group("body")
-    for subcommand in ("status", "plan", "configure", "test", "disable", "remove"):
+    for subcommand in ("status", "plan", "configure", "test", "enable", "disable", "remove"):
         if subcommand not in body:
             fail(f"remote-provider CLI missing subcommand: {subcommand}")
     if "peer-models|peer-model)" not in body:
@@ -225,6 +225,11 @@ def main() -> int:
         r"_remote_provider_request POST /api/remote-provider/apply \"\$response_file\" \"\$payload_file\" 1860",
         text,
         "remote-provider apply must outlast the Dashboard lifecycle deadline",
+    )
+    require(
+        r"_remote_provider_request POST /api/remote-provider/enable \"\$response_file\" \"\" 1860",
+        text,
+        "remote-provider enable must use the re-prove and rollback API",
     )
     require(
         r"Route proof: ",

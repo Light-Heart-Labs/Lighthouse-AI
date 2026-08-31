@@ -174,9 +174,25 @@ The operation is transactional. ODS retains the exact prior mode, LiteLLM
 config, and Pixel model contract in a private recovery record. A failed render,
 container health check, completion, or Pixel restart restores that state.
 **Disable** and **Remove** likewise restore and prove the pre-provider route
-before reporting success. Provider credentials remain in the host-owned egress
-secret store and never enter generated LiteLLM YAML, Pixel state, Dashboard
-responses, or browser logs.
+before reporting success. Disable is a reversible pause: ODS retains the
+non-secret route metadata in an owner-only, fingerprint-bound profile and keeps
+the existing secret custody, so `ods remote-provider enable` can freshly prove
+and reactivate either a direct or SSH route without asking for the endpoint,
+model, key, or SSH inputs again. A transition from paused or degraded state
+never trusts the prior probe receipt; an exact healthy already-active route is
+an idempotent no-op. An SSH proof failure automatically pauses the staged route
+again. Remove is the intentional clean slate and deletes the saved profile as
+well as the stored secrets. A legacy disabled route that predates saved profiles
+remains disabled and requires `ods remote-provider configure` once. Provider
+credentials remain in the host-owned egress secret store and never enter
+generated LiteLLM YAML, Pixel state, Dashboard responses, or browser logs.
+
+```bash
+ods remote-provider disable       # restore local ODS/Pixel and retain the route
+ods remote-provider status        # shows only whether a saved route is available
+ods remote-provider enable        # fresh proof, then transactional reactivation
+ods remote-provider remove        # delete route profile and secret custody
+```
 
 ### Multi-GPU assignment replanning
 

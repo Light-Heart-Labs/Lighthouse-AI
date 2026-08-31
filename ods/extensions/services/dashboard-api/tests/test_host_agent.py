@@ -2745,8 +2745,11 @@ class TestRemoteProviderLifecycle:
         secret_path = root / "secrets" / "provider-api-key"
         secret_path.parent.mkdir(parents=True)
         secret_path.write_text("old-provider-token\n", encoding="utf-8")
+        active_plan = _mod._plan_remote_provider_lifecycle_operation(
+            self._configure_payload()
+        )
         (root / "routing-state.json").write_text(
-            json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
+            json.dumps(_mod._remote_provider_route_state_from_plan(active_plan)),
             encoding="utf-8",
         )
         handler = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
@@ -2757,7 +2760,274 @@ class TestRemoteProviderLifecycle:
         assert handler.response_code == 200
         assert state["enabled"] is False
         assert state["provider"] is None
+        assert state["resume"]["available"] is True
+        assert len(state["resume"]["profileSha256"]) == 64
+        profile = root / "provider-profile.json"
+        assert profile.exists()
+        if os.name != "nt":
+            assert stat.S_IMODE(profile.stat().st_mode) == 0o600
         assert secret_path.read_text(encoding="utf-8") == "old-provider-token\n"
+
+    def test_apply_enable_reproves_saved_direct_route_without_new_secrets(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        probes = self._patch_successful_probe(monkeypatch)
+        activations = []
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: activations.append(route) or {
+                "active": True,
+                "proven": True,
+                "model": route["provider"]["model"],
+            },
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": True, "proven": True},
+        )
+
+        configure = _FakeHandler(
+            json.dumps(self._configure_payload()).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(configure)
+        disable = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable)
+        enable = _FakeHandler(json.dumps({"action": "enable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(enable)
+
+        root = tmp_path / "remote-provider"
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        body = enable.parse_response()
+        assert configure.response_code == 200
+        assert disable.response_code == 200
+        assert enable.response_code == 200
+        assert body["action"] == "enable"
+        assert body["applied"] is True
+        assert body["staged"] is False
+        assert body["probe"]["ok"] is True
+        assert state["enabled"] is True
+        assert state["provider"]["model"] == "qwen/remote:latest"
+        assert state["status"]["proven"] is True
+        assert state["resume"]["available"] is True
+        assert len(probes) == 2
+        assert probes[-1][1] == "unit-test-provider-token"
+        assert len(activations) == 2
+
+    def test_apply_enable_stages_saved_ssh_route_for_fresh_egress_proof(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": True, "proven": True},
+        )
+        configure = _FakeHandler(
+            json.dumps(self._ssh_configure_payload()).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(configure)
+        disable = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable)
+        enable = _FakeHandler(json.dumps({"action": "enable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(enable)
+
+        body = enable.parse_response()
+        state = json.loads(
+            (tmp_path / "remote-provider" / "routing-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert configure.response_code == 200
+        assert disable.response_code == 200
+        assert enable.response_code == 200
+        assert body["action"] == "enable"
+        assert body["applied"] is False
+        assert body["staged"] is True
+        assert body["proof"]["reason"] == "pending-ssh-tunnel-proof"
+        assert state["enabled"] is True
+        assert state["provider"]["transport"] == "ssh"
+        assert state["status"]["proven"] is False
+        assert state["resume"]["available"] is True
+
+    def test_apply_enable_rejects_tampered_saved_profile_and_stays_disabled(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        self._patch_successful_probe(monkeypatch)
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {"active": True, "proven": True},
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": True, "proven": True},
+        )
+        configure = _FakeHandler(
+            json.dumps(self._configure_payload()).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(configure)
+        disable = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable)
+        profile = tmp_path / "remote-provider" / "provider-profile.json"
+        profile.write_text(profile.read_text(encoding="utf-8") + " ", encoding="utf-8")
+        enable = _FakeHandler(json.dumps({"action": "enable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(enable)
+
+        state = json.loads(
+            (tmp_path / "remote-provider" / "routing-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert enable.response_code == 500
+        assert "fingerprint does not match" in enable.parse_response()["error"]
+        assert state["enabled"] is False
+
+    def test_apply_disable_drops_stale_resume_instead_of_blocking_local_fallback(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        self._patch_successful_probe(monkeypatch)
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {"active": True, "proven": True},
+        )
+        deactivations = []
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: deactivations.append(True) or {
+                "active": False,
+                "restored": True,
+                "proven": True,
+            },
+        )
+        configure = _FakeHandler(
+            json.dumps(self._configure_payload()).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(configure)
+        disable_once = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable_once)
+        root = tmp_path / "remote-provider"
+        profile = root / "provider-profile.json"
+        profile.write_text(profile.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+        disable_again = _FakeHandler(
+            json.dumps({"action": "disable"}).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(disable_again)
+
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert configure.response_code == 200
+        assert disable_once.response_code == 200
+        assert disable_again.response_code == 200
+        assert state["enabled"] is False
+        assert "resume" not in state
+        assert profile.exists()
+        assert deactivations == [True, True]
+
+    def test_apply_disable_restores_local_when_enabled_route_cannot_be_saved(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        restored = []
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: restored.append(True) or {
+                "active": False,
+                "restored": True,
+                "proven": True,
+            },
+        )
+        root = tmp_path / "remote-provider"
+        root.mkdir(parents=True)
+        (root / "routing-state.json").write_text(
+            json.dumps({
+                "schema": _mod._REMOTE_PROVIDER_ROUTING_STATE_SCHEMA,
+                "enabled": True,
+                "mode": "cloud",
+                "provider": None,
+            }),
+            encoding="utf-8",
+        )
+
+        disable = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable)
+
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert disable.response_code == 200
+        assert state["enabled"] is False
+        assert "resume" not in state
+        assert restored == [True]
+
+    def test_apply_disable_retains_prior_resume_when_profile_rewrite_fails(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        self._patch_successful_probe(monkeypatch)
+        monkeypatch.setattr(
+            _mod,
+            "_activate_remote_provider_route",
+            lambda route: {"active": True, "proven": True},
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_deactivate_remote_provider_route",
+            lambda: {"active": False, "restored": True, "proven": True},
+        )
+        configure = _FakeHandler(
+            json.dumps(self._configure_payload()).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(configure)
+        disable_once = _FakeHandler(json.dumps({"action": "disable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(disable_once)
+        root = tmp_path / "remote-provider"
+        paused_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        original_resume = paused_state["resume"]
+        enable = _FakeHandler(json.dumps({"action": "enable"}).encode("utf-8"))
+        _mod.AgentHandler._handle_remote_provider_apply(enable)
+        enabled_state = json.loads(
+            (root / "routing-state.json").read_text(encoding="utf-8")
+        )
+        assert enabled_state["resume"] == original_resume
+
+        monkeypatch.setattr(
+            _mod,
+            "_write_remote_provider_profile",
+            lambda _route: (_ for _ in ()).throw(RuntimeError("simulated write failure")),
+        )
+        disable_again = _FakeHandler(
+            json.dumps({"action": "disable"}).encode("utf-8")
+        )
+        _mod.AgentHandler._handle_remote_provider_apply(disable_again)
+
+        state = json.loads((root / "routing-state.json").read_text(encoding="utf-8"))
+        assert configure.response_code == 200
+        assert disable_once.response_code == 200
+        assert enable.response_code == 200
+        assert disable_again.response_code == 200
+        assert state["enabled"] is False
+        assert state["resume"] == original_resume
 
     def test_apply_remove_deletes_route_state_and_secrets(
         self,
@@ -2777,6 +3047,7 @@ class TestRemoteProviderLifecycle:
             json.dumps({"schema": "ods.remote-routing-state.v1", "enabled": True}),
             encoding="utf-8",
         )
+        (root / "provider-profile.json").write_text("saved-profile\n", encoding="utf-8")
         for filename in ("provider-api-key", "peer-token", "ssh-identity", "known_hosts"):
             (secret_dir / filename).write_text(f"{filename}\n", encoding="utf-8")
         handler = _FakeHandler(json.dumps({"action": "remove"}).encode("utf-8"))
@@ -2785,6 +3056,7 @@ class TestRemoteProviderLifecycle:
 
         assert handler.response_code == 200
         assert not (root / "routing-state.json").exists()
+        assert not (root / "provider-profile.json").exists()
         assert not (secret_dir / "provider-api-key").exists()
         assert not (secret_dir / "peer-token").exists()
         assert not (secret_dir / "ssh-identity").exists()

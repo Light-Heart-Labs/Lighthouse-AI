@@ -262,6 +262,7 @@ def _state_response(
     peer: Mapping[str, Any] | None = None,
     projection: Mapping[str, Any] | None = None,
     status: Mapping[str, Any] | None = None,
+    resume_available: bool = False,
 ) -> dict[str, Any]:
     return {
         "exists": exists,
@@ -272,6 +273,7 @@ def _state_response(
         "peer": _safe_peer_metadata(peer) if enabled else None,
         "projection": _safe_string_map(projection, _SAFE_PROJECTION_KEYS),
         "status": _safe_route_status(status),
+        "resumeAvailable": bool(resume_available),
         "errors": errors or [],
     }
 
@@ -302,6 +304,14 @@ def _read_route_state() -> dict[str, Any]:
             enabled=True,
             errors=["enabled route is missing provider metadata"],
         )
+    resume = doc.get("resume")
+    resume_available = bool(
+        not enabled
+        and isinstance(resume, Mapping)
+        and resume.get("available") is True
+        and isinstance(resume.get("profileSha256"), str)
+        and re.fullmatch(r"[a-f0-9]{64}", resume["profileSha256"])
+    )
     return _state_response(
         exists=True,
         valid=True,
@@ -311,6 +321,7 @@ def _read_route_state() -> dict[str, Any]:
         peer=doc.get("peer"),
         projection=doc.get("projection"),
         status=doc.get("status"),
+        resume_available=resume_available,
     )
 
 
@@ -1064,6 +1075,9 @@ async def remote_provider_status() -> dict[str, Any]:
         "availableActions": {
             "configure": True,
             "test": bool(route_state.get("enabled")),
+            "enable": bool(route_state.get("resumeAvailable")) or (
+                bool(route_state.get("enabled")) and overall != "ready"
+            ),
             "disable": bool(route_state.get("enabled")),
             "remove": bool(route_state.get("exists")),
         },
@@ -1155,6 +1169,64 @@ async def remote_provider_probe() -> dict[str, Any]:
     result = await _post_egress_probe()
     result["routeProof"] = await _record_egress_probe_proof(result)
     return result
+
+
+@router.post("/api/remote-provider/enable", dependencies=[Depends(verify_api_key)])
+async def remote_provider_enable() -> dict[str, Any]:
+    """Re-prove and activate a saved route, rolling back to local on failure."""
+    staged = await remote_provider_apply({"action": "enable"})
+    if staged.get("staged") is not True:
+        return staged
+    try:
+        proof = await remote_provider_probe()
+        route_proof = proof.get("routeProof")
+        if not isinstance(route_proof, Mapping) or route_proof.get("recorded") is not True:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "remote_provider_activation_not_recorded",
+                    "message": "Remote provider proof did not activate every consumer.",
+                },
+            )
+    except Exception as exc:
+        status_code = exc.status_code if isinstance(exc, HTTPException) else 500
+        probe_detail = (
+            exc.detail
+            if isinstance(exc, HTTPException)
+            else {"error": "remote_provider_enable_internal_failure"}
+        )
+        rollback: dict[str, Any]
+        try:
+            rollback_result = await remote_provider_apply({"action": "disable"})
+            rollback = {
+                "attempted": True,
+                "ok": rollback_result.get("applied") is True,
+            }
+        except Exception as rollback_exc:
+            rollback = {
+                "attempted": True,
+                "ok": False,
+            }
+            if isinstance(rollback_exc, HTTPException):
+                rollback["statusCode"] = rollback_exc.status_code
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error": "remote_provider_enable_failed",
+                "message": (
+                    "Remote provider reactivation failed; the saved route was paused again."
+                    if rollback.get("ok") is True
+                    else "Remote provider reactivation failed and automatic pause could not be proved."
+                ),
+                "probe": probe_detail,
+                "rollback": rollback,
+            },
+        ) from exc
+    staged["staged"] = False
+    staged["applied"] = True
+    staged["probe"] = proof.get("probe")
+    staged["routeProof"] = proof.get("routeProof")
+    return staged
 
 
 @router.post("/api/remote-provider/apply", dependencies=[Depends(verify_api_key)])

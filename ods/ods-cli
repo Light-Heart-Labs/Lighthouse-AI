@@ -3797,7 +3797,7 @@ Usage: ods remote-provider <command> [options]
 Commands:
   status [--json]
       Show sanitized remote-provider route, egress, and action status.
-  plan <configure|test|disable|remove> [options]
+  plan <configure|test|enable|disable|remove> [options]
       Print the redacted lifecycle plan without mutating state.
   configure --base-url URL --model MODEL [secret options]
       Persist an OpenAI-compatible provider route and provider API key.
@@ -3805,8 +3805,10 @@ Commands:
       Probe the configured provider route through the internal egress service.
   test --base-url URL --model MODEL [secret options]
       Probe a provider without writing route state or secrets.
+  enable [--json]
+      Re-prove and reactivate the saved route without re-entering secrets.
   disable
-      Disable the remote-provider route while keeping stored secrets.
+      Pause the remote-provider route while keeping its profile and secrets.
   remove
       Delete remote-provider route state and stored secrets.
   peer-models list [--json]
@@ -4062,7 +4064,7 @@ _remote_provider_write_payload() {
     done
 
     REMOTE_PROVIDER_JSON_MODE="$json_mode"
-    if [[ "$action" == "disable" || "$action" == "remove" ]]; then
+    if [[ "$action" == "enable" || "$action" == "disable" || "$action" == "remove" ]]; then
         [[ "$provider_option_seen" == "false" && "$secret_option_seen" == "false" ]] || \
             error "remote-provider $action does not accept provider or secret options"
         jq -nc --arg action "$action" '{action: $action}' > "$payload_file" || \
@@ -4198,6 +4200,7 @@ _remote_provider_print_status() {
     jq -r '
         "Remote provider: \(.status // "unknown")",
         "Route: " + (if .routeState.enabled == true then "enabled" else "disabled" end),
+        "Saved route: " + (if .routeState.resumeAvailable == true then "available" else "none" end),
         (if .routeState.enabled == true and .routeState.provider then
             "Provider: \(.routeState.provider.model // "unknown") via \(.routeState.provider.transport // "unknown") at \(.routeState.provider.baseUrl // "unknown")"
          else empty end),
@@ -4575,11 +4578,11 @@ cmd_remote_provider() {
             ;;
         plan)
             local action="${1:-}"
-            [[ -n "$action" ]] || error "Usage: ods remote-provider plan <configure|test|disable|remove> [options]"
+            [[ -n "$action" ]] || error "Usage: ods remote-provider plan <configure|test|enable|disable|remove> [options]"
             shift || true
             case "$action" in
-                configure|test|disable|remove) ;;
-                *) error "Usage: ods remote-provider plan <configure|test|disable|remove> [options]" ;;
+                configure|test|enable|disable|remove) ;;
+                *) error "Usage: ods remote-provider plan <configure|test|enable|disable|remove> [options]" ;;
             esac
             local payload_file response_file http_code curl_status
             payload_file=$(mktemp "${TMPDIR:-/tmp}/ods-remote-provider-payload.XXXXXX") || \
@@ -4606,6 +4609,41 @@ cmd_remote_provider() {
                 error "Remote-provider plan failed (HTTP $http_code): $detail"
             fi
             jq . "$response_file"
+            rm -f "$response_file"; trap - INT TERM HUP
+            ;;
+        enable)
+            local json_mode="false" response_file http_code curl_status
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --json) json_mode="true"; shift ;;
+                    --help|-h) _remote_provider_usage; return 0 ;;
+                    *) error "Unknown remote-provider enable option: $1" ;;
+                esac
+            done
+            response_file=$(mktemp "${TMPDIR:-/tmp}/ods-remote-provider-enable.XXXXXX") || \
+                error "Could not create a remote-provider response file"
+            chmod 600 "$response_file"
+            trap 'rm -f "$response_file"' INT TERM HUP
+            if http_code="$(_remote_provider_request POST /api/remote-provider/enable "$response_file" "" 1860)"; then
+                curl_status=0
+            else
+                curl_status=$?
+            fi
+            if [[ $curl_status -ne 0 ]]; then
+                rm -f "$response_file"; trap - INT TERM HUP
+                error "Remote-provider enable request failed before Dashboard API completed"
+            fi
+            if [[ "$http_code" != "200" ]]; then
+                local detail
+                detail="$(_remote_provider_response_error "$response_file")"
+                rm -f "$response_file"; trap - INT TERM HUP
+                error "Remote-provider enable failed (HTTP $http_code): $detail"
+            fi
+            if [[ "$json_mode" == "true" ]]; then
+                jq . "$response_file"
+            else
+                _remote_provider_print_apply_result "$response_file"
+            fi
             rm -f "$response_file"; trap - INT TERM HUP
             ;;
         configure|test|disable|remove)
@@ -4676,7 +4714,7 @@ cmd_remote_provider() {
             _remote_provider_usage
             ;;
         *)
-            error "Usage: ods remote-provider <status|plan|configure|test|disable|remove|peer-models>"
+            error "Usage: ods remote-provider <status|plan|configure|test|enable|disable|remove|peer-models>"
             ;;
     esac
 }
@@ -6500,7 +6538,7 @@ ${CYAN}Commands:${NC}
                       Switch between local/cloud/hybrid modes
   model [current|list|swap]
                       View or change the local LLM model tier
-  remote-provider [status|plan|configure|test|disable|remove|peer-models]
+  remote-provider [status|plan|configure|test|enable|disable|remove|peer-models]
                       Configure, test, disable, or inspect remote GPU provider routing
   stt [current|status|download] [MODEL]
                       View Whisper STT model, check cache, or trigger download

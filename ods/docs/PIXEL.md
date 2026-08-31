@@ -324,8 +324,12 @@ staged until the managed tunnel proof completes. The operator supplies the
 provider's context window, output limit, and reasoning capability so broad
 model swaps update Pixel's runtime policy rather than inheriting stale local
 limits. Repeated route tests verify the live LiteLLM and Pixel consumers; they
-do not trust an old readiness marker. Disabling or removing the provider
-restores the exact pre-provider ODS mode and Pixel contract.
+do not trust an old readiness marker. Disabling the provider restores the exact
+pre-provider ODS mode and Pixel contract while retaining a private, non-secret
+saved route profile and the existing secret custody. `ods remote-provider
+enable` then performs a new direct or SSH proof before Pixel moves back to that
+route; a failed SSH proof automatically pauses it again. Removing the provider
+restores the same local contract but also deletes the saved profile and secrets.
 
 If Pixel reconciliation fails, ODS restores and proves both the previous model
 runtime and Pixel route. The first upgrade from the legacy direct
