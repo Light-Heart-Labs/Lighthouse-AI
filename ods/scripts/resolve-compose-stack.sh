@@ -451,6 +451,44 @@ def _load_compose_mapping(compose_path, label):
     return data
 
 
+_LOCAL_INFERENCE_DEPENDENCIES = {
+    "llama-server",
+    "llama-server-ready",
+    "model-router",
+}
+
+
+def _compose_requires_local_inference(compose_path):
+    """Return true when an overlay explicitly waits on a local model service.
+
+    Backend-named user overlays predate mode-specific overlays. Some of them
+    use ``compose.nvidia.yaml`` or ``compose.cpu.yaml`` only to add a
+    ``depends_on: llama-server`` readiness edge, not to request accelerator
+    access. Retaining that edge in cloud, external-LLM, or external Lemonade
+    mode makes the complete Compose project invalid because managed local
+    inference is profiled out.
+    """
+    data = _load_compose_mapping(compose_path, f"Compose file {compose_path}")
+    services = data.get("services", {})
+    if not isinstance(services, dict):
+        return False
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        depends_on = service.get("depends_on", {})
+        if isinstance(depends_on, dict):
+            dependency_names = depends_on.keys()
+        elif isinstance(depends_on, list):
+            dependency_names = depends_on
+        else:
+            continue
+        if _LOCAL_INFERENCE_DEPENDENCIES.intersection(
+            str(name) for name in dependency_names
+        ):
+            return True
+    return False
+
+
 def _declared_compose_services(files, strict=True):
     declared_services = set()
     for compose_rel in files:
@@ -669,7 +707,24 @@ if user_ext_dir.exists():
                     for w in warnings:
                         print(f"WARNING: {service_dir.name}: {w}", file=sys.stderr)
                     if ok:
-                        resolved.append(str(gpu_overlay.relative_to(script_dir)))
+                        managed_local_inference = (
+                            ods_mode in ("local", "hybrid")
+                            and tier != "CLOUD"
+                            and not lemonade_external
+                            and not external_llm
+                        )
+                        if (
+                            not managed_local_inference
+                            and _compose_requires_local_inference(gpu_overlay)
+                        ):
+                            print(
+                                f"WARNING: {service_dir.name}: skipping "
+                                f"{gpu_overlay.name} because this model mode has "
+                                "no managed local inference service",
+                                file=sys.stderr,
+                            )
+                        else:
+                            resolved.append(str(gpu_overlay.relative_to(script_dir)))
 
                 # Mode-specific overlay — depends_on for local/hybrid mode only.
                 # Skip on Apple Silicon: macOS runs llama-server natively on the host
