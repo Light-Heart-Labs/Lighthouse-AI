@@ -894,11 +894,18 @@ def exact_file(path: pathlib.Path, uid: int, gid: int, mode: int, maximum: int) 
         raise SystemExit(f"unsafe Pixel Operations Broker artifact: {path}")
 
 
-def owner_source(path: pathlib.Path, maximum: int, private: bool = False) -> None:
+def owner_source(
+    path: pathlib.Path,
+    maximum: int,
+    private: bool = False,
+    allow_owner_group_write: bool = False,
+) -> None:
     info = path.lstat()
+    write_mask = 0o002 if allow_owner_group_write else 0o022
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_nlink != 1 or info.st_uid != owner_uid
-            or info.st_size > maximum or info.st_mode & 0o022
+            or info.st_size > maximum or info.st_mode & write_mask
+            or (allow_owner_group_write and info.st_gid != os.getgid())
             or (private and info.st_mode & 0o077)):
         raise SystemExit(f"unsafe ODS Pixel Operations source: {path}")
 
@@ -954,7 +961,12 @@ if exists(install_dir):
         raise SystemExit("unsafe Pixel Operations Broker install directory")
     if exists(program):
         exact_file(program, root_uid, root_gid, 0o755, 2 * 1024 * 1024)
-        owner_source(expected_program, 2 * 1024 * 1024)
+        # Early ODS checkouts inherited an owner-private group's cooperative
+        # umask and can therefore carry 0664 here. That does not authorize the
+        # source as a mutable deletion oracle: it must still be a regular,
+        # single-link, owner/primary-group file whose bytes exactly equal the
+        # root-owned 0755 executable below. New checkouts are created at 0644.
+        owner_source(expected_program, 2 * 1024 * 1024, allow_owner_group_write=True)
         if program.read_bytes() != expected_program.read_bytes():
             raise SystemExit("Pixel Operations Broker program drifted from the exact Pixel source")
     if exists(extension_program):

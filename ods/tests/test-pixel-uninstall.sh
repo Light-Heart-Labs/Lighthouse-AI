@@ -576,13 +576,25 @@ else
     fail "verified Operations Broker deployment could not be removed"
 fi
 
-for drift_target in program extension-program extension-catalog extension-manager-client \
+write_ops_fixture
+chmod 0664 "$INSTALL_DIR/data/pixel/source-d2a2b6be552126f294fb30ee5fb46872acf82c89/deploy/ops-broker/broker.py"
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    [[ ! -e "$OPS_INSTALL" && ! -e "$OPS_STATE" \
+        && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" ]] \
+        && pass "legacy owner-primary-group writable Pixel broker source is removed only after exact root-byte verification" \
+        || fail "legacy owner-primary-group writable Pixel broker cleanup was incomplete"
+else
+    fail "legacy owner-primary-group writable Pixel broker source could not be safely removed"
+fi
+
+for drift_target in program broker-source-mode extension-program extension-catalog extension-manager-client \
     extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
     artifact-promoter-program artifact-promoter-unit artifact-promoter-owner-unit \
     unit dropin dropin-source environment policy; do
     write_ops_fixture
     case "$drift_target" in
         program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
+        broker-source-mode) chmod 0666 "$INSTALL_DIR/data/pixel/source-d2a2b6be552126f294fb30ee5fb46872acf82c89/deploy/ops-broker/broker.py" ;;
         extension-program) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-search.py" ;;
         extension-catalog) printf '%s\n' ' ' >>"$OPS_INSTALL/ods-extension-catalog.json" ;;
         extension-manager-client) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-manager.py" ;;

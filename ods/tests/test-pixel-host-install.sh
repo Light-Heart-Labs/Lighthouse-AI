@@ -481,9 +481,13 @@ git -C "$source_fixture" -c user.name=test -c user.email=test@example.invalid co
 PIXEL_SOURCE_URL="$source_fixture"
 PIXEL_SOURCE_REF="$(git -C "$source_fixture" rev-parse HEAD)"
 source_checkout="$TEST_ROOT/pixel-checkouts/source-$PIXEL_SOURCE_REF"
+saved_umask="$(umask)"
+umask 0002
 check test "$(_ods_pixel_source_checkout "$owner" "$home" "$source_checkout")" = "$source_checkout"
+umask "$saved_umask"
 check test "$(git -C "$source_checkout" rev-parse HEAD)" = "$PIXEL_SOURCE_REF"
 check test -z "$(git -C "$source_checkout" status --porcelain)"
+check test "$(stat -c '%a' "$source_checkout/pixel")" = 644
 
 cat > "$mock_bin/git" <<'SH'
 #!/usr/bin/env bash

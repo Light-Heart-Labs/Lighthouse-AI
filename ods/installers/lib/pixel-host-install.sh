@@ -1626,23 +1626,23 @@ _ods_pixel_source_checkout() {
         stage="$(ods_pixel_run_as_owner "$owner" "$home" mktemp -d "$parent/.pixel-source.XXXXXX")" || return 1
         checkout="$stage/checkout"
         if [[ "$source" == https://github.com/Osmantic/Pixel.git ]]; then
-            if ! ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+            if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
                 env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
-                clone --filter=blob:none --no-checkout -- "$source" "$checkout" >/dev/null; then
+                clone --filter=blob:none --no-checkout -- "$source" "$checkout" >/dev/null); then
                 ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
                 printf '%s\n' 'error: Pixel source clone failed or timed out; configure authorized Git access or use the documented local checkout' >&2
                 return 1
             fi
         else
-            if ! ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
+            if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout "${source_timeout}s" \
                 env GIT_TERMINAL_PROMPT=0 git -c credential.interactive=never \
-                clone --no-local --no-checkout -- "$source" "$checkout" >/dev/null; then
+                clone --no-local --no-checkout -- "$source" "$checkout" >/dev/null); then
                 ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
                 return 1
             fi
         fi
-        if ! ods_pixel_run_as_owner "$owner" "$home" timeout 60s \
-            env GIT_TERMINAL_PROMPT=0 git -C "$checkout" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null \
+        if ! (umask 0022; ods_pixel_run_as_owner "$owner" "$home" timeout 60s \
+            env GIT_TERMINAL_PROMPT=0 git -C "$checkout" -c advice.detachedHead=false checkout --detach "$ref" >/dev/null) \
             || ! ods_pixel_run_as_owner "$owner" "$home" mv -T -- "$checkout" "$source_root"; then
             ods_pixel_run_as_owner "$owner" "$home" rm -rf -- "$stage"
             return 1
