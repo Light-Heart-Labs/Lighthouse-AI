@@ -549,6 +549,11 @@ export default function RemoteProvider() {
             <RefreshCw size={16} />
             Refresh
           </button>
+          {enableAvailable && (
+            <ActionButton icon={RefreshCw} onClick={() => applyLifecycle('enable')} disabled={lifecycleBusy} primary>
+              {enableActionLabel}
+            </ActionButton>
+          )}
           <button
             type="button"
             onClick={runProbe}
@@ -819,11 +824,6 @@ export default function RemoteProvider() {
             <ActionButton icon={Save} onClick={() => applyLifecycle('configure')} disabled={!configureReady} primary>
               {applyingAction === 'configure' ? 'Configuring' : 'Configure'}
             </ActionButton>
-            {enableAvailable && (
-              <ActionButton icon={RefreshCw} onClick={() => applyLifecycle('enable')} disabled={lifecycleBusy} primary>
-                {enableActionLabel}
-              </ActionButton>
-            )}
             <ActionButton icon={Power} onClick={() => applyLifecycle('disable')} disabled={!statusData?.availableActions?.disable || lifecycleBusy}>
               {applyingAction === 'disable' ? 'Disabling' : 'Disable'}
             </ActionButton>
