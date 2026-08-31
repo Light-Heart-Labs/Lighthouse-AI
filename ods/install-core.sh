@@ -88,6 +88,7 @@ source "$SCRIPT_DIR/installers/lib/python-runtime.sh"
 source "$SCRIPT_DIR/installers/lib/progress.sh"
 source "$SCRIPT_DIR/installers/lib/model-lifecycle-lock.sh"
 source "$SCRIPT_DIR/installers/lib/cli-link.sh"
+source "$SCRIPT_DIR/installers/lib/install-mode.sh"
 source "$SCRIPT_DIR/installers/lib/external-services.sh"
 source "$SCRIPT_DIR/installers/lib/pixel-integration.sh"
 source "$SCRIPT_DIR/installers/lib/pixel-host-install.sh"
@@ -128,6 +129,8 @@ ENABLE_BRAVE_SEARCH=false
 # the Custom menu, or post-install `ods enable langfuse`.
 ENABLE_LANGFUSE=false
 INTERACTIVE=true
+ODS_MODE_EXPLICIT=false
+[[ -n "${ODS_MODE:-}" ]] && ODS_MODE_EXPLICIT=true
 ODS_MODE="${ODS_MODE:-local}"
 LEMONADE_EXTERNAL="${LEMONADE_EXTERNAL:-false}"
 LEMONADE_BASE_URL="${LEMONADE_BASE_URL:-}"
@@ -231,9 +234,9 @@ while [[ $# -gt 0 ]]; do
         --skip-docker) SKIP_DOCKER=true; shift ;;
         --force) FORCE=true; shift ;;
         --tier) TIER="$2"; shift 2 ;;
-        --cloud) ODS_MODE="cloud"; shift ;;
-        --use-existing-lemonade) LEMONADE_EXTERNAL=true; ODS_MODE="lemonade"; shift ;;
-        --lemonade-url) LEMONADE_EXTERNAL=true; ODS_MODE="lemonade"; LEMONADE_BASE_URL="$2"; shift 2 ;;
+        --cloud) ODS_MODE="cloud"; ODS_MODE_EXPLICIT=true; shift ;;
+        --use-existing-lemonade) LEMONADE_EXTERNAL=true; ODS_MODE="lemonade"; ODS_MODE_EXPLICIT=true; shift ;;
+        --lemonade-url) LEMONADE_EXTERNAL=true; ODS_MODE="lemonade"; ODS_MODE_EXPLICIT=true; LEMONADE_BASE_URL="$2"; shift 2 ;;
         --lemonade-api-key) LEMONADE_API_KEY="$2"; shift 2 ;;
         --external-llm-url) EXTERNAL_LLM_URL="$2"; shift 2 ;;
         --external-llm-provider) EXTERNAL_LLM_PROVIDER="$2"; shift 2 ;;
@@ -282,6 +285,13 @@ while [[ $# -gt 0 ]]; do
         *) error "Unknown option: $1" ;;
     esac
 done
+
+_requested_ods_mode="$ODS_MODE"
+ODS_MODE="$(ods_preserve_existing_install_mode "$ODS_MODE" "$ODS_MODE_EXPLICIT" "$INSTALL_DIR/.env")"
+if [[ "$ODS_MODE_EXPLICIT" != "true" && "$ODS_MODE" != "$_requested_ods_mode" ]]; then
+    log "Existing ODS mode detected; preserving ODS_MODE=$ODS_MODE for this installer rerun"
+fi
+unset _requested_ods_mode
 
 if [[ "${LEMONADE_EXTERNAL,,}" == "true" ]]; then
     ODS_MODE="lemonade"

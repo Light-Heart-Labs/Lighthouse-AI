@@ -160,6 +160,56 @@ def _read_activation() -> dict[str, Any]:
     }
 
 
+def _activation_matches_host_runtime(
+    activation: Mapping[str, Any],
+    host_status: Any,
+) -> bool:
+    if not isinstance(host_status, Mapping) or host_status.get("activeAgentViable") is not True:
+        return False
+    runtime = host_status.get("activeRuntime")
+    if not isinstance(runtime, Mapping) or runtime.get("source") != "remote-provider":
+        return False
+    return all(
+        runtime.get(key) == activation.get(key)
+        for key in ("model", "contextLength", "maxTokens", "reasoning")
+    )
+
+
+async def _reconcile_activation_with_host(
+    activation: dict[str, Any],
+) -> dict[str, Any]:
+    """Reject a stale Pixel reconciliation claim using current host custody."""
+    if (
+        activation.get("valid") is not True
+        or activation.get("proven") is not True
+        or activation.get("pixel") != "reconciled"
+    ):
+        return activation
+    try:
+        host_status = await async_request_agent_json(
+            "GET",
+            "/v1/model/status",
+            timeout=3,
+        )
+    except (AgentHTTPError, AgentUnavailable, AgentProtocolError):
+        return {
+            **activation,
+            "valid": False,
+            "proven": False,
+            "reason": "consumer_status_unavailable",
+            "pixel": "unverified",
+        }
+    if _activation_matches_host_runtime(activation, host_status):
+        return activation
+    return {
+        **activation,
+        "valid": False,
+        "proven": False,
+        "reason": "consumer_drift",
+        "pixel": "drifted",
+    }
+
+
 def _peer_token_path() -> Path:
     return Path(DATA_DIR) / "remote-provider" / "secrets" / "peer-token"
 
@@ -1056,7 +1106,7 @@ def _overall_status(
 async def remote_provider_status() -> dict[str, Any]:
     """Return sanitized remote-provider status without mutating configuration."""
     route_state = _read_route_state()
-    activation = _read_activation()
+    activation = await _reconcile_activation_with_host(_read_activation())
     egress = await _fetch_egress_health()
     ssh_supervisor = await _fetch_ssh_supervisor_status()
     peer = _peer_status(route_state, ssh_supervisor)

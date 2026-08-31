@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 
@@ -53,6 +54,10 @@ def _patch_state_path(monkeypatch, path):
     monkeypatch.setattr(rps, "_state_path", lambda: path)
     activation_path = path.with_name("activation-public.json")
     monkeypatch.setattr(rps, "_activation_path", lambda: activation_path)
+    async def verified_activation(value):
+        return value
+
+    monkeypatch.setattr(rps, "_reconcile_activation_with_host", verified_activation)
     if path.exists():
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
@@ -166,6 +171,105 @@ def test_activation_status_treats_missing_receipt_as_not_activated(monkeypatch, 
         "proven": False,
         "reason": "not_activated",
     }
+
+
+def test_activation_reconciliation_rejects_current_host_consumer_drift(monkeypatch):
+    from routers import remote_provider_status as rps
+
+    activation = {
+        "valid": True,
+        "active": True,
+        "proven": True,
+        "reason": "active_and_proven",
+        "gateway": "litellm-cloud",
+        "publicModel": "ods/current",
+        "model": "remote-owner-model",
+        "routeFingerprint": "e" * 64,
+        "contextLength": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "pixel": "reconciled",
+        "updatedAt": "2026-08-31T18:05:36Z",
+    }
+
+    async def local_runtime(*_args, **_kwargs):
+        return {
+            "status": "idle",
+            "activeAgentViable": False,
+            "activeRuntime": None,
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", local_runtime)
+    result = asyncio.run(rps._reconcile_activation_with_host(activation))
+
+    assert result["active"] is True
+    assert result["valid"] is False
+    assert result["proven"] is False
+    assert result["reason"] == "consumer_drift"
+    assert result["pixel"] == "drifted"
+
+
+def test_activation_reconciliation_accepts_exact_remote_host_runtime(monkeypatch):
+    from routers import remote_provider_status as rps
+
+    activation = {
+        "valid": True,
+        "active": True,
+        "proven": True,
+        "reason": "active_and_proven",
+        "model": "remote-owner-model",
+        "contextLength": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "pixel": "reconciled",
+    }
+
+    async def remote_runtime(*_args, **_kwargs):
+        return {
+            "status": "idle",
+            "activeAgentViable": True,
+            "activeRuntime": {
+                "source": "remote-provider",
+                "model": "remote-owner-model",
+                "contextLength": 131072,
+                "maxTokens": 16384,
+                "reasoning": False,
+            },
+        }
+
+    monkeypatch.setattr(rps, "async_request_agent_json", remote_runtime)
+    result = asyncio.run(rps._reconcile_activation_with_host(activation))
+
+    assert result == activation
+
+
+def test_activation_reconciliation_fails_closed_when_host_status_is_unavailable(monkeypatch):
+    from host_agent_client import AgentUnavailable
+    from routers import remote_provider_status as rps
+
+    activation = {
+        "valid": True,
+        "active": True,
+        "proven": True,
+        "reason": "active_and_proven",
+        "model": "remote-owner-model",
+        "contextLength": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "pixel": "reconciled",
+    }
+
+    async def unavailable_runtime(*_args, **_kwargs):
+        raise AgentUnavailable("host agent is unavailable")
+
+    monkeypatch.setattr(rps, "async_request_agent_json", unavailable_runtime)
+    result = asyncio.run(rps._reconcile_activation_with_host(activation))
+
+    assert result["active"] is True
+    assert result["valid"] is False
+    assert result["proven"] is False
+    assert result["reason"] == "consumer_status_unavailable"
+    assert result["pixel"] == "unverified"
 
 
 def test_remote_provider_status_missing_state_is_disabled(
