@@ -538,6 +538,8 @@ assert_contains "$phase06" 'export INSTALL_PHASE="06-directories/\$\{step\}"' "p
 for step in create-directories copy-source copy-extensions-library generate-env validate-env generate-searxng-config; do
   assert_contains "$phase06" "_phase06_step \"$step\"" "phase 06 missing substep: $step"
 done
+assert_contains "installers/phases/06-directories.sh" 'chmod 0755 -- "\$_pixel_exec_control_path"' "Linux installer does not normalize WSL-mounted Pixel execution-control modes"
+assert_contains "installers/phases/06-directories.sh" '! -L "\$_pixel_exec_control_path"' "Linux installer may normalize a symlinked Pixel execution-control helper"
 
 echo "[contract] Windows phase 06 stages the extension library"
 win_phase06="installers/windows/phases/06-directories.ps1"

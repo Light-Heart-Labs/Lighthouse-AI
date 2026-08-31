@@ -260,6 +260,20 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         log "Running in-place (source == install dir), skipping file copy"
     fi
 
+    # Windows-mounted WSL checkouts commonly present every copied file as
+    # mode 0777 even when Git records a narrower executable bit. Pixel refuses
+    # group/other-writable execution controls by design, so normalize only the
+    # two reviewed helpers that are copied into its owner-private runtime.
+    _pixel_exec_control_dir="$INSTALL_DIR/extensions/services/pixel-agent/host"
+    for _pixel_exec_control in cancellable-exec.sh noninteractive-sudo.sh; do
+        _pixel_exec_control_path="$_pixel_exec_control_dir/$_pixel_exec_control"
+        [[ -f "$_pixel_exec_control_path" && ! -L "$_pixel_exec_control_path" ]] \
+            || error "Missing or unsafe Pixel execution-control helper: $_pixel_exec_control_path"
+        chmod 0755 -- "$_pixel_exec_control_path" \
+            || error "Could not secure Pixel execution-control helper: $_pixel_exec_control_path"
+    done
+    unset _pixel_exec_control_dir _pixel_exec_control _pixel_exec_control_path
+
     _phase06_step "reconcile-pixel-compose"
     if ! ods_pixel_reconcile_installed_compose "$SCRIPT_DIR" "$INSTALL_DIR" "${ENABLE_PIXEL_RUNTIME:-false}"; then
         error "Could not reconcile the installed Pixel Compose fragment with the selected default agent"
