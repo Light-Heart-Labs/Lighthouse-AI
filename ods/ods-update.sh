@@ -76,7 +76,7 @@ compose_flags_files_exist() {
     local prev="" tok
     for tok in $flags; do
         if [[ "$prev" == "-f" ]]; then
-            if [[ "$tok" = /* ]]; then
+            if [[ "$tok" == /* ]]; then
                 [[ -f "$tok" ]] || return 1
             else
                 [[ -f "${INSTALL_DIR}/${tok}" ]] || return 1
