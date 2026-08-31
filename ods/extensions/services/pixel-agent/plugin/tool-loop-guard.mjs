@@ -896,7 +896,7 @@ function serviceEvidence(step) {
   return `System services: ${entries.length} running or failed; failed: ${failed.length ? failed.map((entry) => entry.unit).join(", ") : "none"}; sample: ${sample.join(", ")}.`;
 }
 
-function cpuEvidence(step) {
+function cpuEvidenceFields(step) {
   if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 64 * 1024) {
     return undefined;
   }
@@ -920,9 +920,21 @@ function cpuEvidence(step) {
     if (!wanted.has(entry.field)) continue;
     const data = cleanSingleLine(String(entry.data), /^[A-Za-z0-9][A-Za-z0-9 ._+()/:,@-]{0,255}$/, 256);
     if (!data) return undefined;
-    fields.push(`${entry.field.slice(0, -1)} ${data}`);
+    fields.push({ field: entry.field, data });
   }
-  return fields.length >= 2 ? `CPU: ${fields.join("; ")}.` : undefined;
+  return fields.length >= 2 ? fields : undefined;
+}
+
+function cpuEvidence(step) {
+  const fields = cpuEvidenceFields(step);
+  return fields
+    ? `CPU: ${fields.map(({ field, data }) => `${field.slice(0, -1)} ${data}`).join("; ")}.`
+    : undefined;
+}
+
+function cpuArchitectureEvidence(step) {
+  const fields = cpuEvidenceFields(step);
+  return fields?.find(({ field }) => field === "Architecture:")?.data;
 }
 
 function memoryEvidence(step) {
@@ -1046,7 +1058,19 @@ function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjec
       }
     }
   }
-  const missing = [...requiredActions].filter((action) => !steps.has(action));
+  // `host.cpu` is a structured lscpu observation whose validated payload
+  // already contains Architecture. Treat that exact field as equivalent typed
+  // evidence during a broad inventory instead of forcing a redundant
+  // `host.architecture` job and discarding an otherwise complete report.
+  const derivedArchitecture =
+    requiredActions.has("host.architecture") &&
+    !steps.has("host.architecture") &&
+    steps.has("host.cpu")
+      ? cpuArchitectureEvidence(steps.get("host.cpu"))
+      : undefined;
+  const missing = [...requiredActions].filter((action) =>
+    !steps.has(action) && !(action === "host.architecture" && derivedArchitecture)
+  );
   if (missing.length > 0) {
     const failedRequiredOutcome = unsuccessful.find((outcome) =>
       outcome.actions.some(({ target, action }) =>
@@ -1089,6 +1113,11 @@ function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjec
     );
     if (!value || architecture.stderr.trim() || architecture.riskSignals.length > 0) return undefined;
     lines.push(`- Architecture: \`${value}\` (job \`${architecture.jobId}\`)`);
+  } else if (derivedArchitecture) {
+    const cpu = steps.get("host.cpu");
+    lines.push(
+      `- Architecture: \`${derivedArchitecture}\` (from structured host.cpu job \`${cpu.jobId}\`)`
+    );
   }
   const platform = steps.get("host.platform");
   if (platform) {
@@ -3335,7 +3364,10 @@ export function createToolLoopGuard({
           )
           : new Set();
         const missingActions = hostOnly
-          ? [...state.operationsRequiredActions].filter((action) => !terminalActions.has(action))
+          ? [...state.operationsRequiredActions].filter((action) =>
+            !terminalActions.has(action) &&
+            !(action === "host.architecture" && terminalActions.has("host.cpu"))
+          )
           : [];
         if (hostOnly && missingActions.length > 0) {
           return {

@@ -1739,7 +1739,11 @@ test("renders a structurally validated broad host inventory without command argu
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Explore the ODS host machine you are running on and tell me what is here." }
+    {
+      prompt: "Inspect the ODS host and report hostname, kernel, platform, operating system, " +
+        "hardware architecture and CPU, memory, storage, visible processes, services, network " +
+        "addresses and routes, and listening ports.",
+    }
   );
   const steps = actions.map(([id, action]) => ({ id, target: "ods-host", action }));
   afterCall(guard, "pixel_ops_workflow_submit", {
@@ -1770,12 +1774,52 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Processes: 1 visible; top CPU entries: python3/);
   assert.match(text, /System services: 1 running or failed; failed: none/);
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
+  assert.match(text, /Architecture: `x86_64` \(from structured host\.cpu job/);
   assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
   assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);
   assert.match(text, /\/Docker\/host \(9p, 75% used, 250\.0 GiB free of 1000\.0 GiB\)/);
   assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
   assert.match(text, /default via 192\.168\.1\.1 dev eth0/);
   assert.match(text, /Listening TCP\/UDP endpoints: 1/);
+});
+
+test("does not substitute host.cpu for architecture unless the structured field is present", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Inspect the ODS host and report hardware architecture and CPU." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.cpu" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "cpu", target: "ods-host", action: "host.cpu", exitCode: 0,
+            stdout: JSON.stringify({ lscpu: [
+              { field: "CPU(s):", data: "16" },
+              { field: "Model name:", data: "AMD Ryzen AI" },
+            ] }) + "\n",
+            stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /unverified|Missing: `host\.architecture`/);
+  assert.doesNotMatch(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
 });
 
 test("adds only a sanitized ODS container projection after terminal host Operations", () => {
