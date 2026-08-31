@@ -71,7 +71,7 @@ ods_pixel_uninstall_managed() {
     local ops_plan="absent||||" ops_state_status ops_uid ops_gid ops_user_present ops_group_present
     local ops_passwd_entry="" ops_group_entry="" ops_user_group_ids="" ops_user_group_names="" ops_artifacts_present=false
     local pixel_lock_fd="" owner_uid
-    local root_artifacts_present=false
+    local root_artifacts_present=false owner_gid
 
     [[ "$install_dir" == /* && "$install_dir" != / && -d "$install_dir" && ! -L "$install_dir" ]] || {
         log_error "Refusing Pixel cleanup for an invalid ODS install directory"
@@ -115,6 +115,7 @@ ods_pixel_uninstall_managed() {
     # install. Root artifacts must still match the ODS/Pixel contract; drift
     # fails closed instead of deleting an ambient or operator-modified service.
     owner_uid="$(id -u)"
+    owner_gid="$(id -g)"
     if ! cleanup_plan="$(python3 - \
         "$marker" "$install_dir" "$owner_home" "$(id -u)" "$root_uid" \
         "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" "$source_program" \
@@ -744,7 +745,7 @@ PY
             return 1
         }
         if ! ops_plan="$(sudo python3 - \
-            "$root_uid" "$root_gid" "$owner_uid" "$marker_state" "$ops_user" "$ops_group" \
+            "$root_uid" "$root_gid" "$owner_uid" "$owner_gid" "$marker_state" "$ops_user" "$ops_group" \
             "$ops_passwd_entry" "$ops_group_entry" "$ops_user_group_ids" "$ops_user_group_names" \
             "${ODS_PIXEL_UNINSTALL_OPS_UID:-}" "${ODS_PIXEL_UNINSTALL_OPS_GID:-}" \
             "$ops_unit" "$ops_env" "$ops_policy" "$ops_install" "$ops_program" "$ops_state" \
@@ -765,6 +766,7 @@ import sys
     root_uid_raw,
     root_gid_raw,
     owner_uid_raw,
+    owner_gid_raw,
     marker_state,
     ops_user,
     ops_group,
@@ -798,6 +800,7 @@ import sys
 root_uid = int(root_uid_raw)
 root_gid = int(root_gid_raw)
 owner_uid = int(owner_uid_raw)
+owner_gid = int(owner_gid_raw)
 unit = pathlib.Path(unit_raw)
 environment = pathlib.Path(env_raw)
 policy = pathlib.Path(policy_raw)
@@ -905,7 +908,7 @@ def owner_source(
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
             or info.st_nlink != 1 or info.st_uid != owner_uid
             or info.st_size > maximum or info.st_mode & write_mask
-            or (allow_owner_group_write and info.st_gid != os.getgid())
+            or (allow_owner_group_write and info.st_gid != owner_gid)
             or (private and info.st_mode & 0o077)):
         raise SystemExit(f"unsafe ODS Pixel Operations source: {path}")
 

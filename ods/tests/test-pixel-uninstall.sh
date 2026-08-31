@@ -156,6 +156,22 @@ else
     fail "Pixel rerun does not safely deactivate managed host runtime before source replacement"
 fi
 
+if python3 - "$ROOT_DIR/lib/pixel-uninstall.sh" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+assert 'owner_gid="$(id -g)"' in text
+assert '"$root_uid" "$root_gid" "$owner_uid" "$owner_gid"' in text
+assert "info.st_gid != owner_gid" in text
+assert "info.st_gid != os.getgid()" not in text
+PY
+then
+    pass "root Operations validation compares legacy source custody with the captured owner primary group"
+else
+    fail "root Operations validation confuses its process group with the Pixel owner group"
+fi
+
 if logger_output="$(bash -c '
     unset -f log_info log_ok log_error 2>/dev/null || true
     source "$1"
