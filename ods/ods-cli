@@ -4374,7 +4374,10 @@ _remote_provider_probe_configured() {
         error "Could not create a remote-provider response file"
     chmod 600 "$response_file"
     trap 'rm -f "$response_file"' INT TERM HUP
-    if http_code="$(_remote_provider_request POST /api/remote-provider/probe "$response_file" "" 20)"; then
+    # A configured probe can activate and reconcile all downstream consumers.
+    # Stay beyond the Dashboard API's 1800-second lifecycle deadline instead
+    # of reporting a false failure while the host transaction is still live.
+    if http_code="$(_remote_provider_request POST /api/remote-provider/probe "$response_file" "" 1860)"; then
         curl_status=0
     else
         curl_status=$?
@@ -4646,7 +4649,7 @@ cmd_remote_provider() {
             trap 'rm -f "$payload_file" "$response_file"' INT TERM HUP
             REMOTE_PROVIDER_JSON_MODE="false"
             _remote_provider_write_payload "$subcmd" "$payload_file" "$@"
-            if http_code="$(_remote_provider_request POST /api/remote-provider/apply "$response_file" "$payload_file" 20)"; then
+            if http_code="$(_remote_provider_request POST /api/remote-provider/apply "$response_file" "$payload_file" 1860)"; then
                 curl_status=0
             else
                 curl_status=$?

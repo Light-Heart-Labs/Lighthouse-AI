@@ -217,6 +217,16 @@ def main() -> int:
         "configured remote-provider test must call the egress probe endpoint",
     )
     require(
+        r"_remote_provider_request POST /api/remote-provider/probe \"\$response_file\" \"\" 1860",
+        text,
+        "configured remote-provider test must outlast downstream lifecycle activation",
+    )
+    require(
+        r"_remote_provider_request POST /api/remote-provider/apply \"\$response_file\" \"\$payload_file\" 1860",
+        text,
+        "remote-provider apply must outlast the Dashboard lifecycle deadline",
+    )
+    require(
         r"Route proof: ",
         text,
         "configured remote-provider test output must show route proof recording status",

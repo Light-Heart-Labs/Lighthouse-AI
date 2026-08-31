@@ -10461,13 +10461,19 @@ def _chat_completion_ready(
             "-X", "POST", url,
             "-H", "Content-Type: application/json",
         ]
+        header_input = None
         if api_key:
-            command.extend(["-H", f"Authorization: Bearer {api_key}"])
+            # Keep credentials out of process listings. curl accepts a header
+            # stream through stdin, which also avoids a credential-bearing
+            # temporary file.
+            command.extend(["-H", "@-"])
+            header_input = f"Authorization: Bearer {api_key}\n"
         command.extend(["-d", payload])
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
+            input=header_input,
             timeout=35,
         )
         if result.returncode != 0:

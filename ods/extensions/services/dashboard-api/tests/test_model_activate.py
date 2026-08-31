@@ -1262,10 +1262,10 @@ class TestPerplexicaModelRoute:
 class TestDownstreamRouteVerification:
 
     def test_completion_probe_sends_bearer_key_when_requested(self, monkeypatch):
-        commands = []
+        calls = []
 
-        def fake_run(cmd, **_kwargs):
-            commands.append(cmd)
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -1282,7 +1282,11 @@ class TestDownstreamRouteVerification:
             "/v1",
             "secret",
         )
-        assert "Authorization: Bearer secret" in commands[0]
+        command, kwargs = calls[0]
+        assert "Authorization: Bearer secret" not in command
+        assert "secret" not in " ".join(command)
+        assert ["-H", "@-"] == command[command.index("@-") - 1:command.index("@-") + 1]
+        assert kwargs["input"] == "Authorization: Bearer secret\n"
 
     def test_completion_probe_requires_response_model_when_identity_expected(
         self, monkeypatch
