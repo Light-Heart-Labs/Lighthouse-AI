@@ -189,6 +189,74 @@ else
     fail "nested validation error should mention missing signal"
 fi
 
+assert_invalid_outcome() {
+    local fixture="$1"
+    local expected_path="$2"
+    local description="$3"
+    local output
+    local status
+
+    set +e
+    output=$(python3 "$ROOT_DIR/scripts/validate-sim-summary.py" "$fixture" 2>&1)
+    status=$?
+    set -e
+
+    if [[ $status -eq 2 ]]; then
+        pass "$description exits 2"
+    else
+        fail "$description should exit 2, got $status"
+    fi
+    if echo "$output" | grep -q "$expected_path"; then
+        pass "$description identifies $expected_path"
+    else
+        fail "$description should identify $expected_path"
+    fi
+}
+
+python3 - <<'PY' "$TMP_DIR/valid.json" "$TMP_DIR"
+import copy
+import json
+import pathlib
+import sys
+
+source, output_dir = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    valid = json.load(handle)
+
+fixtures = {}
+
+fixtures["failed-linux-exit.json"] = copy.deepcopy(valid)
+fixtures["failed-linux-exit.json"]["runs"]["linux_dryrun"]["exit_code"] = 17
+
+fixtures["missing-linux-signal.json"] = copy.deepcopy(valid)
+fixtures["missing-linux-signal.json"]["runs"]["linux_dryrun"]["signals"]["capability_loaded"] = False
+
+fixtures["macos-blocker.json"] = copy.deepcopy(valid)
+fixtures["macos-blocker.json"]["runs"]["macos_installer_mvp"]["preflight"] = {
+    "summary": {"blockers": 1, "warnings": 0}
+}
+
+fixtures["windows-blocker.json"] = copy.deepcopy(valid)
+fixtures["windows-blocker.json"]["runs"]["windows_scenario_preflight"]["report"]["summary"]["blockers"] = 1
+
+fixtures["failed-doctor-exit.json"] = copy.deepcopy(valid)
+fixtures["failed-doctor-exit.json"]["runs"]["doctor_snapshot"]["exit_code"] = 3
+
+fixtures["incomplete-golden-paths.json"] = copy.deepcopy(valid)
+fixtures["incomplete-golden-paths.json"]["golden_paths"]["pass_count"] = 3
+
+for name, data in fixtures.items():
+    path = pathlib.Path(output_dir, name)
+    path.write_text(json.dumps(data), encoding="utf-8")
+PY
+
+assert_invalid_outcome "$TMP_DIR/failed-linux-exit.json" "linux_dryrun.exit_code" "failed Linux simulation"
+assert_invalid_outcome "$TMP_DIR/missing-linux-signal.json" "capability_loaded" "false Linux success signal"
+assert_invalid_outcome "$TMP_DIR/macos-blocker.json" "macos_installer_mvp.preflight.summary.blockers" "macOS blocker"
+assert_invalid_outcome "$TMP_DIR/windows-blocker.json" "windows_scenario_preflight.report.summary.blockers" "Windows blocker"
+assert_invalid_outcome "$TMP_DIR/failed-doctor-exit.json" "doctor_snapshot.exit_code" "failed doctor snapshot"
+assert_invalid_outcome "$TMP_DIR/incomplete-golden-paths.json" "golden_paths.pass_count" "incomplete golden paths"
+
 python3 - <<'PY' "$TMP_DIR/valid.json" "$TMP_DIR/no-generated-at.json"
 import json
 import sys
