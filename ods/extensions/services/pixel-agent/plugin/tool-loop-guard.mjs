@@ -1604,7 +1604,7 @@ export function userMessageExtensionLifecycleIntent(messages, prompt = undefined
   const text = currentUserText(messages, prompt);
   if (!text) return undefined;
   const match = text.match(
-    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:ODS\s+)?extension\s+[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
+    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:(?:installed|existing|enabled|disabled)\s+)?(?:ODS\s+)?extension\s+[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
   );
   if (!match) return undefined;
   const requested = match[1].toLowerCase();

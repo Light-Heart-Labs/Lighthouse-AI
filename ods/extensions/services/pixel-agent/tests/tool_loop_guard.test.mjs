@@ -930,6 +930,13 @@ test("classifies one exact extension lifecycle action and owner extension ID", (
     userMessageExtensionLifecycleIntent([], "Enable ODS extension vendor.crewai."),
     { action: "enable", serviceId: "vendor.crewai" }
   );
+  assert.deepEqual(
+    userMessageExtensionLifecycleIntent(
+      [],
+      "Inspect and enable the installed ODS extension continue."
+    ),
+    { action: "enable", serviceId: "continue" }
+  );
   assert.equal(
     userMessageExtensionLifecycleIntent([], `Install ODS extension ${"a".repeat(65)}`),
     undefined
@@ -1116,13 +1123,13 @@ test("renders missing extension configuration as a verified no-effect result", (
 test("reports an immutable lifecycle approval without claiming completion", () => {
   const guard = createToolLoopGuard();
   const inspectJob = "ops-1234567890123-abcdef123456";
-  const installJob = "ops-1234567890124-fedcba654321";
+  const enableJob = "ops-1234567890124-fedcba654321";
   const planHash = "d".repeat(64);
-  const parameters = { serviceId: "crewai" };
+  const parameters = { serviceId: "continue" };
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Install the ODS extension crewai." }
+    { prompt: "Inspect and enable the installed ODS extension continue." }
   );
   afterCall(guard, "pixel_ops_run", {
     event: {
@@ -1138,23 +1145,27 @@ test("reports an immutable lifecycle approval without claiming completion", () =
           jobId: inspectJob,
           status: "succeeded",
           waitTimedOut: false,
-          steps: [lifecycleStep("inspect")],
+          steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+            extensionId: "continue",
+            previousStatus: "disabled",
+            currentStatus: "disabled",
+          }))],
         },
       },
     },
   });
   afterCall(guard, "pixel_ops_run", {
     event: {
-      params: { target: "ods-host", action: "ods.extensions.install", parameters },
-      result: { details: { jobId: installJob, status: "submitted", kind: "action" } },
+      params: { target: "ods-host", action: "ods.extensions.enable", parameters },
+      result: { details: { jobId: enableJob, status: "submitted", kind: "action" } },
     },
   });
   afterCall(guard, "pixel_ops_job_wait", {
     event: {
-      params: { jobId: installJob },
+      params: { jobId: enableJob },
       result: {
         details: {
-          jobId: installJob,
+          jobId: enableJob,
           status: "awaiting-approval",
           waitTimedOut: false,
           approvalRequired: true,
@@ -1164,8 +1175,9 @@ test("reports an immutable lifecycle approval without claiming completion", () =
     },
   });
   const text = reply(guard)?.payload?.text;
+  assert.match(text, /^Pixel prepared the exact ods\.extensions\.enable plan/);
   assert.match(text, /external approval is required/);
-  assert.match(text, new RegExp(installJob));
+  assert.match(text, new RegExp(enableJob));
   assert.match(text, new RegExp(planHash));
   assert.match(text, /No lifecycle change was executed/);
   assert.doesNotMatch(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
