@@ -391,7 +391,7 @@ describe('Pixel', () => {
         detail: 'Owner agent ready',
         runtime: {
           source: 'remote-provider',
-          model: 'dream-fleet-agent',
+          model: 'remote-owner-model',
           contextLength: 131072,
           maxTokens: 16384,
           reasoning: false,
@@ -407,7 +407,7 @@ describe('Pixel', () => {
     }} />)
 
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
-    expect(screen.getByText('dream-fleet-agent')).toBeInTheDocument()
+    expect(screen.getByText('remote-owner-model')).toBeInTheDocument()
     expect(screen.getByText('128K context')).toBeInTheDocument()
     expect(screen.queryByText('Qwen3.5-9B-Q4_K_M.gguf')).not.toBeInTheDocument()
   })

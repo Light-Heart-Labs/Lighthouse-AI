@@ -2922,7 +2922,7 @@ class TestRemoteProviderLifecycle:
         tmp_path,
     ):
         runtime = {
-            "model": "dream-fleet-agent",
+            "model": "remote-owner-model",
             "contextLength": 131072,
             "maxTokens": 16384,
             "reasoning": False,
@@ -3731,7 +3731,7 @@ class TestModelActivationOwnership:
         self, tmp_path, monkeypatch,
     ):
         runtime = {
-            "model": "dream-fleet-agent",
+            "model": "remote-owner-model",
             "contextLength": 131072,
             "maxTokens": 16384,
             "reasoning": False,

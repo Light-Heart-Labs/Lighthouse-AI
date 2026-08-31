@@ -314,7 +314,7 @@ async def test_status_projects_only_validated_active_remote_runtime(monkeypatch)
             "activeAgentViable": True,
             "activeRuntime": {
                 "source": "remote-provider",
-                "model": "dream-fleet-agent",
+                "model": "remote-owner-model",
                 "contextLength": 131072,
                 "maxTokens": 16384,
                 "reasoning": False,
@@ -336,7 +336,7 @@ async def test_status_projects_only_validated_active_remote_runtime(monkeypatch)
         "detail": "Owner agent ready",
         "runtime": {
             "source": "remote-provider",
-            "model": "dream-fleet-agent",
+            "model": "remote-owner-model",
             "contextLength": 131072,
             "maxTokens": 16384,
             "reasoning": False,
