@@ -260,6 +260,18 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         log "Running in-place (source == install dir), skipping file copy"
     fi
 
+    # A Windows-mounted WSL checkout can surface every source entry as 0777.
+    # Product config and extension code must never remain ambiently writable
+    # after installation. Do not follow links; downstream trust checks reject
+    # any link where a regular file or directory is required.
+    for _installed_code_root in "$INSTALL_DIR/config" "$INSTALL_DIR/extensions"; do
+        [[ -d "$_installed_code_root" && ! -L "$_installed_code_root" ]] \
+            || error "Missing or unsafe installed code tree: $_installed_code_root"
+        find -P "$_installed_code_root" \( -type d -o -type f \) -exec chmod go-w -- {} + \
+            || error "Could not secure installed code tree: $_installed_code_root"
+    done
+    unset _installed_code_root
+
     # Windows-mounted WSL checkouts commonly present every copied file as
     # mode 0777 even when Git records a narrower executable bit. Pixel refuses
     # group/other-writable execution controls by design, so normalize only the
@@ -310,6 +322,11 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     if [[ -n "$_ext_lib_src" ]]; then
         mkdir -p "$INSTALL_DIR/data/extensions-library"
         cp -r "$_ext_lib_src/." "$INSTALL_DIR/data/extensions-library/"
+        [[ ! -L "$INSTALL_DIR/data/extensions-library" ]] \
+            || error "Installed extension library cannot be a symlink"
+        find -P "$INSTALL_DIR/data/extensions-library" \( -type d -o -type f \) \
+            -exec chmod go-w -- {} + \
+            || error "Could not secure the installed extension library"
         ai_ok "Extensions library copied to data/extensions-library/ (from $_ext_lib_src)"
     else
         ai_warn "Extensions library not found; dashboard Extensions page will return 503 until populated"
