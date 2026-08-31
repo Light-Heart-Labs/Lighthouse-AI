@@ -1086,10 +1086,18 @@ _ods_pixel_install_exec_control() {
 }
 
 _ods_pixel_recreate_agent_sandbox() {
-    local owner="$1" home="$2" openclaw_bin="$3"
+    local owner="$1" home="$2" openclaw_bin="$3" remaining
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
-        sandbox recreate --agent pixel --force >/dev/null
+        sandbox recreate --agent pixel --force || return 1
+    # OpenClaw retires only sandboxes present in its registry. Independently
+    # prove that Docker has no stale agent-scoped container left behind before
+    # a gateway restart can accept another tool turn. This catches registry
+    # drift as well as a failed runtime removal without broadening the scope to
+    # any non-Pixel container.
+    remaining="$(ods_pixel_run_as_owner "$owner" "$home" docker ps --all --quiet \
+        --filter 'name=^/pixel-sbx-agent-pixel-')" || return 1
+    [[ -z "${remaining//[[:space:]]/}" ]]
 }
 
 _ods_pixel_apply_runtime_budget() {
@@ -2995,10 +3003,33 @@ ods_pixel_install_default_agent() {
                 fi
             fi
             if [[ "$same_source_resume" == true ]]; then
-                if ! ods_sudo systemctl restart openclaw-gateway.service \
-                    || ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" 60 '.ok == true and .status == "live"' \
-                    || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
-                    ai_bad "The ODS-managed Pixel extension refresh failed verification. See $LOG_FILE."
+                # Quiesce the gateway so a concurrent tool turn cannot create
+                # a sandbox between retirement and the Docker postcondition.
+                if ! ods_sudo systemctl stop openclaw-gateway.service >>"$LOG_FILE" 2>&1; then
+                    ai_bad "The ODS-managed Pixel gateway could not enter maintenance mode. See $LOG_FILE."
+                    return 1
+                fi
+                if ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
+                    >>"$LOG_FILE" 2>&1; then
+                    # Restore the previously configured service when cleanup
+                    # fails; the installer still fails closed and does not
+                    # claim that the sandbox boundary was refreshed.
+                    ods_sudo systemctl start openclaw-gateway.service >>"$LOG_FILE" 2>&1 || true
+                    ai_bad "Pixel could not retire its stale agent sandbox during recovery. See $LOG_FILE."
+                    return 1
+                fi
+                if ! ods_sudo systemctl start openclaw-gateway.service >>"$LOG_FILE" 2>&1; then
+                    ai_bad "The ODS-managed Pixel gateway could not restart after sandbox recovery. See $LOG_FILE."
+                    return 1
+                fi
+                if ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" \
+                    60 '.ok == true and .status == "live"'; then
+                    ai_bad "The ODS-managed Pixel gateway did not become healthy after sandbox recovery. See $LOG_FILE."
+                    return 1
+                fi
+                if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify \
+                    >>"$LOG_FILE" 2>&1; then
+                    ai_bad "The recovered ODS-managed Pixel contract failed verification. See $LOG_FILE."
                     return 1
                 fi
             else

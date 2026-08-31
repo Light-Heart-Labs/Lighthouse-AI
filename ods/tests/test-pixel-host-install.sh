@@ -323,6 +323,43 @@ else
     pass "blocked ODS Pixel plugin rejected"
 fi
 
+sandbox_recreate_bin="$TEST_ROOT/openclaw-sandbox-recreate"
+cat > "$sandbox_recreate_bin" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod 0755 "$sandbox_recreate_bin"
+if (
+    ods_pixel_run_as_owner() {
+        if [[ "$3" == "$sandbox_recreate_bin" ]]; then
+            [[ "$4 $5 $6 $7 $8" == "sandbox recreate --agent pixel --force" ]]
+        elif [[ "$3 $4 $5 $6 $7" == "docker ps --all --quiet --filter" \
+            && "$8" == 'name=^/pixel-sbx-agent-pixel-' ]]; then
+            return 0
+        else
+            return 1
+        fi
+    }
+    _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$sandbox_recreate_bin"
+); then
+    pass "Pixel sandbox recreation proves no stale agent container remains"
+else
+    fail "Pixel sandbox recreation proves no stale agent container remains"
+fi
+if (
+    ods_pixel_run_as_owner() {
+        if [[ "$3" == "$sandbox_recreate_bin" ]]; then
+            return 0
+        fi
+        printf '%s\n' deadbeefdead
+    }
+    _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$sandbox_recreate_bin"
+) >/dev/null 2>&1; then
+    fail "Pixel sandbox recreation rejects a stale unregistered container"
+else
+    pass "Pixel sandbox recreation rejects a stale unregistered container"
+fi
+
 plugin_registry_bin="$TEST_ROOT/openclaw-plugin-registry"
 cat > "$plugin_registry_bin" <<SH
 #!/usr/bin/env bash
@@ -1495,6 +1532,27 @@ assert "repairing the interrupted ownership checkpoint" in text
 candidate_recovery = installer.index("Could not validate the exact-source Pixel runtime candidate")
 model_reconcile = installer.index("ods_pixel_reconcile_promoted_model", candidate_recovery)
 assert installer.index("_ods_pixel_apply_runtime_budget", candidate_recovery - 1000) < candidate_recovery < model_reconcile
+resume_start = installer.index("if [[ \"$same_source_resume\" == true ]]")
+resume_end = installer.index("ai \"The exact Pixel release is active with an older ODS route", resume_start)
+resume = installer[resume_start:resume_end]
+stop = resume.index("systemctl stop openclaw-gateway.service")
+retire = resume.index("_ods_pixel_recreate_agent_sandbox \"$owner\" \"$home\" \"$openclaw_bin\"")
+start = resume.index("systemctl start openclaw-gateway.service", retire)
+health = resume.index("_ods_pixel_wait_http \"Pixel gateway\"", start)
+verify = resume.index("\"$pixel_root/pixel\" verify", health)
+assert stop < retire < start < health < verify
+helper_start = text.index("_ods_pixel_recreate_agent_sandbox()")
+helper_end = text.index("_ods_pixel_apply_runtime_budget()", helper_start)
+helper = text[helper_start:helper_end]
+assert helper.index("sandbox recreate --agent pixel --force") < helper.index("docker ps --all --quiet")
+for diagnostic in (
+    "could not enter maintenance mode",
+    "could not retire its stale agent sandbox",
+    "could not restart after sandbox recovery",
+    "did not become healthy after sandbox recovery",
+    "failed verification",
+):
+    assert diagnostic in resume
 assert "pixel\" verify >>\"$LOG_FILE\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
 assert "systemctl restart pixel-ingress.service" in text
