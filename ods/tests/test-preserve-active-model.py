@@ -112,6 +112,8 @@ def run_helper(env: Path, catalog: Path, imports: Path, models_dir: Path, **over
         "--host-arch",
         str(overrides.get("host_arch", "amd64")),
     ]
+    if overrides.get("state") is not None:
+        command.extend(["--state", str(overrides["state"])])
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     values: dict[str, str] = {}
     for line in result.stdout.splitlines():
@@ -156,6 +158,88 @@ def test_valid_dashboard_import_is_preserved() -> None:
         assert values["GGUF_FILE"] == "Agent-Test-Q4_K_M.gguf"
 
 
+def test_verified_switchboard_state_recovers_an_interrupted_installer_env() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        env, catalog, imports, models_dir = write_model_fixture(root)
+        state = root / "data" / "model-state.json"
+        state.write_text(
+            json.dumps(
+                {
+                    "schema": "ods.model-state.v1",
+                    "seq": 5,
+                    "routeSeq": 4,
+                    "operation": None,
+                    "desired": {"catalogId": "agent-test-q4"},
+                    "active": {
+                        "routeSeq": 4,
+                        "catalogId": "agent-test-q4",
+                        "runtimeModelId": "Agent-Test-Q4_K_M.gguf",
+                        "publicModel": "ods/current",
+                        "backend": {
+                            "kind": "llama-server",
+                            "endpointId": "llama-server-default",
+                            "nativeRoute": None,
+                        },
+                        "contextLength": 65536,
+                        "verifiedAt": "2026-08-31T11:43:34Z",
+                        "proof": {
+                            "identity": "Agent-Test-Q4_K_M.gguf",
+                            "completion": True,
+                        },
+                    },
+                    "availability": {"mode": "serve_active", "queueDeadline": None},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        replace_env(env, "LLM_MODEL=agent-test", "LLM_MODEL=bootstrap-model")
+        replace_env(env, "GGUF_FILE=Agent-Test-Q4_K_M.gguf", "GGUF_FILE=Bootstrap-2B.gguf")
+        replace_env(env, "MAX_CONTEXT=65536", "MAX_CONTEXT=32768")
+        replace_env(env, "CTX_SIZE=65536", "CTX_SIZE=32768")
+
+        values = run_helper(
+            env,
+            catalog,
+            imports,
+            models_dir,
+            state=state,
+            vram_mb=4096,
+        )
+        assert values["LLM_MODEL"] == "agent-test"
+        assert values["GGUF_FILE"] == "Agent-Test-Q4_K_M.gguf"
+        assert values["MAX_CONTEXT"] == "65536"
+        assert values["MODEL_SELECTION_SOURCE"] == "dashboard"
+        assert values["MODEL_RUNTIME_PROFILE"] == ""
+        assert "LLAMA_ARG_CACHE_TYPE_K" not in values
+
+        replace_env(env, "LLM_MODEL=bootstrap-model", "LLM_MODEL=agent-test")
+        replace_env(env, "GGUF_FILE=Bootstrap-2B.gguf", "GGUF_FILE=Agent-Test-Q4_K_M.gguf")
+        replace_env(env, "MAX_CONTEXT=32768", "MAX_CONTEXT=65536")
+        replace_env(env, "CTX_SIZE=32768", "CTX_SIZE=65536")
+        matching_env_values = run_helper(
+            env,
+            catalog,
+            imports,
+            models_dir,
+            state=state,
+            vram_mb=4096,
+        )
+        assert matching_env_values["GGUF_FILE"] == "Agent-Test-Q4_K_M.gguf"
+        assert matching_env_values["MODEL_RUNTIME_PROFILE"] == ""
+        assert "LLAMA_ARG_CACHE_TYPE_K" not in matching_env_values
+
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        payload["active"]["proof"]["completion"] = False
+        state.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        assert run_helper(env, catalog, imports, models_dir, state=state, vram_mb=4096) == {}
+
+        state.unlink()
+        state.symlink_to(env)
+        assert run_helper(env, catalog, imports, models_dir, state=state, vram_mb=4096) == {}
+
+
 def test_invalid_or_unavailable_contracts_are_not_preserved() -> None:
     mutations = (
         ("GGUF_URL=https://huggingface.co/", "GGUF_URL=https://example.invalid/"),
@@ -196,6 +280,7 @@ def test_installer_keeps_recommendation_and_active_model_separate() -> None:
     assert detection.index("unset LLAMA_ARG_N_CPU_MOE") < detection.index(
         'load_model_selector_env_from_output <<< "$_preserved_model_env"'
     )
+    assert '--state "$INSTALL_DIR/data/model-state.json"' in detection
     assert "MODEL_RECOMMENDED_MODEL_VALUE=\"${INSTALLER_RECOMMENDED_MODEL:-${LLM_MODEL}}\"" in env_writer
     assert "MODEL_SELECTION_SOURCE=${MODEL_SELECTION_SOURCE_VALUE}" in env_writer
     for key in ("GGUF_URL", "GGUF_SHA256", "LLM_MODEL_SIZE_MB", "MODEL_RUNTIME_PROFILE"):
@@ -206,6 +291,7 @@ def main() -> int:
     tests = [
         test_valid_curated_model_is_preserved,
         test_valid_dashboard_import_is_preserved,
+        test_verified_switchboard_state_recovers_an_interrupted_installer_env,
         test_invalid_or_unavailable_contracts_are_not_preserved,
         test_dashboard_activation_records_selection_owner,
         test_installer_keeps_recommendation_and_active_model_separate,

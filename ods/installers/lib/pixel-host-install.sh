@@ -478,17 +478,27 @@ _ods_pixel_model_reconciliation_snapshot() {
 import json, os, pathlib, re, shutil, stat, sys, tempfile
 
 marker, config, answers, attestation, backup_root = map(pathlib.Path, sys.argv[1:])
-sources = (
+required_sources = (
     (marker, 65536),
     (config, 2 * 1024 * 1024),
     (answers, 2 * 1024 * 1024),
-    (attestation, 2 * 1024 * 1024),
 )
-for path, maximum in sources:
+for path, maximum in required_sources:
     info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
             or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > maximum):
         raise SystemExit(f"unsafe Pixel reconciliation source: {path}")
+attestation_present = False
+try:
+    attestation_info = attestation.lstat()
+except FileNotFoundError:
+    pass
+else:
+    if (not stat.S_ISREG(attestation_info.st_mode) or stat.S_ISLNK(attestation_info.st_mode)
+            or attestation_info.st_nlink != 1 or attestation_info.st_uid != os.getuid()
+            or attestation_info.st_mode & 0o077 or attestation_info.st_size > 2 * 1024 * 1024):
+        raise SystemExit(f"unsafe Pixel reconciliation source: {attestation}")
+    attestation_present = True
 backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
 root_info = backup_root.lstat()
 if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
@@ -496,12 +506,14 @@ if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
     raise SystemExit("unsafe Pixel backup root")
 backup = pathlib.Path(tempfile.mkdtemp(prefix="ods-model-reconcile-", dir=backup_root))
 os.chmod(backup, 0o700)
-for source, name in (
+backup_sources = [
     (marker, "pixel-managed.json"),
     (config, "openclaw.json"),
     (answers, "onboarding.json"),
-    (attestation, "runtime-attestation.json"),
-):
+]
+if attestation_present:
+    backup_sources.append((attestation, "runtime-attestation.json"))
+for source, name in backup_sources:
     target = backup / name
     with source.open("rb") as source_handle, target.open("xb") as target_handle:
         shutil.copyfileobj(source_handle, target_handle)
@@ -1426,8 +1438,13 @@ _ods_pixel_restore_model_reconciliation() {
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan \
         || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
         || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root"; then
-        _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/runtime-attestation.json" \
-            "$home/.local/share/pixel/runtime-attestation.json" || true
+        if [[ -f "$backup/runtime-attestation.json" && ! -L "$backup/runtime-attestation.json" ]]; then
+            _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/runtime-attestation.json" \
+                "$home/.local/share/pixel/runtime-attestation.json" || true
+        else
+            ods_pixel_run_as_owner "$owner" "$home" rm -f -- \
+                "$home/.local/share/pixel/runtime-attestation.json" || true
+        fi
         return 1
     fi
     old_contract="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1

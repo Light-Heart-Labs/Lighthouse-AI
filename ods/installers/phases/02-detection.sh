@@ -642,6 +642,7 @@ if [[ -f "$INSTALL_DIR/.env" && "${ODS_RESELECT_MODEL:-false}" != "true" && "${T
                 --catalog "$SCRIPT_DIR/config/model-library.json" \
                 --imports "$INSTALL_DIR/data/model-imports.json" \
                 --models-dir "$INSTALL_DIR/data/models" \
+                --state "$INSTALL_DIR/data/model-state.json" \
                 --backend "${GPU_BACKEND:-unknown}" \
                 --memory-type "${GPU_MEMORY_TYPE:-discrete}" \
                 --vram-mb "${GPU_VRAM:-0}" \

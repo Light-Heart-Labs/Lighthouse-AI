@@ -1156,6 +1156,21 @@ chmod 0600 "$reconcile_marker"
 check test "$(_ods_pixel_managed_source_ref "$owner" "$reconcile_home")" = "$reconcile_ref"
 reconcile_backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$reconcile_home" "$reconcile_answers")"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-old" and v["modelName"] == "ODS Local qwen-old"' "$reconcile_backup/rollback-onboarding.json"
+rm -f "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+missing_attestation_backup="$(_ods_pixel_model_reconciliation_snapshot \
+    "$owner" "$reconcile_home" "$reconcile_answers")"
+check test ! -e "$missing_attestation_backup/runtime-attestation.json"
+ln -s "$reconcile_config" "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+if _ods_pixel_model_reconciliation_snapshot "$owner" "$reconcile_home" \
+    "$reconcile_answers" >/dev/null 2>&1; then
+    fail "symlink Pixel runtime attestation rejected during model snapshot"
+else
+    pass "symlink Pixel runtime attestation rejected during model snapshot"
+fi
+rm -f "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+printf '%s\n' '{"kind":"pixel-runtime-attestation"}' \
+    > "$reconcile_home/.local/share/pixel/runtime-attestation.json"
+chmod 0600 "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" \
     qwen-new 65536 2048 true
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new" and v["modelContextWindow"] == 65536 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' "$reconcile_answers"

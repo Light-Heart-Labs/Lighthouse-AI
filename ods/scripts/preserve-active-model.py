@@ -12,9 +12,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import platform
 import re
 import shlex
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -137,6 +139,70 @@ def load_records(catalog_path: Path, imports_path: Path | None) -> list[dict[str
     return records
 
 
+def load_verified_active_state(path: Path | None) -> dict[str, Any] | None:
+    """Return only a completed, owner-custodied local switchboard proof."""
+    if path is None:
+        return None
+    try:
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o022
+            or info.st_size <= 0
+            or info.st_size > 2 * 1024 * 1024
+        ):
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "ods.model-state.v1":
+        return None
+    active = payload.get("active")
+    desired = payload.get("desired")
+    availability = payload.get("availability")
+    if not isinstance(active, dict) or not isinstance(desired, dict) or not isinstance(availability, dict):
+        return None
+    proof = active.get("proof")
+    backend = active.get("backend")
+    catalog_id = active.get("catalogId")
+    runtime_model_id = active.get("runtimeModelId")
+    context_length = positive_int(active.get("contextLength"))
+    route_seq = positive_int(active.get("routeSeq"))
+    if (
+        payload.get("operation") is not None
+        or availability.get("mode") != "serve_active"
+        or desired.get("catalogId") != catalog_id
+        or route_seq is None
+        or positive_int(payload.get("routeSeq")) != route_seq
+        or not isinstance(catalog_id, str)
+        or not catalog_id
+        or not isinstance(runtime_model_id, str)
+        or Path(runtime_model_id).name != runtime_model_id
+        or not runtime_model_id.lower().endswith(".gguf")
+        or context_length is None
+        or context_length < 1024
+        or context_length > 9_007_199_254_740_991
+        or not isinstance(active.get("verifiedAt"), str)
+        or not active.get("verifiedAt")
+        or not isinstance(proof, dict)
+        or proof.get("completion") is not True
+        or proof.get("identity") != runtime_model_id
+        or not isinstance(backend, dict)
+        or backend.get("kind") != "llama-server"
+        or backend.get("endpointId") != "llama-server-default"
+        or backend.get("nativeRoute") is not None
+    ):
+        return None
+    return {
+        "catalogId": catalog_id,
+        "runtimeModelId": runtime_model_id,
+        "contextLength": context_length,
+    }
+
+
 def manifest_for(record: dict[str, Any]) -> list[dict[str, Any]] | None:
     primary = str(record.get("gguf_file") or "").strip()
     if not primary or Path(primary).name != primary or not primary.lower().endswith(".gguf"):
@@ -249,13 +315,24 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
     ):
         return None
 
-    active_file = env.get("GGUF_FILE", "").strip()
-    if not active_file or Path(active_file).name != active_file:
-        return None
     records = load_records(args.catalog, args.imports)
-    matches = [
-        item for item in records if str(item.get("gguf_file") or "").lower() == active_file.lower()
-    ]
+    verified_state = load_verified_active_state(args.state)
+    state_authoritative = verified_state is not None
+    if state_authoritative:
+        active_file = str(verified_state["runtimeModelId"])
+        matches = [
+            item
+            for item in records
+            if item.get("id") == verified_state["catalogId"]
+            and str(item.get("gguf_file") or "") == active_file
+        ]
+    else:
+        active_file = env.get("GGUF_FILE", "").strip()
+        if not active_file or Path(active_file).name != active_file:
+            return None
+        matches = [
+            item for item in records if str(item.get("gguf_file") or "").lower() == active_file.lower()
+        ]
     if len(matches) != 1:
         return None
     model = matches[0]
@@ -285,20 +362,25 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
         actual_bytes += size
 
     llm_model = str(model.get("llm_model_name") or model.get("id") or "").strip()
-    if not llm_model or (env.get("LLM_MODEL") and env["LLM_MODEL"] != llm_model):
+    if not llm_model or (
+        not state_authoritative and env.get("LLM_MODEL") and env["LLM_MODEL"] != llm_model
+    ):
         return None
     primary = next(item for item in manifest if item["file"] == str(model["gguf_file"]))
     for key, expected in (
         ("GGUF_URL", primary["url"]),
         ("GGUF_SHA256", primary["sha256"]),
     ):
-        if env.get(key) and env[key] != expected:
+        if not state_authoritative and env.get(key) and env[key] != expected:
             return None
 
-    context_values = [positive_int(env.get(key)) for key in ("MAX_CONTEXT", "CTX_SIZE") if env.get(key)]
-    if not context_values or any(value is None for value in context_values) or len(set(context_values)) != 1:
-        return None
-    context = int(context_values[0])
+    if state_authoritative:
+        context = int(verified_state["contextLength"])
+    else:
+        context_values = [positive_int(env.get(key)) for key in ("MAX_CONTEXT", "CTX_SIZE") if env.get(key)]
+        if not context_values or any(value is None for value in context_values) or len(set(context_values)) != 1:
+            return None
+        context = int(context_values[0])
     # Dashboard activation accepts advanced custom contexts above the catalog's
     # declared recommendation and commits only after the live runtime proves
     # the exact value. Preserve that already-qualified operator choice instead
@@ -306,7 +388,14 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
     if context < 1024 or context > 9_007_199_254_740_991:
         return None
 
-    profile_id = env.get("MODEL_RUNTIME_PROFILE", "")
+    reuse_env_runtime = (
+        not state_authoritative
+        or (
+            env.get("GGUF_FILE", "").strip() == active_file
+            and env.get("LLM_MODEL", "").strip() == llm_model
+        )
+    )
+    profile_id = env.get("MODEL_RUNTIME_PROFILE", "") if reuse_env_runtime else ""
     runtime_profile: dict[str, Any] | None = None
     if profile_id:
         profiles = model.get("runtime_profiles")
@@ -315,16 +404,25 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
         profile_matches = [
             item for item in profiles if isinstance(item, dict) and str(item.get("id") or "") == profile_id
         ]
-        if len(profile_matches) != 1 or not profile_is_eligible(profile_matches[0], args):
+        if len(profile_matches) != 1:
             return None
-        runtime_profile = profile_matches[0]
+        if profile_is_eligible(profile_matches[0], args):
+            runtime_profile = profile_matches[0]
+        elif state_authoritative:
+            # The completed switchboard proof is enough to preserve the model,
+            # but a profile that no longer fits freshly observed hardware must
+            # not carry stale GPU, KV-cache, or memory arguments forward.
+            profile_id = ""
+            reuse_env_runtime = False
+        else:
+            return None
 
     declared_mb = positive_int(model.get("size_mb")) or 0
     actual_mb = max(1, math.ceil(actual_bytes / (1024 * 1024)))
     profile_env = runtime_profile.get("env") if runtime_profile and isinstance(runtime_profile.get("env"), dict) else {}
     runtime_values: dict[str, str] = {}
     for key in RUNTIME_KEYS:
-        if key in env:
+        if reuse_env_runtime and key in env:
             value = env[key]
         elif key in profile_env and profile_env[key] is not None:
             value = str(profile_env[key])
@@ -341,7 +439,7 @@ def preserved_contract(args: argparse.Namespace) -> dict[str, str] | None:
     if image and not re.fullmatch(r"[A-Za-z0-9._/@:+-]{1,300}", image):
         return None
 
-    old_source = env.get("MODEL_SELECTION_SOURCE", "")
+    old_source = "dashboard" if state_authoritative else env.get("MODEL_SELECTION_SOURCE", "")
     recommended_file = env.get("MODEL_RECOMMENDED_GGUF", "")
     if old_source in {"installer", "dashboard", "operator", "preserved-local"}:
         source = old_source
@@ -373,6 +471,7 @@ def main() -> int:
     parser.add_argument("--catalog", type=Path, required=True)
     parser.add_argument("--imports", type=Path)
     parser.add_argument("--models-dir", type=Path, required=True)
+    parser.add_argument("--state", type=Path)
     parser.add_argument("--backend", default="unknown")
     parser.add_argument("--memory-type", default="discrete")
     parser.add_argument("--vram-mb", type=float, default=0)
