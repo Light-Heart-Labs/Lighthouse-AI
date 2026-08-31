@@ -829,9 +829,9 @@ class TestWriteLemonadeConfig:
         _write_lemonade_config(tmp_path, "Qwen3.5-9B-Q4_K_M.gguf")
 
         content = (litellm_dir / "lemonade.yaml").read_text()
-        assert "model: openai/extra.Qwen3.5-9B-Q4_K_M.gguf" in content
-        assert "api_base: http://llama-server:8080/api/v1" in content
-        assert "api_key: sk-lemonade" in content
+        assert 'model: "openai/extra.Qwen3.5-9B-Q4_K_M.gguf"' in content
+        assert 'api_base: "http://llama-server:8080/api/v1"' in content
+        assert 'api_key: "sk-lemonade"' in content
         assert "extra_body:" in content
         assert "chat_template_kwargs:" in content
         assert "enable_thinking: false" in content
@@ -870,8 +870,8 @@ class TestWriteLemonadeConfig:
         _write_lemonade_config(tmp_path, "Qwen3.5-9B-Q4_K_M.gguf")
 
         content = (litellm_dir / "lemonade.yaml").read_text()
-        assert "api_key: sk-from-env-file-12345" in content
-        assert "api_key: sk-lemonade" not in content
+        assert 'api_key: "sk-from-env-file-12345"' in content
+        assert 'api_key: "sk-lemonade"' not in content
 
     def test_prefers_persisted_exact_model_id(self, tmp_path):
         litellm_dir = tmp_path / "config" / "litellm"
@@ -884,7 +884,7 @@ class TestWriteLemonadeConfig:
         _write_lemonade_config(tmp_path, "Modern-Model.gguf")
 
         content = (litellm_dir / "lemonade.yaml").read_text(encoding="utf-8")
-        assert "model: openai/Modern-Model" in content
+        assert 'model: "openai/Modern-Model"' in content
         assert "extra.Modern-Model.gguf" not in content
 
     def test_overwrites_previous(self, tmp_path):
@@ -896,7 +896,7 @@ class TestWriteLemonadeConfig:
 
         content = (litellm_dir / "lemonade.yaml").read_text()
         assert "old-model.gguf" not in content
-        assert "model: openai/extra.new-model.gguf" in content
+        assert 'model: "openai/extra.new-model.gguf"' in content
 
     def test_file_path(self, tmp_path):
         litellm_dir = tmp_path / "config" / "litellm"
@@ -4265,8 +4265,8 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 200
         content = lemonade_yaml.read_text(encoding="utf-8")
-        assert "api_key: sk-inline-from-env-file-67890" in content
-        assert "api_key: sk-lemonade" not in content
+        assert 'api_key: "sk-inline-from-env-file-67890"' in content
+        assert 'api_key: "sk-lemonade"' not in content
         assert "enable_thinking: false" in content
         env = _mod.load_env(env_path)
         assert env["LEMONADE_MODEL"] == "extra.new-model.gguf"
@@ -4383,7 +4383,7 @@ class TestModelActivateRollback:
         assert state["active"]["runtimeModelId"] == "Modern-Model"
         assert state["active"]["contextLength"] == 4096
         assert "LEMONADE_MODEL=Modern-Model" in env_path.read_text(encoding="utf-8")
-        assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
+        assert 'model: "openai/Modern-Model"' in lemonade_yaml.read_text(encoding="utf-8")
         assert 'default: "Modern-Model"' in hermes_live.read_text(encoding="utf-8")
         assert 'default: "Modern-Model"' in hermes_template.read_text(encoding="utf-8")
         for path in (opencode_config, opencode_compat):
@@ -4642,7 +4642,7 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 200
         content = lemonade_yaml.read_text(encoding="utf-8")
-        assert "model: openai/extra.new-model.gguf" in content
+        assert 'model: "openai/extra.new-model.gguf"' in content
         assert ["docker", "restart", "ods-litellm"] in calls
 
     def test_windows_lemonade_runtime_ensure_persists_config_without_dependents(
@@ -4706,7 +4706,7 @@ class TestModelActivateRollback:
         assert "GGUF_FILE=new-model.gguf" in updated_env
         assert "LLM_MODEL=target-model" in updated_env
         assert "LEMONADE_MODEL=Modern-Model" in updated_env
-        assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
+        assert 'model: "openai/Modern-Model"' in lemonade_yaml.read_text(encoding="utf-8")
 
     def test_windows_lemonade_runtime_ensure_rolls_back_renderer_failure(
         self, tmp_path, monkeypatch,
