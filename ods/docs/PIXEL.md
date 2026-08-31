@@ -142,10 +142,14 @@ an installer success message is never treated as sufficient custody evidence.
 
 The default policy provides thirteen read-only named host actions. Identity
 and platform observations use `host.identity`, `host.kernel`,
-`host.architecture`, `host.platform`, and `host.os-release`. Broader machine
-exploration uses `host.processes`, `host.services`, `host.cpu`, `host.memory`,
+`host.architecture`, `host.platform`, and `host.os-release`. Broad machine
+exploration combines identity, kernel, platform, and operating-system evidence
+with `host.processes`, `host.services`, `host.cpu`, `host.memory`,
 `host.storage`, `host.network-addresses`, `host.network-routes`, and
-`host.listening-ports`.
+`host.listening-ports`. It does not require the redundant
+`host.architecture` action because both platform and CPU observations already
+carry architecture evidence; an explicit architecture request still requires
+that dedicated action.
 
 These actions intentionally expose useful host state without exposing a raw
 privileged shell. Process observations omit command arguments and environment

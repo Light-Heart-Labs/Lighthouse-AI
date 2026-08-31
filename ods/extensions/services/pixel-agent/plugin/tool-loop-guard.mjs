@@ -139,6 +139,9 @@ export const OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE =
 export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel submitted Operations work but did not obtain a matching terminal broker result in this response. Treat the host outcome as pending or unverified, not completed.";
 
+export const OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX =
+  "Pixel completed its submitted Operations work but did not request every required host observation.";
+
 export const OPERATIONS_WRONG_ACTION_REASON =
   "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
 
@@ -1884,8 +1887,19 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
   const hostContext = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i.test(text);
-  const broadHostExploration = hostContext &&
+  const hostFacetCount = [
+    /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i,
+    /\b(?:process|processes|process inventory)\b/i,
+    /\b(?:systemd|system services?|service inventory)\b/i,
+    /\b(?:cpu|processor|hardware)\b/i,
+    /\b(?:memory|ram|swap)\b/i,
+    /\b(?:disk|filesystem|storage|mounts?)\b/i,
+    /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i,
+  ].filter((pattern) => pattern.test(text)).length;
+  const hostExplorationIntent =
     /\b(?:explore|inspect|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
+  const broadHostExploration = hostContext && hostExplorationIntent &&
+    (hostFacetCount === 0 || hostFacetCount >= 3);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const actions = [];
@@ -1917,7 +1931,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("host.network-addresses", "host.network-routes", "host.listening-ports");
   }
   if (broadHostExploration) {
-    actions.push("host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release");
+    actions.push("host.identity", "host.kernel", "host.platform", "host.os-release");
   }
   if (extensionCatalog) actions.push("ods.extensions.search");
   if (extensionLifecycle) {
@@ -1927,6 +1941,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   return {
     required:
       explicitOperations || hostEvidence || broadHostExploration ||
+      (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
       extensionCatalog || Boolean(extensionLifecycle),
     actions: [...new Set(actions)],
   };
@@ -3100,6 +3115,27 @@ export function createToolLoopGuard({
         state.operationsTerminalJobs
       );
       if (state.operationsRequiredActions.size > 0) {
+        const hostOnly = [...state.operationsRequiredActions].every(
+          (action) => action.startsWith("host.")
+        );
+        const terminalActions = hostOnly
+          ? new Set(
+            [...state.operationsTerminalJobs.values()].flatMap((outcome) =>
+              outcome.actions.map(({ action }) => action)
+            )
+          )
+          : new Set();
+        const missingActions = hostOnly
+          ? [...state.operationsRequiredActions].filter((action) => !terminalActions.has(action))
+          : [];
+        if (hostOnly && missingActions.length > 0) {
+          return {
+            status: "failed",
+            text: `${OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX} Missing: ${missingActions
+              .map((action) => `\`${action}\``)
+              .join(", ")}.`,
+          };
+        }
         if (!evidenceText) {
           return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
         }

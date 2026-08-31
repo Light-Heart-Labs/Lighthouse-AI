@@ -27,6 +27,7 @@ import {
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX,
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
@@ -743,7 +744,7 @@ test("classifies explicit host evidence as Operations work", () => {
   );
 });
 
-test("classifies broad host exploration into the full typed read-only inventory", () => {
+test("classifies broad host exploration into a useful nonredundant typed inventory", () => {
   const result = userMessageOperationsRequirements(
     [],
     "Explore the ODS host machine you are running on and tell me what is here."
@@ -752,7 +753,7 @@ test("classifies broad host exploration into the full typed read-only inventory"
   assert.deepEqual(
     new Set(result.actions),
     new Set([
-      "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
+      "host.identity", "host.kernel", "host.platform", "host.os-release",
       "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
       "host.network-addresses", "host.network-routes", "host.listening-ports",
     ])
@@ -760,6 +761,14 @@ test("classifies broad host exploration into the full typed read-only inventory"
   assert.deepEqual(
     userMessageOperationsRequirements([], "Explain process management in this application."),
     { required: false, actions: [] }
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "Inspect the ODS host storage capacity."),
+    { required: true, actions: ["host.storage"] }
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "Explain CPU scheduling in this system."),
+    { required: false, actions: ["host.cpu"] }
   );
 });
 
@@ -1659,7 +1668,6 @@ test("renders a structurally validated broad host inventory without command argu
   const actions = [
     ["identity", "host.identity", "light-worker\n"],
     ["kernel", "host.kernel", "Linux 6.6.87.2-microsoft-standard-WSL2\n"],
-    ["architecture", "host.architecture", "x86_64\n"],
     ["platform", "host.platform", "Linux light-worker 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"],
     ["os", "host.os-release", 'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\n'],
     ["processes", "host.processes", "42 1 michael S 12.5 1.2 python3\n"],
@@ -1718,6 +1726,43 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
   assert.match(text, /default via 192\.168\.1\.1 dev eth0/);
   assert.match(text, /Listening TCP\/UDP endpoints: 1/);
+});
+
+test("names a required host observation that the model omitted", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Tell me the ODS host hostname and kernel using Operations." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "host.identity" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step", target: "ods-host", action: "host.identity", exitCode: 0,
+            stdout: "light-worker\n", stderr: "",
+            outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `${OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX} Missing: \`host.kernel\`.`
+  );
 });
 
 test("rejects host-controlled storage, route, and listener text outside the evidence schema", () => {
