@@ -415,10 +415,11 @@ PY
         "$INSTALL_DIR/data/pixel/extension-manager.service" \
         "$INSTALL_DIR/bin/ods-pixel-approve" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
-        "$INSTALL_DIR/data/pixel/artifact-promoter.service" <<'PY'
+        "$INSTALL_DIR/data/pixel/artifact-promoter.service" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" <<'PY'
 import hashlib, pathlib, sys
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v6\0")
+digest.update(b"ods-pixel-contract-v7\0")
 for raw in sys.argv[1:]:
     payload = pathlib.Path(raw).read_bytes()
     digest.update(len(payload).to_bytes(8, "big"))

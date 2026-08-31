@@ -123,7 +123,7 @@ ods_pixel_uninstall_managed() {
         "$artifact_promoter_unit" "$artifact_promoter_program" "$artifact_promoter_source" \
         "$artifact_promoter_owner_unit" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
-        "$ops_owner_extension_catalog" "$ops_extension_source_program" \
+        "$ops_owner_extension_catalog" "$ops_extension_source_program" "$ops_dropin_source" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
         "$retired_releases" <<'PY'
 import hashlib
@@ -161,6 +161,7 @@ import sys
     ops_owner_policy_raw,
     ops_owner_extension_catalog_raw,
     ops_extension_source_program_raw,
+    ops_dropin_source_raw,
     current_raw,
     runtime_attestation_raw,
     staged_current_raw,
@@ -449,6 +450,7 @@ extension_manager_owner_unit = pathlib.Path(extension_manager_owner_unit_raw)
 approval_source = pathlib.Path(approval_source_raw)
 artifact_promoter_source = pathlib.Path(artifact_promoter_source_raw)
 artifact_promoter_owner_unit = pathlib.Path(artifact_promoter_owner_unit_raw)
+ops_dropin_source = pathlib.Path(ops_dropin_source_raw)
 extension_manager_present = (
     extension_manager_source.exists() or extension_manager_source.is_symlink()
 )
@@ -473,6 +475,9 @@ artifact_promoter_contract_present = (
 if artifact_promoter_contract_present:
     regular(artifact_promoter_source, owner_uid, 2 * 1024 * 1024)
     regular(artifact_promoter_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
+ops_dropin_contract_present = ops_dropin_source.exists() or ops_dropin_source.is_symlink()
+if ops_dropin_contract_present:
+    regular(ops_dropin_source, owner_uid, 2 * 1024 * 1024)
 if extension_catalog_present:
     regular(ops_owner_extension_catalog, owner_uid, 2 * 1024 * 1024, private=True)
     regular(ops_extension_source_program, owner_uid, 2 * 1024 * 1024)
@@ -569,6 +574,24 @@ if onboarding.exists():
                                 v6.update(len(payload).to_bytes(8, "big"))
                                 v6.update(payload)
                             accepted_contracts.add(v6.hexdigest())
+                            if ops_dropin_contract_present:
+                                v7 = hashlib.sha256()
+                                v7.update(b"ods-pixel-contract-v7\0")
+                                for payload in (
+                                    onboarding_payload,
+                                    policy_payload,
+                                    ops_owner_extension_catalog.read_bytes(),
+                                    ops_extension_source_program.read_bytes(),
+                                    extension_manager_source.read_bytes(),
+                                    extension_manager_owner_unit.read_bytes(),
+                                    approval_source.read_bytes(),
+                                    artifact_promoter_source.read_bytes(),
+                                    artifact_promoter_owner_unit.read_bytes(),
+                                    ops_dropin_source.read_bytes(),
+                                ):
+                                    v7.update(len(payload).to_bytes(8, "big"))
+                                    v7.update(payload)
+                                accepted_contracts.add(v7.hexdigest())
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
