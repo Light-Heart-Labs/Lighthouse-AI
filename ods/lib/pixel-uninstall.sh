@@ -1023,13 +1023,26 @@ if exists(state_dir):
         if mount_path == state_absolute or state_absolute in mount_path.parents:
             raise SystemExit(f"mount inside Pixel Operations Broker state: {mount_path}")
     root_device = root.st_dev
+    legacy_public_profiles = {
+        state_dir / ".bash_logout",
+        state_dir / ".bashrc",
+        state_dir / ".profile",
+    }
     for current, directories, files in os.walk(state_dir, topdown=True, followlinks=False):
         for name in (*directories, *files):
             path = pathlib.Path(current) / name
             info = path.lstat()
             if (stat.S_ISLNK(info.st_mode) or info.st_dev != root_device
                     or info.st_uid not in {broker_uid, owner_uid}
-                    or info.st_gid != broker_gid or info.st_mode & 0o007):
+                    or info.st_gid != broker_gid):
+                raise SystemExit(f"unsafe Pixel Operations Broker state entry: {path}")
+            if path in legacy_public_profiles:
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != broker_uid
+                        or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644
+                        or info.st_size > 64 * 1024):
+                    raise SystemExit(f"unsafe legacy Pixel Operations service profile: {path}")
+                continue
+            if info.st_mode & 0o007:
                 raise SystemExit(f"unsafe Pixel Operations Broker state entry: {path}")
             if stat.S_ISDIR(info.st_mode):
                 if info.st_mode & (stat.S_ISUID | stat.S_ISVTX):
@@ -1392,13 +1405,26 @@ for line in mount_lines:
     if mount_path == root_absolute or root_absolute in mount_path.parents:
         raise SystemExit(f"mount inside Pixel Operations Broker cleanup state: {mount_path}")
 root_device = root_info.st_dev
+legacy_public_profiles = {
+    root / ".bash_logout",
+    root / ".bashrc",
+    root / ".profile",
+}
 for current, directories, files in os.walk(root, topdown=True, followlinks=False):
     for name in (*directories, *files):
         path = pathlib.Path(current) / name
         info = path.lstat()
         if (stat.S_ISLNK(info.st_mode) or info.st_dev != root_device
                 or info.st_uid not in {broker_uid, owner_uid}
-                or info.st_gid != broker_gid or info.st_mode & 0o007):
+                or info.st_gid != broker_gid):
+            raise SystemExit(f"unsafe Pixel Operations Broker cleanup entry: {path}")
+        if path in legacy_public_profiles:
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != broker_uid
+                    or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644
+                    or info.st_size > 64 * 1024):
+                raise SystemExit(f"unsafe legacy Pixel Operations cleanup profile: {path}")
+            continue
+        if info.st_mode & 0o007:
             raise SystemExit(f"unsafe Pixel Operations Broker cleanup entry: {path}")
         if stat.S_ISDIR(info.st_mode):
             if info.st_mode & (stat.S_ISUID | stat.S_ISVTX):

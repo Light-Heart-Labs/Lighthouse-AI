@@ -603,7 +603,20 @@ else
     fail "legacy owner-primary-group writable Pixel broker source could not be safely removed"
 fi
 
-for drift_target in program broker-source-mode extension-program extension-catalog extension-manager-client \
+write_ops_fixture
+for profile in .bash_logout .bashrc .profile; do
+    printf '%s\n' fixture >"$OPS_STATE/$profile"
+    chmod 0644 "$OPS_STATE/$profile"
+done
+if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+    [[ ! -e "$OPS_STATE" && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" ]] \
+        && pass "bounded legacy system-account profiles are retired with the managed Operations state" \
+        || fail "bounded legacy Operations profiles left partial managed state"
+else
+    fail "bounded legacy Operations system-account profiles blocked safe cleanup"
+fi
+
+for drift_target in program broker-source-mode public-state-file extension-program extension-catalog extension-manager-client \
     extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
     artifact-promoter-program artifact-promoter-unit artifact-promoter-owner-unit \
     unit dropin dropin-source environment policy; do
@@ -611,6 +624,7 @@ for drift_target in program broker-source-mode extension-program extension-catal
     case "$drift_target" in
         program) printf '%s\n' '# drift' >>"$OPS_INSTALL/broker.py" ;;
         broker-source-mode) chmod 0666 "$INSTALL_DIR/data/pixel/source-d2a2b6be552126f294fb30ee5fb46872acf82c89/deploy/ops-broker/broker.py" ;;
+        public-state-file) printf '%s\n' unexpected >"$OPS_STATE/notes.txt"; chmod 0644 "$OPS_STATE/notes.txt" ;;
         extension-program) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-search.py" ;;
         extension-catalog) printf '%s\n' ' ' >>"$OPS_INSTALL/ods-extension-catalog.json" ;;
         extension-manager-client) printf '%s\n' '# drift' >>"$OPS_INSTALL/ods-extension-manager.py" ;;

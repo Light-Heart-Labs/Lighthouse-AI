@@ -335,6 +335,51 @@ _ods_pixel_verify_operations_policy_custody() {
     ods_sudo cmp -s -- "$source_policy" "$installed_policy"
 }
 
+_ods_pixel_harden_operations_state_profiles() {
+    local state_root="${1:-/var/lib/pixel-ops-broker}"
+    local broker_user="${2:-pixel-ops-broker}" broker_uid broker_gid
+    [[ "$state_root" == /* && "$state_root" != / \
+        && "$broker_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
+    broker_uid="$(ods_sudo id -u "$broker_user")" || return 1
+    broker_gid="$(ods_sudo id -g "$broker_user")" || return 1
+    [[ "$broker_uid" =~ ^[0-9]+$ && "$broker_gid" =~ ^[0-9]+$ ]] || return 1
+    ods_sudo python3 - "$state_root" "$broker_uid" "$broker_gid" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+uid = int(sys.argv[2])
+gid = int(sys.argv[3])
+root_info = root.lstat()
+if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != uid or root_info.st_gid != gid
+        or stat.S_IMODE(root_info.st_mode) != 0o750):
+    raise SystemExit("unsafe Pixel Operations state root")
+
+profiles = [root / name for name in (".bash_logout", ".bashrc", ".profile")]
+present = []
+for path in profiles:
+    if not path.exists() and not path.is_symlink():
+        continue
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != uid or info.st_gid != gid
+            or stat.S_IMODE(info.st_mode) not in {0o600, 0o640, 0o644}
+            or info.st_size > 64 * 1024):
+        raise SystemExit(f"unsafe Pixel Operations service profile: {path}")
+    present.append(path)
+
+# Validate the complete bounded set before changing any mode.
+for path in present:
+    os.chmod(path, 0o600, follow_symlinks=False)
+for path in present:
+    if stat.S_IMODE(path.lstat().st_mode) != 0o600:
+        raise SystemExit(f"could not harden Pixel Operations service profile: {path}")
+PY
+}
+
 _ods_pixel_managed_contract_matches() {
     local owner="$1" home="$2" contract_sha256="$3" marker config
     [[ "$contract_sha256" =~ ^[0-9a-f]{64}$ ]] || return 1
@@ -3067,6 +3112,10 @@ ods_pixel_install_default_agent() {
             ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
             return 1
         fi
+        if ! _ods_pixel_harden_operations_state_profiles; then
+            ai_bad "Pixel's Operations Broker service profiles could not be hardened safely."
+            return 1
+        fi
         if ! _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy"; then
             ai_bad "Pixel's root-custodied Operations policy does not match the ODS-managed policy."
             return 1
@@ -3083,6 +3132,10 @@ ods_pixel_install_default_agent() {
         fi
         if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
             ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
+            return 1
+        fi
+        if ! _ods_pixel_harden_operations_state_profiles; then
+            ai_bad "Pixel's Operations Broker service profiles could not be hardened safely."
             return 1
         fi
         if ! _ods_pixel_verify_operations_policy_custody "$owner" "$home" "$operations_policy"; then

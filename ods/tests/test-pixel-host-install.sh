@@ -73,6 +73,41 @@ else
 fi
 check test "$(cat "$probe_counter")" = 2
 
+profile_root="$TEST_ROOT/ops-state-profiles"
+mkdir -m 0750 "$profile_root"
+for profile in .bash_logout .bashrc .profile; do
+    printf '%s\n' fixture >"$profile_root/$profile"
+    chmod 0644 "$profile_root/$profile"
+done
+if (
+    ods_sudo() { "$@"; }
+    _ods_pixel_harden_operations_state_profiles "$profile_root" "$owner"
+); then
+    [[ "$(stat -c '%a' "$profile_root/.bash_logout")" == 600 \
+        && "$(stat -c '%a' "$profile_root/.bashrc")" == 600 \
+        && "$(stat -c '%a' "$profile_root/.profile")" == 600 ]] \
+        && pass "Operations Broker service profiles are hardened after Pixel account creation" \
+        || fail "Operations Broker service profiles retained public modes"
+else
+    fail "Operations Broker service profiles could not be hardened"
+fi
+
+rm -rf -- "$profile_root"
+mkdir -m 0750 "$profile_root"
+printf '%s\n' fixture >"$profile_root/.profile"
+chmod 0644 "$profile_root/.profile"
+ln -s /etc/passwd "$profile_root/.bashrc"
+if (
+    ods_sudo() { "$@"; }
+    _ods_pixel_harden_operations_state_profiles "$profile_root" "$owner"
+); then
+    fail "unsafe Operations Broker service profile was accepted"
+elif [[ "$(stat -c '%a' "$profile_root/.profile")" == 644 ]]; then
+    pass "Operations Broker profile hardening validates every target before mutation"
+else
+    fail "failed Operations Broker profile hardening caused partial mutation"
+fi
+
 home="$TEST_ROOT/home"
 mkdir -p "$home/.openclaw"
 printf '%s\n' '{"gateway":{"bind":"loopback"},"preserve":{"value":7}}' > "$home/.openclaw/openclaw.json"
