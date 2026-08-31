@@ -657,6 +657,72 @@ test("streaming response is buffered and replaced before false content is releas
   }
 });
 
+test("streaming response exposes only the host-authoritative clean-context recovery marker", async () => {
+  const safeText =
+    "Pixel did not submit the requested host or Operations work through the isolated Operations Broker.";
+  const gw = await fakeGateway({
+    verification: {
+      status: "failed",
+      text: safeText,
+      code: "operations-unavailable-zero-submissions",
+    },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({
+          stream: true,
+          messages: [{ role: "user", content: "inspect ODS" }],
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.ok(response.body.includes(safeText));
+      assert.ok(response.body.includes(
+        '\"pixel\":{\"schemaVersion\":1,\"recovery\":\"clean-context\",\"reason\":\"operations-unavailable-zero-submissions\"}'
+      ));
+      assert.equal(response.body.includes('\"content\":\"ok\"'), false);
+      assert.ok(response.body.includes("[DONE]"));
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("rejects recovery metadata outside the exact failed zero-submission contract", async () => {
+  const invalid = [
+    { status: "passed", code: "operations-unavailable-zero-submissions" },
+    { status: "failed", text: "safe", code: "unknown" },
+    {
+      status: "failed",
+      text: "safe",
+      code: "operations-unavailable-zero-submissions",
+      extra: true,
+    },
+  ];
+  for (const verification of invalid) {
+    const gw = await fakeGateway({ verification });
+    try {
+      const srv = await startIngress({ gatewayPort: gw.port });
+      try {
+        const response = await request(srv, "POST", "/v1/chat/completions", {
+          body: JSON.stringify({ messages: [{ role: "user", content: "inspect ODS" }] }),
+          headers: { "Content-Type": "application/json" },
+        });
+        assert.equal(response.status, 502);
+        assert.equal(JSON.parse(response.body).error.message, "verification state unavailable");
+      } finally {
+        await new Promise((resolve) => srv.close(resolve));
+      }
+    } finally {
+      await new Promise((resolve) => gw.server.close(resolve));
+    }
+  }
+});
+
 test("closing a silent downstream stream closes the active gateway transport", async () => {
   let markUpstreamClosed;
   const upstreamClosed = new Promise((resolve) => {

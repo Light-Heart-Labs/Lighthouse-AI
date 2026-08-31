@@ -388,6 +388,26 @@ async def test_chat_forwards_exact_body_and_narrow_edge_key_only():
 
 
 @pytest.mark.asyncio
+async def test_chat_preserves_the_host_authored_recovery_marker_verbatim():
+    marker = (
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+        b'"pixel":{"schemaVersion":1,"recovery":"clean-context",'
+        b'"reason":"operations-unavailable-zero-submissions"}}\n\n'
+    )
+    upstream = FakeResponse(
+        content_type="text/event-stream",
+        chunks=[marker, b"data: [DONE]\n\n"],
+    )
+    body = pixel.ChatStreamRequest.model_validate(
+        {"chat_id": "conversation_1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(upstream)):
+        response = await pixel.pixel_chat_stream(ConnectedRequest(), body)
+        streamed = await stream_body(response)
+    assert streamed == marker + b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
 async def test_chat_is_rejected_before_edge_during_model_activation(monkeypatch):
     async def active_model_lifecycle(*_args, **_kwargs):
         return {"lifecycleActive": True, "activeOperation": "model_activation"}

@@ -44,6 +44,9 @@ const CHAT_STORAGE_KEY = 'ods.pixel.chat.v1'
 const SAFE_CHAT_ID = /^[A-Za-z0-9_-]{1,128}$/
 const STOPPED_NOTICE = 'Stopped by you. Workspace changes completed before cancellation were preserved.'
 const MODEL_SWITCH_DETAIL = 'Model switch in progress; Pixel will be ready when activation completes'
+const CLEAN_CONTEXT_RECOVERY_REASON = 'operations-unavailable-zero-submissions'
+const CLEAN_CONTEXT_RECOVERY_NOTICE = 'The first attempt did not reach the Operations Broker, and the host verified that no work was submitted. Retrying once with a clean context…'
+const CLEAN_CONTEXT_RECOVERY_FAILED = 'Automatic recovery was attempted once, but Pixel again did not reach the Operations Broker. The host verified that no Operations work was submitted. Nothing was executed. Start a new chat or rephrase the request.'
 const STATUS_POLL_MS = 3000
 const OPS_STATUS_POLL_MS = 3000
 const OPS_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'rejected'])
@@ -105,6 +108,20 @@ export function parseApprovalReceipt(content) {
     jobId: match[3],
     planHash: match[4],
   }
+}
+
+export function isCleanContextRecoveryFrame(frame) {
+  const marker = frame?.pixel
+  return Boolean(
+    frame?.choices?.[0]?.finish_reason === 'stop'
+    && marker
+    && typeof marker === 'object'
+    && !Array.isArray(marker)
+    && Object.keys(marker).sort().join('\n') === ['reason', 'recovery', 'schemaVersion'].join('\n')
+    && marker.schemaVersion === 1
+    && marker.recovery === 'clean-context'
+    && marker.reason === CLEAN_CONTEXT_RECOVERY_REASON
+  )
 }
 
 export function OperationsApprovalCard({ content }) {
@@ -331,6 +348,7 @@ export default function Pixel({ systemStatus = null }) {
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
+  const contextStartRef = useRef(0)
   const inputRef = useRef(null)
   const scrollRef = useRef(null)
 
@@ -401,7 +419,7 @@ export default function Pixel({ systemStatus = null }) {
   useEffect(() => {
     if (sending) return
     try {
-      const storedMessages = boundedHistory(messages, '')
+      const storedMessages = boundedHistory(messages.slice(contextStartRef.current), '')
       globalThis.localStorage?.setItem(CHAT_STORAGE_KEY, JSON.stringify({
         schema: 1,
         chatId: chatIdRef.current,
@@ -421,10 +439,15 @@ export default function Pixel({ systemStatus = null }) {
     if (!trimmed || sending || status !== 'available' || trimmed.length > MAX_INPUT_LEN) return
 
     const userMessage = { role: 'user', content: trimmed }
+    const originalContextStart = contextStartRef.current
     // Local assistant messages carry UI-only status metadata. Keep the API
     // boundary exact so a completed or failed first turn cannot make the next
     // request fail the dashboard API's extra="forbid" contract.
-    const conversation = [...boundedHistory(messages, trimmed), userMessage]
+    const conversation = [
+      ...boundedHistory(messages.slice(originalContextStart), trimmed),
+      userMessage,
+    ]
+    contextStartRef.current = 0
     setMessages([...conversation, { role: 'assistant', content: '', status: 'streaming' }])
     setInput('')
     setSending(true)
@@ -433,94 +456,164 @@ export default function Pixel({ systemStatus = null }) {
 
     const controller = new AbortController()
     abortRef.current = controller
-    let reader
-    let assistantText = ''
-    let receivedDone = false
-    let receivedError = false
+    let latestAssistantText = ''
 
-    try {
-      const response = await fetch('/api/pixel/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatIdRef.current, messages: conversation }),
-        signal: controller.signal,
-      })
-      if (response.status === 409) {
-        let detail = MODEL_SWITCH_DETAIL
-        if (typeof response.json === 'function') {
-          try {
-            const payload = await response.json()
-            if (typeof payload?.detail === 'string' && payload.detail.trim()) detail = payload.detail
-          } catch {
-            // The fixed local fallback remains safe and actionable.
+    async function streamAttempt(chatId, attemptConversation) {
+      let reader
+      let assistantText = ''
+      let receivedDone = false
+      let receivedError = false
+      let recoveryEligible = false
+
+      try {
+        const response = await fetch('/api/pixel/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, messages: attemptConversation }),
+          signal: controller.signal,
+        })
+        if (response.status === 409) {
+          let detail = MODEL_SWITCH_DETAIL
+          if (typeof response.json === 'function') {
+            try {
+              const payload = await response.json()
+              if (typeof payload?.detail === 'string' && payload.detail.trim()) detail = payload.detail
+            } catch {
+              // The fixed local fallback remains safe and actionable.
+            }
+          }
+          return { kind: 'switching', detail }
+        }
+        if (!response.ok) throw new Error('chat unavailable')
+
+        reader = response.body?.getReader()
+        if (!reader) throw new Error('stream unavailable')
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!receivedDone) {
+          const { done, value } = await reader.read()
+          if (done) {
+            buffer += decoder.decode()
+            break
+          }
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const rawLine of lines) {
+            const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+            if (!line.startsWith('data:')) continue
+            const payload = line.slice(5).trimStart()
+            if (payload === '[DONE]') {
+              receivedDone = true
+              break
+            }
+
+            try {
+              const frame = JSON.parse(payload)
+              if (frame?.error) {
+                receivedError = true
+                setMessages(previous => replaceLastAssistant(previous, {
+                  content: 'Pixel could not complete the response.',
+                  status: 'error',
+                }))
+                continue
+              }
+              if (isCleanContextRecoveryFrame(frame)) recoveryEligible = true
+              const content = frame?.choices?.[0]?.delta?.content
+              if (typeof content === 'string' && content.length > 0) {
+                assistantText += content
+                latestAssistantText = assistantText
+                setMessages(previous => replaceLastAssistant(previous, {
+                  content: assistantText,
+                  status: 'streaming',
+                }))
+              }
+            } catch {
+              // Ignore malformed data frames; the server bounds and terminates the stream.
+            }
           }
         }
+
+        return {
+          kind: 'complete',
+          assistantText,
+          receivedDone,
+          receivedError,
+          recoveryEligible,
+        }
+      } finally {
+        reader?.releaseLock?.()
+      }
+    }
+
+    function finishAttempt(attempt, recovered = false) {
+      if (attempt.receivedError) return
+      if (attempt.receivedDone) {
+        setMessages(previous => replaceLastAssistant(previous, {
+          status: 'done',
+          ...(recovered ? { recovered: true } : {}),
+        }))
+        return
+      }
+      const content = attempt.assistantText
+        ? `${attempt.assistantText}\n\n_Response interrupted._`
+        : 'Connection interrupted'
+      setMessages(previous => replaceLastAssistant(previous, { content, status: 'error' }))
+    }
+
+    try {
+      let attempt = await streamAttempt(chatIdRef.current, conversation)
+      if (attempt.kind === 'switching') {
         setStatus('switching')
-        setStatusDetail(detail)
+        setStatusDetail(attempt.detail)
         setInput(trimmed)
+        contextStartRef.current = originalContextStart
         setMessages(messages)
         return
       }
-      if (!response.ok) throw new Error('chat unavailable')
 
-      reader = response.body?.getReader()
-      if (!reader) throw new Error('stream unavailable')
+      if (!attempt.receivedError && attempt.receivedDone && attempt.recoveryEligible) {
+        const retryChatId = makeChatId()
+        chatIdRef.current = retryChatId
+        contextStartRef.current = conversation.length - 1
+        latestAssistantText = ''
+        setMessages([
+          ...conversation,
+          {
+            role: 'assistant',
+            content: CLEAN_CONTEXT_RECOVERY_NOTICE,
+            status: 'recovering',
+          },
+        ])
 
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (!receivedDone) {
-        const { done, value } = await reader.read()
-        if (done) {
-          buffer += decoder.decode()
-          break
+        attempt = await streamAttempt(retryChatId, [userMessage])
+        if (attempt.kind === 'switching') {
+          contextStartRef.current = 0
+          setMessages([])
+          setInput(trimmed)
+          setStatus('switching')
+          setStatusDetail(`${attempt.detail}. The clean-context request is preserved.`)
+          return
         }
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const rawLine of lines) {
-          const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
-          if (!line.startsWith('data:')) continue
-          const payload = line.slice(5).trimStart()
-          if (payload === '[DONE]') {
-            receivedDone = true
-            break
-          }
-
-          try {
-            const frame = JSON.parse(payload)
-            if (frame?.error) {
-              receivedError = true
-              setMessages(previous => replaceLastAssistant(previous, {
-                content: 'Pixel could not complete the response.',
-                status: 'error',
-              }))
-              continue
-            }
-            const content = frame?.choices?.[0]?.delta?.content
-            if (typeof content === 'string' && content.length > 0) {
-              assistantText += content
-              setMessages(previous => replaceLastAssistant(previous, { content: assistantText }))
-            }
-          } catch {
-            // Ignore malformed data frames; the server bounds and terminates the stream.
-          }
+        if (!attempt.receivedError && attempt.receivedDone && attempt.recoveryEligible) {
+          setMessages(previous => replaceLastAssistant(previous, {
+            content: CLEAN_CONTEXT_RECOVERY_FAILED,
+            status: 'error',
+          }))
+          return
         }
+        finishAttempt(attempt, true)
+        return
       }
 
-      if (!receivedError && receivedDone) {
-        setMessages(previous => replaceLastAssistant(previous, { status: 'done' }))
-      } else if (!receivedError) {
-        const content = assistantText
-          ? `${assistantText}\n\n_Response interrupted._`
-          : 'Connection interrupted'
-        setMessages(previous => replaceLastAssistant(previous, { content, status: 'error' }))
-      }
+      finishAttempt(attempt)
     } catch (error) {
       if (error?.name !== 'AbortError') {
         setMessages(previous => replaceLastAssistant(previous, {
-          content: assistantText || 'Request failed',
+          content: latestAssistantText || 'Request failed',
           status: 'error',
         }))
       }
@@ -529,7 +622,6 @@ export default function Pixel({ systemStatus = null }) {
       setStopping(false)
       setStopError('')
       if (abortRef.current === controller) abortRef.current = null
-      reader?.releaseLock?.()
     }
   }, [input, messages, sending, status])
 
@@ -581,6 +673,7 @@ export default function Pixel({ systemStatus = null }) {
   const startNewChat = useCallback(() => {
     if (sending) return
     chatIdRef.current = makeChatId()
+    contextStartRef.current = 0
     setMessages([])
     setInput('')
     inputRef.current?.focus?.()
@@ -747,6 +840,12 @@ export default function Pixel({ systemStatus = null }) {
                 <div role="status" className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-amber-300">
                   <Square className="h-3 w-3 fill-current" />
                   Response stopped
+                </div>
+              )}
+              {message.recovered && (
+                <div role="status" className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-emerald-300">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Recovered with a clean context
                 </div>
               )}
               {message.role === 'assistant' && message.content ? (

@@ -35,6 +35,7 @@ import {
   OPERATIONS_LOOP_ABORT_REASON,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
+  OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
   OPERATIONS_UNVERIFIED_DELIVERY_PREFIX,
   OPERATIONS_WRONG_ACTION_REASON,
   PRIVATE_URL_REQUEST_REASON,
@@ -1608,6 +1609,11 @@ test("fails closed when Operations work is not submitted or routing is ignored",
   });
   assert.deepEqual(aborts, ["session-1"]);
   assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
+    code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
+  });
 });
 
 test("routes from only the current dashboard message, not stale transcript context", () => {

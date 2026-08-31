@@ -26,6 +26,8 @@ const MAX_NONSTREAM_RESPONSE = 2 * 1024 * 1024; // 2 MiB non-stream response cap
 const MAX_STREAM_RESPONSE = 4 * 1024 * 1024; // 4 MiB terminal completion cap for SSE clients
 const MAX_VERIFICATION_RESPONSE = 4096;
 const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE =
+  "operations-unavailable-zero-submissions";
 const CONNECT_TIMEOUT_MS = 5000;
 // OpenClaw's ODS-owned provider is capped at 30 minutes. Keep the private
 // ingress one bounded step outside that ceiling so CPU-only prefill can finish
@@ -619,8 +621,13 @@ function parseVerificationResponse(value) {
     status === "pending" ||
     status === "failed" ||
     (status === "passed" && Object.prototype.hasOwnProperty.call(value, "text"));
+  const hasRecoveryCode =
+    status === "failed" &&
+    value.code === OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE;
   const expectedKeys = carriesAuthoritativeText
-    ? ["status", "text"]
+    ? hasRecoveryCode
+      ? ["status", "text", "code"]
+      : ["status", "text"]
     : ["status"];
   if (
     Object.keys(value).sort().join("\n") !== expectedKeys.sort().join("\n") ||
@@ -685,7 +692,7 @@ function applyVerificationToCompletion(completion, verification) {
   };
 }
 
-function completionSse(completion) {
+function completionSse(completion, verification) {
   const runId = completion?.id;
   const text = completion?.choices?.[0]?.message?.content;
   if (!OPENAI_RUN_ID.test(runId) || typeof text !== "string") {
@@ -699,17 +706,26 @@ function completionSse(completion) {
     Number.isSafeInteger(completion?.created) && completion.created > 0
       ? completion.created
       : Math.floor(Date.now() / 1000);
-  const envelope = (delta, finishReason) => JSON.stringify({
+  const envelope = (delta, finishReason, terminal = false) => JSON.stringify({
     id: runId,
     object: "chat.completion.chunk",
     created,
     model,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
+    ...(terminal && verification?.code === OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE
+      ? {
+          pixel: {
+            schemaVersion: 1,
+            recovery: "clean-context",
+            reason: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
+          },
+        }
+      : {}),
   });
   return Buffer.from(
     `data: ${envelope({ role: "assistant" }, null)}\n\n` +
       `data: ${envelope({ content: text }, null)}\n\n` +
-      `data: ${envelope({}, "stop")}\n\n` +
+      `data: ${envelope({}, "stop", true)}\n\n` +
       "data: [DONE]\n\n",
     "utf8"
   );
@@ -789,7 +805,10 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
           controller.signal,
           deps
         );
-        res.end(completionSse(applyVerificationToCompletion(completion, verification)));
+        res.end(completionSse(
+          applyVerificationToCompletion(completion, verification),
+          verification
+        ));
       } catch {
         if (!res.destroyed && !res.writableEnded) {
           res.write('data: {"error":{"message":"upstream stream failed","type":"pixel_ingress_error"}}\n\n');

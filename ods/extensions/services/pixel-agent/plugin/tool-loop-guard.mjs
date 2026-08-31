@@ -133,6 +133,8 @@ export const OPERATIONS_LOOP_ABORT_REASON =
 
 export const OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX =
   "Pixel did not submit the requested host or Operations work through the isolated Operations Broker. No sandbox command was accepted as host evidence.";
+export const OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE =
+  "operations-unavailable-zero-submissions";
 
 export const OPERATIONS_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel submitted Operations work but did not obtain a matching terminal broker result in this response. Treat the host outcome as pending or unverified, not completed.";
@@ -2825,7 +2827,11 @@ export function createToolLoopGuard({
         };
       }
       if (state.operationsSubmittedJobs.size === 0) {
-        return { status: "failed", text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX };
+        return {
+          status: "failed",
+          text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
+          code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
+        };
       }
       if (
         [...state.operationsSubmittedJobs.keys()].some(

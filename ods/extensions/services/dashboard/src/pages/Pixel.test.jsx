@@ -4,7 +4,12 @@ import { act } from '@testing-library/react'
 
 // The repository's base ESLint profile does not mark JSX identifiers as uses.
 // eslint-disable-next-line no-unused-vars
-import Pixel, { OperationsApprovalCard, formatElapsed, parseApprovalReceipt } from './Pixel'
+import Pixel, {
+  OperationsApprovalCard,
+  formatElapsed,
+  isCleanContextRecoveryFrame,
+  parseApprovalReceipt,
+} from './Pixel'
 
 const response = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -74,6 +79,30 @@ describe('Pixel', () => {
     })
     expect(parseApprovalReceipt(`${content} Approve it now.`)).toBeNull()
     expect(parseApprovalReceipt(content.replace('crewai', '../../shadow'))).toBeNull()
+  })
+
+  it('accepts only the exact host-authored clean-context terminal marker', () => {
+    const frame = {
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      pixel: {
+        schemaVersion: 1,
+        recovery: 'clean-context',
+        reason: 'operations-unavailable-zero-submissions',
+      },
+    }
+    expect(isCleanContextRecoveryFrame(frame)).toBe(true)
+    expect(isCleanContextRecoveryFrame({
+      ...frame,
+      pixel: { ...frame.pixel, extra: true },
+    })).toBe(false)
+    expect(isCleanContextRecoveryFrame({
+      ...frame,
+      choices: [{ delta: {}, finish_reason: null }],
+    })).toBe(false)
+    expect(isCleanContextRecoveryFrame({
+      ...frame,
+      pixel: { ...frame.pixel, reason: 'model-prose-matched' },
+    })).toBe(false)
   })
 
   it('renders a host-verified approval card without approving in the browser', async () => {
@@ -375,6 +404,121 @@ describe('Pixel', () => {
       { role: 'user', content: 'second turn' },
     ])
     expect(body.messages.every(message => Object.keys(message).sort().join(',') === 'content,role')).toBe(true)
+  })
+
+  it('recovers once from a host-authoritative zero-submission marker with clean future context', async () => {
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1,
+      chatId: 'long-running-chat',
+      messages: [
+        { role: 'user', content: 'old context' },
+        { role: 'assistant', content: 'old answer' },
+      ],
+    }))
+    const marker = JSON.stringify({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      pixel: {
+        schemaVersion: 1,
+        recovery: 'clean-context',
+        reason: 'operations-unavailable-zero-submissions',
+      },
+    })
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'unverified model prose' } }] }),
+      marker,
+      '[DONE]',
+    ]))
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Verified recovery result' } }] }),
+      '[DONE]',
+    ]))
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Follow-up result' } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    const textarea = screen.getByPlaceholderText('Message Pixel...')
+    fireEvent.change(textarea, { target: { value: 'Inspect the installed extension.' } })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    expect(await screen.findByText('Verified recovery result')).toBeInTheDocument()
+    expect(screen.getByText('Recovered with a clean context')).toBeInTheDocument()
+    expect(screen.queryByText('unverified model prose')).not.toBeInTheDocument()
+    const firstTwo = globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')
+    expect(firstTwo).toHaveLength(2)
+    const firstBody = JSON.parse(firstTwo[0][1].body)
+    const retryBody = JSON.parse(firstTwo[1][1].body)
+    expect(retryBody.chat_id).not.toBe(firstBody.chat_id)
+    expect(retryBody.messages).toEqual([
+      { role: 'user', content: 'Inspect the installed extension.' },
+    ])
+
+    fireEvent.change(textarea, { target: { value: 'Continue from that verified result.' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    expect(await screen.findByText('Follow-up result')).toBeInTheDocument()
+    const chatCalls = globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')
+    expect(chatCalls).toHaveLength(3)
+    expect(JSON.parse(chatCalls[2][1].body)).toEqual({
+      chat_id: retryBody.chat_id,
+      messages: [
+        { role: 'user', content: 'Inspect the installed extension.' },
+        { role: 'assistant', content: 'Verified recovery result' },
+        { role: 'user', content: 'Continue from that verified result.' },
+      ],
+    })
+  })
+
+  it('stops honestly after a second host-authoritative zero-submission marker', async () => {
+    const marker = JSON.stringify({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      pixel: {
+        schemaVersion: 1,
+        recovery: 'clean-context',
+        reason: 'operations-unavailable-zero-submissions',
+      },
+    })
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([marker, '[DONE]']))
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([marker, '[DONE]']))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'Inspect ODS through Operations.' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    expect(await screen.findByText(/Automatic recovery was attempted once/)).toBeInTheDocument()
+    expect(globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')).toHaveLength(2)
+    expect(screen.queryByText('Recovered with a clean context')).not.toBeInTheDocument()
+  })
+
+  it('never retries from matching model prose without the structured host marker', async () => {
+    const prose = 'Pixel did not submit the requested host or Operations work through the isolated Operations Broker.'
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: prose } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'Discuss the fallback wording.' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    expect(await screen.findByText(prose)).toBeInTheDocument()
+    expect(globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')).toHaveLength(1)
   })
 
   it('starts a clean conversation with a new opaque chat id', async () => {
