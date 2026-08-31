@@ -343,6 +343,10 @@ def _bounded_status(value: Any) -> str:
     return value
 
 
+def _same_effective_status(left: str, right: str) -> bool:
+    return left == right or {left, right} <= {"enabled", "cli_installed"}
+
+
 def _detail(port: int, credential: str, extension_id: str) -> dict[str, Any]:
     encoded = urllib.parse.quote(extension_id, safe="")
     status, value = _request_json(
@@ -495,7 +499,10 @@ def _execute(
         "install": previous_status == "not_installed",
         "enable": previous_status == "disabled",
         "disable": previous_status in {"enabled", "cli_installed"},
-        "remove": previous_status == "disabled",
+        # Removal owns its safe stop prerequisite. The immutable broker plan
+        # still grants only this one typed lifecycle action, while the manager
+        # verifies disabled before issuing the data-preserving removal request.
+        "remove": previous_status in {"enabled", "cli_installed", "disabled"},
     }[action]
     if not transition_allowed:
         return _public_result(
@@ -513,12 +520,29 @@ def _execute(
 
     current_status = previous_status
     try:
+        if action == "remove" and previous_status in {"enabled", "cli_installed"}:
+            _mutate(
+                port=port,
+                credential=credential,
+                action="disable",
+                extension_id=extension_id,
+                previous=previous_status,
+            )
+            current_status = _wait_for_status(
+                port=port,
+                credential=credential,
+                extension_id=extension_id,
+                expected=frozenset({"disabled"}),
+                deadline=time.monotonic() + 120,
+            )
+            if current_status != "disabled":
+                raise ManagerError("extension did not reach the removal prerequisite")
         _mutate(
             port=port,
             credential=credential,
             action=action,
             extension_id=extension_id,
-            previous=previous_status,
+            previous=current_status,
         )
         current_status = _wait_for_status(
             port=port,
@@ -602,13 +626,41 @@ def _execute(
             current_status = rolled_back_status
         except ManagerError:
             rollback_succeeded = False
+    elif not succeeded and action == "remove":
+        # A remove request is irreversible once the host reaches
+        # not_installed. Before that point, restore an enabled extension if
+        # the safe stop prerequisite succeeded but removal did not.
+        try:
+            observed = _bounded_status(_detail(port, credential, extension_id).get("status"))
+            current_status = observed
+            if observed == "disabled" and previous_status in {"enabled", "cli_installed"}:
+                rollback_attempted = True
+                _mutate(
+                    port=port,
+                    credential=credential,
+                    action="enable",
+                    extension_id=extension_id,
+                    previous=observed,
+                )
+                rolled_back_status = _wait_for_status(
+                    port=port,
+                    credential=credential,
+                    extension_id=extension_id,
+                    expected=frozenset({"enabled", "cli_installed"}),
+                    deadline=time.monotonic() + 120,
+                )
+                rollback_succeeded = rolled_back_status in {"enabled", "cli_installed"}
+                current_status = rolled_back_status
+        except ManagerError:
+            if rollback_attempted:
+                rollback_succeeded = False
     return _public_result(
         action=action,
         extension_id=extension_id,
         outcome="succeeded" if succeeded else "failed",
         previous_status=previous_status,
         current_status=current_status,
-        changed=current_status != previous_status,
+        changed=not _same_effective_status(current_status, previous_status),
         external_effect=True,
         required_configuration=required,
         optional_configuration=optional,

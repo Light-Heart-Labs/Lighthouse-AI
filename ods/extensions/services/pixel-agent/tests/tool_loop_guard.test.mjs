@@ -1183,6 +1183,59 @@ test("reports an immutable lifecycle approval without claiming completion", () =
   assert.doesNotMatch(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
 });
 
+test("accepts an exact failed remove receipt only when rollback restores prior state", () => {
+  const guard = createToolLoopGuard();
+  const inspectJob = "ops-1234567890123-abcdef123456";
+  const removeJob = "ops-1234567890124-fedcba654321";
+  const parameters = { serviceId: "continue" };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Remove the installed ODS extension continue." }
+  );
+  for (const [action, jobId, step] of [
+    ["ods.extensions.inspect", inspectJob, lifecycleStep("inspect", lifecycleResult("inspect", {
+      extensionId: "continue",
+      previousStatus: "enabled",
+      currentStatus: "enabled",
+    }))],
+    ["ods.extensions.remove", removeJob, lifecycleStep("remove", lifecycleResult("remove", {
+      extensionId: "continue",
+      outcome: "failed",
+      previousStatus: "enabled",
+      currentStatus: "cli_installed",
+      changed: false,
+      externalEffectOccurred: true,
+      rollback: { attempted: true, succeeded: true },
+    }))],
+  ]) {
+    afterCall(guard, "pixel_ops_run", {
+      event: {
+        params: { target: "ods-host", action, parameters },
+        result: { details: { jobId, status: "submitted", kind: "action" } },
+      },
+    });
+    afterCall(guard, "pixel_ops_job_wait", {
+      event: {
+        params: { jobId },
+        result: {
+          details: {
+            jobId,
+            status: "succeeded",
+            waitTimedOut: false,
+            steps: [step],
+          },
+        },
+      },
+    });
+  }
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+  assert.match(text, /Requested action: `remove`; verified outcome: `failed`/);
+  assert.match(text, /State: `enabled` -> `cli_installed`/);
+  assert.match(text, /Rollback: succeeded/);
+});
+
 test("accepts only a structurally bound extension lifecycle success receipt", () => {
   const guard = createToolLoopGuard();
   const inspectJob = "ops-1234567890123-abcdef123456";

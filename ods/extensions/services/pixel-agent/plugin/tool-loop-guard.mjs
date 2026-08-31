@@ -1023,6 +1023,11 @@ function sortedConfigurationKeys(value) {
   return result;
 }
 
+function sameEffectiveLifecycleStatus(left, right) {
+  return left === right ||
+    [left, right].every((status) => ["enabled", "cli_installed"].includes(status));
+}
+
 function extensionLifecycleResult(step, submittedAction) {
   const expectedAction = submittedAction?.action?.replace(/^ods\.extensions\./, "");
   const submittedParameters = submittedAction?.parameters;
@@ -1116,7 +1121,8 @@ function extensionLifecycleResult(step, submittedAction) {
     if (
       value.changed && !value.externalEffectOccurred ||
       (value.externalEffectOccurred && expectedAction !== "remove" && !value.rollback.attempted) ||
-      (expectedAction === "remove" && value.rollback.attempted)
+      (value.rollback.succeeded === true &&
+        !sameEffectiveLifecycleStatus(value.currentStatus, value.previousStatus))
     ) {
       return undefined;
     }

@@ -49,6 +49,11 @@ class ExtensionManagerTests(unittest.TestCase):
             extension_id="crewai",
         )
 
+    def test_enabled_runtime_states_are_effectively_equivalent(self) -> None:
+        self.assertTrue(manager._same_effective_status("enabled", "cli_installed"))
+        self.assertTrue(manager._same_effective_status("enabled", "enabled"))
+        self.assertFalse(manager._same_effective_status("enabled", "disabled"))
+
     def test_request_grammar_is_exact(self) -> None:
         request = json.dumps(
             {"schemaVersion": 1, "action": "inspect", "extensionId": "crewai"}
@@ -257,24 +262,61 @@ class ExtensionManagerTests(unittest.TestCase):
         self.assertEqual(result["currentStatus"], "not_installed")
         self.assertEqual(result["rollback"], {"attempted": True, "succeeded": True})
 
-    def test_remove_timeout_is_reconciled_without_claiming_rollback(self) -> None:
+    def test_remove_enabled_extension_safely_disables_then_preserves_data_on_remove(self) -> None:
+        with (
+            mock.patch.object(manager, "_detail", return_value=detail("enabled")),
+            mock.patch.object(manager, "_mutate") as mutate,
+            mock.patch.object(
+                manager,
+                "_wait_for_status",
+                side_effect=["disabled", "not_installed"],
+            ) as wait,
+        ):
+            result = self.execute("remove")
+        self.assertEqual(
+            [call.kwargs["action"] for call in mutate.call_args_list],
+            ["disable", "remove"],
+        )
+        self.assertEqual(wait.call_count, 2)
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertEqual(result["previousStatus"], "enabled")
+        self.assertEqual(result["currentStatus"], "not_installed")
+        self.assertTrue(result["changed"])
+        self.assertTrue(result["externalEffectOccurred"])
+        self.assertEqual(result["rollback"], {"attempted": False, "succeeded": None})
+
+    def test_remove_failure_after_safe_disable_restores_enabled_state(self) -> None:
         with (
             mock.patch.object(
                 manager,
                 "_detail",
-                side_effect=[detail("disabled"), detail("disabled")],
+                side_effect=[
+                    detail("enabled"),
+                    detail("disabled"),
+                    detail("disabled"),
+                ],
             ),
             mock.patch.object(
                 manager,
                 "_mutate",
-                side_effect=manager.ManagerError("timeout"),
+                side_effect=[None, manager.ManagerError("timeout"), None],
+            ) as mutate,
+            mock.patch.object(
+                manager,
+                "_wait_for_status",
+                side_effect=["disabled", "enabled"],
             ),
         ):
             result = self.execute("remove")
+        self.assertEqual(
+            [call.kwargs["action"] for call in mutate.call_args_list],
+            ["disable", "remove", "enable"],
+        )
         self.assertEqual(result["outcome"], "failed")
         self.assertFalse(result["changed"])
         self.assertTrue(result["externalEffectOccurred"])
-        self.assertEqual(result["rollback"], {"attempted": False, "succeeded": None})
+        self.assertEqual(result["currentStatus"], "enabled")
+        self.assertEqual(result["rollback"], {"attempted": True, "succeeded": True})
 
     def test_enable_never_auto_enables_dependencies(self) -> None:
         class Response:
