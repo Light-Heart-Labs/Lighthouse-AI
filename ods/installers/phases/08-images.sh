@@ -203,6 +203,8 @@ else
 
         if ! pull_with_progress "$img" "$label" "$pull_count" "$pull_total"; then
             ai_warn "Failed to pull $img — retry after fixing Docker registry/network/disk access"
+# Clean up dangling images and build cache after pulls
+    docker image prune -f --filter=until=168h 2>/dev/null || true
             ai "  If this persists, check your network connection and disk space"
             pull_failed=$((pull_failed + 1))
         fi
