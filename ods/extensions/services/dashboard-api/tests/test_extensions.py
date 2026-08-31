@@ -400,7 +400,9 @@ class TestUserExtensionStatus:
 _SAFE_COMPOSE = "services:\n  svc:\n    image: test:latest\n"
 
 
-def _setup_library_ext(tmp_path, service_id, compose_content=None):
+def _setup_library_ext(
+    tmp_path, service_id, compose_content=None, depends_on=None
+):
     """Create a library extension directory with compose.yaml and manifest."""
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir(exist_ok=True)
@@ -409,7 +411,11 @@ def _setup_library_ext(tmp_path, service_id, compose_content=None):
     (ext_dir / "compose.yaml").write_text(compose_content or _SAFE_COMPOSE)
     (ext_dir / "manifest.yaml").write_text(yaml.dump({
         "schema_version": "ods.services.v1",
-        "service": {"id": service_id, "name": service_id},
+        "service": {
+            "id": service_id,
+            "name": service_id,
+            "depends_on": depends_on or [],
+        },
     }))
     return lib_dir
 
@@ -448,6 +454,91 @@ def _patch_mutation_config(monkeypatch, tmp_path, lib_dir=None, user_dir=None):
 
 
 class TestInstallExtension:
+
+    def test_install_rejects_transitive_library_dependencies_before_copy(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        lib_dir = _setup_library_ext(tmp_path, "vector-db")
+        _setup_library_ext(
+            tmp_path,
+            "embedding-api",
+            depends_on=["vector-db"],
+        )
+        _setup_library_ext(
+            tmp_path,
+            "document-chat",
+            depends_on=["embedding-api"],
+        )
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+
+        resp = test_client.post(
+            "/api/extensions/document-chat/install",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["missing_dependencies"] == [
+            "vector-db",
+            "embedding-api",
+        ]
+        assert "Install or enable dependencies first" in detail["message"]
+        assert not (tmp_path / "user" / "document-chat").exists()
+
+    def test_dependency_failure_preserves_broken_retry_directory(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        lib_dir = _setup_library_ext(tmp_path, "dependency")
+        _setup_library_ext(
+            tmp_path,
+            "my-ext",
+            depends_on=["dependency"],
+        )
+        user_dir = tmp_path / "user"
+        broken_dir = user_dir / "my-ext"
+        broken_dir.mkdir(parents=True)
+        marker = broken_dir / "operator-note.txt"
+        marker.write_text("keep until install can proceed")
+        _patch_mutation_config(
+            monkeypatch,
+            tmp_path,
+            lib_dir=lib_dir,
+            user_dir=user_dir,
+        )
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/install",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 400
+        assert marker.read_text() == "keep until install can proceed"
+
+    def test_install_proceeds_when_library_dependency_is_enabled(
+        self, test_client, monkeypatch, tmp_path,
+    ):
+        lib_dir = _setup_library_ext(tmp_path, "dependency")
+        _setup_library_ext(
+            tmp_path,
+            "my-ext",
+            depends_on=["dependency"],
+        )
+        user_dir = _setup_user_ext(tmp_path, "dependency", enabled=True)
+        _patch_mutation_config(
+            monkeypatch,
+            tmp_path,
+            lib_dir=lib_dir,
+            user_dir=user_dir,
+        )
+
+        resp = test_client.post(
+            "/api/extensions/my-ext/install",
+            headers=test_client.auth_headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "installed"
+        assert (user_dir / "my-ext" / "compose.yaml").exists()
 
     def test_install_copies_and_enables(self, test_client, monkeypatch, tmp_path):
         """Install copies from library and keeps compose.yaml enabled."""
