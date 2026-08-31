@@ -92,8 +92,29 @@ const statusPayload = {
   availableActions: {
     configure: true,
     test: true,
+    enable: false,
     disable: true,
     remove: true,
+  },
+}
+
+const driftedStatusPayload = {
+  ...statusPayload,
+  status: 'degraded',
+  activation: {
+    ...statusPayload.activation,
+    valid: false,
+    proven: false,
+    reason: 'consumer_drift',
+    pixel: 'drifted',
+  },
+  capabilities: {
+    ...statusPayload.capabilities,
+    inference: false,
+  },
+  availableActions: {
+    ...statusPayload.availableActions,
+    enable: true,
   },
 }
 
@@ -278,6 +299,12 @@ const disableApplyPayload = {
   secretRefs: {},
 }
 
+const enableApplyPayload = {
+  ...disableApplyPayload,
+  action: 'enable',
+  route: { enabled: true },
+}
+
 const removeApplyPayload = {
   ...disableApplyPayload,
   action: 'remove',
@@ -425,6 +452,28 @@ test('applies disable lifecycle action and refreshes status', async () => {
   })
   expect(requestBody(1)).toEqual({ action: 'disable' })
   expect(screen.getByText('Disable applied')).toBeInTheDocument()
+})
+
+test('offers one-click reconciliation when the active consumer drifted', async () => {
+  globalThis.fetch
+    .mockResolvedValueOnce(response(driftedStatusPayload))
+    .mockResolvedValueOnce(response(enableApplyPayload))
+    .mockResolvedValueOnce(response(statusPayload))
+
+  render(createElement(RemoteProvider))
+
+  expect(await screen.findByText(/ODS and Pixel are not using its exact model contract/i)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /^reconcile route$/i }))
+
+  await waitFor(() => {
+    expect(globalThis.fetch.mock.calls.map(call => call[0])).toEqual([
+      '/api/remote-provider/status',
+      '/api/remote-provider/apply',
+      '/api/remote-provider/status',
+    ])
+  })
+  expect(requestBody(1)).toEqual({ action: 'enable' })
+  expect(screen.getByText('Enable applied')).toBeInTheDocument()
 })
 
 test('confirms remove before deleting route state and stored secrets', async () => {

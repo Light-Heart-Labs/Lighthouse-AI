@@ -496,6 +496,7 @@ export default function RemoteProvider() {
   const sshSupervisor = statusData?.sshSupervisor || {}
   const peer = statusData?.peer || {}
   const testEnabled = Boolean(statusData?.availableActions?.test)
+  const enableAvailable = Boolean(statusData?.availableActions?.enable)
   const statusMeta = STATUS_META[statusData?.status] || STATUS_META.unknown
   const lifecycleBusy = planning || Boolean(applyingAction)
   const contextLength = Number(form.contextLength)
@@ -512,6 +513,11 @@ export default function RemoteProvider() {
   ) && !lifecycleBusy
   const proofReceipt = testResult?.probe || routeStatus.lastProbe
   const proofRecorded = testResult?.routeProof?.recorded
+  const consumerDrift = activation.reason === 'consumer_drift'
+  let enableActionLabel = routeState.enabled ? 'Reconcile route' : 'Enable route'
+  if (applyingAction === 'enable') {
+    enableActionLabel = routeState.enabled ? 'Reconciling' : 'Enabling'
+  }
   const peerReady = Boolean(statusData?.capabilities?.odsPeerLifecycle)
   const peerModels = Array.isArray(peerModelsData?.models) ? peerModelsData.models : []
   const peerBusy = peerModelsLoading || Boolean(peerAction)
@@ -581,6 +587,15 @@ export default function RemoteProvider() {
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
           <AlertCircle size={16} />
           {lifecycleError}
+        </div>
+      )}
+      {consumerDrift && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100" role="status">
+          <AlertCircle className="mt-0.5 shrink-0" size={16} />
+          <span>
+            The provider route is reachable, but ODS and Pixel are not using its exact model contract.
+            Reconcile the route to restore the configured remote model without re-entering its stored secret.
+          </span>
         </div>
       )}
 
@@ -804,6 +819,11 @@ export default function RemoteProvider() {
             <ActionButton icon={Save} onClick={() => applyLifecycle('configure')} disabled={!configureReady} primary>
               {applyingAction === 'configure' ? 'Configuring' : 'Configure'}
             </ActionButton>
+            {enableAvailable && (
+              <ActionButton icon={RefreshCw} onClick={() => applyLifecycle('enable')} disabled={lifecycleBusy} primary>
+                {enableActionLabel}
+              </ActionButton>
+            )}
             <ActionButton icon={Power} onClick={() => applyLifecycle('disable')} disabled={!statusData?.availableActions?.disable || lifecycleBusy}>
               {applyingAction === 'disable' ? 'Disabling' : 'Disable'}
             </ActionButton>
