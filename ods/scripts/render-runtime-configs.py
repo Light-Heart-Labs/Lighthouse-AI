@@ -177,8 +177,8 @@ def render_litellm_local_native(inputs: RenderInputs) -> RenderedFile:
     content = f"""model_list:
   - model_name: default
     litellm_params:
-      model: openai/{model}
-      api_base: {api_base}
+      model: {yaml_scalar(f"openai/{model}")}
+      api_base: {yaml_scalar(api_base)}
       api_key: not-needed
       extra_body:
         chat_template_kwargs:
@@ -187,7 +187,7 @@ def render_litellm_local_native(inputs: RenderInputs) -> RenderedFile:
   - model_name: "*"
     litellm_params:
       model: openai/*
-      api_base: {api_base}
+      api_base: {yaml_scalar(api_base)}
       api_key: not-needed
       extra_body:
         chat_template_kwargs:
@@ -351,18 +351,18 @@ def render_litellm_lemonade(inputs: RenderInputs) -> RenderedFile:
     content = f"""model_list:
   - model_name: default
     litellm_params:
-      model: openai/{model}
-      api_base: {api_base}
-      api_key: {inputs.litellm_key}
+      model: {yaml_scalar(f"openai/{model}")}
+      api_base: {yaml_scalar(api_base)}
+      api_key: {yaml_scalar(inputs.litellm_key)}
       extra_body:
         chat_template_kwargs:
           enable_thinking: false
 
   - model_name: "*"
     litellm_params:
-      model: openai/{model}
-      api_base: {api_base}
-      api_key: {inputs.litellm_key}
+      model: {yaml_scalar(f"openai/{model}")}
+      api_base: {yaml_scalar(api_base)}
+      api_key: {yaml_scalar(inputs.litellm_key)}
       extra_body:
         chat_template_kwargs:
           enable_thinking: false
@@ -384,9 +384,9 @@ def render_hermes(inputs: RenderInputs) -> RenderedFile:
         else inputs.llm_base_url
     )
     content = f"""model:
-  default: "{model}"
+  default: {yaml_scalar(model)}
   provider: "custom"
-  base_url: "{base_url}"
+  base_url: {yaml_scalar(base_url)}
   context_length: {inputs.context_length}
   max_tokens: {DEFAULT_HERMES_MAX_TOKENS}
 
