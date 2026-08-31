@@ -275,7 +275,7 @@ pass "OpenCode and OpenClaw routes transition without secret output"
 # Fake the pinned Perplexica provider/config API, including its fresh state with
 # no OpenAI provider, then exercise cloud -> local updates through production code.
 cat > "$TMP_DIR/perplexica-server.py" <<'PY'
-import json, sys
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 values = {
@@ -332,14 +332,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"provider": provider})
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-open(sys.argv[1], "w", encoding="ascii").write(str(server.server_port))
+print(server.server_port, flush=True)
 server.serve_forever()
 PY
-"$python_cmd" "$TMP_DIR/perplexica-server.py" "$TMP_DIR/perplexica.port" &
-SERVER_PID=$!
-for _ in $(seq 1 50); do [[ -s "$TMP_DIR/perplexica.port" ]] && break; sleep 0.1; done
-[[ -s "$TMP_DIR/perplexica.port" ]] || fail "Perplexica fixture did not start"
-perplexica_port="$(cat "$TMP_DIR/perplexica.port")"
+coproc PERPLEXICA_FIXTURE { "$python_cmd" "$TMP_DIR/perplexica-server.py"; }
+SERVER_PID=$PERPLEXICA_FIXTURE_PID
+IFS= read -r -t 10 perplexica_port <&"${PERPLEXICA_FIXTURE[0]}" \
+    || fail "Perplexica fixture did not report its port"
+[[ "$perplexica_port" =~ ^[0-9]+$ ]] \
+    || fail "Perplexica fixture reported an invalid port"
 perplexica_secret="sk-perplexica-transition-secret"
 perplexica_output="$(configure_perplexica "$perplexica_port" default \
     http://litellm:4000 "$perplexica_secret" 2>&1)" \
