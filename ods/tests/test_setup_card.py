@@ -110,13 +110,14 @@ def test_cli_writes_valid_png(tmp_path):
 @pillow_required
 def test_cli_writes_factory_owner_png(tmp_path):
     out = tmp_path / "owner-card.png"
+    owner_url = "http://auth.ods.local/magic-link/" + "A" * 220
     result = subprocess.run(
         [
             sys.executable, str(SCRIPT),
             "--mode", "factory-owner",
             "--ssid", "ODS-Setup-TEST",
             "--password", "supersecret",
-            "--owner-url", "http://auth.ods.local/magic-link/owner-token",
+            "--owner-url", owner_url,
             "--device-name", "ods-test.local",
             "--output", str(out),
         ],
@@ -124,6 +125,7 @@ def test_cli_writes_factory_owner_png(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert out.exists()
+    assert out.stat().st_size > 1000
     with open(out, "rb") as f:
         assert f.read(8) == b"\x89PNG\r\n\x1a\n"
 
