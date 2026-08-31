@@ -1776,6 +1776,7 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
   assert.match(text, /Architecture: `x86_64` \(from structured host\.cpu job/);
   assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
+  assert.match(text, /swap 0\.00 GiB used of 4\.00 GiB, 4\.00 GiB free/);
   assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);
   assert.match(text, /\/Docker\/host \(9p, 75% used, 250\.0 GiB free of 1000\.0 GiB\)/);
   assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);

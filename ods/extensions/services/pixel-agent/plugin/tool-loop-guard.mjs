@@ -948,12 +948,25 @@ function memoryEvidence(step) {
   if (!mem || mem.length < 3 || mem.some((item) => !Number.isSafeInteger(item) || item < 0)) {
     return undefined;
   }
+  if (
+    !swp ||
+    swp.length < 3 ||
+    swp.some((item) => !Number.isSafeInteger(item) || item < 0) ||
+    swp[1] > swp[0] ||
+    swp[2] > swp[0] ||
+    swp[1] + swp[2] !== swp[0]
+  ) {
+    return undefined;
+  }
   const total = formatHostBytes(mem[0]);
   const used = formatHostBytes(mem[1]);
   const available = formatHostBytes(mem[5] ?? mem[2]);
-  const swapTotal = swp && swp.length >= 1 ? formatHostBytes(swp[0]) : undefined;
-  if (!total || !used || !available) return undefined;
-  return `Memory: ${used} used of ${total}; ${available} available${swapTotal ? `; swap ${swapTotal}` : ""}.`;
+  const swapTotal = formatHostBytes(swp[0]);
+  const swapUsed = formatHostBytes(swp[1]);
+  const swapFree = formatHostBytes(swp[2]);
+  if (!total || !used || !available || !swapTotal || !swapUsed || !swapFree) return undefined;
+  return `Memory: ${used} used of ${total}; ${available} available; ` +
+    `swap ${swapUsed} used of ${swapTotal}, ${swapFree} free.`;
 }
 
 function storageEvidence(step) {
