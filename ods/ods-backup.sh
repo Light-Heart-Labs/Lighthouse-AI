@@ -10,6 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ODS_DIR="${ODS_DIR:-$SCRIPT_DIR}"
 BACKUP_ROOT="${ODS_DIR}/.backups"
 RETENTION_COUNT="${RETENTION_COUNT:-5}"
+# Maximum total backup size in GB before pruning older backups (0 = disabled)
+MAX_BACKUP_SIZE_GB="${MAX_BACKUP_SIZE_GB:-0}"
 
 # Colors for output
 RED='\033[0;31m'
