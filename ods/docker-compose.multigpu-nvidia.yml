@@ -6,6 +6,9 @@ services:
       LLAMA_ARG_TENSOR_SPLIT: "${LLAMA_ARG_TENSOR_SPLIT:-}"
     deploy:
       resources:
+        limits:
+          cpus: '${LLAMA_CPU_LIMIT:-16.0}'
+          memory: ${LLAMA_SERVER_MEMORY_LIMIT:-64G}
         reservations:
           devices:
             - driver: nvidia
