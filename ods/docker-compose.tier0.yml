@@ -14,8 +14,10 @@ services:
     deploy:
       resources:
         limits:
+          cpus: '1.0'
           memory: 4G
         reservations:
+          cpus: '0.5'
           memory: 512M
 
   dashboard:
