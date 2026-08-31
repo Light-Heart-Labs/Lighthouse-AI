@@ -107,7 +107,7 @@ export function parseApprovalReceipt(content) {
   }
 }
 
-function OperationsApprovalCard({ content }) {
+export function OperationsApprovalCard({ content }) {
   const receipt = parseApprovalReceipt(content)
   const [projection, setProjection] = useState(null)
   const [verification, setVerification] = useState(receipt ? 'loading' : 'absent')
@@ -145,7 +145,13 @@ function OperationsApprovalCard({ content }) {
           poll = globalThis.setTimeout(fetchProjection, OPS_STATUS_POLL_MS)
         }
       } catch (error) {
-        if (error?.name !== 'AbortError') setVerification('unverified')
+        if (error?.name !== 'AbortError') {
+          setProjection(null)
+          setVerification('unverified')
+          if (!stopped) {
+            poll = globalThis.setTimeout(fetchProjection, OPS_STATUS_POLL_MS)
+          }
+        }
       }
     }
 

@@ -30,6 +30,8 @@ import {
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
+  OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON,
+  OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX,
   OPERATIONS_LOOP_ABORT_REASON,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
@@ -58,6 +60,7 @@ import {
   userMessageOperationsRequirements,
   userMessageExtensionCatalogExactQuery,
   userMessageExtensionLifecycleIntent,
+  userMessageOperationsContinuation,
   userMessageRequiresOperations,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
@@ -940,6 +943,44 @@ test("classifies one exact extension lifecycle action and owner extension ID", (
   );
 });
 
+test("binds Operations continuation only to one exact current-message job and plan hash", () => {
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "a".repeat(64);
+  assert.deepEqual(
+    userMessageOperationsContinuation(
+      [],
+      `Check exact job ${jobId} with plan SHA-256 ${planHash} and report its status.`
+    ),
+    { jobId, planHash }
+  );
+  assert.equal(
+    userMessageOperationsContinuation(
+      [],
+      `Approved job ${jobId} with plan SHA-256 ${planHash}.`
+    ),
+    undefined
+  );
+  assert.equal(
+    userMessageOperationsContinuation(
+      [],
+      `Check jobs ${jobId} and ops-1234567890124-fedcba654321 with plan SHA-256 ${planHash}.`
+    ),
+    undefined
+  );
+  const currentJob = "ops-1234567890125-012345abcdef";
+  const currentHash = "b".repeat(64);
+  assert.deepEqual(
+    userMessageOperationsContinuation(
+      [],
+      `[Chat messages since your last reply - for context]\n` +
+        `Assistant: Job ${jobId}. Plan SHA-256: ${planHash}.\n\n` +
+        `[Current message - respond to this]\nUser: Check job ${currentJob} ` +
+        `with plan SHA-256 ${currentHash}.`
+    ),
+    { jobId: currentJob, planHash: currentHash }
+  );
+});
+
 test("forces extension lifecycle inspection, exact IDs, and sequential submissions", () => {
   const guard = createToolLoopGuard();
   const inspectJob = "ops-1234567890123-abcdef123456";
@@ -1169,6 +1210,162 @@ test("accepts only a structurally bound extension lifecycle success receipt", ()
   assert.match(text, /Requested action: `install`; verified outcome: `succeeded`/);
   assert.match(text, /State: `not_installed` -> `enabled`/);
   assert.match(text, /external effect attempted: yes/);
+});
+
+test("continues one exact approved lifecycle job without resubmitting the mutation", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890124-fedcba654321";
+  const planHash = "d".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        `The administrator approved job ${jobId} with plan SHA-256 ${planHash}. ` +
+        "Check that exact job and report only the host-authoritative status.",
+    }
+  );
+  assert.equal(
+    call(guard, "pixel_ops_inventory")?.blockReason,
+    OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_job_get", {
+      event: { params: { jobId: "ops-1234567890999-aaaaaaaaaaaa" } },
+    }),
+    { params: { jobId } }
+  );
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash,
+          status: "succeeded",
+          approvalRequired: true,
+          waitTimedOut: false,
+          steps: [lifecycleStep("install", lifecycleResult("install", {
+            extensionId: "continue",
+          }))],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+  assert.match(text, /Extension: `continue`/);
+  assert.match(text, /Requested action: `install`; verified outcome: `succeeded`/);
+  assert.match(text, new RegExp(jobId));
+  assert.match(text, new RegExp(planHash));
+});
+
+test("rejects approval prose and mismatched continuation receipts as host evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890124-fedcba654321";
+  const planHash = "d".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        `I approved job ${jobId} with plan SHA-256 ${planHash}; ` +
+        "check it and report the status.",
+    }
+  );
+  assert.equal(
+    reply(guard)?.payload?.text,
+    OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX
+  );
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash: "e".repeat(64),
+          status: "succeeded",
+          approvalRequired: true,
+          waitTimedOut: false,
+          steps: [lifecycleStep("install")],
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX
+  );
+});
+
+test("fails closed on truncated or multi-step continuation evidence", () => {
+  const jobId = "ops-1234567890124-fedcba654321";
+  const planHash = "d".repeat(64);
+  const baseStep = lifecycleStep("install");
+  for (const steps of [
+    [{
+      ...baseStep,
+      outputTruncated: { stdout: true, stderr: false },
+    }],
+    [baseStep, lifecycleStep("remove", lifecycleResult("remove", {
+      previousStatus: "disabled",
+      currentStatus: "not_installed",
+    }))],
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt: `Check job ${jobId} with plan SHA-256 ${planHash}.` }
+    );
+    afterCall(guard, "pixel_ops_job_get", {
+      event: {
+        params: { jobId },
+        result: {
+          details: {
+            jobId,
+            planHash,
+            status: "succeeded",
+            approvalRequired: true,
+            waitTimedOut: false,
+            steps,
+          },
+        },
+      },
+    });
+    assert.equal(
+      reply(guard)?.payload?.text,
+      OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX
+    );
+  }
+});
+
+test("reports a matching terminal continuation failure without model improvisation", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890124-fedcba654321";
+  const planHash = "d".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: `Verify job ${jobId} with plan SHA-256 ${planHash}.` }
+  );
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash,
+          status: "failed",
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /verified terminal status is failed/);
+  assert.match(text, /No successful lifecycle result was accepted/);
+  assert.doesNotMatch(text, /Model claimed success/);
 });
 
 test("routes host evidence through Operations and requires a matching terminal job", () => {

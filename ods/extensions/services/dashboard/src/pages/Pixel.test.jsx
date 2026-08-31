@@ -1,9 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { render } from '../test/test-utils'
+import { act } from '@testing-library/react'
 
 // The repository's base ESLint profile does not mark JSX identifiers as uses.
 // eslint-disable-next-line no-unused-vars
-import Pixel, { formatElapsed, parseApprovalReceipt } from './Pixel'
+import Pixel, { OperationsApprovalCard, formatElapsed, parseApprovalReceipt } from './Pixel'
 
 const response = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -51,6 +52,7 @@ describe('Pixel', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -124,6 +126,38 @@ describe('Pixel', () => {
     await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith(command))
     expect(globalThis.fetch.mock.calls.some(([url]) => url.includes('/api/pixel/ops/'))).toBe(true)
     expect(globalThis.fetch.mock.calls.some(([, options]) => options?.method === 'POST' && options?.body?.includes('approve'))).toBe(false)
+  })
+
+  it('recovers an approval card after a transient status projection failure', async () => {
+    vi.useFakeTimers()
+    const jobId = 'ops-1788127319657-f3262c99a419'
+    const planHash = 'e'.repeat(64)
+    const content = `Pixel prepared the exact ods.extensions.install plan for extension crewai, but external approval is required. No lifecycle change was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+    globalThis.fetch
+      .mockRejectedValueOnce(new Error('temporary restart'))
+      .mockResolvedValueOnce(response({
+        schemaVersion: 1,
+        kind: 'ods-pixel-operations-status',
+        jobId,
+        planHash,
+        status: 'succeeded',
+        riskTier: 'managed',
+        approvalRequired: true,
+        updatedAt: '2026-08-30T22:01:59Z',
+        approvalCommand: null,
+      }))
+
+    render(<OperationsApprovalCard content={content} />)
+    await act(async () => {})
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This approval receipt could not be independently verified. Do not approve it.'
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(screen.getByText('Protected operation completed')).toBeInTheDocument()
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
   })
 
   it('shows unavailable state when status fails', async () => {

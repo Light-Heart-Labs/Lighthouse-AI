@@ -143,6 +143,15 @@ export const OPERATIONS_WRONG_ACTION_REASON =
 export const OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON =
   "Pixel blocked an extension lifecycle shortcut. Submit exactly one ods.extensions.inspect action for the owner's extension ID and wait for its terminal receipt before submitting the requested lifecycle action. Do not combine lifecycle actions in a workflow or continue when inspection reports missing configuration.";
 
+export const OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON =
+  "Pixel blocked a new action while checking an existing immutable Operations plan. Query only the exact owner-supplied job with pixel_ops_job_get or pixel_ops_job_wait; do not resubmit, repeat, approve, or widen the operation.";
+
+export const OPERATIONS_CONTINUATION_COMPLETE_REASON =
+  "Pixel already obtained a structurally matched terminal receipt for the exact owner-supplied Operations job and plan hash. Do not call another tool; report only that verified outcome.";
+
+export const OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel did not obtain a structurally matched terminal Operations receipt for the exact owner-supplied job and plan hash. The owner's approval or success statement was not accepted as host evidence.";
+
 export const OPERATIONS_HOST_EVIDENCE_PREFIX =
   "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts:";
 
@@ -1117,6 +1126,106 @@ function extensionLifecycleResult(step, submittedAction) {
   return { ...value, requiredConfiguration: required, optionalConfiguration: optional, missingConfiguration: missing };
 }
 
+function operationsContinuationTerminalOutcome(event, continuation) {
+  if (toolCallFailed(event) || !continuation) return undefined;
+  const requestedJobId = event?.params?.jobId;
+  const details = event?.result?.details;
+  if (
+    requestedJobId !== continuation.jobId ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.jobId !== continuation.jobId ||
+    details.planHash !== continuation.planHash ||
+    details.waitTimedOut === true ||
+    !["succeeded", "failed", "cancelled", "rejected", "awaiting-approval"].includes(
+      details.status
+    )
+  ) {
+    return undefined;
+  }
+  if (details.status === "awaiting-approval") {
+    return details.approvalRequired === true
+      ? { ...continuation, status: details.status }
+      : undefined;
+  }
+  if (details.status !== "succeeded") {
+    return { ...continuation, status: details.status };
+  }
+  if (details.approvalRequired !== true || !Array.isArray(details.steps) || details.steps.length !== 1) {
+    return undefined;
+  }
+  const step = details.steps[0];
+  if (
+    !step ||
+    typeof step !== "object" ||
+    Array.isArray(step) ||
+    step.target !== "ods-host" ||
+    !/^ods\.extensions\.(?:install|enable|disable|remove)$/.test(step.action) ||
+    step.exitCode !== 0 ||
+    typeof step.stdout !== "string" ||
+    typeof step.stderr !== "string" ||
+    !step.outputTruncated ||
+    typeof step.outputTruncated !== "object" ||
+    step.outputTruncated.stdout !== false ||
+    step.outputTruncated.stderr !== false ||
+    !Array.isArray(step.riskSignals)
+  ) {
+    return undefined;
+  }
+  let rawResult;
+  try {
+    rawResult = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (
+    !rawResult ||
+    typeof rawResult !== "object" ||
+    Array.isArray(rawResult) ||
+    typeof rawResult.extensionId !== "string" ||
+    !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(rawResult.extensionId)
+  ) {
+    return undefined;
+  }
+  const submittedAction = {
+    target: "ods-host",
+    action: step.action,
+    parameters: { serviceId: rawResult.extensionId },
+  };
+  const result = extensionLifecycleResult(step, submittedAction);
+  if (!result) return undefined;
+  return {
+    ...continuation,
+    status: details.status,
+    action: submittedAction.action,
+    result,
+  };
+}
+
+function operationsContinuationEvidenceText(outcome) {
+  if (!outcome) return undefined;
+  if (outcome.status === "awaiting-approval") {
+    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; the host still reports awaiting-approval. No lifecycle change was accepted.`;
+  }
+  if (outcome.status !== "succeeded") {
+    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; its verified terminal status is ${outcome.status}. No successful lifecycle result was accepted.`;
+  }
+  const result = outcome.result;
+  if (!result) return undefined;
+  return [
+    OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+    `- Extension: \`${result.extensionId}\`.`,
+    `- Requested action: \`${result.action}\`; verified outcome: \`${result.outcome}\`.`,
+    `- State: \`${result.previousStatus}\` -> \`${result.currentStatus}\`.`,
+    `- Change observed: ${result.changed ? "yes" : "no"}; external effect attempted: ${result.externalEffectOccurred ? "yes" : "no"}.`,
+    `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+    `- Rollback: ${result.rollback.attempted ? (result.rollback.succeeded ? "succeeded" : "failed") : "not required"}.`,
+    `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
+    `- Continued lifecycle job: \`${outcome.jobId}\`; plan SHA-256: \`${outcome.planHash}\`.`,
+  ].join("\n");
+}
+
 function lifecycleOutcomeForAction(terminalJobs, action) {
   if (!(terminalJobs instanceof Map)) return undefined;
   const matches = [...terminalJobs.values()].filter(
@@ -1505,6 +1614,27 @@ export function userMessageExtensionLifecycleIntent(messages, prompt = undefined
   };
 }
 
+export function userMessageOperationsContinuation(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (
+    !text ||
+    !/\b(?:check|continue|follow\s*up|inspect|query|report|status|verify)\b/i.test(text)
+  ) {
+    return undefined;
+  }
+  const jobIds = [
+    ...new Set([...text.matchAll(/\bops-[0-9]{13}-[a-f0-9]{12}\b/gi)].map((match) => match[0].toLowerCase())),
+  ];
+  const planHashes = [
+    ...new Set(
+      [...text.matchAll(/\bplan\s+sha(?:-?256)?\s*(?::|=|is)?\s*[`"']?([a-f0-9]{64})[`"']?/gi)]
+        .map((match) => match[1].toLowerCase())
+    ),
+  ];
+  if (jobIds.length !== 1 || planHashes.length !== 1) return undefined;
+  return { jobId: jobIds[0], planHash: planHashes[0] };
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return { required: false, actions: [] };
@@ -1844,6 +1974,8 @@ export function createToolLoopGuard({
         operationsRequiredActions: new Set(),
         operationsExpectedQuery: undefined,
         operationsExpectedExtensionLifecycle: undefined,
+        operationsContinuation: undefined,
+        operationsContinuationOutcome: undefined,
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
@@ -1964,6 +2096,32 @@ export function createToolLoopGuard({
           },
         };
       }
+    }
+
+    if (state?.operationsContinuation) {
+      if (state.operationsContinuationOutcome) {
+        return { block: true, blockReason: OPERATIONS_CONTINUATION_COMPLETE_REASON };
+      }
+      if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+        return { params: { jobId: state.operationsContinuation.jobId } };
+      }
+      if (state.operationsTerminalBlocks === 0) {
+        state.operationsTerminalBlocks = 1;
+        return {
+          block: true,
+          blockReason: OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON,
+        };
+      }
+      let aborted = false;
+      try {
+        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+      } catch (error) {
+        warn(`Pixel Operations-continuation abort failed for run ${runId}: ${String(error)}`);
+      }
+      warn(
+        `Pixel stopped a tool retry after the Operations-continuation boundary for run ${runId}; active run aborted=${aborted}`
+      );
+      return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
     }
 
     if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
@@ -2365,14 +2523,21 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
-        state.operationsRequired = !state.exactDownloadRequested && operations.required;
-        state.operationsRequiredActions = new Set(
-          state.operationsRequired ? operations.actions : []
+        const operationsContinuation = userMessageOperationsContinuation(
+          event?.messages,
+          event?.prompt
         );
-        state.operationsExpectedQuery = state.operationsRequired
+        state.operationsContinuation = operationsContinuation;
+        state.operationsRequired =
+          !state.exactDownloadRequested &&
+          (operations.required || Boolean(operationsContinuation));
+        state.operationsRequiredActions = new Set(
+          state.operationsRequired && !operationsContinuation ? operations.actions : []
+        );
+        state.operationsExpectedQuery = state.operationsRequired && !operationsContinuation
           ? userMessageExtensionCatalogExactQuery(event?.messages, event?.prompt)
           : undefined;
-        state.operationsExpectedExtensionLifecycle = state.operationsRequired
+        state.operationsExpectedExtensionLifecycle = state.operationsRequired && !operationsContinuation
           ? userMessageExtensionLifecycleIntent(event?.messages, event?.prompt)
           : undefined;
       }
@@ -2466,6 +2631,14 @@ export function createToolLoopGuard({
         state.operationsSubmittedJobs.set(submission.jobId, submission);
       }
       if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+        const continuationOutcome = operationsContinuationTerminalOutcome(
+          event,
+          state.operationsContinuation
+        );
+        if (continuationOutcome) {
+          state.operationsContinuationOutcome = continuationOutcome;
+          state.operationsTerminalBlocks = 0;
+        }
         const outcome = operationsTerminalOutcome(
           event,
           state.operationsSubmittedJobs
@@ -2630,6 +2803,21 @@ export function createToolLoopGuard({
       };
     }
     if (state.operationsRequired) {
+      if (state.operationsContinuation) {
+        const evidenceText = operationsContinuationEvidenceText(
+          state.operationsContinuationOutcome
+        );
+        if (!evidenceText) {
+          return {
+            status: "failed",
+            text: OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX,
+          };
+        }
+        return {
+          status: state.operationsContinuationOutcome.status === "succeeded" ? "passed" : "failed",
+          text: evidenceText,
+        };
+      }
       if (state.operationsSubmittedJobs.size === 0) {
         return { status: "failed", text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX };
       }

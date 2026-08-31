@@ -4,6 +4,7 @@ import {
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
+  ODS_OPERATIONS_CONTINUATION_CONTRACT,
   ODS_EXACT_DOWNLOAD_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
@@ -209,6 +210,36 @@ test("adds a sequential approval-aware contract for extension lifecycle requests
   assert.match(result.appendSystemContext, /missing required configuration/);
   assert.match(result.appendSystemContext, /never approve it yourself/);
   assert.match(result.appendSystemContext, /later succeeded receipt proves it/);
+});
+
+test("adds a read-only exact-job continuation contract after external approval", () => {
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "a".repeat(64);
+  const event = {
+    prompt:
+      `The administrator approved job ${jobId} with plan SHA-256 ${planHash}. ` +
+      "Check that exact job and report only its verified status.",
+  };
+  const result = promptContractForAgent({ agentId: "pixel" }, "pixel", event);
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_OPERATIONS_CONTINUATION_CONTRACT}`
+  );
+  assert.match(result.appendSystemContext, /read-only lookup key/);
+  assert.match(result.appendSystemContext, /Call only pixel_ops_job_get/);
+  assert.match(result.appendSystemContext, /Do not call inventory, submit or repeat any action/);
+  assert.match(result.appendSystemContext, /matches both the exact job ID and exact plan hash/);
+  const mutationWording = promptContractForAgent(
+    { agentId: "pixel" },
+    "pixel",
+    {
+      prompt:
+        `Check install extension crewai job ${jobId} with plan SHA-256 ${planHash}; ` +
+        "do not repeat the mutation.",
+    }
+  );
+  assert.match(mutationWording.appendSystemContext, /read-only lookup key/);
+  assert.doesNotMatch(mutationWording.appendSystemContext, /First call only pixel_ops_inventory/);
 });
 
 test("adds exact pending and failed verification truth constraints", () => {

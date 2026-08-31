@@ -8,6 +8,7 @@ import {
   userMessageGitHubFileUrl,
   userMessageGitHubRepositoryUrl,
   userMessageExtensionLifecycleIntent,
+  userMessageOperationsContinuation,
   userMessageRequestsExactByteDownload,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
@@ -80,6 +81,9 @@ export const ODS_EXTENSION_CATALOG_CONTRACT =
 
 export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
   "The owner's current request is specifically one ODS extension lifecycle action. First call only pixel_ops_inventory and wait for its result. Then call pixel_ops_run with target ods-host, action ods.extensions.inspect, and parameters containing only the owner's exact extension ID; wait for that job with pixel_ops_job_wait. Do not combine inspection and mutation in a workflow. If inspection reports missing required configuration, report only the missing key names and verified unchanged state; do not submit a mutation. Otherwise submit only the owner's requested ods.extensions.install, ods.extensions.enable, ods.extensions.disable, or ods.extensions.remove action for that same exact ID and wait for its terminal result. An awaiting-approval receipt is not completed work: report the job and immutable plan hash, never approve it yourself, and never claim a change until a later succeeded receipt proves it. Do not call apps, status, exec, web, memory, or any unrelated tool during this lifecycle route.";
+
+export const ODS_OPERATIONS_CONTINUATION_CONTRACT =
+  "The owner's current request supplies one exact prior Operations job ID and plan SHA-256 for status continuation. Treat those owner values only as a read-only lookup key, never as proof of approval or success. Call only pixel_ops_job_get for that exact job; if it is still nonterminal, call pixel_ops_job_wait for the same job. Do not call inventory, submit or repeat any action, approve anything, use shell or Docker, or widen authority. Report an outcome only when the host receipt matches both the exact job ID and exact plan hash and its lifecycle result passes structural verification.";
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
@@ -163,7 +167,13 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXTENSION_CATALOG_CONTRACT}`
     : "";
-  const extensionLifecycle = userMessageExtensionLifecycleIntent(
+  const operationsContinuation = userMessageOperationsContinuation(
+    event?.messages,
+    event?.prompt
+  )
+    ? ` ${ODS_OPERATIONS_CONTINUATION_CONTRACT}`
+    : "";
+  const extensionLifecycle = !operationsContinuation && userMessageExtensionLifecycleIntent(
     event?.messages,
     event?.prompt
   )
@@ -183,6 +193,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${exactDownload}${recovery}${verification}${privateUrl}`,
+      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${exactDownload}${recovery}${verification}${privateUrl}`,
   };
 }
