@@ -3533,6 +3533,114 @@ class TestModelActivationOwnership:
         assert response["activeTarget"] == "target-a"
         assert response["activeModelId"] == "target-a"
 
+    def test_model_status_projects_only_active_agent_viability(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir = tmp_path / "ods"
+        state_path = install_dir / "data" / "model-state.json"
+        state_path.parent.mkdir(parents=True)
+        state = _mod._switchboard_state.initial_state()
+        state["seq"] = 1
+        state["routeSeq"] = 1
+        state["desired"] = {"catalogId": "chat-only"}
+        state["active"] = {
+            "routeSeq": 1,
+            "catalogId": "chat-only",
+            "runtimeModelId": "chat-only.gguf",
+            "publicModel": "ods/current",
+            "backend": {
+                "kind": "llama-server",
+                "endpointId": "llama-server-default",
+                "nativeRoute": None,
+            },
+            "contextLength": 32768,
+            "capabilities": {
+                "chat": True,
+                "tools": False,
+                "vision": False,
+                "agentViable": False,
+            },
+            "verifiedAt": "2026-08-31T13:53:16Z",
+            "proof": {"identity": "chat-only.gguf", "completion": True},
+        }
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        response = handler.parse_response()
+        assert response == {"status": "idle", "activeAgentViable": False}
+        assert "runtimeModelId" not in response
+        assert "capabilities" not in response
+
+    def test_model_status_applies_new_pixel_specific_revocation(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir = tmp_path / "ods"
+        state_path = install_dir / "data" / "model-state.json"
+        state_path.parent.mkdir(parents=True)
+        (install_dir / "config").mkdir()
+        (install_dir / "config" / "model-library.json").write_text(
+            json.dumps({
+                "models": [{
+                    "id": "stale-qualified",
+                    "gguf_file": "model.gguf",
+                    "gguf_url": "https://huggingface.co/example/model.gguf",
+                    "app_compatibility": {
+                        "pixel_agent": {"status": "not_agent_viable"},
+                    },
+                }],
+            }),
+            encoding="utf-8",
+        )
+        state = _mod._switchboard_state.initial_state()
+        state["seq"] = 1
+        state["routeSeq"] = 1
+        state["desired"] = {"catalogId": "stale-qualified"}
+        state["active"] = {
+            "routeSeq": 1,
+            "catalogId": "stale-qualified",
+            "runtimeModelId": "model.gguf",
+            "publicModel": "ods/current",
+            "backend": {
+                "kind": "llama-server",
+                "endpointId": "llama-server-default",
+                "nativeRoute": None,
+            },
+            "contextLength": 65536,
+            "capabilities": {
+                "chat": True,
+                "tools": False,
+                "vision": False,
+                "agentViable": True,
+            },
+            "verifiedAt": "2026-08-31T13:53:16Z",
+            "proof": {"identity": "model.gguf", "completion": True},
+        }
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["activeAgentViable"] is False
+
+    def test_pixel_agent_viability_is_distinct_from_generic_chat_viability(self):
+        generic = {"app_compatibility": {"agent_viability": {"status": "verified"}}}
+        revoked = {
+            "app_compatibility": {
+                "agent_viability": {"status": "verified"},
+                "pixel_agent": {"status": "not_agent_viable"},
+            },
+        }
+        assert _mod._model_agent_viable(generic, 65536) is True
+        assert _mod._model_agent_viable(revoked, 65536) is False
+
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
         handler = _FakeHandler(json.dumps({"model_id": "target-a"}).encode("utf-8"))

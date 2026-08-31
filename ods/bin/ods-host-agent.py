@@ -1796,6 +1796,57 @@ def _switchboard_state_path() -> Path:
     return INSTALL_DIR / "data" / "model-state.json"
 
 
+def _project_switchboard_agent_viability(payload: dict) -> None:
+    """Add only the verified active route's Pixel viability to host status.
+
+    The switchboard record is host-owned and structurally validated by its
+    stdlib reader.  Missing, stale, or malformed state remains unknown rather
+    than inventing either readiness or failure for legacy installations.
+    """
+    if _switchboard_state is None:
+        return
+    state_path = _switchboard_state_path()
+    if _switchboard_state_needs_current_env_verification(state_path):
+        return
+    doc, errors = _switchboard_state.read_state(state_path)
+    if errors or not isinstance(doc, dict):
+        return
+    active = doc.get("active")
+    if not isinstance(active, dict):
+        return
+    capabilities = active.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return
+    agent_viable = capabilities.get("agentViable")
+    if not isinstance(agent_viable, bool):
+        return
+
+    # A route proof is a snapshot.  A newer Pixel-specific qualification may
+    # revoke generic agent viability without changing the model bytes, so an
+    # exact current catalog verdict may only narrow the stored capability.
+    projected = agent_viable
+    catalog_id = active.get("catalogId")
+    context_length = active.get("contextLength")
+    if isinstance(catalog_id, str) and isinstance(context_length, int):
+        try:
+            catalog_model = next(
+                (
+                    item
+                    for item in _load_model_library_records()
+                    if item.get("id") == catalog_id
+                ),
+                None,
+            )
+        except RuntimeError:
+            catalog_model = None
+        if isinstance(catalog_model, dict):
+            projected = projected and _model_agent_viable(
+                catalog_model,
+                context_length,
+            )
+    payload["activeAgentViable"] = projected
+
+
 def _switchboard_state_needs_initial_verification(path: Path) -> bool:
     if _switchboard_state is None:
         return False
@@ -7487,6 +7538,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             data = {"status": "idle"}
             data.update(_model_lifecycle_status())
             _verify_switchboard_route_for_status(data, "model-status")
+            _project_switchboard_agent_viability(data)
             json_response(self, 200, data)
             return
         try:
@@ -7494,11 +7546,13 @@ class AgentHandler(BaseHTTPRequestHandler):
             data = _normalize_model_download_status(status_path, data)
             data.update(_model_lifecycle_status())
             _verify_switchboard_route_for_status(data, "model-status")
+            _project_switchboard_agent_viability(data)
             json_response(self, 200, data)
         except (json.JSONDecodeError, OSError):
             data = {"status": "idle"}
             data.update(_model_lifecycle_status())
             _verify_switchboard_route_for_status(data, "model-status")
+            _project_switchboard_agent_viability(data)
             json_response(self, 200, data)
 
     def _handle_model_download(self):
@@ -9975,9 +10029,13 @@ def _model_agent_viable(model: dict, context_length: int) -> bool:
     viability = compatibility.get("agent_viability")
     if not isinstance(viability, dict):
         viability = {}
+    pixel_viability = compatibility.get("pixel_agent")
+    if not isinstance(pixel_viability, dict):
+        pixel_viability = {}
     return (
         int(context_length) >= 65536
         and viability.get("status") != "not_agent_viable"
+        and pixel_viability.get("status") != "not_agent_viable"
     )
 
 

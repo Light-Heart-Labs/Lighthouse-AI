@@ -225,6 +225,41 @@ describe('Pixel', () => {
     expect(screen.getByPlaceholderText('Waiting for model switch...')).toBeDisabled()
   })
 
+  it('explains when the active model is not qualified for Pixel tools', async () => {
+    globalThis.fetch.mockResolvedValue(response({
+      available: false,
+      model: null,
+      state: 'model_incompatible',
+      detail: 'The active model is not qualified for Pixel tool use.',
+    }))
+
+    render(<Pixel />)
+
+    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
+    expect(screen.getByText('Active model is not Pixel-ready')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Choose a Pixel-ready model' })).toHaveAttribute('href', '/models')
+    expect(screen.getByPlaceholderText('Choose a Pixel-ready model...')).toBeDisabled()
+  })
+
+  it('preserves a draft when model viability changes before stream acceptance', async () => {
+    globalThis.fetch
+      .mockResolvedValueOnce(response({ available: true, model: 'pixel/default', detail: 'local' }))
+      .mockResolvedValueOnce(response({
+        detail: 'The active model is not qualified for Pixel tool use.',
+      }, 412))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    const composer = screen.getByPlaceholderText('Message Pixel...')
+    fireEvent.change(composer, { target: { value: 'keep this owner request' } })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
+    expect(screen.getByPlaceholderText('Choose a Pixel-ready model...')).toHaveValue(
+      'keep this owner request'
+    )
+  })
+
   it('restores an unsent draft when model activation wins the chat race', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })

@@ -334,6 +334,27 @@ async def test_status_projects_active_model_switch_without_touching_edge(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_status_rejects_host_proven_non_agent_model_without_touching_edge(monkeypatch):
+    async def incompatible_model(*_args, **_kwargs):
+        return {"status": "idle", "activeAgentViable": False}
+
+    monkeypatch.setattr(pixel, "request_agent_json", incompatible_model)
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        side_effect=AssertionError("incompatible model readiness reached Pixel edge"),
+    ):
+        result = await pixel.pixel_status()
+
+    assert result == {
+        "available": False,
+        "model": None,
+        "state": "model_incompatible",
+        "detail": pixel._MODEL_INCOMPATIBLE_DETAIL,
+    }
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_probe_failure_does_not_falsely_disable_pixel(monkeypatch):
     async def failed_model_lifecycle(*_args, **_kwargs):
         raise pixel.AgentClientError("unreachable")
@@ -426,6 +447,27 @@ async def test_chat_is_rejected_before_edge_during_model_activation(monkeypatch)
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == pixel._MODEL_SWITCH_DETAIL
+
+
+@pytest.mark.asyncio
+async def test_chat_rechecks_and_rejects_host_proven_non_agent_model(monkeypatch):
+    async def incompatible_model(*_args, **_kwargs):
+        return {"status": "idle", "activeAgentViable": False}
+
+    monkeypatch.setattr(pixel, "request_agent_json", incompatible_model)
+    body = pixel.ChatStreamRequest.model_validate(
+        {"chat_id": "c1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    with patch.object(
+        pixel.httpx,
+        "AsyncClient",
+        side_effect=AssertionError("incompatible model turn reached Pixel edge"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await pixel.pixel_chat_stream(ConnectedRequest(), body)
+
+    assert exc_info.value.status_code == 412
+    assert exc_info.value.detail == pixel._MODEL_INCOMPATIBLE_DETAIL
 
 
 @pytest.mark.asyncio

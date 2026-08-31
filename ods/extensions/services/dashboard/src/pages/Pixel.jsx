@@ -370,6 +370,8 @@ export default function Pixel({ systemStatus = null }) {
           ? 'available'
           : data.state === 'model_switching'
             ? 'switching'
+            : data.state === 'model_incompatible'
+              ? 'incompatible'
             : 'unavailable')
         setStatusDetail(typeof data.detail === 'string' ? data.detail : '')
       } catch (error) {
@@ -484,6 +486,18 @@ export default function Pixel({ systemStatus = null }) {
           }
           return { kind: 'switching', detail }
         }
+        if (response.status === 412) {
+          let detail = 'The active model is not qualified for Pixel tool use.'
+          if (typeof response.json === 'function') {
+            try {
+              const payload = await response.json()
+              if (typeof payload?.detail === 'string' && payload.detail.trim()) detail = payload.detail
+            } catch {
+              // The fixed local fallback remains safe and actionable.
+            }
+          }
+          return { kind: 'incompatible', detail }
+        }
         if (!response.ok) throw new Error('chat unavailable')
 
         reader = response.body?.getReader()
@@ -568,6 +582,14 @@ export default function Pixel({ systemStatus = null }) {
       let attempt = await streamAttempt(chatIdRef.current, conversation)
       if (attempt.kind === 'switching') {
         setStatus('switching')
+        setStatusDetail(attempt.detail)
+        setInput(trimmed)
+        contextStartRef.current = originalContextStart
+        setMessages(messages)
+        return
+      }
+      if (attempt.kind === 'incompatible') {
+        setStatus('incompatible')
         setStatusDetail(attempt.detail)
         setInput(trimmed)
         contextStartRef.current = originalContextStart
@@ -696,6 +718,8 @@ export default function Pixel({ systemStatus = null }) {
       ? 'Available'
       : status === 'switching'
         ? 'Switching model...'
+      : status === 'incompatible'
+        ? 'Model not ready'
       : status === 'loading'
         ? 'Connecting...'
         : 'Degraded'
@@ -784,6 +808,22 @@ export default function Pixel({ systemStatus = null }) {
             <Loader2 className="mb-4 h-9 w-9 animate-spin text-theme-accent-light" />
             <p className="font-medium text-theme-text">Pixel is switching models</p>
             <p className="mt-1 text-sm">Your draft is safe. Pixel will reconnect automatically when activation completes.</p>
+          </div>
+        )}
+        {status === 'incompatible' && messages.length === 0 && (
+          <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center text-theme-text-muted">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-500/25 bg-amber-500/10 text-amber-300">
+              <AlertCircle className="h-7 w-7" />
+            </div>
+            <p className="font-medium text-theme-text">Active model is not Pixel-ready</p>
+            {statusDetail && <p className="mt-1 text-sm">{statusDetail}</p>}
+            <Link
+              to="/models"
+              className="mt-4 inline-flex rounded-lg bg-theme-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-theme-accent-hover"
+            >
+              Choose a Pixel-ready model
+            </Link>
+            <p className="mt-3 text-xs">Chat-only models remain available to other ODS applications.</p>
           </div>
         )}
         {status === 'available' && messages.length === 0 && (
@@ -891,6 +931,8 @@ export default function Pixel({ systemStatus = null }) {
               ? 'Message Pixel...'
               : status === 'switching'
                 ? 'Waiting for model switch...'
+                : status === 'incompatible'
+                  ? 'Choose a Pixel-ready model...'
                 : 'Pixel is unavailable'}
             disabled={isDisabled}
             rows={1}

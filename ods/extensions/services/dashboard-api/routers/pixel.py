@@ -46,6 +46,10 @@ _OPS_STATUSES = frozenset(
 )
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _MODEL_SWITCH_DETAIL = "Model switch in progress; Pixel will be ready when activation completes"
+_MODEL_INCOMPATIBLE_DETAIL = (
+    "The active model is not qualified for Pixel tool use. "
+    "Choose a Pixel-ready model or configure a verified remote provider."
+)
 
 
 def _validate_edge_url(raw: str) -> str:
@@ -137,8 +141,8 @@ class ChatCancelRequest(BaseModel):
 router = APIRouter(prefix="/api/pixel", tags=["pixel"])
 
 
-async def _model_activation_in_progress() -> bool:
-    """Project an explicit model activation without coupling Pixel to model internals.
+async def _model_readiness_issue() -> tuple[str, str] | None:
+    """Return a host-proven model transition or incompatibility, if present.
 
     A failed lifecycle probe does not falsely take down an otherwise healthy
     Pixel edge. The edge readiness check remains authoritative in that case.
@@ -146,12 +150,23 @@ async def _model_activation_in_progress() -> bool:
     try:
         status = await request_agent_json("GET", "/v1/model/status", timeout=2.0)
     except AgentClientError:
-        return False
-    return (
+        return None
+    switching = (
         isinstance(status, dict)
         and status.get("activeOperation") == "model_activation"
         and bool(status.get("lifecycleActive") or status.get("activeOperation"))
     )
+    if switching:
+        return "model_switching", _MODEL_SWITCH_DETAIL
+    if isinstance(status, dict) and status.get("activeAgentViable") is False:
+        return "model_incompatible", _MODEL_INCOMPATIBLE_DETAIL
+    return None
+
+
+async def _model_activation_in_progress() -> bool:
+    """Compatibility wrapper retained for focused lifecycle callers/tests."""
+    issue = await _model_readiness_issue()
+    return issue is not None and issue[0] == "model_switching"
 
 
 async def _bounded_response_bytes(response: httpx.Response, limit: int) -> bytes:
@@ -171,12 +186,14 @@ async def pixel_status() -> dict[str, object]:
     config = _pixel_config()
     if config is None:
         return {"available": False, "model": None, "detail": "Pixel is not enabled"}
-    if await _model_activation_in_progress():
+    readiness_issue = await _model_readiness_issue()
+    if readiness_issue is not None:
+        state, detail = readiness_issue
         return {
             "available": False,
             "model": None,
-            "state": "model_switching",
-            "detail": _MODEL_SWITCH_DETAIL,
+            "state": state,
+            "detail": detail,
         }
     edge_url, key = config
     try:
@@ -355,8 +372,13 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
     config = _pixel_config()
     if config is None:
         raise HTTPException(status_code=503, detail="Pixel is not enabled")
-    if await _model_activation_in_progress():
-        raise HTTPException(status_code=409, detail=_MODEL_SWITCH_DETAIL)
+    readiness_issue = await _model_readiness_issue()
+    if readiness_issue is not None:
+        state, detail = readiness_issue
+        raise HTTPException(
+            status_code=409 if state == "model_switching" else 412,
+            detail=detail,
+        )
     edge_url, key = config
     edge_body = {
         "model": _MODEL,
