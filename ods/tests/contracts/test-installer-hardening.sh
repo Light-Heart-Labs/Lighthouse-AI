@@ -541,6 +541,8 @@ done
 assert_contains "installers/phases/06-directories.sh" 'chmod 0755 -- "\$_pixel_exec_control_path"' "Linux installer does not normalize WSL-mounted Pixel execution-control modes"
 assert_contains "installers/phases/06-directories.sh" '! -L "\$_pixel_exec_control_path"' "Linux installer may normalize a symlinked Pixel execution-control helper"
 assert_contains "installers/phases/06-directories.sh" 'find -P "\$_installed_code_root"' "Linux installer does not normalize WSL-mounted product code modes"
+assert_contains "installers/phases/06-directories.sh" '"\$INSTALL_DIR/bin"' "Linux installer does not normalize installed command modes"
+assert_contains "installers/phases/06-directories.sh" 'find -P "\$INSTALL_DIR" -maxdepth 1' "Linux installer does not normalize root executable modes"
 assert_contains "installers/phases/06-directories.sh" 'chmod go-w --' "Linux installer leaves copied product code ambiently writable"
 assert_contains "installers/phases/06-directories.sh" 'find -P "\$INSTALL_DIR/data/extensions-library"' "Linux installer does not normalize copied extension-library modes"
 

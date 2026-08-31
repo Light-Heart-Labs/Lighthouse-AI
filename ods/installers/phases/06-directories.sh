@@ -264,12 +264,20 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     # Product config and extension code must never remain ambiently writable
     # after installation. Do not follow links; downstream trust checks reject
     # any link where a regular file or directory is required.
-    for _installed_code_root in "$INSTALL_DIR/config" "$INSTALL_DIR/extensions"; do
+    for _installed_code_root in \
+        "$INSTALL_DIR/bin" \
+        "$INSTALL_DIR/scripts" \
+        "$INSTALL_DIR/config" \
+        "$INSTALL_DIR/extensions"
+    do
         [[ -d "$_installed_code_root" && ! -L "$_installed_code_root" ]] \
             || error "Missing or unsafe installed code tree: $_installed_code_root"
         find -P "$_installed_code_root" \( -type d -o -type f \) -exec chmod go-w -- {} + \
             || error "Could not secure installed code tree: $_installed_code_root"
     done
+    find -P "$INSTALL_DIR" -maxdepth 1 -type f \
+        \( -name '*.sh' -o -name 'ods-cli' \) -exec chmod go-w -- {} + \
+        || error "Could not secure installed root executables"
     unset _installed_code_root
 
     # Windows-mounted WSL checkouts commonly present every copied file as
