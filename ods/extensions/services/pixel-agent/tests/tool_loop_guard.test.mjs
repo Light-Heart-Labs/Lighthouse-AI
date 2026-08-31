@@ -772,6 +772,33 @@ test("classifies broad host exploration into a useful nonredundant typed invento
   );
 });
 
+test("does not require host facets that a follow-up explicitly says not to repeat", () => {
+  assert.deepEqual(
+    userMessageOperationsRequirements(
+      [],
+      "Continue from that result. Using typed Operations only, add the host CPU and memory facts " +
+        "with the new exact terminal job IDs. Keep the answer concise and do not repeat the prior " +
+        "hostname or OS facts."
+    ),
+    { required: true, actions: ["host.cpu", "host.memory"] }
+  );
+  assert.equal(
+    userMessageOperationsRequirements(
+      [],
+      "Explore the ODS host processes, services, CPU, memory, storage, and network, " +
+        "but skip listening ports."
+    ).actions.includes("host.listening-ports"),
+    false
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements(
+      [],
+      "Report the ODS host identity using Operations; do not treat sandbox output as host evidence."
+    ),
+    { required: true, actions: ["host.identity"] }
+  );
+});
+
 test("classifies installable extension catalog work as one exact Operations action", () => {
   for (const prompt of [
     "Search the installable ODS extension catalog for workflow automation.",

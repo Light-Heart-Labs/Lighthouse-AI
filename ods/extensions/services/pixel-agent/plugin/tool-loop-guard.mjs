@@ -1761,6 +1761,19 @@ function explicitlyRejectsOdsTool(text, toolPattern) {
     );
 }
 
+function explicitlyExcludesHostObservation(text, facetPattern) {
+  const exclusion = new RegExp(
+    `\\b(?:` +
+      `(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
+        `(?:repeat|restate|include|report|show|list|add)|` +
+      `(?:avoid|skip|omit|exclude)|` +
+      `without(?:\\s+(?:repeating|restating|including|reporting|showing|listing|adding))?` +
+    `)\\b[^.!?;\\n]{0,120}\\b(?:${facetPattern})\\b`,
+    "i"
+  );
+  return exclusion.test(text);
+}
+
 export function userMessageAuthorizesRecursiveDelete(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return false;
@@ -1951,12 +1964,31 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("ods.extensions.inspect");
     actions.push(`ods.extensions.${extensionLifecycle.action}`);
   }
+  const hostFacetPatterns = new Map([
+    ["host.identity", "hostname|host identity"],
+    ["host.kernel", "kernel"],
+    ["host.architecture", "machine architecture|architecture|cpu architecture"],
+    ["host.platform", "host platform"],
+    ["host.os-release", "operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro"],
+    ["host.processes", "process|processes|process inventory"],
+    ["host.services", "systemd|system services?|service inventory"],
+    ["host.cpu", "cpu|processor|hardware"],
+    ["host.memory", "memory|ram|swap"],
+    ["host.storage", "disk|filesystem|storage|mounts?"],
+    ["host.network-addresses", "network interfaces?|interfaces?|addresses?|ip addresses?"],
+    ["host.network-routes", "routes?|routing"],
+    ["host.listening-ports", "ports?|listeners?"],
+  ]);
+  const requestedActions = [...new Set(actions)].filter((action) => {
+    const facetPattern = hostFacetPatterns.get(action);
+    return !facetPattern || !explicitlyExcludesHostObservation(text, facetPattern);
+  });
   return {
     required:
       explicitOperations || hostEvidence || broadHostExploration ||
       (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
       extensionCatalog || Boolean(extensionLifecycle),
-    actions: [...new Set(actions)],
+    actions: requestedActions,
   };
 }
 
