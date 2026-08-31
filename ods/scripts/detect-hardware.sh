@@ -134,11 +134,16 @@ detect_platform() {
 detect_nvidia() {
     # Validate NVIDIA hardware present in sysfs before trusting nvidia-smi,
     # which may be installed without NVIDIA hardware (e.g. nvidia-container-toolkit
-    # on AMD-only systems).
+    # on AMD-only systems). WSL2 exposes the GPU through its paravirtualized
+    # driver without a PCI card entry, so a working nvidia-smi is the hardware
+    # witness there. Keep this in parity with installers/lib/detection.sh.
     local _has_nvidia=false
     for _v in /sys/class/drm/card*/device/vendor; do
         [[ "$(cat "$_v" 2>/dev/null)" == "0x10de" ]] && _has_nvidia=true && break
     done
+    if ! $_has_nvidia && is_wsl && command -v nvidia-smi &>/dev/null; then
+        _has_nvidia=true
+    fi
     $_has_nvidia || return 1
 
     # Works on bare metal Linux; on WSL2 it may be present via Docker Desktop GPU integration.
