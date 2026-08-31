@@ -227,6 +227,14 @@ jobs:
       - name: Atomic Environment Write Tests
         run: /bin/bash tests/test-atomic-env-writes.sh
 
+      - name: Set up Python for Compose resolver contracts
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Compose resolver dependencies
+        run: python3 -m pip install "PyYAML>=6.0,<7.0"
+
       - name: Resolve modern Bash for macOS runtime contracts
         run: |
           for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
