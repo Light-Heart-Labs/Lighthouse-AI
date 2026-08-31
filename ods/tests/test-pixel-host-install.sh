@@ -625,7 +625,7 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-host_inventory={"host.processes","host.services","host.cpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports"}
+host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports"}
 assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
 for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect"}:
     assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
@@ -633,6 +633,7 @@ assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
 assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
 assert v["actions"]["host.architecture"]["argv"] == ["/usr/bin/uname", "-m"]
 assert v["actions"]["host.platform"]["argv"] == ["/usr/bin/uname", "-a"]
+assert v["actions"]["host.uptime"]["argv"] == ["/usr/bin/uptime"]
 assert v["actions"]["host.os-release"]["argv"] == ["/usr/bin/cat", "/etc/os-release"]
 assert pathlib.Path(v["actions"]["host.processes"]["argv"][0]).name == "ps"
 assert v["actions"]["host.processes"]["argv"][1:] == ["-eo","pid=,ppid=,user=,stat=,%cpu=,%mem=,comm=","--sort=-%cpu"]
@@ -1651,7 +1652,7 @@ handoff = (
 )
 assert handoff in phase
 assert phase.index(handoff) < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
-assert "PIXEL_SOURCE_REF \"0f5e2e117fc7080964c12e26bceff7498032acc8\"" in phase
+assert "PIXEL_SOURCE_REF \"7a83c48aa79d1c0e224b8f0cb6aacba92570bb14\"" in phase
 ' "$ROOT/installers/phases/06-directories.sh"
 check python3 -c '
 import pathlib,sys

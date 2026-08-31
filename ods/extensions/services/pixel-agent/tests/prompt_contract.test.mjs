@@ -84,6 +84,7 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /generic exec is sandbox-only evidence/);
   assert.match(result.appendSystemContext, /typed ods-host observations that match the request/);
   assert.match(result.appendSystemContext, /host\.identity, host\.kernel, host\.architecture/);
+  assert.match(result.appendSystemContext, /host\.os-release, host\.uptime, host\.processes/);
   assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.memory, host\.storage/);
   assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, and host\.listening-ports/);
   assert.match(result.appendSystemContext, /literal target ods-host/);

@@ -2065,6 +2065,7 @@ python_binary = str(pathlib.Path("/usr/bin/python3").resolve(strict=True))
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
 cat_binary = "/usr/bin/cat"
+uptime_binary = "/usr/bin/uptime"
 
 def required_binary(name):
     candidate = shutil.which(name)
@@ -2080,7 +2081,7 @@ df_binary = required_binary("df")
 ip_binary = required_binary("ip")
 ss_binary = required_binary("ss")
 for binary in (
-    python_binary, hostname_binary, uname_binary, cat_binary, ps_binary,
+    python_binary, hostname_binary, uname_binary, cat_binary, uptime_binary, ps_binary,
     systemctl_binary, lscpu_binary, free_binary, df_binary, ip_binary, ss_binary,
 ):
     info = pathlib.Path(binary).lstat()
@@ -2209,6 +2210,18 @@ payload = {
             "reversible": False,
             "targets": ["ods-host"],
             "argv": [cat_binary, "/etc/os-release"],
+            "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.uptime": {
+            "description": "Report host uptime and the one, five, and fifteen minute load averages.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [uptime_binary],
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },

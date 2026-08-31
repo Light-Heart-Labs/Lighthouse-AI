@@ -937,6 +937,17 @@ function cpuArchitectureEvidence(step) {
   return fields?.find(({ field }) => field === "Architecture:")?.data;
 }
 
+function uptimeEvidence(step) {
+  const lines = safeHostLines(step, 2, 1024);
+  if (!lines || lines.length !== 1) return undefined;
+  const match = lines[0].match(
+    /^[0-9]{1,2}:[0-9]{2}:[0-9]{2}\s+up\s+([0-9]{1,4}\s+days?(?:,\s*[0-9]{1,3}:[0-9]{2})?|[0-9]{1,4}\s+min|[0-9]{1,3}:[0-9]{2}),\s+([0-9]{1,6})\s+users?,\s+load average:\s+([0-9]+(?:\.[0-9]+)?),\s+([0-9]+(?:\.[0-9]+)?),\s+([0-9]+(?:\.[0-9]+)?)$/
+  );
+  if (!match) return undefined;
+  return `Uptime: ${match[1]}; users: ${match[2]}; ` +
+    `load average (1/5/15m): ${match[3]}, ${match[4]}, ${match[5]}.`;
+}
+
 function memoryEvidence(step) {
   const lines = safeHostLines(step, 16, 4096);
   if (!lines) return undefined;
@@ -1149,6 +1160,7 @@ function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjec
     lines.push(`- Operating system: \`${value}\` (job \`${osRelease.jobId}\`)`);
   }
   const renderers = [
+    ["host.uptime", "Uptime and load", uptimeEvidence],
     ["host.cpu", "Hardware", cpuEvidence],
     ["host.memory", "Memory", memoryEvidence],
     ["host.storage", "Storage", storageEvidence],
@@ -1680,7 +1692,7 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
 function operationsEvidenceText(requiredActions, terminalJobs, odsAppsProjection = undefined) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
-    "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release",
+    "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release", "host.uptime",
     "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
     "host.network-addresses", "host.network-routes", "host.listening-ports",
   ]);
@@ -2039,7 +2051,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
   const hostContext = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i.test(text);
   const hostFacetCount = [
-    /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i,
+    /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro|uptime|load averages?|system load)\b/i,
     /\b(?:process|processes|process inventory)\b/i,
     /\b(?:systemd|system services?|service inventory)\b/i,
     /\b(?:cpu|processor|hardware)\b/i,
@@ -2063,6 +2075,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (/\b(?:operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i.test(text)) {
     actions.push("host.os-release");
   }
+  if (broadHostExploration || (hostContext && /\b(?:uptime|load averages?|system load)\b/i.test(text))) {
+    actions.push("host.uptime");
+  }
   if (broadHostExploration || (hostContext && /\b(?:process|processes|process inventory)\b/i.test(text))) {
     actions.push("host.processes");
   }
@@ -2082,7 +2097,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("host.network-addresses", "host.network-routes", "host.listening-ports");
   }
   if (broadHostExploration) {
-    actions.push("host.identity", "host.kernel", "host.platform", "host.os-release");
+    actions.push("host.identity", "host.kernel", "host.platform", "host.os-release", "host.uptime");
   }
   if (extensionCatalog) actions.push("ods.extensions.search");
   if (extensionLifecycle) {
@@ -2095,6 +2110,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ["host.architecture", "machine architecture|architecture|cpu architecture"],
     ["host.platform", "host platform"],
     ["host.os-release", "operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro"],
+    ["host.uptime", "uptime|load averages?|system load"],
     ["host.processes", "process|processes|process inventory"],
     ["host.services", "systemd|system services?|service inventory"],
     ["host.cpu", "cpu|processor|hardware"],

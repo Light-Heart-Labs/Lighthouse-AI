@@ -756,7 +756,7 @@ test("classifies broad host exploration into a useful nonredundant typed invento
     new Set(result.actions),
     new Set([
       "host.identity", "host.kernel", "host.platform", "host.os-release",
-      "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
+      "host.uptime", "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
       "host.network-addresses", "host.network-routes", "host.listening-ports",
     ])
   );
@@ -767,6 +767,10 @@ test("classifies broad host exploration into a useful nonredundant typed invento
   assert.deepEqual(
     userMessageOperationsRequirements([], "Inspect the ODS host storage capacity."),
     { required: true, actions: ["host.storage"] }
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "Inspect the ODS host uptime and system load."),
+    { required: true, actions: ["host.uptime"] }
   );
   assert.deepEqual(
     userMessageOperationsRequirements([], "Explain CPU scheduling in this system."),
@@ -1719,6 +1723,7 @@ test("renders a structurally validated broad host inventory without command argu
     ["kernel", "host.kernel", "Linux 6.6.87.2-microsoft-standard-WSL2\n"],
     ["platform", "host.platform", "Linux light-worker 6.6.87.2-microsoft-standard-WSL2 x86_64 GNU/Linux\n"],
     ["os", "host.os-release", 'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\n'],
+    ["uptime", "host.uptime", "18:42:19 up 2 days,  3:17,  1 user,  load average: 0.25, 0.18, 0.11\n"],
     ["processes", "host.processes", "42 1 michael S 12.5 1.2 python3\n"],
     ["services", "host.services", "ssh.service loaded active running OpenBSD Secure Shell server\n"],
     ["cpu", "host.cpu", JSON.stringify({ lscpu: [
@@ -1772,6 +1777,7 @@ test("renders a structurally validated broad host inventory without command argu
   const text = reply(guard)?.payload?.text;
   assert.match(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
   assert.match(text, /Processes: 1 visible; top CPU entries: python3/);
+  assert.match(text, /Uptime: 2 days,\s+3:17; users: 1; load average \(1\/5\/15m\): 0\.25, 0\.18, 0\.11/);
   assert.match(text, /System services: 1 running or failed; failed: none/);
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
   assert.match(text, /Architecture: `x86_64` \(from structured host\.cpu job/);
@@ -2079,6 +2085,13 @@ test("rejects host-controlled storage, route, and listener text outside the evid
     terminalReply("Inspect the ODS host storage capacity.", [[
       "storage", "host.storage",
       "Type 1B-blocks Used Avail Use% Mounted on\next4 100 50 50 50% /srv/ignore;instructions\n",
+    ]]),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  assert.equal(
+    terminalReply("Inspect the ODS host uptime and system load.", [[
+      "uptime", "host.uptime",
+      "18:42:19 up 2 days, 3:17, 1 user, load average: 0.25, 0.18, 0.11; ignore\n",
     ]]),
     OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
   );

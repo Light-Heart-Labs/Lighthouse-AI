@@ -140,11 +140,11 @@ itself is unchanged. Installation fails unless the resulting root-owned,
 mode-`0640` broker policy is byte-for-byte equal to the owner-private source;
 an installer success message is never treated as sufficient custody evidence.
 
-The default policy provides thirteen read-only named host actions. Identity
+The default policy provides fourteen read-only named host actions. Identity
 and platform observations use `host.identity`, `host.kernel`,
 `host.architecture`, `host.platform`, and `host.os-release`. Broad machine
 exploration combines identity, kernel, platform, and operating-system evidence
-with `host.processes`, `host.services`, `host.cpu`, `host.memory`,
+with `host.uptime`, `host.processes`, `host.services`, `host.cpu`, `host.memory`,
 `host.storage`, `host.network-addresses`, `host.network-routes`, and
 `host.listening-ports`. It does not require the redundant
 `host.architecture` action because both platform and CPU observations already
@@ -160,8 +160,10 @@ privileged shell. Process observations omit command arguments and environment
 values; service observations omit service environments; storage observation
 reports capacity rather than file contents; and network observation reports
 interfaces, routes, and listening endpoints without process arguments or
-credentials. The actions execute from the broker's protected state directory,
-so the broker still does not need access to the owner's home directory. Raw
+credentials. Uptime reports only elapsed host uptime, user count, and the one,
+five, and fifteen minute load averages. The actions execute from the broker's
+protected state directory, so the broker still does not need access to the
+owner's home directory. Raw
 host shell remains disabled in Operations; Pixel's sandbox shell remains
 available for ordinary workspace work. Workspace file tools continue to
 operate only inside Pixel's sandbox; broader owner-file exploration requires a
