@@ -209,10 +209,11 @@ async def enable_workflow(workflow_id: str, api_key: str = Depends(verify_api_ke
             async with session.post(f"{N8N_URL}/api/v1/workflows", headers=headers, json=workflow_data) as resp:
                 if resp.status in (200, 201):
                     result = await resp.json()
-                    n8n_id = result.get("data", {}).get("id")
+                    n8n_id = result.get("id")
                     activated = False
                     if n8n_id:
-                        async with session.patch(f"{N8N_URL}/api/v1/workflows/{n8n_id}", headers=headers, json={"active": True}) as activate_resp:
+                        activate_url = f"{N8N_URL}/api/v1/workflows/{n8n_id}/activate"
+                        async with session.post(activate_url, headers=headers) as activate_resp:
                             activated = activate_resp.status == 200
                     message = (
                         f"{wf_info['name']} is now active!"
