@@ -148,8 +148,12 @@ with `host.processes`, `host.services`, `host.cpu`, `host.memory`,
 `host.storage`, `host.network-addresses`, `host.network-routes`, and
 `host.listening-ports`. It does not require the redundant
 `host.architecture` action because both platform and CPU observations already
-carry architecture evidence; an explicit architecture request still requires
-that dedicated action.
+carry architecture evidence. A narrow architecture-only request still requires
+the dedicated action. In a broad inventory that already contains a structurally
+validated `host.cpu` receipt, the verifier may satisfy an explicit architecture
+facet from that receipt's exact `Architecture:` field instead of discarding the
+otherwise complete report; malformed or absent architecture data still fails
+closed.
 
 These actions intentionally expose useful host state without exposing a raw
 privileged shell. Process observations omit command arguments and environment
