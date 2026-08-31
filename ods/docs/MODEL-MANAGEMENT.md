@@ -170,6 +170,14 @@ consumer activation only after the managed tunnel and egress proof succeed.
 The Dashboard reports the provider as Ready only when the egress path and the
 actual consumer route are both active and proven.
 
+The status page rechecks the current host-owned Pixel runtime instead of
+trusting an older activation receipt. If the provider is reachable but ODS or
+Pixel has moved to a different model contract, the page reports **Consumer
+drift**, marks inference unavailable, and offers **Reconcile route** in the
+header. Reconcile runs the same fresh proof and transactional activation as
+`ods remote-provider enable`; it reuses the owner-custodied secret and does not
+ask the browser to recover or resubmit it.
+
 The operation is transactional. ODS retains the exact prior mode, LiteLLM
 config, and Pixel model contract in a private recovery record. A failed render,
 container health check, completion, or Pixel restart restores that state.
