@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -918,6 +919,152 @@ class TestComposeCacheInvalidationWire:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+class TestSetupStateWire:
+    """Dashboard setup state crosses the authenticated host-agent boundary."""
+
+    def test_unwritable_container_mount_does_not_block_setup(
+        self,
+        tmp_path,
+        monkeypatch,
+        host_agent_wire_client,
+        test_client,
+    ):
+        from http.server import HTTPServer
+
+        from routers import setup as setup_router
+
+        host_data = tmp_path / "host-data"
+        blocked_mount = tmp_path / "container-data"
+        blocked_mount.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(
+            setup_router,
+            "SETUP_CONFIG_DIR",
+            blocked_mount / "config",
+            raising=False,
+        )
+        monkeypatch.setattr(_mod, "DATA_DIR", host_data)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host_agent_wire_client(port, key="wrong-secret")
+            denied = test_client.post(
+                "/api/setup/persona",
+                json={"persona": "coding"},
+                headers=test_client.auth_headers,
+            )
+            assert denied.status_code == 403
+            assert not (host_data / "config" / "persona.json").exists()
+
+            host_agent_wire_client(port)
+            persona = test_client.post(
+                "/api/setup/persona",
+                json={"persona": "coding"},
+                headers=test_client.auth_headers,
+            )
+            assert persona.status_code == 200
+
+            status_response = test_client.get(
+                "/api/setup/status",
+                headers=test_client.auth_headers,
+            )
+            assert status_response.status_code == 200
+            assert status_response.json()["persona"] == "coding"
+            assert status_response.json()["step"] == 2
+
+            complete = test_client.post(
+                "/api/setup/complete",
+                headers=test_client.auth_headers,
+            )
+            assert complete.status_code == 200
+            assert test_client.post(
+                "/api/setup/complete",
+                headers=test_client.auth_headers,
+            ).status_code == 200
+
+            state_dir = host_data / "config"
+            persona_file = state_dir / "persona.json"
+            complete_file = state_dir / "setup-complete.json"
+            assert persona_file.is_file()
+            assert complete_file.is_file()
+            assert not (state_dir / "setup-progress.json").exists()
+            assert json.loads(persona_file.read_text(encoding="utf-8"))["persona"] == "coding"
+            if os.name != "nt":
+                assert stat.S_IMODE(persona_file.stat().st_mode) == 0o600
+                assert stat.S_IMODE(complete_file.stat().st_mode) == 0o600
+
+            final_status = test_client.get(
+                "/api/setup/status",
+                headers=test_client.auth_headers,
+            )
+            assert final_status.status_code == 200
+            assert final_status.json()["first_run"] is False
+        finally:
+            # Release httpx's HTTP/1.1 keep-alive connection before stopping
+            # the single-threaded test server.
+            host_agent_wire_client(port)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+class TestSetupStateTransactions:
+    def test_persona_write_rolls_back_both_files_on_partial_failure(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        state_dir = tmp_path / "config"
+        state_dir.mkdir()
+        persona_path = state_dir / "persona.json"
+        progress_path = state_dir / "setup-progress.json"
+        persona_path.write_text('{"persona":"general"}\n', encoding="utf-8")
+        progress_path.write_text('{"step":1}\n', encoding="utf-8")
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        real_atomic_write = _mod._atomic_write_text
+        failed_once = False
+
+        def flaky_atomic_write(path, text, *args, **kwargs):
+            nonlocal failed_once
+            if path == progress_path and not failed_once:
+                failed_once = True
+                raise RuntimeError("simulated progress write failure")
+            return real_atomic_write(path, text, *args, **kwargs)
+
+        monkeypatch.setattr(_mod, "_atomic_write_text", flaky_atomic_write)
+        payload = {
+            "persona": "coding",
+            "name": "Coding Assistant",
+            "system_prompt": "Help with code.",
+            "icon": "code",
+            "selected_at": "2026-08-25T00:00:00+00:00",
+        }
+
+        with pytest.raises(RuntimeError, match="simulated progress write failure"):
+            _mod._write_setup_persona(payload)
+
+        assert persona_path.read_text(encoding="utf-8") == '{"persona":"general"}\n'
+        assert progress_path.read_text(encoding="utf-8") == '{"step":1}\n'
+
+    def test_state_reader_refuses_symlinked_marker(self, tmp_path, monkeypatch):
+        if not can_create_symlinks(tmp_path):
+            pytest.skip("symlinks are unavailable")
+
+        state_dir = tmp_path / "config"
+        state_dir.mkdir(exist_ok=True)
+        target = tmp_path / "outside-marker.json"
+        target.write_text("{}", encoding="utf-8")
+        (state_dir / "setup-complete.json").symlink_to(target)
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+
+        with pytest.raises(RuntimeError, match="Refusing symlinked setup state"):
+            _mod._setup_state_payload()
 
 
 class TestUpdateWire:
