@@ -4694,6 +4694,13 @@ cmd_backup() {
     "$INSTALL_DIR/ods-backup.sh" "$@"
 }
 
+cmd_support_bundle() {
+    check_install
+    local bundle_script="$INSTALL_DIR/scripts/ods-support-bundle.sh"
+    [[ -x "$bundle_script" ]] || error "Support bundle generator not found or not executable: $bundle_script"
+    exec "$bundle_script" "$@"
+}
+
 cmd_restore() {
     check_install
     cd "$INSTALL_DIR"
@@ -6423,6 +6430,8 @@ ${CYAN}Commands:${NC}
                       View Whisper STT model, check cache, or trigger download
   backup [options]    Create a backup of user data and config
   backup verify <id>   Verify checksum integrity for a backup
+  support-bundle [options]
+                      Create a redacted diagnostics archive for support
   restore [backup_id] Restore from a backup
   rollback            Rollback to pre-update state (after failed update)
   logs <service>      Tail logs for a service
@@ -6533,6 +6542,7 @@ ${CYAN}Examples:${NC}
   ods backup -c                 # Create compressed backup
   ods backup -l                 # List all backups
   ods backup verify <id>        # Verify backup integrity
+  ods support-bundle --json     # Create a bundle and print its archive path as JSON
   ods restore                   # Interactive restore
   ods restore 20260309-120000   # Restore specific backup
   ods rollback                  # Rollback after failed update
@@ -6576,6 +6586,7 @@ case "${1:-help}" in
     remote-provider) shift; cmd_remote_provider "$@" ;;
     stt)         shift; cmd_stt "$@" ;;
     backup)      shift; cmd_backup "$@" ;;
+    support-bundle|support) shift; cmd_support_bundle "$@" ;;
     restore)     shift; cmd_restore "$@" ;;
     rollback)    cmd_rollback ;;
     logs|log|l)  shift; cmd_logs "$@" ;;
