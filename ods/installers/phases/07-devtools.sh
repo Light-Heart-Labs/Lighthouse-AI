@@ -174,7 +174,7 @@ else
         _opencode_model_id="${LLM_MODEL}"
         _opencode_model_name="${LLM_MODEL}"
         _opencode_provider_name="llama-server (local)"
-        if [[ "${ODS_MODEL_SWITCHBOARD:-observe}" == "enabled" ]]; then
+        if [[ "${ODS_MODEL_SWITCHBOARD:-enabled}" == "enabled" ]]; then
             _opencode_url="http://127.0.0.1:${LITELLM_PORT:-4000}/v1"
             _opencode_key="${LITELLM_KEY:-}"
             _opencode_model_id="ods/current"

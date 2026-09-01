@@ -171,9 +171,9 @@ detect_timezone() {
 }
 
 normalize_ods_model_switchboard() {
-    case "${1:-observe}" in
+    case "${1:-enabled}" in
         legacy|observe|enabled) printf '%s\n' "$1" ;;
-        *) printf '%s\n' "observe" ;;
+        *) printf '%s\n' "enabled" ;;
     esac
 }
 
@@ -246,7 +246,7 @@ generate_ods_env() {
 
         local _switchboard_mode
         _switchboard_mode="$(read_env_value "$env_path" "ODS_MODEL_SWITCHBOARD")"
-        [[ -n "$_switchboard_mode" ]] || _switchboard_mode="${ODS_MODEL_SWITCHBOARD:-observe}"
+        [[ -n "$_switchboard_mode" ]] || _switchboard_mode="${ODS_MODEL_SWITCHBOARD:-enabled}"
         _switchboard_mode="$(normalize_ods_model_switchboard "$_switchboard_mode")"
         upsert_env_value "$env_path" "ODS_MODEL_SWITCHBOARD" "$_switchboard_mode"
         if [[ "$_switchboard_mode" == "enabled" ]]; then
@@ -439,7 +439,7 @@ generate_ods_env() {
     local agent_host="host.docker.internal"
     local llm_api_url="http://host.docker.internal:8080"
     local switchboard_mode
-    switchboard_mode="$(normalize_ods_model_switchboard "${ODS_MODEL_SWITCHBOARD:-observe}")"
+    switchboard_mode="$(normalize_ods_model_switchboard "${ODS_MODEL_SWITCHBOARD:-enabled}")"
     if [[ "${DOCKER_BACKEND:-unknown}" == "colima" ]]; then
         macos_llm_bridge_enabled="true"
         macos_host_agent_bridge_enabled="true"

@@ -41,6 +41,29 @@ assert_in_order() {
 # Strip comments so explanatory text cannot satisfy or fail the checks.
 active_code="$(grep -v '^[[:space:]]*#' "$TARGET")"
 
+gate_acquire_block="$(function_block acquire_model_router_swap_gate | grep -v '^[[:space:]]*#')"
+gate_release_block="$(function_block release_model_router_swap_gate | grep -v '^[[:space:]]*#')"
+grep -qF 'model_router_swap_gate_call begin "$token" 30' <<<"$gate_acquire_block" \
+    || fail "model swap admission must use a short renewable router lease"
+grep -qF 'model_router_swap_gate_health' <<<"$gate_acquire_block" \
+    || fail "model swap admission must inspect authoritative router request counts"
+grep -qF 'consecutive_idle >= 2' <<<"$gate_acquire_block" \
+    || fail "model swap admission must prove a stable drained boundary"
+grep -qF 'model_router_swap_gate_call end "$token" 30' <<<"$gate_release_block" \
+    || fail "model swap admission must explicitly reopen after the transaction"
+grep -qF "trap 'release_model_router_swap_gate; release_model_lifecycle_lock; release_upgrade_lock' EXIT" <<<"$active_code" \
+    || fail "model swap admission must reopen on every normal or failed exit"
+top_level_swap="$(awk '
+    /acquire_model_lifecycle_lock \|\| fail "Could not serialize background full-model activation/ { in_block=1 }
+    in_block { print }
+    /Snapshotting active model config before full-model swap/ { exit }
+' "$TARGET" | grep -v '^[[:space:]]*#')"
+assert_in_order "$top_level_swap" "bootstrap swap drain boundary" \
+    'acquire_model_lifecycle_lock ||' \
+    'acquire_model_router_swap_gate' \
+    'Snapshotting active model config before full-model swap'
+pass "bootstrap promotion closes, drains, and releases router admission"
+
 yaml_scalar_block="$(function_block yaml_double_quoted_scalar_content | grep -v '^[[:space:]]*#')"
 sed_escape_block="$(function_block sed_replacement_escape | grep -v '^[[:space:]]*#')"
 hermes_host_patch_block="$(function_block patch_hermes_yaml_with_sed | grep -v '^[[:space:]]*#')"

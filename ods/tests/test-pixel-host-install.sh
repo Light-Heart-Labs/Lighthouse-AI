@@ -1409,6 +1409,17 @@ gateway_budget_status="$(_ods_pixel_apply_runtime_budget "$owner" "$reconcile_ho
 check test "$gateway_budget_status" = unchanged
 check _ods_pixel_candidate_is_managed_runtime_update "$owner" "$reconcile_home" \
     "$gateway_candidate" "$gateway_answers"
+cp "$reconcile_config" "$TEST_ROOT/pre-gateway-alias-config.json"
+cp "$gateway_candidate" "$reconcile_config"
+chmod 0600 "$reconcile_config"
+check _ods_pixel_uses_stable_model_alias "$owner" "$reconcile_home" "$gateway_answers"
+cp "$TEST_ROOT/pre-gateway-alias-config.json" "$reconcile_config"
+chmod 0600 "$reconcile_config"
+if _ods_pixel_uses_stable_model_alias "$owner" "$reconcile_home" "$gateway_answers" >/dev/null 2>&1; then
+    fail "stable Pixel model alias rejected a direct-model live route"
+else
+    pass "stable Pixel model alias rejects a direct-model live route"
+fi
 python3 - "$reconcile_marker" "$reconcile_config" <<'PY'
 import hashlib, json, pathlib, sys
 
@@ -1636,6 +1647,13 @@ assert "_ods_pixel_recreate_agent_sandbox" in text
 assert "_ods_pixel_refresh_plugin_registry" in text
 assert "plugins registry --refresh --json" in text
 assert "ods_pixel_reconcile_promoted_model" in text
+stable_alias = text.index("if _ods_pixel_uses_stable_model_alias")
+reconcile_snapshot = text.index("_ods_pixel_model_reconciliation_snapshot", stable_alias)
+reconcile_restart = text.index("_ods_pixel_restart_gateway_and_verify", reconcile_snapshot)
+assert stable_alias < reconcile_snapshot < reconcile_restart
+stable_branch = text[stable_alias:reconcile_snapshot]
+assert "Pixel stable model alias remains active" in stable_branch
+assert "_ods_pixel_restart_gateway_and_verify" not in stable_branch
 assert "failure_phase=\"onboarding-update\"" in text
 assert "failure_phase=\"pixel-configure\"" in text
 assert "failure_phase=\"pixel-plan\"" in text
@@ -1698,6 +1716,11 @@ assert "PIXEL_GATEWAY_TOKEN_FILE=$runtime_token_file" in text
 assert "PIXEL_ODS_VERSION=$ods_version" in text
 assert "PIXEL_ODS_N8N_PORT=${N8N_PORT:-5678}" in text
 assert "PIXEL_ODS_WHISPER_PORT=${WHISPER_PORT:-9000}" in text
+prerequisites = installer.index("litellm searxng dashboard-api")
+control_health = installer.index("_ods_pixel_wait_http \"ODS control API\"", prerequisites)
+bootstrap = installer.index("ai \"Bootstrapping the exact Pixel source", control_health)
+assert prerequisites < control_health < bootstrap
+assert "exact ODS prerequisite services" in installer
 ' "$ROOT/installers/lib/pixel-host-install.sh"
 check python3 -c '
 import pathlib,sys

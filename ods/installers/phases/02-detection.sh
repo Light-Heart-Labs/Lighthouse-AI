@@ -585,15 +585,11 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "${TIER:-}" !=
             if (( ${#_selector_agent_args[@]} > 0 )); then
                 if [[ -n "$_selector_env" ]]; then
                     PIXEL_AGENT_MODEL_READY=true
-                elif [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
-                    PIXEL_AGENT_MODEL_READY=false
-                    ai_warn "No catalog-verified Pixel agent model fits this hardware."
-                    ai_warn "Continuing because Pixel was explicitly requested; the selected installable model remains unqualified for agent work."
-                    log "Explicit Pixel request accepted an unqualified local model without changing its catalog readiness verdict"
-                    _selector_env="$(_run_catalog_selector 2>>"$LOG_FILE" || true)"
                 else
                     PIXEL_AGENT_MODEL_READY=false
-                    log "Pixel auto-gate will use Hermes because no catalog-verified agent model fits this hardware"
+                    ai_warn "No catalog-tested Pixel performance profile fits this hardware yet."
+                    ai_warn "Pixel will still use the best-fit installable model in adaptive mode; capability and speed vary with the model."
+                    log "Pixel adaptive mode selected the best-fit installable local model; catalog qualification remains advisory"
                     _selector_env="$(_run_catalog_selector 2>>"$LOG_FILE" || true)"
                 fi
             fi

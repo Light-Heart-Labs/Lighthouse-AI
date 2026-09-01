@@ -146,12 +146,16 @@ def main() -> int:
     )
     assert "--agent-ready-only" in detection
     assert "PIXEL_AGENT_MODEL_READY=false" in detection
-    assert "No catalog-verified Pixel agent model fits" in detection
-    assert "Explicit Pixel request accepted an unqualified local model" in detection
+    assert "No catalog-tested Pixel performance profile fits" in detection
+    assert "Pixel adaptive mode selected the best-fit installable local model" in detection
     assert '_selector_env="$(_run_catalog_selector' in detection
     assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
-    assert "selected Hermes because no catalog-verified agent model fits" in features
-    assert "explicitly selected but catalog-unqualified local model" in features
+    assert "Pixel adaptive mode will use this best-fit local model" in features
+    assert "catalog testing is performance guidance, not an access gate" in features
+    assert "PIXEL_AGENT_MODE=hermes" not in features[
+        features.index('PIXEL_AGENT_MODEL_READY:-unknown'):
+        features.index('"$_pixel_model_route_class" == "unmanaged-external"')
+    ]
     assert "ods_pixel_model_route_class" in features
     assert '"$_pixel_model_route_class" == "unmanaged-external"' in features
     assert '"${ENABLE_PIXEL_RUNTIME:-false}" == "true"' in features

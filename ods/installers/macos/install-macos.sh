@@ -1722,9 +1722,9 @@ else
     _previous_macos_gateway="$(read_env_value "${INSTALL_DIR}/.env" "ODS_MACOS_HOST_GATEWAY")"
     generate_ods_env "$INSTALL_DIR" "$SELECTED_TIER" "$FORCE"
     _macos_switchboard_mode="$(read_env_value "${INSTALL_DIR}/.env" "ODS_MODEL_SWITCHBOARD")"
-    case "${_macos_switchboard_mode:-observe}" in
+    case "${_macos_switchboard_mode:-enabled}" in
         legacy|observe|enabled) ;;
-        *) _macos_switchboard_mode="observe" ;;
+        *) _macos_switchboard_mode="enabled" ;;
     esac
     upsert_env_value "${INSTALL_DIR}/.env" "ODS_MODEL_SWITCHBOARD" "$_macos_switchboard_mode"
     _macos_agent_bind_raw="$(read_env_value "${INSTALL_DIR}/.env" "ODS_AGENT_BIND")"
@@ -2823,7 +2823,7 @@ for service in (data.get("services") or {}).values():
     if [[ -n "$OPENCODE_BIN" && -x "$OPENCODE_BIN" ]]; then
         mkdir -p "$OPENCODE_CONFIG_DIR"
         _opencode_switchboard_mode="$(read_env_value "$INSTALL_DIR/.env" "ODS_MODEL_SWITCHBOARD")"
-        if [[ "${_opencode_switchboard_mode:-observe}" == "enabled" ]]; then
+        if [[ "${_opencode_switchboard_mode:-enabled}" == "enabled" ]]; then
             _opencode_model="ods/current"
             _opencode_port="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_PORT")"
             [[ "$_opencode_port" =~ ^[0-9]+$ ]] || _opencode_port="4000"
@@ -3255,7 +3255,7 @@ if $ENABLE_PERPLEXICA; then
     PERPLEXICA_API_KEY="no-key"
     PERPLEXICA_BASE_URL="${CONTAINER_LLM_URL:-http://host.docker.internal:8080}"
     _perplexica_switchboard_mode="$(read_env_value "$INSTALL_DIR/.env" "ODS_MODEL_SWITCHBOARD")"
-    if [[ "${_perplexica_switchboard_mode:-observe}" == "enabled" ]]; then
+    if [[ "${_perplexica_switchboard_mode:-enabled}" == "enabled" ]]; then
         PERPLEXICA_MODEL="ods/current"
         PERPLEXICA_API_KEY="$(read_env_value "$INSTALL_DIR/.env" "LITELLM_KEY")"
         PERPLEXICA_BASE_URL="http://litellm:4000"

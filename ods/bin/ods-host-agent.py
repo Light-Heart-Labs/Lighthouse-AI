@@ -11632,7 +11632,7 @@ def _render_runtime_config(
     ods_mode: str,
     gpu_backend: str,
     context_length: int | None = None,
-    switchboard_mode: str = "observe",
+    switchboard_mode: str = "enabled",
     remote_llm_enabled: bool = False,
     remote_llm_transport: str = "",
     remote_llm_base_url: str = "",
@@ -11699,7 +11699,7 @@ def _render_runtime_config(
 
 
 def _normal_switchboard_mode(env: dict) -> str:
-    value = str(env.get("ODS_MODEL_SWITCHBOARD") or "observe").strip().lower()
+    value = str(env.get("ODS_MODEL_SWITCHBOARD") or "enabled").strip().lower()
     return value if value in {"legacy", "observe", "enabled"} else "observe"
 
 

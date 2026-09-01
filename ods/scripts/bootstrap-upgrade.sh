@@ -38,6 +38,146 @@ BOOTSTRAP_GGUF_FILE="${7:-Qwen3.5-2B-Q4_K_M.gguf}"
 LOG_TAG="[BOOTSTRAP-UPGRADE]"
 
 log()  { echo "$LOG_TAG $(date '+%H:%M:%S') $*"; }
+MODEL_ROUTER_SWAP_GATE_TOKEN=""
+MODEL_ROUTER_SWAP_GATE_HEARTBEAT_PID=""
+
+model_router_swap_gate_call() {
+    local action="$1" token="$2" lease_seconds="${3:-30}"
+    [[ -n "${DOCKER_CMD:-}" ]] || return 1
+    $DOCKER_CMD exec \
+        -e ODS_SWAP_GATE_ACTION="$action" \
+        -e ODS_SWAP_GATE_TOKEN="$token" \
+        -e ODS_SWAP_GATE_LEASE_SECONDS="$lease_seconds" \
+        ods-model-router python -c '
+import json, os, urllib.error, urllib.request
+key = os.environ.get("ODS_ROUTER_INTERNAL_KEY") or os.environ.get("DASHBOARD_API_KEY") or ""
+if not key:
+    raise SystemExit(2)
+payload = {
+    "action": os.environ["ODS_SWAP_GATE_ACTION"],
+    "token": os.environ["ODS_SWAP_GATE_TOKEN"],
+}
+if payload["action"] == "begin":
+    payload["leaseSeconds"] = int(os.environ["ODS_SWAP_GATE_LEASE_SECONDS"])
+request = urllib.request.Request(
+    "http://127.0.0.1:9099/internal/model-swap/admission",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=5) as response:
+        body = json.load(response)
+except (OSError, ValueError, urllib.error.HTTPError):
+    raise SystemExit(3)
+expected = "closed" if payload["action"] == "begin" else "open"
+raise SystemExit(0 if body.get("status") == expected else 4)
+' >/dev/null 2>&1
+}
+
+model_router_swap_gate_health() {
+    [[ -n "${DOCKER_CMD:-}" ]] || return 1
+    $DOCKER_CMD exec ods-model-router python -c '
+import json, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:9099/health", timeout=5) as response:
+    body = json.load(response)
+active = body.get("activeRequests")
+queued = body.get("queuedRequests")
+gate = body.get("modelSwapGateActive")
+if isinstance(active, bool) or not isinstance(active, int) or active < 0:
+    raise SystemExit(2)
+if isinstance(queued, bool) or not isinstance(queued, int) or queued < 0:
+    raise SystemExit(2)
+if not isinstance(gate, bool):
+    raise SystemExit(2)
+print(f"{active} {queued} {1 if gate else 0}")
+' 2>/dev/null
+}
+
+release_model_router_swap_gate() {
+    local token="${MODEL_ROUTER_SWAP_GATE_TOKEN:-}"
+    local heartbeat_pid="${MODEL_ROUTER_SWAP_GATE_HEARTBEAT_PID:-}"
+    [[ -n "$token" ]] || return 0
+    MODEL_ROUTER_SWAP_GATE_TOKEN=""
+    MODEL_ROUTER_SWAP_GATE_HEARTBEAT_PID=""
+    if [[ -n "$heartbeat_pid" ]]; then
+        kill "$heartbeat_pid" >/dev/null 2>&1 || true
+        wait "$heartbeat_pid" >/dev/null 2>&1 || true
+    fi
+    if model_router_swap_gate_call end "$token" 30; then
+        log "Reopened model-router request admission."
+    else
+        log "WARNING: could not explicitly reopen model-router admission; its short lease will expire automatically."
+    fi
+}
+
+acquire_model_router_swap_gate() {
+    local switchboard_mode token drain_attempts state active queued gate consecutive_idle=0
+    switchboard_mode="$(read_env_value ODS_MODEL_SWITCHBOARD | tr '[:upper:]' '[:lower:]')"
+    [[ "$switchboard_mode" == "enabled" ]] || {
+        log "Model switchboard is ${switchboard_mode:-unset}; no router admission gate is active for this explicit legacy/observe route."
+        return 0
+    }
+    if ! $DOCKER_CMD ps --filter name=ods-model-router --format '{{.Names}}' 2>/dev/null \
+        | grep -qx 'ods-model-router'; then
+        log "ERROR: model switchboard is enabled but ods-model-router is not running."
+        return 1
+    fi
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        token="$(tr -d '-' </proc/sys/kernel/random/uuid)"
+    elif command -v uuidgen >/dev/null 2>&1; then
+        token="$(uuidgen | tr -d '-')"
+    else
+        token="ods-swap-$$-$(date +%s)-${RANDOM}${RANDOM}"
+    fi
+    if ! model_router_swap_gate_call begin "$token" 30; then
+        log "ERROR: model-router refused the request-admission gate."
+        return 1
+    fi
+    MODEL_ROUTER_SWAP_GATE_TOKEN="$token"
+    (
+        while sleep 10; do
+            model_router_swap_gate_call begin "$token" 30 || exit 1
+        done
+    ) >/dev/null 2>&1 &
+    MODEL_ROUTER_SWAP_GATE_HEARTBEAT_PID=$!
+
+    drain_attempts="${ODS_BOOTSTRAP_ROUTER_DRAIN_ATTEMPTS:-600}"
+    if ! [[ "$drain_attempts" =~ ^[0-9]+$ ]] || (( drain_attempts < 1 )); then
+        drain_attempts=600
+    fi
+    log "Closed model-router admission; draining active model requests before promotion..."
+    for _drain_i in $(seq 1 "$drain_attempts"); do
+        state="$(model_router_swap_gate_health)" || {
+            log "ERROR: model-router drain health could not be verified."
+            release_model_router_swap_gate
+            return 1
+        }
+        read -r active queued gate <<<"$state"
+        if [[ "$gate" != "1" ]]; then
+            log "ERROR: model-router admission gate was lost while draining."
+            release_model_router_swap_gate
+            return 1
+        fi
+        if [[ "$active" == "0" ]]; then
+            consecutive_idle=$(( consecutive_idle + 1 ))
+            if (( consecutive_idle >= 2 )); then
+                log "Model-router drained (active=0, queued=${queued}); promotion may mutate runtime state."
+                return 0
+            fi
+        else
+            consecutive_idle=0
+            if (( _drain_i == 1 || _drain_i % 15 == 0 )); then
+                log "Waiting for ${active} active model request(s) to finish (${queued} queued)."
+            fi
+        fi
+        sleep 1
+    done
+    log "ERROR: active model requests did not drain within ${drain_attempts} seconds."
+    release_model_router_swap_gate
+    return 1
+}
+
 release_model_lifecycle_lock() {
     if declare -F ods_model_lifecycle_lock_release >/dev/null 2>&1; then
         ods_model_lifecycle_lock_release
@@ -68,7 +208,7 @@ acquire_model_lifecycle_lock() {
     [[ "$(uname -s 2>/dev/null || true)" == "Linux" ]] || return 0
     ods_model_lifecycle_lock_acquire "$INSTALL_DIR" "background full-model activation"
 }
-fail() { log "ERROR: $*"; release_model_lifecycle_lock; release_upgrade_lock; exit 1; }
+fail() { log "ERROR: $*"; release_model_router_swap_gate; release_model_lifecycle_lock; release_upgrade_lock; exit 1; }
 
 if [[ -z "$INSTALL_DIR" || ! -d "$INSTALL_DIR" ]]; then
     log "ERROR: install directory does not exist: ${INSTALL_DIR:-<empty>}"
@@ -325,7 +465,7 @@ acquire_upgrade_lock() {
 
     UPGRADE_LOCK_DIR="$lock_dir"
     printf '%s\n' "$$" > "$pid_file"
-    trap 'release_model_lifecycle_lock; release_upgrade_lock' EXIT
+    trap 'release_model_router_swap_gate; release_model_lifecycle_lock; release_upgrade_lock' EXIT
 }
 
 model_sha256() {
@@ -2465,6 +2605,11 @@ elif [[ -n "$DOCKER_CMD" ]]; then
     # llama-server hot-swap. Snapshot whenever Docker is available so every
     # Docker failure path can restore the last known-good model config.
     _docker_llama_swap_applies=true
+fi
+
+if [[ "$_windows_lemonade_swap_applies" == "true" || "$_windows_native_llama_swap_applies" == "true" || "$_docker_llama_swap_applies" == "true" ]]; then
+    acquire_model_router_swap_gate \
+        || fail "Could not safely drain model traffic before full-model activation."
 fi
 
 if [[ "$_windows_lemonade_swap_applies" == "true" || "$_windows_native_llama_swap_applies" == "true" || "$_docker_llama_swap_applies" == "true" ]]; then

@@ -443,7 +443,7 @@ Primary changes:
 - Add `ods/config/model-router/endpoints.json`, generated at install from known runtime topology and mounted read-only. State selects only an `endpointId` from this file.
 - Include model-router in local, Lemonade, and hybrid Compose stacks; exclude it from cloud-only routing. It has no host port.
 - Change LiteLLM local/Lemonade templates to map `ods/current`, `default`, and the compatibility wildcard to model-router permanently when enabled.
-- Add `ODS_MODEL_SWITCHBOARD=legacy|observe|enabled`; ship `observe` by default in this PR. `legacy` renders the pre-switchboard LiteLLM config, `observe` runs router/state checks without consumer traffic, and `enabled` sends the stable aliases through model-router.
+- `ODS_MODEL_SWITCHBOARD=enabled` is the production default after live request-drain and rollback qualification. `observe` remains a non-routing diagnostic mode, and `legacy` renders the pre-switchboard LiteLLM configuration for explicit rollback.
 
 Required LiteLLM shape when enabled:
 

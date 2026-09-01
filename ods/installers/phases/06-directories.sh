@@ -702,10 +702,10 @@ raise SystemExit(1)' 2>/dev/null && return 0
         unset _docker_memory_gb _effective_memory_gb _llama_memory_default
     fi
     ODS_MODE_VALUE="$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo "local"; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
-    ODS_MODEL_SWITCHBOARD_VALUE=$(_env_get ODS_MODEL_SWITCHBOARD "${ODS_MODEL_SWITCHBOARD:-observe}")
+    ODS_MODEL_SWITCHBOARD_VALUE=$(_env_get ODS_MODEL_SWITCHBOARD "${ODS_MODEL_SWITCHBOARD:-enabled}")
     case "$ODS_MODEL_SWITCHBOARD_VALUE" in
         legacy|observe|enabled) ;;
-        *) ODS_MODEL_SWITCHBOARD_VALUE="observe" ;;
+        *) ODS_MODEL_SWITCHBOARD_VALUE="enabled" ;;
     esac
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" && "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
         ai_warn "External LLM reuse bypasses the managed model router; setting ODS_MODEL_SWITCHBOARD=observe."
@@ -1382,7 +1382,7 @@ ENV_EOF
     fi
     _router_ods_mode="${ODS_MODE_VALUE:-${ODS_MODE:-local}}"
     _router_common_args=(
-        --switchboard-mode "${ODS_MODEL_SWITCHBOARD_VALUE:-observe}"
+        --switchboard-mode "${ODS_MODEL_SWITCHBOARD_VALUE:-enabled}"
         --ods-mode "$_router_ods_mode"
         --gpu-backend "${GPU_BACKEND:-nvidia}"
         --gguf-file "${GGUF_FILE:-}"

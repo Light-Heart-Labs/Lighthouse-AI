@@ -493,6 +493,56 @@ if values[0] != values[1]:
 PY
 }
 
+_ods_pixel_uses_stable_model_alias() {
+    local owner="$1" home="$2" answers="$3" config
+    config="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$config" <<'PY'
+import json, os, pathlib, re, stat, sys
+
+documents = []
+for raw in sys.argv[1:]:
+    path = pathlib.Path(raw)
+    info = path.lstat()
+    parent = path.parent.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024
+            or not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode)
+            or parent.st_uid != os.getuid() or parent.st_mode & 0o022):
+        raise SystemExit(1)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit(1)
+    documents.append(value)
+
+answers, config = documents
+if answers.get("modelProvider") != "ods-gateway" or answers.get("modelId") != "ods/current":
+    raise SystemExit(1)
+base_url = answers.get("modelBaseUrl")
+api_key = answers.get("modelApiKey")
+if (not isinstance(base_url, str)
+        or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", base_url)
+        or int(base_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535
+        or not isinstance(api_key, str) or not api_key or len(api_key) > 4096
+        or any(ord(character) < 32 or ord(character) == 127 for character in api_key)):
+    raise SystemExit(1)
+
+providers = config.get("models", {}).get("providers", {})
+agents = config.get("agents", {}).get("list", [])
+selected = [item for item in agents if isinstance(item, dict) and item.get("id") == "pixel"]
+if not isinstance(providers, dict) or set(providers) != {"ods-gateway"} or len(selected) != 1:
+    raise SystemExit(1)
+provider = providers["ods-gateway"]
+models = provider.get("models") if isinstance(provider, dict) else None
+if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict)
+        or provider.get("api") != "openai-completions"
+        or provider.get("baseUrl") != base_url or provider.get("apiKey") != api_key
+        or models[0].get("id") != "ods/current"
+        or selected[0].get("model") != "ods-gateway/ods/current"):
+    raise SystemExit(1)
+PY
+}
+
 _ods_pixel_managed_source_ref() {
     local owner="$1" home="$2" marker config
     marker="$home/.config/ods/pixel-managed.json"
@@ -1525,9 +1575,31 @@ ods_pixel_reconcile_promoted_model() {
     pixel_root="$(_ods_pixel_source_checkout "$owner" "$home" "$source_root")" || return 1
     answers="$INSTALL_DIR/data/pixel/onboarding.json"
     candidate="$pixel_root/dist/openclaw.json"
-    backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$home" "$answers")" || return 1
     openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
+
+    # A stable ODS gateway alias deliberately separates Pixel from the concrete
+    # local model. Model-router owns promotion beneath ods/current, so rewriting
+    # OpenClaw's otherwise healthy configuration here is both unnecessary and
+    # harmful: OpenClaw supervises config changes with a gateway restart, which
+    # aborts a user turn already admitted to Pixel but queued at model-router's
+    # swap gate. Verify and re-attest the existing alias contract without
+    # touching the gateway, ingress, or sandbox. Legacy direct-model contracts
+    # still use the transactional migration path below.
+    if _ods_pixel_uses_stable_model_alias "$owner" "$home" "$answers"; then
+        contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1
+        _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256" || return 1
+        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify || return 1
+        if [[ "$final_state" == ready ]]; then
+            _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+        else
+            _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+        fi
+        printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
+        return 0
+    fi
+
+    backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$home" "$answers")" || return 1
 
     if ! _ods_pixel_update_onboarding_model "$owner" "$home" "$answers" "$promoted_model" \
         "$promoted_context" "$promoted_max_tokens" "$promoted_reasoning"; then
@@ -1736,7 +1808,7 @@ _ods_pixel_wait_http() {
 }
 
 _ods_pixel_gateway_model_alias() {
-    case "${ODS_MODEL_SWITCHBOARD:-observe}" in
+    case "${ODS_MODEL_SWITCHBOARD:-enabled}" in
         legacy|observe|enabled|"") printf '%s\n' 'ods/current' ;;
         *) return 1 ;;
     esac
@@ -3059,11 +3131,23 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel received an unsupported ODS model Switchboard mode."
         return 1
     }
-    ai "Starting the ODS model gateway and search prerequisites for Pixel review..."
-    $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-build --pull never litellm searxng >>"$LOG_FILE" 2>&1
+    ai "Starting the ODS model gateway, control API, and search prerequisites for Pixel review..."
+    # The scoped extension manager validates its contract against dashboard-api
+    # while Pixel is installed below. Start the API from this exact Compose
+    # project before that probe. Otherwise a fresh install has no endpoint, and
+    # a migration can accidentally probe a stale related install on the same
+    # port. Treat Compose startup failure as authoritative instead of allowing
+    # later endpoint checks to accept unrelated containers.
+    if ! $DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" up -d --no-build --pull never \
+        litellm searxng dashboard-api >>"$LOG_FILE" 2>&1; then
+        ai_bad "Could not start Pixel's exact ODS prerequisite services. See $LOG_FILE."
+        return 1
+    fi
     _ods_pixel_wait_model_gateway "ODS model gateway" "${LITELLM_PORT:-4000}" \
         "${LITELLM_KEY:-}" "$gateway_alias" 180
     _ods_pixel_wait_http "ODS local search" "http://127.0.0.1:${SEARXNG_PORT:-8888}/search?q=pixel-preflight&format=json" 90 '.results | type == "array"'
+    _ods_pixel_wait_http "ODS control API" \
+        "http://127.0.0.1:${DASHBOARD_API_PORT:-3002}/health" 90
 
     ai "Bootstrapping the exact Pixel source and pinned runtime..."
     if ! declare -f ods_linux_node_tools_available >/dev/null 2>&1 \

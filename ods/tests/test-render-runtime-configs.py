@@ -58,9 +58,16 @@ def test_all_surfaces_render() -> None:
     surfaces = {item["surface"] for item in payload["files"]}
     assert surfaces == {
         "env", "opencode", "litellm-local", "perplexica", "hermes",
-        "model-router-endpoints",
+        "model-router-endpoints", "litellm-switchboard",
     }
     assert payload["mode"] == "dry-run"
+
+
+def test_fresh_default_uses_stable_switchboard_alias() -> None:
+    payload = run_renderer("--surface", "all")
+    assert payload["inputs"]["switchboard_mode"] == "enabled"
+    switchboard = file_by_surface(payload, "litellm-switchboard")["content"]
+    assert "api_base: http://model-router:9099/v1" in switchboard
 
 
 def test_switchboard_surface_gated_on_enabled_mode() -> None:
@@ -424,6 +431,8 @@ def test_exact_lemonade_id_propagates_to_every_runtime_surface() -> None:
     payload = run_renderer(
         "--surface",
         "all",
+        "--switchboard-mode",
+        "observe",
         "--ods-mode",
         "lemonade",
         "--gpu-backend",
@@ -468,6 +477,8 @@ def test_hermes_uses_lemonade_model_id_for_amd() -> None:
     payload = run_renderer(
         "--surface",
         "hermes",
+        "--switchboard-mode",
+        "observe",
         "--ods-mode",
         "lemonade",
         "--gpu-backend",
@@ -490,6 +501,8 @@ def test_perplexica_default_model_matches_route() -> None:
     payload = run_renderer(
         "--surface",
         "perplexica",
+        "--switchboard-mode",
+        "observe",
         "--ods-mode",
         "lemonade",
         "--gpu-backend",

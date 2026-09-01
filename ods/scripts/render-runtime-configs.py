@@ -92,7 +92,7 @@ class RenderInputs:
     remote_llm_base_url: str = ""
     remote_llm_model: str = ""
     # Switchboard rollout mode: legacy | observe | enabled (plan section 8)
-    switchboard_mode: str = "observe"
+    switchboard_mode: str = "enabled"
 
 
 @dataclass(frozen=True)
@@ -687,7 +687,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--switchboard-mode",
         choices=["legacy", "observe", "enabled"],
-        default=os.environ.get("ODS_MODEL_SWITCHBOARD", "observe"),
+        default=os.environ.get("ODS_MODEL_SWITCHBOARD", "enabled"),
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--gguf-file", default=DEFAULT_GGUF)
@@ -741,7 +741,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def select_surfaces(
     surface: str,
     ods_mode: str = "local",
-    switchboard_mode: str = "observe",
+    switchboard_mode: str = "enabled",
     remote_llm_enabled: bool = False,
 ) -> list[str]:
     if surface == "all":
@@ -793,7 +793,7 @@ def validate_remote_inputs(inputs: RenderInputs) -> None:
 
 def render(args: argparse.Namespace) -> dict[str, object]:
     inputs = RenderInputs(
-        switchboard_mode=getattr(args, 'switchboard_mode', 'observe'),
+        switchboard_mode=getattr(args, 'switchboard_mode', 'enabled'),
         model=args.model,
         gguf_file=args.gguf_file,
         lemonade_model_id=args.lemonade_model_id,
