@@ -80,4 +80,6 @@ grep -q "Not safe to claim now" "$TRUTH" || fail "truth table missing launch gua
 checked "truth table includes launch guardrails"
 
 pass "release claim gates"
-$JSON_OUTPUT && emit_json true
+if $JSON_OUTPUT; then
+    emit_json true
+fi

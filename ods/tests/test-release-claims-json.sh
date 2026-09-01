@@ -22,7 +22,9 @@ assert all(check["status"] == "pass" for check in payload["checks"])
 assert payload["checks"][-1]["name"] == "release claim gates"
 PY
 
-human="$(bash "$SCRIPT")"
+human_rc=0
+human="$(bash "$SCRIPT")" || human_rc=$?
+[[ "$human_rc" -eq 0 ]]
 grep -qF "[PASS] release claim gates" <<< "$human"
 
 echo "[PASS] release claim gate emits a standalone JSON receipt"
