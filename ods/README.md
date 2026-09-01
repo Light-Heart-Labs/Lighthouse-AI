@@ -424,7 +424,8 @@ ods start                      # Start everything
 
 # Management scripts
 ./scripts/session-cleanup.sh             # Clean up bloated agent sessions
-./scripts/llm-cold-storage.sh --status   # Check model hot/cold storage
+./scripts/llm-cold-storage.sh --status          # Check model hot/cold storage
+./scripts/llm-cold-storage.sh --status --json   # Export model placement inventory
 ods mode                               # Show current mode
 ```
 
