@@ -267,6 +267,28 @@ else
     pass "Behavioral test: backup skips the backups directory"
 fi
 
+# Two backups created within the same second must remain separate snapshots.
+FAKE_BIN="$TEMP_DIR/fake-bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/date" <<'SH'
+#!/bin/bash
+if [[ "${1:-}" == "+%Y%m%d-%H%M%S" ]]; then
+    printf '%s\n' '20300101-010203'
+else
+    /bin/date "$@"
+fi
+SH
+chmod +x "$FAKE_BIN/date"
+
+backup_first=$(PATH="$FAKE_BIN:$PATH" bash "$MIGRATE_CONFIG_SCRIPT" backup | tail -n 1)
+backup_second=$(PATH="$FAKE_BIN:$PATH" bash "$MIGRATE_CONFIG_SCRIPT" backup | tail -n 1)
+if [[ "$backup_first" != "$backup_second" \
+    && -d "$backup_first" && -d "$backup_second" ]]; then
+    pass "Behavioral test: same-second backups use unique directories"
+else
+    fail "Behavioral test: same-second backups collided at $backup_first"
+fi
+
 # ============================================================================
 # Summary
 # ============================================================================

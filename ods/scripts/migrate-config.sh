@@ -99,11 +99,20 @@ compare_versions() {
 cmd_backup() {
     log_info "Backing up current configuration..."
     
-    local backup_name backup_path
+    local backup_name backup_path backup_suffix mkdir_error
     backup_name="config-$(date +%Y%m%d-%H%M%S)"
     backup_path="${BACKUP_DIR}/${backup_name}"
-    
-    mkdir -p "$backup_path"
+    backup_suffix=0
+
+    mkdir -p "$BACKUP_DIR"
+    while ! mkdir_error=$(mkdir "$backup_path" 2>&1); do
+        if [[ ! -e "$backup_path" ]]; then
+            log_error "Could not create backup directory $backup_path: $mkdir_error"
+            return 1
+        fi
+        backup_suffix=$((backup_suffix + 1))
+        backup_path="${BACKUP_DIR}/${backup_name}-${backup_suffix}"
+    done
 
     # Backup key config files. Absent ones are legitimate on a partial install;
     # a copy that fails for any other reason must not be swallowed.
