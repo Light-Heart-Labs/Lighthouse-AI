@@ -13,6 +13,9 @@ from performance_oracle import (
     model_publisher,
     normalize_catalog_entry,
     rank_pre_download_models,
+    read_env_file_value,
+    read_env_value,
+    read_persisted_env_value,
 )
 
 
@@ -41,6 +44,21 @@ def _model():
         "quantization": "Q4_K_M",
         "llm_model_name": "qwen3.5-9b",
     }
+
+
+def test_performance_env_readers_share_matching_quote_contract(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "PAIRED='catalog-v2'\n"
+        "UNMATCHED=catalog-v2'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("PAIRED", raising=False)
+    monkeypatch.setenv("PROCESS_ONLY", "'runtime-v2'")
+
+    assert read_env_file_value("PAIRED", tmp_path) == "catalog-v2"
+    assert read_env_file_value("UNMATCHED", tmp_path) == "catalog-v2'"
+    assert read_env_value("PROCESS_ONLY", tmp_path) == "runtime-v2"
+    assert read_persisted_env_value("UNMATCHED", tmp_path) == "catalog-v2'"
 
 
 def _official_model_catalog():
@@ -1262,6 +1280,60 @@ def test_pre_download_ranker_accounts_for_long_context_kv_on_4gb_gpu(data_dir, t
     by_id = {model["id"]: model for model in payload["models"]}
     assert by_id["phi4-mini-q4"]["fitsVram"] is False
     assert by_id["phi4-mini-q4"]["estimatedRequired"] > by_id["phi4-mini-q4"]["vramRequired"]
+
+
+def test_qwen35_2b_fits_4gb_but_is_not_recommended_after_fleet_failures(
+    data_dir,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("ODS_FLEET_HOST_ID", "tower2")
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    payload = build_models_payload(
+        _gpu(total_mb=4096),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=_official_model_catalog(),
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "qwen3.5-2b-q4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 262144
+    assert model["vramRequired"] == 3
+    assert model["estimatedRequired"] <= 4
+    assert model["fitsVram"] is True
+    assert model["recommended"] is False
+    compatibility = model["appCompatibility"]
+    assert compatibility["hermesTalk"]["status"] == "verified"
+    assert compatibility["openaiChat"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agentViability"]["status"] == "not_agent_viable"
+
+
+def test_jamba_reasoning_3b_catalog_profile_fits_4gb_at_agent_context(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    payload = build_models_payload(
+        _gpu(total_mb=4096),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=_official_model_catalog(),
+        evidence=[],
+    )
+    model = next(item for item in payload["models"] if item["id"] == "jamba-reasoning-3b-q4")
+
+    assert model["contextLength"] == 65536
+    assert model["maxContextLength"] == 262144
+    assert model["vramRequired"] == 3
+    assert model["estimatedRequired"] <= 4
+    assert model["fitsVram"] is True
+    assert model["recommended"] is False
 
 
 def test_pre_download_ranker_falls_back_to_smallest_model_without_gpu_info(data_dir):

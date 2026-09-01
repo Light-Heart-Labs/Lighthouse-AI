@@ -147,8 +147,10 @@ if command -v docker &>/dev/null; then
         log_warn "No compose files resolved; falling back to container/volume discovery"
     fi
 
-    # Remove any remaining ods-* containers
-    ods_containers=$(docker ps -a --filter "name=ods-" --format "{{.Names}}" 2>/dev/null || true)
+    # Remove any remaining ods-* containers.
+    # Docker's name filter matches anywhere in the name, so filter on the
+    # printed names instead: only this project's ods-<service> containers.
+    ods_containers=$(docker ps -a --format "{{.Names}}" 2>/dev/null | grep -E '^ods-' || true)
     if [[ -n "$ods_containers" ]]; then
         log_info "Removing ODS containers..."
         echo "$ods_containers" | xargs docker rm -f 2>/dev/null || true
@@ -158,7 +160,12 @@ if command -v docker &>/dev/null; then
     if [[ "$KEEP_DATA" == "true" ]]; then
         log_info "Keeping Docker volumes (--keep-data)"
     else
-        ods_volumes=$(docker volume ls --filter "name=ods" --format "{{.Name}}" 2>/dev/null || true)
+        # Compose names project volumes ods_<volume> (docker-compose.base.yml
+        # declares `name: ods`); older installs also produced ods-<volume>.
+        # An unanchored "ods" filter would additionally select unrelated
+        # volumes that merely contain it (pods, methods, ...) and this branch
+        # removes what it finds, so anchor on the project prefix.
+        ods_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E '^ods[_-]' || true)
         if [[ -n "$ods_volumes" ]]; then
             log_info "Removing Docker volumes..."
             echo "$ods_volumes" | xargs docker volume rm 2>/dev/null || true
