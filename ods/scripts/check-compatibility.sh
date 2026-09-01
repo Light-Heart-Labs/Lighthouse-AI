@@ -87,4 +87,6 @@ if jq -e '.compatibility.os.macos.supported == false' "$MANIFEST_FILE" >/dev/nul
     || warn "manifest says macOS unsupported/preview but docs may be out of sync"
 fi
 pass "compatibility check complete"
-$JSON_OUTPUT && emit_json true
+if $JSON_OUTPUT; then
+  emit_json true
+fi

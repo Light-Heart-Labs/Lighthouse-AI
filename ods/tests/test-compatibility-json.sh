@@ -21,7 +21,9 @@ assert all(item["status"] in {"pass", "warn"} for item in payload["checks"])
 assert payload["checks"][-1]["name"] == "compatibility check complete"
 PY
 
-human="$(bash "$SCRIPT")"
+human_rc=0
+human="$(bash "$SCRIPT")" || human_rc=$?
+[[ "$human_rc" -eq 0 ]]
 grep -qF "compatibility check complete" <<< "$human"
 
 echo "[PASS] compatibility validator emits a standalone JSON receipt"
