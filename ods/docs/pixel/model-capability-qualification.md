@@ -1,8 +1,16 @@
 # Pixel model capability qualification
 
-ODS does not infer Pixel readiness from direct chat, route, load, ODS Talk, or
-generic agent evidence. Pixel readiness is a separate, fail-closed catalog
-verdict under `app_compatibility.pixel_agent`.
+ODS does not infer Pixel reliability from direct chat, route, load, ODS Talk,
+or generic agent evidence. Pixel qualification is a separate catalog verdict
+under `app_compatibility.pixel_agent`, but it is a recommendation and evidence
+signal rather than an admission gate. Pixel attempts work with every active ODS
+chat model. Models without a passing qualification use Pixel's adaptive route so
+owners can use, compare, and improve them instead of being locked out.
+
+This does not weaken Pixel's safety boundary. Typed tools, broker policy,
+approval requirements, bounded execution, cancellation, and receipts are
+enforced mechanically for every model. Qualification measures how effectively a
+model uses that harness; it does not grant the model additional authority.
 
 ## Qualification bar
 
@@ -21,9 +29,12 @@ and runtime does all of the following:
 6. Survives an independent replay of the requested verification outside the
    model turn.
 
-`not_agent_viable` means a real Pixel turn failed that bar. `unknown` means no
-matching host-scoped Pixel qualification exists. Neither status is eligible for
-the Pixel default-model selector.
+`not_agent_viable` means a real Pixel turn failed that demanding reliability
+bar. `unknown` means no matching host-scoped Pixel qualification exists. Both
+remain usable in Pixel and visible in the model selector with adaptive routing
+and an evidence-backed quality tier. `verified` models may be recommended by default; the verdict
+must never disable chat or make an otherwise callable model inaccessible to
+Pixel.
 
 ## 2026-08-30 Windows laptop probe
 

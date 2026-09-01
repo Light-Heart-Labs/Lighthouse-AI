@@ -346,6 +346,7 @@ export default function Pixel({ systemStatus = null }) {
   const [stopError, setStopError] = useState('')
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
   const [agentRuntime, setAgentRuntime] = useState(null)
+  const [modelSupport, setModelSupport] = useState(null)
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
@@ -386,12 +387,32 @@ export default function Pixel({ systemStatus = null }) {
             ? runtime
             : null
         )
-        setStatus(data.available === true
+        const support = data?.modelSupport
+        const supportKeys = support && typeof support === 'object' && !Array.isArray(support)
+          ? Object.keys(support).sort().join('\n')
+          : ''
+        const validatedSupport = supportKeys === ['detail', 'tier'].join('\n')
+          && support.tier === 'adaptive'
+          && typeof support.detail === 'string'
+          && support.detail.length > 0
+          && support.detail.length <= 512
+          ? support
+          : null
+        // Treat the former hard-gate status as an advisory during rolling
+        // upgrades so a stale API cannot make the new UI exclude a model.
+        const legacyAdaptive = data.state === 'model_incompatible'
+        setModelSupport(validatedSupport || (legacyAdaptive
+          ? {
+              tier: 'adaptive',
+              detail: typeof data.detail === 'string' && data.detail.trim()
+                ? data.detail
+                : 'Pixel is ready and will adapt its tool flow for this model.',
+            }
+          : null))
+        setStatus(data.available === true || legacyAdaptive
           ? 'available'
           : data.state === 'model_switching'
             ? 'switching'
-            : data.state === 'model_incompatible'
-              ? 'incompatible'
             : 'unavailable')
         setStatusDetail(typeof data.detail === 'string' ? data.detail : '')
       } catch (error) {
@@ -507,7 +528,7 @@ export default function Pixel({ systemStatus = null }) {
           return { kind: 'switching', detail }
         }
         if (response.status === 412) {
-          let detail = 'The active model is not qualified for Pixel tool use.'
+          let detail = 'Pixel can use this model, but the current runtime still has an older model gate.'
           if (typeof response.json === 'function') {
             try {
               const payload = await response.json()
@@ -516,7 +537,7 @@ export default function Pixel({ systemStatus = null }) {
               // The fixed local fallback remains safe and actionable.
             }
           }
-          return { kind: 'incompatible', detail }
+          return { kind: 'adaptive', detail }
         }
         if (!response.ok) throw new Error('chat unavailable')
 
@@ -608,9 +629,9 @@ export default function Pixel({ systemStatus = null }) {
         setMessages(messages)
         return
       }
-      if (attempt.kind === 'incompatible') {
-        setStatus('incompatible')
-        setStatusDetail(attempt.detail)
+      if (attempt.kind === 'adaptive') {
+        setStatus('available')
+        setModelSupport({ tier: 'adaptive', detail: attempt.detail })
         setInput(trimmed)
         contextStartRef.current = originalContextStart
         setMessages(messages)
@@ -638,6 +659,14 @@ export default function Pixel({ systemStatus = null }) {
           setInput(trimmed)
           setStatus('switching')
           setStatusDetail(`${attempt.detail}. The clean-context request is preserved.`)
+          return
+        }
+        if (attempt.kind === 'adaptive') {
+          contextStartRef.current = 0
+          setMessages([])
+          setInput(trimmed)
+          setStatus('available')
+          setModelSupport({ tier: 'adaptive', detail: attempt.detail })
           return
         }
         if (!attempt.receivedError && attempt.receivedDone && attempt.recoveryEligible) {
@@ -738,8 +767,6 @@ export default function Pixel({ systemStatus = null }) {
       ? 'Available'
       : status === 'switching'
         ? 'Switching model...'
-      : status === 'incompatible'
-        ? 'Model not ready'
       : status === 'loading'
         ? 'Connecting...'
         : 'Degraded'
@@ -785,6 +812,7 @@ export default function Pixel({ systemStatus = null }) {
           )}
           <span
             aria-live="polite"
+            title={modelSupport?.detail || undefined}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
             sending
               ? 'border-theme-accent/35 bg-theme-accent/15 text-theme-accent-light'
@@ -830,37 +858,6 @@ export default function Pixel({ systemStatus = null }) {
             <p className="mt-1 text-sm">Your draft is safe. Pixel will reconnect automatically when activation completes.</p>
           </div>
         )}
-        {status === 'incompatible' && messages.length > 0 && (
-          <div role="alert" className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            <AlertCircle className="h-5 w-5 shrink-0 text-amber-300" />
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">Active model is not Pixel-ready</p>
-              {statusDetail && <p className="mt-0.5 text-xs text-theme-text-muted">{statusDetail}</p>}
-            </div>
-            <Link
-              to="/models"
-              className="shrink-0 rounded-lg bg-theme-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-theme-accent-hover"
-            >
-              Choose model
-            </Link>
-          </div>
-        )}
-        {status === 'incompatible' && messages.length === 0 && (
-          <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center text-theme-text-muted">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-500/25 bg-amber-500/10 text-amber-300">
-              <AlertCircle className="h-7 w-7" />
-            </div>
-            <p className="font-medium text-theme-text">Active model is not Pixel-ready</p>
-            {statusDetail && <p className="mt-1 text-sm">{statusDetail}</p>}
-            <Link
-              to="/models"
-              className="mt-4 inline-flex rounded-lg bg-theme-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-theme-accent-hover"
-            >
-              Choose a Pixel-ready model
-            </Link>
-            <p className="mt-3 text-xs">Chat-only models remain available to other ODS applications.</p>
-          </div>
-        )}
         {status === 'available' && messages.length === 0 && (
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center py-8">
             <div className="mb-7 text-center">
@@ -869,7 +866,7 @@ export default function Pixel({ systemStatus = null }) {
               </div>
               <h2 className="text-2xl font-semibold tracking-tight">What should we accomplish?</h2>
               <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-theme-text-muted">
-                Pixel can research, write and run code, inspect ODS, and carry multi-step work through to a verified result using the active local model.
+                Pixel uses every ODS chat model. Stronger models handle complex tools and long tasks more reliably; the same broker-enforced safety boundaries apply to all of them.
               </p>
             </div>
 
@@ -966,8 +963,6 @@ export default function Pixel({ systemStatus = null }) {
               ? 'Message Pixel...'
               : status === 'switching'
                 ? 'Waiting for model switch...'
-                : status === 'incompatible'
-                  ? 'Choose a Pixel-ready model...'
                 : 'Pixel is unavailable'}
             disabled={isDisabled}
             rows={1}

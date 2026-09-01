@@ -406,24 +406,33 @@ async def test_status_projects_active_model_switch_without_touching_edge(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_status_rejects_host_proven_non_agent_model_without_touching_edge(monkeypatch):
-    async def incompatible_model(*_args, **_kwargs):
-        return {"status": "idle", "activeAgentViable": False}
+async def test_status_keeps_adaptive_model_available_with_fixed_advisory(monkeypatch):
+    async def adaptive_model(*_args, **_kwargs):
+        return {
+            "status": "idle",
+            "activeAgentViable": False,
+            "privateModelPath": "/secret/model.gguf",
+        }
 
-    monkeypatch.setattr(pixel, "request_agent_json", incompatible_model)
+    monkeypatch.setattr(pixel, "request_agent_json", adaptive_model)
+    body = json.dumps({"data": [{"id": "pixel/default"}]}).encode()
     with patch.object(
         pixel.httpx,
         "AsyncClient",
-        side_effect=AssertionError("incompatible model readiness reached Pixel edge"),
+        return_value=FakeClient(FakeResponse(chunks=[body])),
     ):
         result = await pixel.pixel_status()
 
     assert result == {
-        "available": False,
-        "model": None,
-        "state": "model_incompatible",
-        "detail": pixel._MODEL_INCOMPATIBLE_DETAIL,
+        "available": True,
+        "model": "pixel/default",
+        "detail": "Owner agent ready",
+        "modelSupport": {
+            "tier": "adaptive",
+            "detail": pixel._MODEL_ADAPTIVE_DETAIL,
+        },
     }
+    assert "secret" not in json.dumps(result)
 
 
 @pytest.mark.asyncio
@@ -522,24 +531,27 @@ async def test_chat_is_rejected_before_edge_during_model_activation(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_chat_rechecks_and_rejects_host_proven_non_agent_model(monkeypatch):
-    async def incompatible_model(*_args, **_kwargs):
+async def test_chat_rechecks_and_allows_adaptive_model(monkeypatch):
+    async def adaptive_model(*_args, **_kwargs):
         return {"status": "idle", "activeAgentViable": False}
 
-    monkeypatch.setattr(pixel, "request_agent_json", incompatible_model)
+    monkeypatch.setattr(pixel, "request_agent_json", adaptive_model)
     body = pixel.ChatStreamRequest.model_validate(
         {"chat_id": "c1", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    upstream = FakeResponse(
+        content_type="text/event-stream",
+        chunks=[b"data: [DONE]\n\n"],
     )
     with patch.object(
         pixel.httpx,
         "AsyncClient",
-        side_effect=AssertionError("incompatible model turn reached Pixel edge"),
+        return_value=FakeClient(upstream),
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await pixel.pixel_chat_stream(ConnectedRequest(), body)
+        response = await pixel.pixel_chat_stream(ConnectedRequest(), body)
+        streamed = await stream_body(response)
 
-    assert exc_info.value.status_code == 412
-    assert exc_info.value.detail == pixel._MODEL_INCOMPATIBLE_DETAIL
+    assert streamed == b"data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio

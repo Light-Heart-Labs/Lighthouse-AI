@@ -145,6 +145,9 @@ export const OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX =
 export const OPERATIONS_WRONG_ACTION_REASON =
   "Pixel blocked an Operations submission that did not match the host facts requested. Use only the exact named ods-host actions listed in this correction, then wait for every submitted job to reach a terminal state.";
 
+export const OPERATIONS_REQUIRES_WORKFLOW_REASON =
+  "Pixel blocked a fragmented host inventory. Submit exactly one pixel_ops_workflow_submit containing every required ods-host action, then call pixel_ops_job_wait once for that workflow job. Do not submit separate pixel_ops_run jobs.";
+
 export const OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON =
   "Pixel blocked an extension lifecycle shortcut. Submit exactly one ods.extensions.inspect action for the owner's extension ID and wait for its terminal receipt before submitting the requested lifecycle action. Do not combine lifecycle actions in a workflow or continue when inspection reports missing configuration.";
 
@@ -2061,7 +2064,12 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   ].filter((pattern) => pattern.test(text)).length;
   const hostExplorationIntent =
     /\b(?:explore|inspect|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
-  const broadHostExploration = hostContext && hostExplorationIntent &&
+  const naturalHostOverview = hostContext && (
+    /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(text) ||
+    /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(text) ||
+    /\b(?:describe|summari[sz]e|profile)\b.{0,24}\b(?:this|the|my|our|ODS)\b/i.test(text)
+  );
+  const broadHostExploration = hostContext && (hostExplorationIntent || naturalHostOverview) &&
     (hostFacetCount === 0 || hostFacetCount >= 3);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
@@ -2449,6 +2457,7 @@ export function createToolLoopGuard({
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
         operationsTerminalBlocks: 0,
+        operationsTerminalAborted: false,
         operationsRequiresOdsAppsProjection: false,
         operationsOdsAppsProjectionAttempted: false,
         operationsOdsAppsProjection: undefined,
@@ -2686,23 +2695,55 @@ export function createToolLoopGuard({
         }
       }
       // Some otherwise-capable models shorten the single local ODS target to
-      // `host`. Canonicalize only that exact alias, only for host.* actions the
+      // `host` or omit the `host.` namespace from an otherwise exact action.
+      // Canonicalize only those exact aliases, only for observations the
       // current owner request already requires, and never for a different
       // target, action, parameter, tier, or authority level.
+      const requiresHostWorkflow =
+        state.operationsRequiredActions.size > 1 &&
+        [...state.operationsRequiredActions].every((action) => action.startsWith("host."));
+      if (toolName === "pixel_ops_run" && requiresHostWorkflow) {
+        return {
+          block: true,
+          blockReason: `${OPERATIONS_REQUIRES_WORKFLOW_REASON} Required actions: ${[
+            ...state.operationsRequiredActions,
+          ].join(", ")}.`,
+        };
+      }
       if (
         toolName === "pixel_ops_run" &&
-        params?.target === "host" &&
+        ["host", "ods-host"].includes(params?.target) &&
         typeof params?.action === "string" &&
-        params.action.startsWith("host.") &&
-        state.operationsRequiredActions.has(params.action)
+        (
+          params.target === "host" ||
+          (
+            !state.operationsRequiredActions.has(params.action) &&
+            state.operationsRequiredActions.has(`host.${params.action}`)
+          )
+        ) &&
+        (
+          state.operationsRequiredActions.has(params.action) ||
+          state.operationsRequiredActions.has(`host.${params.action}`)
+        )
       ) {
-        params = { ...params, target: "ods-host" };
+        const action = state.operationsRequiredActions.has(params.action)
+          ? params.action
+          : `host.${params.action}`;
+        params = { ...params, target: "ods-host", action };
         normalizedParams = params;
       } else if (
         toolName === "pixel_ops_workflow_submit" &&
         Array.isArray(params?.steps) &&
         params.steps.length > 0 &&
-        params.steps.some((step) => step?.target === "host") &&
+        params.steps.some(
+          (step) =>
+            step?.target === "host" ||
+            (
+              typeof step?.action === "string" &&
+              !state.operationsRequiredActions.has(step.action) &&
+              state.operationsRequiredActions.has(`host.${step.action}`)
+            )
+        ) &&
         params.steps.every(
           (step) =>
             step &&
@@ -2710,15 +2751,21 @@ export function createToolLoopGuard({
             !Array.isArray(step) &&
             ["host", "ods-host"].includes(step.target) &&
             typeof step.action === "string" &&
-            step.action.startsWith("host.") &&
-            state.operationsRequiredActions.has(step.action)
+            (
+              state.operationsRequiredActions.has(step.action) ||
+              state.operationsRequiredActions.has(`host.${step.action}`)
+            )
         )
       ) {
         params = {
           ...params,
-          steps: params.steps.map((step) =>
-            step.target === "host" ? { ...step, target: "ods-host" } : step
-          ),
+          steps: params.steps.map((step) => ({
+            ...step,
+            target: "ods-host",
+            action: state.operationsRequiredActions.has(step.action)
+              ? step.action
+              : `host.${step.action}`,
+          })),
         };
         normalizedParams = params;
       }
@@ -3188,6 +3235,32 @@ export function createToolLoopGuard({
       }
       if (toolName === "pixel_ods_apps_list" && state.operationsRequiresOdsAppsProjection) {
         state.operationsOdsAppsProjection = operationsOdsAppsProjection(event);
+      }
+      const hostOnly =
+        state.operationsRequiredActions.size > 0 &&
+        [...state.operationsRequiredActions].every((action) => action.startsWith("host."));
+      const everySubmittedJobIsTerminal =
+        state.operationsSubmittedJobs.size > 0 &&
+        [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+          state.operationsTerminalJobs.has(jobId)
+        );
+      if (
+        hostOnly &&
+        !state.operationsRequiresOdsAppsProjection &&
+        everySubmittedJobIsTerminal &&
+        !state.operationsTerminalAborted &&
+        typeof context?.sessionId === "string" &&
+        context.sessionId
+      ) {
+        const verification = verificationForRun(runId);
+        if (verification.text && ["passed", "failed"].includes(verification.status)) {
+          state.operationsTerminalAborted = true;
+          try {
+            abortRun(context.sessionId);
+          } catch (error) {
+            warn(`Pixel terminal Operations fast-path abort failed: ${String(error)}`);
+          }
+        }
       }
     }
     if (toolName === "pixel_ops_download_stage") {

@@ -39,6 +39,7 @@ import {
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
   OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
   OPERATIONS_UNVERIFIED_DELIVERY_PREFIX,
+  OPERATIONS_REQUIRES_WORKFLOW_REASON,
   OPERATIONS_WRONG_ACTION_REASON,
   PRIVATE_URL_REQUEST_REASON,
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
@@ -1583,7 +1584,13 @@ test("reports a matching terminal continuation failure without model improvisati
 });
 
 test("routes host evidence through Operations and requires a matching terminal job", () => {
-  const guard = createToolLoopGuard();
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    abortRun: (sessionId) => {
+      aborts.push(sessionId);
+      return true;
+    },
+  });
   const jobId = "ops-1234567890123-abcdef123456";
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -1621,6 +1628,20 @@ test("routes host evidence through Operations and requires a matching terminal j
       },
     }
   );
+  assert.deepEqual(
+    call(guard, "pixel_ops_workflow_submit", {
+      event: {
+        params: {
+          steps: [{ id: "identity", target: "ods-host", action: "identity" }],
+        },
+      },
+    }),
+    {
+      params: {
+        steps: [{ id: "identity", target: "ods-host", action: "host.identity" }],
+      },
+    }
+  );
   assert.equal(
     call(guard, "pixel_ops_run", {
       event: { params: { target: "ods-host", action: "host.identity" } },
@@ -1633,6 +1654,7 @@ test("routes host evidence through Operations and requires a matching terminal j
       result: { details: { jobId, status: "submitted", kind: "action" } },
     },
   });
+  assert.deepEqual(aborts, []);
   assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
   afterCall(guard, "pixel_ops_job_wait", {
     event: {
@@ -1656,6 +1678,7 @@ test("routes host evidence through Operations and requires a matching terminal j
       },
     },
   });
+  assert.deepEqual(aborts, ["session-1"]);
   assert.equal(
     reply(guard)?.payload?.text,
     `${OPERATIONS_HOST_EVIDENCE_PREFIX}\n- Hostname: \`light-worker\` (job \`${jobId}\`)`
@@ -1677,6 +1700,12 @@ test("binds every requested host fact to exact workflow actions and terminal out
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
     { prompt }
+  );
+  assert.match(
+    call(guard, "pixel_ops_run", {
+      event: { params: { target: "ods-host", action: "host.identity" } },
+    })?.blockReason,
+    new RegExp(OPERATIONS_REQUIRES_WORKFLOW_REASON)
   );
   assert.equal(
     call(guard, "pixel_ops_workflow_submit", { event: { params: { steps } } }),
@@ -1744,10 +1773,18 @@ test("renders a structurally validated broad host inventory without command argu
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
+    { prompt: "What can you tell me about this machine?" }
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements([], "What can you tell me about this machine?"),
     {
-      prompt: "Inspect the ODS host and report hostname, kernel, platform, operating system, " +
-        "hardware architecture and CPU, memory, storage, visible processes, services, network " +
-        "addresses and routes, and listening ports.",
+      required: true,
+      actions: [
+        "host.uptime", "host.processes", "host.services", "host.cpu", "host.memory",
+        "host.storage", "host.network-addresses", "host.network-routes",
+        "host.listening-ports", "host.identity", "host.kernel", "host.platform",
+        "host.os-release",
+      ],
     }
   );
   const steps = actions.map(([id, action]) => ({ id, target: "ods-host", action }));
@@ -1780,7 +1817,6 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Uptime: 2 days,\s+3:17; users: 1; load average \(1\/5\/15m\): 0\.25, 0\.18, 0\.11/);
   assert.match(text, /System services: 1 running or failed; failed: none/);
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
-  assert.match(text, /Architecture: `x86_64` \(from structured host\.cpu job/);
   assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
   assert.match(text, /swap 0\.00 GiB used of 4\.00 GiB, 4\.00 GiB free/);
   assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);

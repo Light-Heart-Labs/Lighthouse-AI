@@ -13,8 +13,23 @@ import {
   ODS_VERIFICATION_PENDING_CONTRACT,
   githubSourceContract,
   needsLoopRecovery,
+  operationsRequestContract,
   promptContractForAgent,
 } from "../plugin/prompt-contract.mjs";
+
+test("adds one exact compact tool route for natural broad host questions", () => {
+  const prompt = "What can you tell me about this machine?";
+  const exact = operationsRequestContract([], prompt);
+  assert.match(exact, /pixel_ops_workflow_submit exactly once/);
+  assert.match(exact, /host\.identity/);
+  assert.match(exact, /host\.listening-ports/);
+  assert.match(exact, /Do not submit separate pixel_ops_run calls/);
+  assert.equal((exact.match(/host\.identity/g) || []).length, 1);
+  assert.equal(
+    promptContractForAgent({ agentId: "pixel" }, "pixel", { prompt }).appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT}${exact}`
+  );
+});
 
 test("adds a static visible-reply contract for the exact Pixel agent", () => {
   const result = promptContractForAgent({ agentId: "pixel" }, "pixel");

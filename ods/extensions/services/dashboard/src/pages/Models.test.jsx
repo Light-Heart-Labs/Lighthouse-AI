@@ -638,8 +638,8 @@ test('allows low-context downloaded models to run with an agent-readiness warnin
   fireEvent.click(runButton)
   confirmModelRun()
   expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 8192 })
-  expect(screen.getByText('Direct chat only')).toBeInTheDocument()
-  expect(screen.getByText('Needs 16K')).toBeInTheDocument()
+  expect(screen.getByText('Pixel compact')).toBeInTheDocument()
+  expect(screen.getByText('8K context')).toBeInTheDocument()
 
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
@@ -679,14 +679,14 @@ test('allows explicit Talk-incompatible models to run with an agent-readiness wa
   fireEvent.click(runButton)
   confirmModelRun()
   expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 128000 })
-  expect(screen.getByText('Direct chat only')).toBeInTheDocument()
-  expect(screen.getByText('Agent blocked')).toBeInTheDocument()
+  expect(screen.getByText('Pixel adaptive')).toBeInTheDocument()
+  expect(screen.getByText('Capability varies')).toBeInTheDocument()
 
   const deleteButton = screen.getByRole('button', { name: /delete phi-4 mini$/i })
   expect(deleteButton).toBeEnabled()
 })
 
-test('distinguishes generic agent compatibility from real Pixel qualification', () => {
+test('distinguishes verified and adaptive Pixel capability without excluding models', () => {
   useModelsMock.mockReturnValue(baseState({
     models: [
       model({
@@ -718,13 +718,12 @@ test('distinguishes generic agent compatibility from real Pixel qualification', 
 
   renderModels()
 
-  expect(screen.getByText('Pixel blocked')).toBeInTheDocument()
-  expect(screen.getByText('Pixel unverified')).toBeInTheDocument()
-  expect(screen.getByText('Test before default')).toBeInTheDocument()
+  expect(screen.getAllByText('Pixel adaptive')).toHaveLength(2)
+  expect(screen.getAllByText('Available to use')).toHaveLength(2)
   expect(screen.getByText('Pixel ready', { selector: 'span' })).toBeInTheDocument()
 })
 
-test('shows explicit Pixel qualification in the activation dialog before context heuristics', () => {
+test('shows adaptive Pixel capability in the activation dialog without blocking Run', () => {
   useModelsMock.mockReturnValue(baseState({
     models: [model({
       status: 'downloaded',
@@ -739,7 +738,7 @@ test('shows explicit Pixel qualification in the activation dialog before context
   renderModels()
   fireEvent.click(screen.getByRole('button', { name: 'Run' }))
 
-  expect(screen.getAllByText('Pixel blocked')).toHaveLength(2)
+  expect(screen.getAllByText('Pixel adaptive')).toHaveLength(2)
   expect(screen.queryByText('Hermes ready')).not.toBeInTheDocument()
 })
 

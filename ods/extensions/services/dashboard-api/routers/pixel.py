@@ -46,9 +46,10 @@ _OPS_STATUSES = frozenset(
 )
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _MODEL_SWITCH_DETAIL = "Model switch in progress; Pixel will be ready when activation completes"
-_MODEL_INCOMPATIBLE_DETAIL = (
-    "The active model is not qualified for Pixel tool use. "
-    "Choose a Pixel-ready model or configure a verified remote provider."
+_MODEL_ADAPTIVE_DETAIL = (
+    "Pixel is ready and adapts its tool flow for this model. Model capability "
+    "affects the quality and persistence of complex work, not access or the "
+    "broker-enforced safety boundary."
 )
 
 
@@ -157,16 +158,27 @@ def _model_readiness_issue_from_status(status: object) -> tuple[str, str] | None
     )
     if switching:
         return "model_switching", _MODEL_SWITCH_DETAIL
+    return None
+
+
+def _model_support_from_status(status: object) -> dict[str, str] | None:
+    """Return fixed advisory metadata without turning model quality into access.
+
+    ODS model qualification is a recommendation signal. Pixel's brokers,
+    approvals, and typed capabilities enforce safety independently of model
+    intelligence, so an unqualified model remains usable and testable.
+    """
     if isinstance(status, dict) and status.get("activeAgentViable") is False:
-        return "model_incompatible", _MODEL_INCOMPATIBLE_DETAIL
+        return {"tier": "adaptive", "detail": _MODEL_ADAPTIVE_DETAIL}
     return None
 
 
 async def _model_readiness_issue() -> tuple[str, str] | None:
-    """Return a host-proven model transition or incompatibility, if present.
+    """Return a host-proven model transition, if present.
 
     A failed lifecycle probe does not falsely take down an otherwise healthy
-    Pixel edge. The edge readiness check remains authoritative in that case.
+    Pixel edge. Model quality metadata is advisory; the edge readiness check
+    remains authoritative.
     """
     return _model_readiness_issue_from_status(await _host_model_status())
 
@@ -252,6 +264,9 @@ async def pixel_status() -> dict[str, object]:
         runtime = _active_runtime_projection(host_status)
         if available and runtime is not None:
             result["runtime"] = runtime
+        model_support = _model_support_from_status(host_status)
+        if available and model_support is not None:
+            result["modelSupport"] = model_support
         return result
     except (httpx.HTTPError, asyncio.TimeoutError):
         return {"available": False, "model": None, "detail": "Pixel edge is unavailable"}
@@ -408,11 +423,8 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         raise HTTPException(status_code=503, detail="Pixel is not enabled")
     readiness_issue = await _model_readiness_issue()
     if readiness_issue is not None:
-        state, detail = readiness_issue
-        raise HTTPException(
-            status_code=409 if state == "model_switching" else 412,
-            detail=detail,
-        )
+        _state, detail = readiness_issue
+        raise HTTPException(status_code=409, detail=detail)
     edge_url, key = config
     edge_body = {
         "model": _MODEL,

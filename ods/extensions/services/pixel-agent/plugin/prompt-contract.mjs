@@ -9,6 +9,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageExtensionLifecycleIntent,
   userMessageOperationsContinuation,
+  userMessageOperationsRequirements,
   userMessageRequestsExactByteDownload,
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
@@ -90,6 +91,25 @@ export const ODS_PRIVATE_URL_CONTRACT =
 
 export const ODS_EXACT_DOWNLOAD_CONTRACT =
   "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
+
+export function operationsRequestContract(messages, prompt = undefined) {
+  const requirements = userMessageOperationsRequirements(messages, prompt);
+  const actions = requirements.actions.filter((action) => action.startsWith("host."));
+  if (!requirements.required || actions.length === 0) return "";
+  const exactActions = actions.join(", ");
+  if (actions.length === 1) {
+    return (
+      ` The owner's current request requires exactly this typed host observation: ${exactActions}. ` +
+      `In the first tool step call pixel_ops_run once with literal target ods-host and literal action ${exactActions}. ` +
+      "Then call pixel_ops_job_wait once with the exact returned jobId. Do not call inventory, generic exec, or a differently named action."
+    );
+  }
+  return (
+    ` The owner's current request requires exactly these typed host observations: ${exactActions}. ` +
+    "In the first tool step call pixel_ops_workflow_submit exactly once, with one step per listed action, literal target ods-host on every step, and every action copied with its host. prefix. " +
+    "Then call pixel_ops_job_wait once with the exact returned jobId. Do not submit separate pixel_ops_run calls, call inventory, use generic exec, omit an action namespace, or add another observation."
+  );
+}
 
 export function githubSourceContract(messages, prompt = undefined) {
   const url = userMessageGitHubRepositoryUrl(messages, prompt);
@@ -173,6 +193,9 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_OPERATIONS_CONTINUATION_CONTRACT}`
     : "";
+  const operationsRequest = operationsContinuation
+    ? ""
+    : operationsRequestContract(event?.messages, event?.prompt);
   const extensionLifecycle = !operationsContinuation && userMessageExtensionLifecycleIntent(
     event?.messages,
     event?.prompt
@@ -193,6 +216,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${exactDownload}${recovery}${verification}${privateUrl}`,
+      `${ODS_CONVERSATION_CONTRACT}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsRequest}${exactDownload}${recovery}${verification}${privateUrl}`,
   };
 }

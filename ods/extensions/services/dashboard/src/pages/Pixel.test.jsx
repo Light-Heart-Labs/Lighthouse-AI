@@ -225,20 +225,28 @@ describe('Pixel', () => {
     expect(screen.getByPlaceholderText('Waiting for model switch...')).toBeDisabled()
   })
 
-  it('explains when the active model is not qualified for Pixel tools', async () => {
+  it('keeps an adaptive model available without presenting a warning gate', async () => {
     globalThis.fetch.mockResolvedValue(response({
-      available: false,
-      model: null,
-      state: 'model_incompatible',
-      detail: 'The active model is not qualified for Pixel tool use.',
+      available: true,
+      model: 'pixel/default',
+      detail: 'Owner agent ready',
+      modelSupport: {
+        tier: 'adaptive',
+        detail: 'Pixel is ready and adapts its tool flow for this model.',
+      },
     }))
 
     render(<Pixel />)
 
-    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
-    expect(screen.getByText('Active model is not Pixel-ready')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Choose a Pixel-ready model' })).toHaveAttribute('href', '/models')
-    expect(screen.getByPlaceholderText('Choose a Pixel-ready model...')).toBeDisabled()
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('Available')).toHaveAttribute(
+      'title',
+      'Pixel is ready and adapts its tool flow for this model.'
+    )
+    expect(screen.getAllByRole('link', { name: 'Change model' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'Change model' })[0]).toHaveAttribute('href', '/models')
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
   })
 
   it('preserves a draft when model viability changes before stream acceptance', async () => {
@@ -254,13 +262,14 @@ describe('Pixel', () => {
     fireEvent.change(composer, { target: { value: 'keep this owner request' } })
     fireEvent.click(screen.getByTitle('Send'))
 
-    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
-    expect(screen.getByPlaceholderText('Choose a Pixel-ready model...')).toHaveValue(
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
+    expect(screen.getByPlaceholderText('Message Pixel...')).toHaveValue(
       'keep this owner request'
     )
   })
 
-  it('keeps the incompatible-model explanation visible with stored chat history', async () => {
+  it('maps the legacy incompatible status to a usable adaptive status', async () => {
     globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
       schema: 1,
       chatId: 'stored_chat',
@@ -278,10 +287,15 @@ describe('Pixel', () => {
 
     render(<Pixel />)
 
-    await waitFor(() => expect(screen.getByText('Model not ready')).toBeInTheDocument())
-    expect(screen.getByRole('alert')).toHaveTextContent('Active model is not Pixel-ready')
-    expect(screen.getByRole('alert')).toHaveTextContent('This model failed Pixel tool qualification.')
-    expect(screen.getByRole('link', { name: 'Choose model' })).toHaveAttribute('href', '/models')
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('Available')).toHaveAttribute(
+      'title',
+      'This model failed Pixel tool qualification.'
+    )
+    expect(screen.getAllByRole('link', { name: 'Change model' })).toHaveLength(1)
+    expect(screen.getAllByRole('link', { name: 'Change model' })[0]).toHaveAttribute('href', '/models')
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
   })
 
   it('restores an unsent draft when model activation wins the chat race', async () => {

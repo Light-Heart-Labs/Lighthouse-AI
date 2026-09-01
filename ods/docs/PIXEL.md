@@ -281,6 +281,15 @@ After a successful install:
 3. Hermes remains at its authenticated proxy URL shown by the installer.
 4. OpenCode remains an independent coding UI when enabled.
 
+Pixel follows the active ODS model without a qualification allowlist. Every
+callable ODS chat model can be used in the dedicated Pixel UI and through
+`pixel/default`. Qualification affects recommendation and the displayed
+reliability tier only: a model that has not passed the demanding multi-step
+agent replay uses Pixel's **adaptive** route, while the composer remains enabled.
+Model intelligence may change the quality, speed, tool judgment, and length of
+work it can complete, but Pixel's broker permissions, approvals, receipts, and
+cancellation boundary do not change with that label.
+
 Open WebUI search-query generation uses the ordinary ODS model route, not Pixel,
 to avoid recursive agent routing. Automatic title, tag, and follow-up
 generation is disabled while Pixel is active because those cosmetic jobs would

@@ -1105,14 +1105,14 @@ function ModelActivationDialog({
   const agentViability = getAgentViabilityCompatibility(model)
   const pixelContextReady = selectedContext >= Number(pixelMinimumContext || 16384)
   const appProfile = isAgentViabilityBlocked(pixelAgent)
-    ? { label: 'Pixel blocked', tone: 'text-red-300' }
+    ? { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
     : isAgentViabilityBlocked(agentViability)
-      ? { label: 'Agent blocked', tone: 'text-red-300' }
+      ? { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
       : !pixelContextReady
-        ? { label: `Needs ${formatContext(pixelMinimumContext || 16384)}`, tone: 'text-amber-300' }
+        ? { label: `Pixel compact · ${formatContext(selectedContext)}`, tone: 'text-amber-300' }
         : isPixelAgentVerified(pixelAgent)
           ? { label: 'Pixel ready', tone: 'text-emerald-400' }
-          : { label: 'Pixel unverified', tone: 'text-amber-300' }
+          : { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
   const memoryCapacity = Number(gpu?.vramTotal || 0)
   const exceedsMemory = selected?.fitsVram === false
   const exceedsDeclaredLimit = declaredLimit > 0 && selectedContext > declaredLimit
@@ -1700,9 +1700,9 @@ function getCompatibilityMeta(model, memory, pixelMinimumContext = 0) {
   const agentViability = getAgentViabilityCompatibility(model)
   if (isAgentViabilityBlocked(agentViability)) {
     return {
-      label: 'Direct chat only',
-      detail: 'Agent blocked',
-      tone: 'amber',
+      label: 'Pixel adaptive',
+      detail: 'Capability varies',
+      tone: 'purple',
     }
   }
   const appBlock = getBlockedAppCompatibility(model)
@@ -1716,25 +1716,25 @@ function getCompatibilityMeta(model, memory, pixelMinimumContext = 0) {
   const pixelAgent = getPixelAgentCompatibility(model)
   if (isAgentViabilityBlocked(pixelAgent)) {
     return {
-      label: 'Direct chat only',
-      detail: 'Pixel blocked',
-      tone: 'amber',
+      label: 'Pixel adaptive',
+      detail: 'Available to use',
+      tone: 'purple',
     }
   }
   const contextLength = Number(model?.contextLength || 0)
   const minimumContext = Number(pixelMinimumContext || 0)
   if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
     return {
-      label: 'Direct chat only',
-      detail: `Needs ${formatContext(minimumContext)}`,
+      label: 'Pixel compact',
+      detail: `${formatContext(contextLength)} context`,
       tone: 'amber',
     }
   }
   if (!isPixelAgentVerified(pixelAgent)) {
     return {
-      label: 'Pixel unverified',
-      detail: 'Test before default',
-      tone: 'amber',
+      label: 'Pixel adaptive',
+      detail: 'Available to use',
+      tone: 'purple',
     }
   }
   const talkCompatibility = getHermesTalkCompatibility(model)
