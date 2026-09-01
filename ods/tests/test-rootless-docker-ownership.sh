@@ -32,6 +32,28 @@ pass "rootless detection has deterministic test override"
 
 (
     source "$LIB"
+    install_dir="$TMP_DIR/config-repair"
+    mkdir -p "$install_dir/config/searxng"
+    _ods_rootless_ensure_helper_image() { return 0; }
+    docker() {
+        [[ "$*" == *'-v '*'/config/searxng:/target'* ]] || return 1
+        return 0
+    }
+    ods_rootless_make_host_writable "$install_dir" config/searxng
+) || fail "rootless config ownership repair"
+pass "rootless config ownership repair stays inside config/"
+
+(
+    source "$LIB"
+    install_dir="$TMP_DIR/config-escape"
+    mkdir -p "$install_dir/config" "$TMP_DIR/outside"
+    ln -s "$TMP_DIR/outside" "$install_dir/config/escape"
+    ! ods_rootless_make_host_writable "$install_dir" config/escape
+) || fail "rootless config symlink escape guard"
+pass "rootless config ownership repair rejects symlinks"
+
+(
+    source "$LIB"
     unset ODS_ASSUME_ROOTLESS
     docker() { return 1; }
     state_rc=0
