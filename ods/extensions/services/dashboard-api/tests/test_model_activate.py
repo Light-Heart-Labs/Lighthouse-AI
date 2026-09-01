@@ -2598,6 +2598,7 @@ def _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch):
         "GPU_ASSIGNMENT_JSON_B64": encoded,
     }
     monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+    monkeypatch.setattr(_mod, "_is_wsl_linux", lambda: False)
     return install_dir, target, env
 
 
@@ -3132,6 +3133,7 @@ def test_model_gpu_plan_rejects_malformed_or_duplicate_assignment(
     target = tmp_path / "model.gguf"
     target.write_bytes(b"model")
     monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+    monkeypatch.setattr(_mod, "_is_wsl_linux", lambda: False)
 
     with pytest.raises(RuntimeError, match="assignment is malformed"):
         _mod._plan_nvidia_model_gpu_assignment(
@@ -3350,7 +3352,7 @@ def test_model_gpu_plan_leaves_non_applicable_runtimes_unchanged(
 def test_model_gpu_plan_explicitly_skips_wsl_auto_replan(tmp_path, monkeypatch):
     _install_dir, target, env = _write_nvidia_gpu_plan_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
-    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(_mod, "_is_wsl_linux", lambda: True)
     monkeypatch.setattr(
         _mod,
         "_run_nvidia_gpu_planner",
@@ -3624,6 +3626,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(_mod, "_is_wsl_linux", lambda: False)
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(
             _mod,
@@ -3696,6 +3699,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(_mod, "_is_wsl_linux", lambda: False)
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(
             _mod,
