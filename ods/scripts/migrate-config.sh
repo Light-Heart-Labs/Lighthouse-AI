@@ -165,14 +165,18 @@ cmd_diff() {
 
 # Check if migration is needed
 cmd_check() {
+    local output_format="${1:-human}"
     local current_version
     local last_migrated
+    local pending_json='[]'
     
     current_version=$(get_current_version)
     last_migrated=$(get_last_migrated_version)
     
-    log_info "Current version: $current_version"
-    log_info "Last migrated: $last_migrated"
+    if [[ "$output_format" == "human" ]]; then
+        log_info "Current version: $current_version"
+        log_info "Last migrated: $last_migrated"
+    fi
     
     # compare_versions returns a non-zero *ordering* status, so capture it with
     # `|| result=$?`. A bare call would trip `set -e` and abort before $? is
@@ -183,27 +187,53 @@ cmd_check() {
     compare_versions "$current_version" "$last_migrated" || result=$?
 
     if [[ $result -eq 1 ]]; then
-        log_warn "Migration needed: $last_migrated → $current_version"
+        [[ "$output_format" == "human" ]] && log_warn "Migration needed: $last_migrated → $current_version"
         
         # List pending migrations
-        echo ""
-        echo "Pending migrations:"
+        if [[ "$output_format" == "human" ]]; then
+            echo ""
+            echo "Pending migrations:"
+        fi
         for migration in "$MIGRATIONS_DIR"/migrate-v*.sh; do
             if [[ -f "$migration" ]]; then
-                local migration_version
+                local migration_version description
                 migration_version=$(basename "$migration" | sed 's/migrate-v//;s/.sh//')
                 
                 local mig_cmp=0
                 compare_versions "$migration_version" "$last_migrated" || mig_cmp=$?
                 if [[ $mig_cmp -eq 1 ]]; then
-                    echo "  - $migration_version: $(head -5 "$migration" | grep '^# Description:' | sed 's/# Description://')"
+                    description=$(awk '/^# Description:/ {sub(/^# Description:[[:space:]]*/, ""); print; exit}' "$migration")
+                    if [[ "$output_format" == "json" ]]; then
+                        pending_json=$(jq -c \
+                            --arg version "$migration_version" \
+                            --arg description "$description" \
+                            '. + [{version: $version, description: $description}]' \
+                            <<< "$pending_json")
+                    else
+                        echo "  - $migration_version: $description"
+                    fi
                 fi
             fi
         done
+
+        if [[ "$output_format" == "json" ]]; then
+            jq -cn \
+                --arg current_version "$current_version" \
+                --arg last_migrated "$last_migrated" \
+                --argjson pending_migrations "$pending_json" \
+                '{migration_needed: true, current_version: $current_version, last_migrated: $last_migrated, pending_migrations: $pending_migrations}'
+        fi
         
         return 2
     else
-        log_success "No migration needed (already at $current_version)"
+        if [[ "$output_format" == "json" ]]; then
+            jq -cn \
+                --arg current_version "$current_version" \
+                --arg last_migrated "$last_migrated" \
+                '{migration_needed: false, current_version: $current_version, last_migrated: $last_migrated, pending_migrations: []}'
+        else
+            log_success "No migration needed (already at $current_version)"
+        fi
         return 0
     fi
 }
@@ -303,7 +333,8 @@ ODS Config Migration Manager
 Usage: ./migrate-config.sh [command]
 
 Commands:
-  check       Check if migration is needed
+  check [--json]
+              Check if migration is needed; optionally emit a JSON plan
   migrate     Run pending migrations (with backup)
   diff        Show configuration differences
   backup      Backup current configuration
@@ -311,7 +342,7 @@ Commands:
   help        Show this help message
 
 Examples:
-  ./migrate-config.sh check
+  ./migrate-config.sh check --json
   ./migrate-config.sh migrate
   ./migrate-config.sh diff
   ./migrate-config.sh validate
@@ -325,7 +356,14 @@ EOF
 # Main
 case "${1:-help}" in
     check)
-        cmd_check
+        case "${2:-}" in
+            "") cmd_check ;;
+            --json)
+                command -v jq >/dev/null 2>&1 || { log_error "jq is required for --json"; exit 1; }
+                cmd_check json
+                ;;
+            *) log_error "Unknown check option: $2"; exit 1 ;;
+        esac
         ;;
     migrate)
         cmd_migrate
