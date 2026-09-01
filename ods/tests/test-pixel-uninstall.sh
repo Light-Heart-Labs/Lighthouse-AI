@@ -603,18 +603,20 @@ else
     fail "legacy owner-primary-group writable Pixel broker source could not be safely removed"
 fi
 
-write_ops_fixture
-for profile in .bash_logout .bashrc .profile; do
-    printf '%s\n' fixture >"$OPS_STATE/$profile"
-    chmod 0644 "$OPS_STATE/$profile"
+for profile_mode in 0600 0640 0644; do
+    write_ops_fixture
+    for profile in .bash_logout .bashrc .profile; do
+        printf '%s\n' fixture >"$OPS_STATE/$profile"
+        chmod "$profile_mode" "$OPS_STATE/$profile"
+    done
+    if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
+        [[ ! -e "$OPS_STATE" && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" ]] \
+            && pass "bounded mode-$profile_mode system-account profiles are retired with the managed Operations state" \
+            || fail "bounded mode-$profile_mode Operations profiles left partial managed state"
+    else
+        fail "bounded mode-$profile_mode Operations system-account profiles blocked safe cleanup"
+    fi
 done
-if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
-    [[ ! -e "$OPS_STATE" && ! -e "$HOME_DIR/.config/ods/pixel-managed.json" ]] \
-        && pass "bounded legacy system-account profiles are retired with the managed Operations state" \
-        || fail "bounded legacy Operations profiles left partial managed state"
-else
-    fail "bounded legacy Operations system-account profiles blocked safe cleanup"
-fi
 
 for drift_target in program broker-source-mode public-state-file extension-program extension-catalog extension-manager-client \
     extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
