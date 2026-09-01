@@ -21,19 +21,35 @@ info() { echo -e "${BLUE}ℹ${NC} $1"; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Git Bash and minimal CI images may not ship rsync. This deterministic shim is
+# enough to prove whether restore_user_data runs before config validation.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/rsync" <<'SH'
+#!/bin/bash
+if [[ "${1:-}" == "--help" ]]; then
+    exit 0
+fi
+src="${@: -2:1}"
+dest="${@: -1}"
+cp -R "$src" "$dest"
+SH
+chmod +x "$TMP/bin/rsync"
+
 FAKE_ODS="$TMP/ods"
 mkdir -p "$FAKE_ODS/data" "$FAKE_ODS/.backups"
 # ods-restore.sh sources $ODS_DIR/lib/*.sh at startup.
 cp -R "$SCRIPT_DIR/../lib" "$FAKE_ODS/lib"
 
-# Live configuration the user would lose.
-mkdir -p "$FAKE_ODS/config"
+# Live configuration and user data the user would lose.
+mkdir -p "$FAKE_ODS/config" "$FAKE_ODS/data/open-webui"
 echo "live-settings" > "$FAKE_ODS/config/settings.json"
+echo "live-user-data" > "$FAKE_ODS/data/open-webui/data.txt"
 
 # A truncated backup: config/ exists but holds nothing.
 BID="20260101-000000"
 B="$FAKE_ODS/.backups/$BID"
-mkdir -p "$B/config"
+mkdir -p "$B/config" "$B/data/open-webui"
+echo "backup-user-data" > "$B/data/open-webui/data.txt"
 cat > "$B/manifest.json" <<'JSON'
 {
   "manifest_version": "1.0",
@@ -43,13 +59,13 @@ cat > "$B/manifest.json" <<'JSON'
   "ods_version": "test",
   "hostname": "test",
   "description": "test",
-  "contents": {"user_data": false, "config": true, "cache": false}
+  "contents": {"user_data": true, "config": true, "cache": false}
 }
 JSON
 
 info "Restore from a backup with an empty config/ must refuse and preserve the live config"
 set +e
-out=$(ODS_DIR="$FAKE_ODS" bash "$ODS_RESTORE" -f --config-only "$BID" 2>&1)
+out=$(PATH="$TMP/bin:$PATH" ODS_DIR="$FAKE_ODS" bash "$ODS_RESTORE" -f "$BID" 2>&1)
 rc=$?
 set -e
 
@@ -62,5 +78,10 @@ pass "Error names the empty config directory"
 [[ -f "$FAKE_ODS/config/settings.json" ]] || fail "Live config was deleted"
 [[ "$(cat "$FAKE_ODS/config/settings.json")" == "live-settings" ]] || fail "Live config was modified"
 pass "Live config preserved intact"
+
+[[ -f "$FAKE_ODS/data/open-webui/data.txt" ]] || fail "Live user data was deleted"
+[[ "$(cat "$FAKE_ODS/data/open-webui/data.txt")" == "live-user-data" ]] \
+    || fail "Live user data was modified before config validation failed"
+pass "Live user data preserved intact"
 
 echo "All restore empty-config tests passed"

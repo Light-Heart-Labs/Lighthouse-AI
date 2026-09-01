@@ -422,20 +422,23 @@ restore_user_data() {
     fi
 }
 
-# Restore configuration
-restore_config() {
+validate_restore_config_source() {
     local backup_dir="$1"
-    log_step "Restoring configuration..."
 
-    # A present-but-empty config/ means the backup was truncated. Bail before
-    # anything is copied or removed: replacing a working config with nothing is
-    # strictly worse than not restoring at all.
+    # A present-but-empty config/ means the backup was truncated. This check
+    # runs before the restore plan mutates user data or stops containers.
     if [[ -d "$backup_dir/config" && -z "$(ls -A "$backup_dir/config")" ]]; then
         log_error "Backup's config directory is empty: $backup_dir/config"
         log_error "This backup is incomplete — refusing to replace the live config at $ODS_DIR/config"
         log_error "Restore from a complete backup, or re-run with --data-only to skip configuration."
-        exit 1
+        return 1
     fi
+}
+
+# Restore configuration
+restore_config() {
+    local backup_dir="$1"
+    log_step "Restoring configuration..."
 
     local restored_any=false
 
@@ -520,6 +523,11 @@ do_restore() {
     # Validate backup (with optional checksum verification)
     if ! validate_backup "$backup_dir" "$skip_verify"; then
         log_error "Backup validation failed"
+        return 1
+    fi
+
+    if [[ "$restore_config" == "true" ]] \
+        && ! validate_restore_config_source "$backup_dir"; then
         return 1
     fi
 
