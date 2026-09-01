@@ -150,11 +150,12 @@ collect_backups() {
         base=$(basename "$entry")
         # Prefix may span multiple hyphen-separated segments (e.g.
         # `dashboard-my-name-`): the host agent's BACKUP_ID_RE
-        # (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) accepts hyphenated labels, so a
-        # `<prefix>-` group with `*` (not `?`) is required to see and retain
-        # them. The trailing YYYYMMDD-HHMMSS timestamp anchor still keeps
-        # unrelated operator files out of the retention set.
-        [[ "$base" =~ ^([A-Za-z0-9_]+-)*[0-9]{8}-[0-9]{6}(\.tar\.gz)?$ ]] || continue
+        # (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) accepts hyphenated labels, so
+        # match the prefix as one allowed label. This also preserves consecutive
+        # hyphens accepted by BACKUP_ID_RE instead of interpreting every
+        # hyphen as a mandatory non-empty segment. The trailing timestamp
+        # anchor still keeps unrelated operator files out of retention.
+        [[ "$base" =~ ^([A-Za-z0-9_][A-Za-z0-9_-]*-)?[0-9]{8}-[0-9]{6}(\.tar\.gz)?$ ]] || continue
         COLLECTED_BACKUPS+=("$entry")
     done < <(find "$BACKUP_ROOT" -maxdepth 1 \( -type d -o -name "*.tar.gz" \) -print0 2>/dev/null | sort -z -r)
 }
