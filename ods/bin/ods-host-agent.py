@@ -9067,8 +9067,82 @@ class AgentHandler(BaseHTTPRequestHandler):
             rollback_attempted = True
             try:
                 restore_backups()
-                restore_previous_runtime()
                 rollback_env = load_env(env_path)
+                previous_gguf = str(rollback_env.get("GGUF_FILE") or "")
+                previous_model = str(
+                    rollback_env.get("LLM_MODEL")
+                    or _local_model_name_from_gguf(previous_gguf)
+                )
+                previous_windows_native = _is_windows_host_llama_server(rollback_env)
+                previous_hermes_model = previous_gguf
+                if (
+                    not previous_windows_native
+                    and str(rollback_env.get("GPU_BACKEND") or "").lower() == "amd"
+                ):
+                    previous_hermes_model = str(
+                        rollback_env.get("LEMONADE_MODEL")
+                        or f"extra.{previous_gguf}"
+                    )
+                try:
+                    previous_context = int(
+                        rollback_env.get("MAX_CONTEXT")
+                        or rollback_env.get("CTX_SIZE")
+                        or 32768
+                    )
+                except (TypeError, ValueError):
+                    previous_context = 32768
+                previous_base_url = rollback_env.get("HERMES_LLM_BASE_URL") or (
+                    "http://litellm:4000/v1"
+                    if _is_windows_host_lemonade(rollback_env)
+                    else None
+                )
+
+                # The captured Hermes file can already be stale relative to the
+                # persisted model-of-record. Restoring that byte-for-byte would
+                # leave rollback split-brained and make the proof impossible.
+                # Canonicalize both persisted Hermes inputs to the restored env
+                # before restarting it, then prove the running route below.
+                if (
+                    (hermes_restart_attempted or hermes_config_mutated)
+                    and hermes_live_snapshot
+                    and hermes_live_snapshot.get("exists")
+                ):
+                    restored_live = _capture_hermes_live_config(hermes_live_config)
+                    repaired_live, repaired = _patch_hermes_config_text(
+                        str(restored_live.get("text") or ""),
+                        previous_hermes_model,
+                        base_url=previous_base_url,
+                        context_length=previous_context,
+                        max_tokens=0,
+                    )
+                    if repaired:
+                        _write_hermes_live_config(
+                            hermes_live_config,
+                            repaired_live,
+                            restored_live.get("source"),
+                            restored_live.get("mode"),
+                        )
+                    if not _hermes_config_matches(
+                        repaired_live,
+                        previous_hermes_model,
+                        previous_base_url,
+                        previous_context,
+                    ):
+                        raise RuntimeError(
+                            "Hermes rollback config could not be rebound to the previous model route"
+                        )
+                    if hermes_template_snapshot and hermes_template_snapshot.get("exists"):
+                        repaired_template, template_changed = _patch_hermes_config_text(
+                            str(hermes_template_snapshot.get("text") or ""),
+                            previous_hermes_model,
+                            base_url=previous_base_url,
+                            context_length=previous_context,
+                            max_tokens=0,
+                        )
+                        if template_changed:
+                            _atomic_write_text(hermes_template_config, repaired_template)
+
+                restore_previous_runtime()
                 litellm_restarted = False
                 if litellm_restart_attempted:
                     litellm_restarted = _restore_container_state(
@@ -9095,41 +9169,13 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if opencode_config_mutated and opencode_runtime_state and opencode_runtime_state.get("active"):
                     if not _restart_managed_opencode(opencode_runtime_state):
                         raise RuntimeError("managed OpenCode disappeared during rollback")
-                previous_gguf = str(rollback_env.get("GGUF_FILE") or "")
-                previous_model = str(
-                    rollback_env.get("LLM_MODEL")
-                    or _local_model_name_from_gguf(previous_gguf)
-                )
-                previous_windows_native = _is_windows_host_llama_server(rollback_env)
-                previous_hermes_model = previous_gguf
-                if (
-                    not previous_windows_native
-                    and str(rollback_env.get("GPU_BACKEND") or "").lower() == "amd"
-                ):
-                    previous_hermes_model = str(
-                        rollback_env.get("LEMONADE_MODEL")
-                        or f"extra.{previous_gguf}"
-                    )
                 if hermes_restarted and hermes_live_snapshot and hermes_live_snapshot.get("exists"):
-                    try:
-                        previous_context = int(
-                            rollback_env.get("MAX_CONTEXT")
-                            or rollback_env.get("CTX_SIZE")
-                            or 32768
-                        )
-                    except (TypeError, ValueError):
-                        previous_context = 32768
-                    previous_base_url = rollback_env.get("HERMES_LLM_BASE_URL") or (
-                        "http://litellm:4000/v1"
-                        if _is_windows_host_lemonade(rollback_env)
-                        else None
-                    )
+                    _wait_for_container_health("ods-hermes")
                     _verify_running_hermes_route(
                         previous_hermes_model,
                         previous_base_url,
                         previous_context,
                     )
-                    _wait_for_container_health("ods-hermes")
                 if not previous_gguf:
                     raise RuntimeError("previous GGUF identity is empty")
                 if not _wait_for_model_readiness(
@@ -9761,12 +9807,12 @@ class AgentHandler(BaseHTTPRequestHandler):
                     container_states["ods-hermes"],
                     recreate=True,
                 ):
+                    _wait_for_container_health("ods-hermes")
                     _verify_running_hermes_route(
                         hermes_model_name,
                         hermes_base_url,
                         int(context_length),
                     )
-                    _wait_for_container_health("ods-hermes")
                 openclaw_recreate_attempted = container_states["ods-openclaw"]["running"]
                 openclaw_recreated = _recreate_openclaw_if_present(
                     container_states["ods-openclaw"]

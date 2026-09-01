@@ -3696,6 +3696,108 @@ class TestModelActivateRollback:
         ]
         assert _mod.load_env(env_path)["LLM_MODEL"] == "old-model"
 
+    def test_pixel_failure_heals_stale_hermes_route_during_rollback(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.write_text(
+            env_path.read_text(encoding="utf-8").replace(
+                "CTX_SIZE=2048\n",
+                "CTX_SIZE=4096\nMAX_CONTEXT=4096\n"
+                "HERMES_LLM_BASE_URL=http://llama-server:8080/v1\n",
+            ),
+            encoding="utf-8",
+        )
+        hermes_live = install_dir / "data" / "hermes" / "config.yaml"
+        hermes_template = (
+            install_dir / "extensions" / "services" / "hermes" / "cli-config.yaml.template"
+        )
+        hermes_live.parent.mkdir(parents=True)
+        hermes_template.parent.mkdir(parents=True)
+        stale_hermes = (
+            "model:\n"
+            '  default: "stale-model.gguf"\n'
+            '  base_url: "http://llama-server:8080/v1"\n'
+            "  context_length: 2048\n"
+        )
+        hermes_live.write_text(stale_hermes, encoding="utf-8")
+        hermes_template.write_text(stale_hermes, encoding="utf-8")
+        states = {
+            "ods-litellm": {"exists": False, "running": False},
+            "ods-hermes": {"exists": True, "running": True},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        events = []
+        reconciliations = []
+
+        def verify_hermes(model, base_url, context):
+            events.append(f"verify:{model}:{context}")
+            assert _mod._hermes_config_matches(
+                hermes_live.read_text(encoding="utf-8"),
+                model,
+                base_url,
+                context,
+            )
+
+        def reconcile(model, context, **_options):
+            reconciliations.append((model, context))
+            if model == "new-model":
+                raise RuntimeError("simulated Pixel reconciliation failure")
+            return "reconciled"
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda env: events.append(
+            f"runtime:{env['LLM_MODEL']}"
+        ))
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None, **_options: events.append(f"target:{name}") or True,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restore_container_state",
+            lambda name, _state=None, **_options: events.append(f"rollback:{name}") or True,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_container_health",
+            lambda name: events.append(f"health:{name}"),
+        )
+        monkeypatch.setattr(_mod, "_verify_running_hermes_route", verify_hermes)
+        monkeypatch.setattr(_mod, "_reconcile_ods_managed_pixel_model", reconcile)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert reconciliations == [("new-model", 4096), ("old-model", 4096)]
+        assert events.index("health:ods-hermes") < events.index("verify:new-model.gguf:4096")
+        rollback_health = len(events) - 1 - events[::-1].index("health:ods-hermes")
+        rollback_verify = events.index("verify:old-model.gguf:4096")
+        assert rollback_health < rollback_verify
+        assert _mod._hermes_config_matches(
+            hermes_live.read_text(encoding="utf-8"),
+            "old-model.gguf",
+            "http://llama-server:8080/v1",
+            4096,
+        )
+        assert _mod._hermes_config_matches(
+            hermes_template.read_text(encoding="utf-8"),
+            "old-model.gguf",
+            "http://llama-server:8080/v1",
+            4096,
+        )
+
     def test_uses_lower_live_ram_limit_instead_of_host_physical_ram(
         self,
         monkeypatch,
