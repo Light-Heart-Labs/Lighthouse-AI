@@ -89,6 +89,19 @@ except Exception:  # pragma: no cover - import environment dependent
     _remote_provider_public_probe_receipt = None
     _remote_provider_ssh_supervisor_plan = None
 
+try:
+    from dream_worker.client import (
+        DreamWorkerClient as _DreamWorkerClient,
+        DreamWorkerError as _DreamWorkerError,
+    )
+except Exception:  # pragma: no cover - import environment dependent
+    _DreamWorkerClient = None
+
+    class _DreamWorkerError(RuntimeError):
+        status = None
+        code = "dream_worker_unavailable"
+        message = "Dream Worker client is unavailable"
+
 _MODEL_MEMORY_PATH = (
     Path(__file__).resolve().parent.parent
     / "extensions"
@@ -3623,6 +3636,76 @@ foreach ($prefix in $prefixes) {{
         return payload
 
 
+def _dream_worker_base_url() -> str:
+    env = load_env(INSTALL_DIR / ".env")
+    configured = str(env.get("DREAM_WORKER_URL") or "").strip()
+    if configured:
+        return configured
+    return "http://192.168.1.19:18100"
+
+
+def _dream_worker_token_path() -> Path:
+    env = load_env(INSTALL_DIR / ".env")
+    configured = str(env.get("DREAM_WORKER_TOKEN_FILE") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    local_app_data = str(os.environ.get("LOCALAPPDATA") or "").strip()
+    if not local_app_data:
+        raise RuntimeError("LOCALAPPDATA is unavailable for Dream Worker token lookup")
+
+    return (
+        Path(local_app_data)
+        / "DreamServer"
+        / "secrets"
+        / "dream-worker-token.txt"
+    )
+
+
+def _dream_worker_client():
+    if _DreamWorkerClient is None:
+        raise RuntimeError("Dream Worker client module is unavailable")
+
+    token_path = _dream_worker_token_path()
+
+    if token_path.is_symlink():
+        raise RuntimeError("Refusing symlinked Dream Worker token file")
+
+    token = token_path.read_text(encoding="utf-8-sig").strip()
+
+    if not token:
+        raise RuntimeError("Dream Worker token file is empty")
+
+    return _DreamWorkerClient(
+        _dream_worker_base_url(),
+        token,
+    )
+
+
+def _dream_worker_write_transport_error(handler, exc) -> None:
+    status = getattr(exc, "status", None)
+    if type(status) is not int:
+        status = 502
+
+    code = str(
+        getattr(exc, "code", None)
+        or "dream_worker_request_failed"
+    )
+
+    message = str(
+        getattr(exc, "message", None)
+        or "Dream Worker request failed"
+    )
+
+    json_response(
+        handler,
+        status,
+        {
+            "error": message,
+            "code": code,
+        },
+    )
+
 def _windows_llm_status() -> dict | None:
     """Read host-native Lemonade health and optional stats over loopback."""
     global _windows_llm_status_cache
@@ -4553,6 +4636,22 @@ class AgentHandler(BaseHTTPRequestHandler):
         logger.info(fmt, *args)
 
     def do_GET(self):
+        dream_path = self.path.split("?", 1)[0]
+
+        if dream_path == "/v1/dream-worker/status":
+            self._handle_dream_worker_status()
+            return
+
+        dream_job_match = re.fullmatch(
+            r"/v1/dream-worker/jobs/([0-9a-fA-F]{32})",
+            dream_path,
+        )
+
+        if dream_job_match is not None:
+            self._handle_dream_worker_get_job(
+                dream_job_match.group(1)
+            )
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/health":
@@ -4897,6 +4996,22 @@ class AgentHandler(BaseHTTPRequestHandler):
         json_response(self, 200, metrics)
 
     def do_POST(self):
+        dream_path = self.path.split("?", 1)[0]
+
+        if dream_path == "/v1/dream-worker/jobs":
+            self._handle_dream_worker_submit()
+            return
+
+        dream_cancel_match = re.fullmatch(
+            r"/v1/dream-worker/jobs/([0-9a-fA-F]{32})/cancel",
+            dream_path,
+        )
+
+        if dream_cancel_match is not None:
+            self._handle_dream_worker_cancel(
+                dream_cancel_match.group(1)
+            )
+            return
         # Several legacy endpoints intentionally ignore an optional body, and
         # rejected requests may return before consuming one. Close POST
         # connections after their framed response so unread bytes can never be
@@ -4955,6 +5070,181 @@ class AgentHandler(BaseHTTPRequestHandler):
         else:
             json_response(self, 404, {"error": "Not found"})
 
+    def _handle_dream_worker_status(self):
+        """Return authenticated Dream Worker machine/runtime status."""
+        if not check_auth(self):
+            return
+
+        try:
+            status = _dream_worker_client().status()
+        except _DreamWorkerError as exc:
+            _dream_worker_write_transport_error(self, exc)
+            return
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Dream Worker status unavailable", exc_info=True)
+            json_response(
+                self,
+                503,
+                {
+                    "error": "Dream Worker integration is unavailable",
+                    "code": "dream_worker_unavailable",
+                },
+            )
+            return
+
+        json_response(
+            self,
+            200,
+            {
+                "ok": True,
+                "worker": status,
+            },
+        )
+
+    def _handle_dream_worker_get_job(self, job_id: str):
+        """Return one persistent Dream Worker job."""
+        if not check_auth(self):
+            return
+
+        try:
+            job = _dream_worker_client().get_job(job_id)
+        except _DreamWorkerError as exc:
+            _dream_worker_write_transport_error(self, exc)
+            return
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Dream Worker job lookup unavailable", exc_info=True)
+            json_response(
+                self,
+                503,
+                {
+                    "error": "Dream Worker integration is unavailable",
+                    "code": "dream_worker_unavailable",
+                },
+            )
+            return
+
+        json_response(
+            self,
+            200,
+            {
+                "ok": True,
+                "job": job,
+            },
+        )
+
+    def _handle_dream_worker_submit(self):
+        """Submit one asynchronous Dream Worker inference job."""
+        if not check_auth(self):
+            return
+
+        body = read_optional_json_body(self)
+
+        if body is None:
+            return
+
+        if not isinstance(body, dict):
+            json_response(
+                self,
+                400,
+                {"error": "Request body must be a JSON object"},
+            )
+            return
+
+        prompt = body.get("prompt")
+
+        if not isinstance(prompt, str) or not prompt.strip():
+            json_response(
+                self,
+                400,
+                {"error": "prompt must be a non-empty string"},
+            )
+            return
+
+        enable_thinking = body.get("enableThinking", False)
+
+        if type(enable_thinking) is not bool:
+            json_response(
+                self,
+                400,
+                {"error": "enableThinking must be boolean"},
+            )
+            return
+
+        max_tokens = body.get("maxTokens", 512)
+
+        if type(max_tokens) is not int or max_tokens < 1:
+            json_response(
+                self,
+                400,
+                {"error": "maxTokens must be a positive integer"},
+            )
+            return
+
+        try:
+            job = _dream_worker_client().submit_job(
+                prompt,
+                enable_thinking=enable_thinking,
+                max_tokens=max_tokens,
+            )
+        except _DreamWorkerError as exc:
+            _dream_worker_write_transport_error(self, exc)
+            return
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Dream Worker job submission unavailable", exc_info=True)
+            json_response(
+                self,
+                503,
+                {
+                    "error": "Dream Worker integration is unavailable",
+                    "code": "dream_worker_unavailable",
+                },
+            )
+            return
+
+        response_status = 200
+
+        if str(job.get("state") or "") in {"queued", "running"}:
+            response_status = 202
+
+        json_response(
+            self,
+            response_status,
+            {
+                "ok": True,
+                "job": job,
+            },
+        )
+
+    def _handle_dream_worker_cancel(self, job_id: str):
+        """Request cancellation of one Dream Worker job."""
+        if not check_auth(self):
+            return
+
+        try:
+            job = _dream_worker_client().cancel_job(job_id)
+        except _DreamWorkerError as exc:
+            _dream_worker_write_transport_error(self, exc)
+            return
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Dream Worker cancellation unavailable", exc_info=True)
+            json_response(
+                self,
+                503,
+                {
+                    "error": "Dream Worker integration is unavailable",
+                    "code": "dream_worker_unavailable",
+                },
+            )
+            return
+
+        json_response(
+            self,
+            200,
+            {
+                "ok": True,
+                "job": job,
+            },
+        )
     def _handle_remote_provider_plan(self):
         """Validate a remote-provider lifecycle request without side effects."""
         if not check_auth(self):
