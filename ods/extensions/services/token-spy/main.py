@@ -18,10 +18,11 @@ import shlex
 import tempfile
 import time
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, Security
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from filters import apply_filters
@@ -1685,8 +1686,16 @@ def _update_timer_interval(minutes: int):
     except Exception as e:
         log.warning(f"[SETTINGS] Could not update timer: {e} (may need sudo)")
 
+UsageHours = Annotated[int, Query(ge=1, le=24 * 366)]
+UsageLimit = Annotated[int, Query(ge=1, le=1000)]
+
+
 @app.get("/api/usage", dependencies=[Depends(verify_api_key)])
-def api_usage(agent: str | None = None, hours: int = 24, limit: int = 200):
+def api_usage(
+    agent: str | None = None,
+    hours: UsageHours = 24,
+    limit: UsageLimit = 200,
+):
     return query_usage(agent=agent, hours=hours, limit=limit)
 
 
@@ -1700,7 +1709,11 @@ def api_report(start: str, end: str):
 
 
 @app.get("/token-usage", dependencies=[Depends(verify_api_key)])
-def token_usage_alias(agent: str | None = None, hours: int = 24, limit: int = 200):
+def token_usage_alias(
+    agent: str | None = None,
+    hours: UsageHours = 24,
+    limit: UsageLimit = 200,
+):
     """Alias for /api/usage — returns recent token usage events."""
     return query_usage(agent=agent, hours=hours, limit=limit)
 
