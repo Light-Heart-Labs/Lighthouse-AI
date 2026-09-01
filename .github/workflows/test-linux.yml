@@ -169,6 +169,9 @@ jobs:
       - name: Safe Env Loading Tests
         run: bash tests/test-safe-env.sh
 
+      - name: Dotenv Serializer Tests
+        run: bash tests/test-dotenv-serializer.sh
+
       - name: Mode Switch Tests
         run: bash tests/test-mode-switch-status.sh
 
@@ -212,6 +215,7 @@ jobs:
           bash tests/test-phase03-multigpu-tty.sh
           bash tests/contracts/test-preflight-fixtures.sh
           bash tests/test-preflight-resolver-bug.sh
+          bash tests/test-desktop-agent-host-env.sh
           python3 tests/contracts/test-network-exposure-contracts.py
           python3 tests/contracts/test-remote-provider-egress-policy.py
           python3 tests/contracts/test-remote-provider-egress-service.py
@@ -239,6 +243,9 @@ jobs:
 
       - name: Config Migration Tests
         run: bash tests/test-migrate-config.sh
+
+      - name: Atomic Environment Write Tests
+        run: bash tests/test-atomic-env-writes.sh
 
       - name: Issue-to-PR Security Contract Tests
         run: bash tests/test-issue-to-pr-security.sh

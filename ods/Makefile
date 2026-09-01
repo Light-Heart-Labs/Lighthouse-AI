@@ -80,6 +80,9 @@ test: ## Run unit and contract tests
 	@echo "=== config migration (version check under set -e) ==="
 	@bash tests/test-migrate-config.sh
 	@echo ""
+	@echo "=== atomic .env writes ==="
+	@bash tests/test-atomic-env-writes.sh
+	@echo ""
 	@echo "=== brave-search searxng compat contract ==="
 	@bash tests/test-brave-search-searxng-compat.sh
 	@echo ""
@@ -121,6 +124,9 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== macOS ods-host-agent bootstrap verification ==="
 	@bash tests/test-macos-host-agent-verification.sh
+	@echo ""
+	@echo "=== desktop host-agent environment contract ==="
+	@bash tests/test-desktop-agent-host-env.sh
 	@echo ""
 	@echo "=== macOS model download retry contract ==="
 	@bash tests/test-macos-download-retries.sh
