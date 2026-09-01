@@ -742,7 +742,7 @@ test('shows adaptive Pixel capability in the activation dialog without blocking 
   expect(screen.queryByText('Hermes ready')).not.toBeInTheDocument()
 })
 
-test('blocks direct-chat-incompatible models before Run', () => {
+test('allows models with failed direct-chat qualification to run adaptively', () => {
   const loadModel = vi.fn()
   const deleteModel = vi.fn()
   const reason = 'Fleet validation could not load this model into the local chat runtime.'
@@ -764,13 +764,15 @@ test('blocks direct-chat-incompatible models before Run', () => {
 
   renderModels()
 
-  const runButton = screen.getByRole('button', { name: /chat unsupported/i })
-  expect(runButton).toBeDisabled()
-  expect(runButton).toHaveAttribute('title', reason)
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeEnabled()
+  expect(runButton).toHaveAttribute('title', 'Run Phi-3.5 Mini')
   fireEvent.click(runButton)
+  expect(screen.getAllByText('Pixel adaptive')).toHaveLength(2)
+  expect(screen.getByText('Capability varies')).toBeInTheDocument()
   expect(loadModel).not.toHaveBeenCalled()
-  expect(screen.getByText('Unavailable')).toBeInTheDocument()
-  expect(screen.getByText('Chat blocked')).toBeInTheDocument()
+  confirmModelRun()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4', { contextLength: 128000 })
 
   const deleteButton = screen.getByRole('button', { name: /delete phi-3\.5 mini$/i })
   expect(deleteButton).toBeEnabled()

@@ -955,8 +955,6 @@ function PrimaryAction({
 
   if (isDownloaded) {
     const runDisabled = Boolean(runDisabledReason)
-    const directChatBlocked = isOpenAiChatBlocked(getOpenAiChatCompatibility(model))
-    const buttonLabel = directChatBlocked ? 'Chat Unsupported' : 'Run'
     return (
       <span className="inline-flex" title={runDisabledReason || `Run ${model.name}`}>
         <button
@@ -970,8 +968,8 @@ function PrimaryAction({
               : 'cursor-not-allowed border border-theme-border bg-theme-bg/45 text-theme-text-muted'
           }`}
         >
-          {directChatBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
-          {buttonLabel}
+          <Play size={13} />
+          Run
         </button>
       </span>
     )
@@ -1101,10 +1099,13 @@ function ModelActivationDialog({
   const contextValid = Number.isSafeInteger(selectedContext)
     && selectedContext >= 1024
   const sameContext = contextValid && isCurrentModel && selectedContext === currentContext
+  const openAiChat = getOpenAiChatCompatibility(model)
   const pixelAgent = getPixelAgentCompatibility(model)
   const agentViability = getAgentViabilityCompatibility(model)
   const pixelContextReady = selectedContext >= Number(pixelMinimumContext || 16384)
-  const appProfile = isAgentViabilityBlocked(pixelAgent)
+  const appProfile = isOpenAiChatBlocked(openAiChat)
+    ? { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
+    : isAgentViabilityBlocked(pixelAgent)
     ? { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
     : isAgentViabilityBlocked(agentViability)
       ? { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
@@ -1459,10 +1460,6 @@ function getRunDisabledReason({
   if (!canActivateModels) {
     return activationModeError || 'The local model runtime is unavailable. Review runtime settings before running this model.'
   }
-  const openAiChat = getOpenAiChatCompatibility(model)
-  if (isOpenAiChatBlocked(openAiChat)) {
-    return openAiChat.reason || 'This model is not currently validated for direct local chat.'
-  }
   if (model.fitsVram !== true && !model.recommended) {
     const required = Number(model.estimatedRequired || model.vramRequired || 0)
     const total = Number(gpu?.vramTotal || 0)
@@ -1692,9 +1689,9 @@ function getCompatibilityMeta(model, memory, pixelMinimumContext = 0) {
   const openAiChat = getOpenAiChatCompatibility(model)
   if (isOpenAiChatBlocked(openAiChat)) {
     return {
-      label: 'Unavailable',
-      detail: 'Chat blocked',
-      tone: 'red',
+      label: 'Pixel adaptive',
+      detail: 'Capability varies',
+      tone: 'purple',
     }
   }
   const agentViability = getAgentViabilityCompatibility(model)
