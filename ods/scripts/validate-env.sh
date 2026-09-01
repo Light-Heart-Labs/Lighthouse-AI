@@ -25,8 +25,28 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-$(dirname "$SCRIPT_DIR")}"
-ENV_FILE="${1:-${INSTALL_DIR}/.env}"
-SCHEMA_FILE="${2:-${INSTALL_DIR}/.env.schema.json}"
+JSON_OUTPUT=false
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json) JSON_OUTPUT=true ;;
+    --help|-h)
+      SHOW_HELP=true
+      ;;
+    -*) echo "Unknown option: $1" >&2; exit 3 ;;
+    *) POSITIONAL_ARGS+=("$1") ;;
+  esac
+  shift
+done
+
+if (( ${#POSITIONAL_ARGS[@]} > 2 )); then
+  echo "Expected at most ENV_FILE and SCHEMA_FILE" >&2
+  exit 3
+fi
+
+ENV_FILE="${POSITIONAL_ARGS[0]:-${INSTALL_DIR}/.env}"
+SCHEMA_FILE="${POSITIONAL_ARGS[1]:-${INSTALL_DIR}/.env.schema.json}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -36,14 +56,32 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+VALIDATION_WARNINGS=()
+log_info() { $JSON_OUTPUT || echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { $JSON_OUTPUT || echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warn() { VALIDATION_WARNINGS+=("$1"); $JSON_OUTPUT || echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { $JSON_OUTPUT || echo -e "${RED}[ERROR]${NC} $1"; }
+
+json_escape() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
+emit_input_error() {
+  printf '{"schema_version":"1","kind":"env-validation","valid":false,'
+  printf '"env_file":"%s","schema_file":"%s","error_code":"%s","message":"%s"}\n' \
+    "$(json_escape "$ENV_FILE")" "$(json_escape "$SCHEMA_FILE")" \
+    "$(json_escape "$1")" "$(json_escape "$2")"
+}
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [ENV_FILE] [SCHEMA_FILE]
+Usage: $(basename "$0") [--json] [ENV_FILE] [SCHEMA_FILE]
 
 Validates a ODS .env file against the JSON schema.
 
@@ -58,25 +96,27 @@ Tips:
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
-    --help|-h) usage; exit 0 ;;
-  esac
-done
+if [[ "${SHOW_HELP:-false}" == "true" ]]; then
+  usage
+  exit 0
+fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
     log_error "Env file not found: $ENV_FILE"
+    $JSON_OUTPUT && emit_input_error "env_file_unreadable" "Env file not found"
     exit 3
 fi
 
 if [[ ! -f "$SCHEMA_FILE" ]]; then
     log_error "Schema file not found: $SCHEMA_FILE"
+    $JSON_OUTPUT && emit_input_error "schema_file_unreadable" "Schema file not found"
     exit 3
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
     log_error "jq is required for schema validation"
     log_info "Install: sudo apt-get install -y jq  (or your distro equivalent)"
+    $JSON_OUTPUT && emit_input_error "jq_unavailable" "jq is required for schema validation"
     exit 3
 fi
 
@@ -147,7 +187,7 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
 
   # Must contain '='
   if [[ "$line" != *"="* ]]; then
-    log_warn "Ignoring line $line_no (not KEY=VALUE): $raw_line"
+    log_warn "Ignoring line $line_no (not KEY=VALUE)"
     continue
   fi
 
@@ -516,10 +556,92 @@ esac
 # Reporting
 # -----------------------------
 
+for key in "${!ENV_DUPLICATE_FROM[@]}"; do
+  from_to="${ENV_DUPLICATE_FROM[$key]}"
+  duplicate_errors+=("$key: duplicate assignment at lines $from_to")
+done
+
+secret_count=$(jq_raw '.properties | to_entries[] | select(.value.secret==true) | .key' "$SCHEMA_FILE" | wc -l | tr -d ' ')
+total_errors=$((
+  ${#missing[@]} + ${#unknown[@]} + ${#type_errors[@]} +
+  ${#enum_errors[@]} + ${#range_errors[@]} + ${#length_errors[@]} +
+  ${#contract_errors[@]} + ${#duplicate_errors[@]}
+))
+
 had_errors=false
+if (( total_errors > 0 )); then
+  had_errors=true
+fi
+
+array_json() {
+  if (( $# == 0 )); then
+    printf '[]'
+    return
+  fi
+  printf '%s\0' "$@" | jq -Rs 'split("\u0000")[:-1]'
+}
+
+emit_validation_json() {
+  local valid_json=false error_code="validation_failed"
+  if [[ "$had_errors" == "false" ]]; then
+    valid_json=true
+    error_code=""
+  fi
+  jq -n \
+    --arg env_file "$ENV_FILE" \
+    --arg schema_file "$SCHEMA_FILE" \
+    --arg error_code "$error_code" \
+    --argjson valid "$valid_json" \
+    --argjson missing "$(array_json "${missing[@]}")" \
+    --argjson unknown "$(array_json "${unknown[@]}")" \
+    --argjson type_errors "$(array_json "${type_errors[@]}")" \
+    --argjson enum_errors "$(array_json "${enum_errors[@]}")" \
+    --argjson range_errors "$(array_json "${range_errors[@]}")" \
+    --argjson length_errors "$(array_json "${length_errors[@]}")" \
+    --argjson contract_errors "$(array_json "${contract_errors[@]}")" \
+    --argjson duplicate_errors "$(array_json "${duplicate_errors[@]}")" \
+    --argjson warnings "$(array_json "${VALIDATION_WARNINGS[@]}")" \
+    --argjson env_keys "${#ENV_MAP[@]}" \
+    --argjson schema_keys "${#schema_keys[@]}" \
+    --argjson required_keys "${#required_keys[@]}" \
+    --argjson secret_keys "${secret_count:-0}" \
+    --argjson total_errors "$total_errors" \
+    '{
+      schema_version: "1",
+      kind: "env-validation",
+      valid: $valid,
+      env_file: $env_file,
+      schema_file: $schema_file,
+      error_code: $error_code,
+      errors: {
+        missing_required: $missing,
+        unknown_keys: $unknown,
+        type: $type_errors,
+        enum: $enum_errors,
+        range: $range_errors,
+        length: $length_errors,
+        runtime_contract: $contract_errors,
+        duplicate: $duplicate_errors
+      },
+      warnings: $warnings,
+      summary: {
+        env_keys: $env_keys,
+        schema_keys: $schema_keys,
+        required_keys: $required_keys,
+        secret_keys: $secret_keys,
+        total_errors: $total_errors,
+        total_warnings: ($warnings | length)
+      }
+    }'
+}
+
+if $JSON_OUTPUT; then
+  emit_validation_json
+  [[ "$had_errors" == "false" ]] && exit 0
+  exit 2
+fi
 
 if (( ${#missing[@]} > 0 )); then
-    had_errors=true
     log_error "Missing required keys:"
     for key in "${missing[@]}"; do
         echo "  - $key"
@@ -527,7 +649,6 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 if (( ${#unknown[@]} > 0 )); then
-    had_errors=true
     log_error "Unknown keys not defined in schema:"
     for key in "${unknown[@]}"; do
         echo "  - $key (line ${ENV_LINE[$key]:-?})"
@@ -535,7 +656,6 @@ if (( ${#unknown[@]} > 0 )); then
 fi
 
 if (( ${#type_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Type validation errors:"
     for err in "${type_errors[@]}"; do
         echo "  - $err"
@@ -543,7 +663,6 @@ if (( ${#type_errors[@]} > 0 )); then
 fi
 
 if (( ${#enum_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Enum validation errors:"
     for err in "${enum_errors[@]}"; do
         echo "  - $err"
@@ -551,7 +670,6 @@ if (( ${#enum_errors[@]} > 0 )); then
 fi
 
 if (( ${#range_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Range validation errors:"
     for err in "${range_errors[@]}"; do
         echo "  - $err"
@@ -559,7 +677,6 @@ if (( ${#range_errors[@]} > 0 )); then
 fi
 
 if (( ${#length_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Length validation errors (replace placeholder/default values):"
     for err in "${length_errors[@]}"; do
         echo "  - $err"
@@ -567,20 +684,13 @@ if (( ${#length_errors[@]} > 0 )); then
 fi
 
 if (( ${#contract_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Runtime contract validation errors:"
     for err in "${contract_errors[@]}"; do
         echo "  - $err"
     done
 fi
 
-for key in "${!ENV_DUPLICATE_FROM[@]}"; do
-  from_to="${ENV_DUPLICATE_FROM[$key]}"
-  duplicate_errors+=("$key: duplicate assignment at lines $from_to")
-done
-
 if (( ${#duplicate_errors[@]} > 0 )); then
-    had_errors=true
     log_error "Duplicate key errors:"
     for err in "${duplicate_errors[@]}"; do
         echo "  - $err"
@@ -602,7 +712,6 @@ log_info "Keys in schema: ${#schema_keys[@]}"
 log_info "Required keys: ${#required_keys[@]}"
 
 # Optional: print helpful summary of secrets (without values)
-secret_count=$(jq_raw '.properties | to_entries[] | select(.value.secret==true) | .key' "$SCHEMA_FILE" | wc -l | tr -d ' ')
 if [[ "$secret_count" =~ ^[0-9]+$ ]] && (( secret_count > 0 )); then
   log_info "Schema marks ${secret_count} key(s) as secrets (values not printed)."
 fi
