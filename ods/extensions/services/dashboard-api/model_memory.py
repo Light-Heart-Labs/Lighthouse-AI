@@ -63,9 +63,7 @@ def estimated_context_kv_gb(
         context = 0
     context = max(context, 8192)
     block_count = _positive_number(model.get("block_count"))
-    kv_heads = _positive_number(
-        model.get("attention_head_count_kv") or model.get("head_count_kv")
-    )
+    kv_heads_raw = model.get("attention_head_count_kv") or model.get("head_count_kv")
     embedding_length = _positive_number(model.get("embedding_length"))
     head_count = _positive_number(
         model.get("attention_head_count") or model.get("head_count")
@@ -73,18 +71,39 @@ def estimated_context_kv_gb(
     head_dimension = _positive_number(
         model.get("attention_head_dimension")
         or model.get("head_dimension")
-        or model.get("rope_dimension_count")
     )
-    if not head_dimension and embedding_length and head_count:
-        head_dimension = embedding_length / head_count
+    derived_head_dimension = (
+        embedding_length / head_count if embedding_length and head_count else 0.0
+    )
+    key_dimension = _positive_number(model.get("attention_key_length"))
+    value_dimension = _positive_number(model.get("attention_value_length"))
+    key_dimension = key_dimension or head_dimension or derived_head_dimension
+    value_dimension = value_dimension or head_dimension or derived_head_dimension
 
-    if block_count and kv_heads and head_dimension:
+    layer_kv_heads = 0.0
+    if isinstance(kv_heads_raw, (list, tuple)):
+        kv_heads_by_layer = [_positive_number(value) for value in kv_heads_raw]
+        # Per-layer arrays are authoritative only when complete. The GGUF
+        # inspector deliberately samples very large arrays, so an incomplete
+        # list must fall back instead of under-counting omitted layers.
+        if block_count and len(kv_heads_by_layer) == int(block_count):
+            layer_kv_heads = sum(kv_heads_by_layer)
+    else:
+        kv_heads = _positive_number(kv_heads_raw)
+        if block_count and kv_heads:
+            layer_kv_heads = block_count * kv_heads
+
+    if layer_kv_heads and key_dimension and value_dimension:
         # llama.cpp's default f16 KV cache stores one key and one value for
-        # every layer/head/token: 2 * layers * KV heads * head dimension *
-        # 2-byte elements. Architecture metadata is authoritative here;
-        # parameter count is especially misleading for MoE models.
+        # every KV head/token. Key and value dimensions can differ, and newer
+        # hybrid architectures expose a per-layer KV-head array.
         element_bytes = _positive_number(model.get("kv_cache_element_bytes")) or 2.0
-        kv_bytes = 2.0 * block_count * kv_heads * head_dimension * element_bytes * context
+        kv_bytes = (
+            layer_kv_heads
+            * (key_dimension + value_dimension)
+            * element_bytes
+            * context
+        )
         return round(kv_bytes / (1024.0 ** 3), 2)
 
     params_b = estimated_param_billions(model)
