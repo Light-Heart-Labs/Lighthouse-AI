@@ -180,7 +180,7 @@ reset_agent() {
     log "Reset $agent MEMORY.md to baseline (${baseline_size} bytes)"
 }
 
-reset_remote_agent() {
+reset_remote_agent() (
     local agent="$1"
     local remote_host="$2"
     local remote_user="$3"
@@ -201,7 +201,9 @@ reset_remote_agent() {
     fi
 
     # Fetch current memory from remote
-    local tmpfile="/tmp/memory-shepherd-${agent}-current.md"
+    local tmpfile
+    tmpfile=$(mktemp "${TMPDIR:-/tmp}/memory-shepherd-${agent}.XXXXXX")
+    trap 'rm -f "$tmpfile"' EXIT
     if ! scp -q "${remote_user}@${remote_host}:${remote_memory}" "$tmpfile" 2>/dev/null; then
         log "WARN: No memory file for $agent on $remote_host — pushing baseline"
         scp -q "$baseline" "${remote_user}@${remote_host}:${remote_memory}"
@@ -244,8 +246,7 @@ reset_remote_agent() {
     # Push baseline to remote
     scp -q "$baseline" "${remote_user}@${remote_host}:${remote_memory}"
     log "Reset $agent MEMORY.md on $remote_host to baseline (${baseline_size} bytes)"
-    rm -f "$tmpfile"
-}
+)
 
 # ── Dispatch ───────────────────────────────────────────────────────────
 
