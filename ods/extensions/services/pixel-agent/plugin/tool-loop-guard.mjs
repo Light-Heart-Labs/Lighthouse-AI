@@ -1885,6 +1885,16 @@ function operationsHostEvidenceText(
     lines.push(
       `- ODS container projection: ${odsAppsProjection.online_app_count} of ${odsAppsProjection.app_count} allowlisted ODS application containers online; ${apps || "none reported"}.`
     );
+    const applicationDetails = odsAppsProjection.apps
+      .filter(({ display_name, purpose, url }) => display_name && purpose && url)
+      .map(
+        ({ name, display_name: displayName, purpose, url }) =>
+          `\`${name}\`: ${displayName} - ${purpose} - <${url}>`
+      )
+      .join("; ");
+    if (applicationDetails) {
+      lines.push(`- ODS application details: ${applicationDetails}.`);
+    }
     lines.push(
       "- Container boundary: this host-produced status projection covers allowlisted ODS application containers only; it does not enumerate unrelated or non-ODS containers."
     );
@@ -1985,19 +1995,33 @@ function operationsOdsAppsProjection(event) {
     }
     if (
       keys === enriched &&
-      (typeof app.display_name !== "string" ||
-        !app.display_name ||
-        app.display_name.length > 128 ||
-        typeof app.purpose !== "string" ||
-        !app.purpose ||
-        app.purpose.length > 256 ||
+      (!cleanSingleLine(
+        app.display_name,
+        /^[A-Za-z0-9][A-Za-z0-9 .,_+()\/:;~'&-]{0,127}$/,
+        128
+      ) ||
+        !cleanSingleLine(
+          app.purpose,
+          /^[A-Za-z0-9][A-Za-z0-9 .,_+()\/:;~'&-]{0,255}$/,
+          256
+        ) ||
         typeof app.url !== "string" ||
         !/^http:\/\/localhost:[1-9][0-9]{0,4}\/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*$/.test(app.url))
     ) {
       return undefined;
     }
     names.add(app.name);
-    apps.push({ name: app.name, status: app.status });
+    apps.push(
+      keys === enriched
+        ? {
+            name: app.name,
+            status: app.status,
+            display_name: app.display_name.trim(),
+            purpose: app.purpose.trim(),
+            url: app.url,
+          }
+        : { name: app.name, status: app.status }
+    );
   }
   const online = apps.filter(({ status }) => status === "running" || status === "healthy").length;
   if (online !== value.online_app_count) return undefined;

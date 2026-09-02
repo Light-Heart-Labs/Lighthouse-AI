@@ -3807,7 +3807,7 @@ test("does not substitute host.cpu for architecture unless the structured field 
   assert.doesNotMatch(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
 });
 
-test("adds only a sanitized ODS container projection after terminal host Operations", () => {
+test("adds only sanitized ODS container and application projections after terminal host Operations", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
   guard.observeRun(
@@ -3894,6 +3894,9 @@ test("adds only a sanitized ODS container projection after terminal host Operati
   assert.match(text, /Hostname: `light-worker`/);
   assert.match(text, /ODS container projection: 1 of 2 allowlisted/);
   assert.match(text, /`ods-dashboard` \(healthy\), `ods-worker` \(stopped\)/);
+  assert.match(text, /ODS application details:/);
+  assert.match(text, /`ods-dashboard`: Dashboard - ODS control center/);
+  assert.match(text, /<http:\/\/localhost:3001\/>/);
   assert.match(text, /does not enumerate unrelated or non-ODS containers/);
   assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed", text });
 });
