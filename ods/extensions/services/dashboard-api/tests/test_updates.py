@@ -1,5 +1,6 @@
 """Tests for updates router endpoints."""
 
+import asyncio
 import json
 from datetime import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -79,6 +80,34 @@ def test_get_version_with_mock_github(test_client, monkeypatch):
     data = resp.json()
     assert data["latest"] == "2.0.0"
     assert data["changelog_url"] == "https://github.com/test"
+
+
+def test_release_refresh_keeps_stale_cache_on_github_status_error(monkeypatch):
+    import routers.updates as updates_mod
+
+    stale = {
+        "latest": "1.9.0",
+        "changelog_url": "https://github.com/test/releases/v1.9.0",
+        "checked_at": "2026-01-01T00:00:00+00:00",
+    }
+    monkeypatch.setattr(
+        updates_mod,
+        "_version_cache",
+        {"expires_at": 0.0, "payload": stale},
+    )
+    request = httpx.Request("GET", f"{updates_mod._GITHUB_RELEASES_API}/latest")
+    response = httpx.Response(403, request=request, json={"message": "rate limited"})
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.updates.httpx.AsyncClient", return_value=mock_client):
+        result = asyncio.run(updates_mod._refresh_release_cache())
+
+    assert result == stale
+    assert updates_mod._version_cache["payload"] == stale
 
 
 def test_build_version_result_strips_v_prefix_from_current():
@@ -343,6 +372,25 @@ def test_update_dry_run_with_env_and_version(test_client, tmp_path, monkeypatch)
     assert "GPU_BACKEND" in data["env_keys"]
     assert "LLM_MODEL" in data["env_keys"]
     assert "SOME_OTHER_KEY" not in data["env_keys"]
+
+
+def test_update_dry_run_reports_github_status_error(test_client, tmp_path, monkeypatch):
+    import routers.updates as updates_mod
+
+    install_dir = tmp_path / "ods"
+    install_dir.mkdir()
+    (install_dir / ".env").write_text("ODS_VERSION=1.3.0\n", encoding="utf-8")
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(install_dir))
+
+    request = httpx.Request("GET", f"{updates_mod._GITHUB_RELEASES_API}/latest")
+    response = httpx.Response(403, request=request, json={"message": "rate limited"})
+    with patch("routers.updates.httpx.AsyncClient.get", return_value=response):
+        resp = test_client.get("/api/update/dry-run", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["latest_version"] is None
+    assert "403 Forbidden" in data["version_check_error"]
 
 
 def test_update_dry_run_parses_quoted_ods_version(test_client, tmp_path, monkeypatch):
