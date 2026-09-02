@@ -4205,9 +4205,14 @@ export function createToolLoopGuard({
       const nextPath = state.workspaceTaskDirectory
         ? `${state.workspaceTaskDirectory}/${nextFile}`
         : nextFile;
-      const testFileHint = /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile)
-        ? " For a Python test file, include every required test-framework and implementation import."
-        : "";
+      const pythonTestFile =
+        /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile);
+      const testFileHint = !pythonTestFile
+        ? ""
+        : state.workspacePythonUnittestRequested
+          ? " The owner explicitly requires unittest: include import unittest, at least one " +
+            "class inheriting unittest.TestCase, and test_* methods with the requested assertions."
+          : " For a Python test file, include every required test-framework and implementation import.";
       return (
         "Inspection complete. Make exactly one tool call next: call tool_call with " +
         `id openclaw:core:write and args path ${JSON.stringify(nextPath)} plus content ` +
@@ -5954,9 +5959,14 @@ export function createToolLoopGuard({
         : undefined;
       if (nextFile) {
         const nextPath = `${state.workspaceTaskDirectory}/${nextFile}`;
-        const testFileHint = /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile)
-          ? " For a Python test file, include every required test-framework and implementation import."
-          : "";
+        const pythonTestFile =
+          /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile);
+        const testFileHint = !pythonTestFile
+          ? ""
+          : state.workspacePythonUnittestRequested
+            ? " The owner explicitly requires unittest: include import unittest, at least one " +
+              "class inheriting unittest.TestCase, and test_* methods with the requested assertions."
+            : " For a Python test file, include every required test-framework and implementation import.";
         return (
           "[ODS Pixel next step] Call tool_call next with id openclaw:core:write and " +
           `args path ${JSON.stringify(nextPath)} plus the complete requested content. ` +

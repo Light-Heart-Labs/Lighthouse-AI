@@ -1377,6 +1377,41 @@ test("requires real unittest structure when the owner explicitly requests it", (
     "pixel",
     { prompt }
   );
+  const implementation = call(guard, "tool_call", {
+    event: {
+      toolCallId: "write-stats-report",
+      params: {
+        id: "write",
+        args: { path: "stats_report.py", content: "print('ready')\n" },
+      },
+    },
+    context: { toolCallId: "write-stats-report" },
+  });
+  const implementationResult = wrappedCoreResult("write", {
+    content: [{ type: "text", text: "Successfully wrote 15 bytes" }],
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      toolCallId: "write-stats-report",
+      params: implementation.params,
+      result: implementationResult,
+    },
+    context: { toolCallId: "write-stats-report" },
+  });
+  const persistedImplementation = persistToolResult(
+    guard,
+    "tool_call",
+    "write-stats-report",
+    implementationResult
+  );
+  assert.match(
+    persistedImplementation.message.content.at(-1).text,
+    /owner explicitly requires unittest/
+  );
+  assert.match(
+    persistedImplementation.message.content.at(-1).text,
+    /import unittest.*unittest\.TestCase.*test_\* methods/
+  );
   assert.deepEqual(
     call(guard, "tool_call", {
       event: {
