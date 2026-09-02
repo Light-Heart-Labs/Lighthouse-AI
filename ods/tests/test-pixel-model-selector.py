@@ -84,15 +84,18 @@ def catalog_model(
 
 def main() -> int:
     result = run_selector(CATALOG)
-    assert result.returncode == 2
-    assert not result.stdout.strip()
-    assert "no explicitly verified Pixel agent model fits" in result.stderr
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["selected"]["id"] == "qwen3.5-9b-q4"
+    assert payload["selected"]["pixel_agent_status"] == "verified"
+    assert payload["policy"].endswith("+pixel-agent-capability-v1")
+    assert "overrides --tier 0's 1221MB model size preference" in payload["reason"]
 
     result = run_selector(CATALOG, max_size_mb=0, agent_ready_only=False)
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["selected"]["id"] == "qwen3.5-9b-q4"
-    assert payload["selected"]["pixel_agent_status"] == "not-agent-viable"
+    assert payload["selected"]["pixel_agent_status"] == "verified"
     assert payload["source"] == "catalog_runtime_profile_pre_download"
     assert payload["alternatives"][0]["context_length"] == 65536
 
