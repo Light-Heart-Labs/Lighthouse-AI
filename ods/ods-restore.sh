@@ -154,8 +154,8 @@ list_backups() {
             # Compressed backup
             size=$(du -sh "$backup" 2>/dev/null | cut -f1)
             # Try to read manifest from tar
-            if tar -tzf "$backup" 2>/dev/null | grep -q "manifest.json"; then
-                manifest=$(tar -xzf "$backup" -O */manifest.json 2>/dev/null || echo "")
+            if tar -tzf "$backup" 2>/dev/null | grep "manifest.json" >/dev/null; then
+                manifest=$(tar -xzf "$backup" -O "$id/manifest.json" 2>/dev/null || echo "")
                 if [[ -n "$manifest" ]]; then
                     backup_type=$(echo "$manifest" | grep -o '"backup_type": "[^"]*"' | cut -d'"' -f4 || echo "unknown")
                     description=$(echo "$manifest" | grep -o '"description": "[^"]*"' | cut -d'"' -f4 || echo "")
@@ -220,7 +220,7 @@ extract_backup() {
 
     if [[ -f "$compressed" ]]; then
         # Validate: reject archives with absolute paths or path traversal
-        if tar -tzf "$compressed" 2>/dev/null | grep -qE '(^/|\.\./)'; then
+        if tar -tzf "$compressed" 2>/dev/null | grep -E '(^/|\.\./)' >/dev/null; then
             log_error "Backup archive contains unsafe paths (absolute or ../) — refusing to extract" >&2
             return 1
         fi
