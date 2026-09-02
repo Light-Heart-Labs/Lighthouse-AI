@@ -28,6 +28,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["setup"])
 
 
+def _chat_response_content(data: object) -> str:
+    if not isinstance(data, dict):
+        raise ValueError("LLM response must be a JSON object")
+    choices = data.get("choices")
+    if choices is None or choices == []:
+        return ""
+    if not isinstance(choices, list):
+        raise ValueError("LLM response choices must be an array of objects")
+    choice = choices[0] or {}
+    if not isinstance(choice, dict):
+        raise ValueError("LLM response choices must be an array of objects")
+    message = choice.get("message") or {}
+    if not isinstance(message, dict):
+        raise ValueError("LLM response choice must contain a message object")
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        raise ValueError("LLM response content must be a string")
+    return content
+
+
 def get_active_persona_prompt() -> str:
     """Get the system prompt for the active persona."""
     persona_file = SETUP_CONFIG_DIR / "persona.json"
@@ -219,17 +239,20 @@ async def chat(request: ChatRequest, api_key: str = Depends(verify_api_key)):
             async with session.post(f"{llm_url}{_api_path}/chat/completions", json=payload, headers={"Content-Type": "application/json"}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    choices = data.get("choices") or [{}]
-                    response_text = (choices[0] or {}).get("message", {}).get("content", "")
+                    response_text = _chat_response_content(data)
                     # Strip thinking model tags — content may contain <think>...</think> blocks
                     response_text = re.sub(r'<think>[\s\S]*?</think>\s*', '', response_text).strip()
                     return {"response": response_text, "success": True}
                 else:
                     error_text = await resp.text()
                     raise HTTPException(status_code=resp.status, detail=f"LLM error: {error_text}")
-    except aiohttp.ClientError:
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="LLM backend timed out") from exc
+    except (aiohttp.ContentTypeError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="LLM backend returned an invalid response") from exc
+    except aiohttp.ClientError as exc:
         logger.exception("Cannot reach LLM backend")
-        raise HTTPException(status_code=503, detail="Cannot reach LLM backend")
+        raise HTTPException(status_code=503, detail="Cannot reach LLM backend") from exc
 
 
 # ---------------------------------------------------------------------------
