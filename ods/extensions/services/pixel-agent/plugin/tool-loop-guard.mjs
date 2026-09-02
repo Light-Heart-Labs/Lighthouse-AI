@@ -125,6 +125,9 @@ export const REQUESTED_UNITTEST_REQUIRED_REASON =
 export const REQUESTED_UNITTEST_RETRY_REASON =
   "That replacement still was not unittest and was not written. Make one final write call now, with no prose, using this exact outer shape: `import subprocess, sys, unittest`; `class Tests(unittest.TestCase):`; one `def test_name(self):` per owner-requested case; each method calls `subprocess.run(...)` and uses `self.assertEqual(...)`; finish with `if __name__ == '__main__': unittest.main()`. Keep the complete file under 1000 characters. A third invalid shape will stop this turn.";
 
+export const REQUESTED_PARSED_JSON_REQUIRED_REASON =
+  "The owner explicitly required parsed JSON verification, so that raw-text comparison test was not written. Write the same test file with `json.loads(result.stdout)` and compare the resulting Python object and numeric values; do not compare JSON whitespace or a literal expression such as `10/3` inside a string.";
+
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
 
@@ -420,14 +423,21 @@ function stripTrailingToolEnvelopeLeak(value) {
 }
 
 function completeRequestedUnittestImports(value, state, requestedPath) {
+  const workspaceTestPath =
+    typeof requestedPath === "string" &&
+    typeof state?.workspaceTaskDirectory === "string" &&
+    requestedPath.startsWith(`${state.workspaceTaskDirectory}/`) &&
+    /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(
+      requestedPath.split("/").at(-1)
+    );
+  const originallyRequestedTestPath = state?.workspaceRequestedFiles?.some((file) =>
+    requestedPath === `${state.workspaceTaskDirectory}/${file}` &&
+    /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file)
+  );
   if (
     typeof value !== "string" ||
-    typeof requestedPath !== "string" ||
-    !/(?:^|\/)test[^/]*\.py$/i.test(requestedPath) ||
-    !state?.workspaceRequestedFiles?.some((file) =>
-      requestedPath === `${state.workspaceTaskDirectory}/${file}` &&
-      /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file)
-    )
+    !workspaceTestPath ||
+    !(originallyRequestedTestPath || state?.workspacePythonUnittestRequested)
   ) {
     return value;
   }
@@ -437,6 +447,12 @@ function completeRequestedUnittestImports(value, state, requestedPath) {
     !/^\s*(?:import\s+unittest\b|from\s+unittest\s+import\b)/m.test(value)
   ) {
     imports.push("import unittest");
+  }
+  if (
+    /\bjson\.loads\s*\(/.test(value) &&
+    !/^\s*(?:import\s+json\b|from\s+json\s+import\b)/m.test(value)
+  ) {
+    imports.push("import json");
   }
   for (const file of state.workspaceRequestedFiles) {
     if (
@@ -3709,12 +3725,14 @@ export function createToolLoopGuard({
         workspaceTaskDirectory: undefined,
         workspaceRequestedFiles: [],
         workspacePythonUnittestRequested: false,
+        workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspaceToolSearchRouted: false,
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
         failedTestReadCorrections: 0,
         invalidUnittestBlocks: 0,
+        invalidParsedJsonBlocks: 0,
         noOpEditBlocks: 0,
         operationsPromptRound: 0,
         operationsCorrectionPromptRound: undefined,
@@ -4010,11 +4028,19 @@ export function createToolLoopGuard({
           };
         }
         const normalizedWritePath = normalizeWorkspaceFilePath(pendingParams.args.path);
-        const requestedUnittestPath = state.workspaceRequestedFiles.some(
+        const workspaceTestPath =
+          typeof state.workspaceTaskDirectory === "string" &&
+          normalizedWritePath.startsWith(`${state.workspaceTaskDirectory}/`) &&
+          /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(
+            normalizedWritePath.split("/").at(-1)
+          );
+        const originallyRequestedUnittestPath = state.workspaceRequestedFiles.some(
           (file) =>
             /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file) &&
             normalizedWritePath === `${state.workspaceTaskDirectory}/${file}`
         );
+        const requestedUnittestPath = workspaceTestPath &&
+          (state.workspacePythonUnittestRequested || originallyRequestedUnittestPath);
         if (
           state.workspacePythonUnittestRequested &&
           requestedUnittestPath &&
@@ -4026,6 +4052,22 @@ export function createToolLoopGuard({
           }
           if (state.invalidUnittestBlocks === 2) {
             return { block: true, blockReason: REQUESTED_UNITTEST_RETRY_REASON };
+          }
+          state.codingExhausted = true;
+          state.codingTerminalBlocks = 1;
+          return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+        }
+        if (
+          state.workspaceParsedJsonVerificationRequested &&
+          workspaceTestPath &&
+          !/\bjson\.loads\s*\(/.test(pendingParams.args.content)
+        ) {
+          state.invalidParsedJsonBlocks += 1;
+          if (state.invalidParsedJsonBlocks <= 2) {
+            return {
+              block: true,
+              blockReason: REQUESTED_PARSED_JSON_REQUIRED_REASON,
+            };
           }
           state.codingExhausted = true;
           state.codingTerminalBlocks = 1;
@@ -4168,12 +4210,12 @@ export function createToolLoopGuard({
       const repairPath = normalizeWorkspaceFilePath(pendingParams.args.path);
       const previousContent = state.successfulWriteContentByPath.get(repairPath);
       const replacementContent = pendingParams.args.content;
-      const ownerRequestedPath = state.workspaceRequestedFiles.some(
-        (file) => repairPath === `${state.workspaceTaskDirectory}/${file}`
-      );
+      const runWrittenWorkspacePath =
+        typeof repairPath === "string" &&
+        repairPath.startsWith(`${state.workspaceTaskDirectory}/`);
       const repairCount = state.compareSwapRepairCounts.get(repairPath) ?? 0;
       if (
-        ownerRequestedPath &&
+        runWrittenWorkspacePath &&
         state.successfulWritePaths.has(repairPath) &&
         typeof previousContent === "string" &&
         typeof replacementContent === "string" &&
@@ -4185,7 +4227,8 @@ export function createToolLoopGuard({
         // Compact models often regenerate a complete short file after a real
         // failed verification even when directed to use edit. Preserve the
         // no-clobber property by turning that replacement into an exact
-        // compare-and-swap edit against only the bytes this run wrote. A
+        // compare-and-swap edit against only the bytes this run wrote inside
+        // the owner-authorized workspace. A
         // concurrent or external change makes the edit fail instead of being
         // overwritten, and the per-path cap preserves the repair-loop fuse.
         pendingParams = {
@@ -5323,6 +5366,10 @@ export function createToolLoopGuard({
         state.workspacePythonUnittestRequested = /\bunittest\b/i.test(
           currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
         );
+        state.workspaceParsedJsonVerificationRequested =
+          /\bparsed\s+JSON\b|\bjson\.loads\b/i.test(
+            currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
+          );
         state.workspaceVerificationRequested = state.workspaceTaskRequested &&
           /\b(?:(?:run|execute)\s+(?:the\s+)?(?:unit\s*)?tests?|verification|verify|test\s+suite)\b/i.test(
             currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
@@ -5516,6 +5563,7 @@ export function createToolLoopGuard({
       state.oversizedEditBlocks = 0;
       state.noOpEditBlocks = 0;
       state.invalidUnittestBlocks = 0;
+      state.invalidParsedJsonBlocks = 0;
       state.failedExec.clear();
       state.successfulExec.clear();
       state.successfulExecBlocks.clear();

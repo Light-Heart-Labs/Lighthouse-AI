@@ -62,6 +62,7 @@ import {
   RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
   REPEATED_WRITE_REQUIRES_PATCH_REASON,
   REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
+  REQUESTED_PARSED_JSON_REQUIRED_REASON,
   REQUESTED_UNITTEST_REQUIRED_REASON,
   REQUESTED_UNITTEST_RETRY_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
@@ -594,7 +595,7 @@ test("turns bounded post-failure rewrites of run-created files into compare-and-
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Work in /workspace/project. Create probe.py and run the tests." }
+    { prompt: "Continue in /workspace/project. Repair the implementation and run the tests." }
   );
   const firstWrite = call(guard, "tool_call", {
     event: {
@@ -1598,6 +1599,52 @@ test("requires real unittest structure when the owner explicitly requests it", (
     accepted.params.args.path,
     "pixel-qualification/compact-tests/test_stats_report.py"
   );
+});
+
+test("carries unittest and parsed-JSON contracts into continuation test repairs", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Continue in /workspace/project. Repair the existing unittest using parsed JSON " +
+        "via json.loads, then run the tests.",
+    }
+  );
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: {
+          id: "write",
+          args: {
+            path: "test_probe.py",
+            content:
+              "import unittest\n\n" +
+              "class Tests(unittest.TestCase):\n" +
+              "    def test_json(self): self.assertEqual(result.stdout, '{\"value\":10/3}')\n",
+          },
+        },
+      },
+    }),
+    { block: true, blockReason: REQUESTED_PARSED_JSON_REQUIRED_REASON }
+  );
+
+  const accepted = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "write",
+        args: {
+          path: "test_probe.py",
+          content:
+            "class Tests(unittest.TestCase):\n" +
+            "    def test_json(self): self.assertEqual(json.loads(result.stdout), {'value': 10 / 3})\n",
+        },
+      },
+    },
+  });
+  assert.equal(accepted.params.args.path, "project/test_probe.py");
+  assert.match(accepted.params.args.content, /^import unittest\nimport json\n\n/);
 });
 
 test("does not treat a failed write as an established file", () => {
