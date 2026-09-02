@@ -3825,7 +3825,15 @@ export function createToolLoopGuard({
       !Array.isArray(pendingParams.args)
     ) {
       let nestedName = pendingParams.id.split(":").at(-1);
-      const requestedPath = normalizeWorkspaceFilePath(pendingParams.args.path);
+      const compactUnittestPath =
+        pendingParams.id === "python3" &&
+        pendingParams.args.run === "unittest" &&
+        typeof pendingParams.args.test === "string"
+          ? pendingParams.args.test
+          : undefined;
+      const requestedPath = normalizeWorkspaceFilePath(
+        pendingParams.args.path ?? compactUnittestPath
+      );
       const directoryBasename = state.workspaceTaskDirectory.split("/").at(-1);
       const basenamePrefix = `${directoryBasename}/`;
       const basenameRelativePath =
@@ -3858,12 +3866,22 @@ export function createToolLoopGuard({
         return undefined;
       })();
       const compactPythonArgs = pendingParams.args.args ?? [];
+      const compactUnittestRunner =
+        pendingParams.id === "python3" &&
+        Object.keys(pendingParams.args).sort().join("\u0000") ===
+          ["run", "test"].sort().join("\u0000") &&
+        pendingParams.args.run === "unittest";
       const compactPythonRunner =
-        (pendingParams.id === "python3" || nestedName === "exec") &&
-        Object.keys(pendingParams.args).every((key) => key === "path" || key === "args") &&
-        Array.isArray(compactPythonArgs) &&
-        (compactPythonArgs.length === 0 ||
-          (compactPythonArgs.length === 1 && compactPythonArgs[0] === "-v")) &&
+        (
+          compactUnittestRunner ||
+          (
+            (pendingParams.id === "python3" || nestedName === "exec") &&
+            Object.keys(pendingParams.args).every((key) => key === "path" || key === "args") &&
+            Array.isArray(compactPythonArgs) &&
+            (compactPythonArgs.length === 0 ||
+              (compactPythonArgs.length === 1 && compactPythonArgs[0] === "-v"))
+          )
+        ) &&
         readbackCandidate &&
         state.successfulWritePaths.has(readbackCandidate);
       const compactPythonFile = compactPythonRunner
