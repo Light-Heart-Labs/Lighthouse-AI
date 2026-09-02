@@ -62,6 +62,7 @@ import {
   RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
   REPEATED_WRITE_REQUIRES_PATCH_REASON,
   REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
+  REQUESTED_UNITTEST_REQUIRED_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
   VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
   VERIFICATION_PENDING_DELIVERY_PREFIX,
@@ -1248,6 +1249,52 @@ test("binds writes under a naturally named new workspace directory", () => {
   assert.equal(
     write.params.args.path,
     "pixel-qualification/2b-adaptive-v73/stats_report.py"
+  );
+});
+
+test("requires real unittest structure when the owner explicitly requests it", () => {
+  const guard = createToolLoopGuard();
+  const prompt =
+    "Work in the new directory /workspace/pixel-qualification/compact-tests. " +
+    "Create stats_report.py and test_stats_report.py with unittest subprocess coverage.";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: {
+          id: "write",
+          args: {
+            path: "test_stats_report.py",
+            content: "def run_test():\n    print('PASS')\n",
+          },
+        },
+      },
+    }),
+    { block: true, blockReason: REQUESTED_UNITTEST_REQUIRED_REASON }
+  );
+
+  const accepted = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "write",
+        args: {
+          path: "test_stats_report.py",
+          content:
+            "import unittest\n\n" +
+            "class StatsReportTests(unittest.TestCase):\n" +
+            "    def test_normal(self):\n" +
+            "        self.assertEqual(3, 3)\n",
+        },
+      },
+    },
+  });
+  assert.equal(
+    accepted.params.args.path,
+    "pixel-qualification/compact-tests/test_stats_report.py"
   );
 });
 

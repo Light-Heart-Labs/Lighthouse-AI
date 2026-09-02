@@ -113,6 +113,9 @@ export const VERIFICATION_FAILED_DELIVERY_PREFIX =
 export const VERIFICATION_COMMAND_NOT_AUDITABLE_REASON =
   "Pixel blocked this verification because a shell pipeline, redirect, or chained command can hide the test runner's exit status or truncate its evidence. Rerun the same test command directly, with no pipeline, redirection, chaining, or output filter, and inspect its complete output.";
 
+export const REQUESTED_UNITTEST_REQUIRED_REASON =
+  "The owner explicitly requested Python unittest coverage. Rewrite this same test file with import unittest, at least one class inheriting unittest.TestCase, and test_* methods containing the requested assertions. Do not use a print-only custom runner and do not run verification before this test file is accepted.";
+
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
 
@@ -450,6 +453,15 @@ function completeRequestedUnittestImports(value, state, requestedPath) {
   return shebang
     ? `${shebang[1]}${prefix}${value.slice(shebang[1].length)}`
     : `${prefix}${value}`;
+}
+
+function hasRequestedUnittestStructure(value) {
+  if (typeof value !== "string") return false;
+  return (
+    /^\s*(?:import\s+unittest\b|from\s+unittest\s+import\b)/m.test(value) &&
+    /class\s+[A-Za-z_][A-Za-z0-9_]*\s*\(\s*(?:unittest\.)?TestCase\s*\)\s*:/m.test(value) &&
+    /\bdef\s+test_[A-Za-z0-9_]*\s*\(/m.test(value)
+  );
 }
 
 function normalizeExecWorkdir(value) {
@@ -3647,10 +3659,12 @@ export function createToolLoopGuard({
         workspaceTaskPath: undefined,
         workspaceTaskDirectory: undefined,
         workspaceRequestedFiles: [],
+        workspacePythonUnittestRequested: false,
         workspaceToolSearchRouted: false,
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
         failedTestReadCorrections: 0,
+        invalidUnittestBlocks: 0,
         noOpEditBlocks: 0,
         operationsPromptRound: 0,
         operationsCorrectionPromptRound: undefined,
@@ -3922,6 +3936,25 @@ export function createToolLoopGuard({
             ...pendingParams,
             args: { ...pendingParams.args, content },
           };
+        }
+        const normalizedWritePath = normalizeWorkspaceFilePath(pendingParams.args.path);
+        const requestedUnittestPath = state.workspaceRequestedFiles.some(
+          (file) =>
+            /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file) &&
+            normalizedWritePath === `${state.workspaceTaskDirectory}/${file}`
+        );
+        if (
+          state.workspacePythonUnittestRequested &&
+          requestedUnittestPath &&
+          !hasRequestedUnittestStructure(pendingParams.args.content)
+        ) {
+          state.invalidUnittestBlocks += 1;
+          if (state.invalidUnittestBlocks === 1) {
+            return { block: true, blockReason: REQUESTED_UNITTEST_REQUIRED_REASON };
+          }
+          state.codingExhausted = true;
+          state.codingTerminalBlocks = 1;
+          return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
         }
       }
     }
@@ -5164,6 +5197,9 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        state.workspacePythonUnittestRequested = /\bunittest\b/i.test(
+          currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
+        );
         state.workspaceToolSearchRouted = false;
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
@@ -5328,6 +5364,7 @@ export function createToolLoopGuard({
       state.invalidEditCreateBlocks = 0;
       state.oversizedEditBlocks = 0;
       state.noOpEditBlocks = 0;
+      state.invalidUnittestBlocks = 0;
       state.failedExec.clear();
       state.successfulExec.clear();
       state.successfulExecBlocks.clear();
