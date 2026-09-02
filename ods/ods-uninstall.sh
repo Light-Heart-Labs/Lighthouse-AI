@@ -327,10 +327,15 @@ fi
 # 5. Remove install directory (with optional data/model preservation)
 log_info "Removing installation directory..."
 INSTALL_DIR_CLEANED=true
+MODELS_BACKUP="$HOME/.ods-models-backup"
 if $KEEP_MODELS && [[ -d "$INSTALL_DIR/data/models" ]]; then
-    MODELS_BACKUP="$HOME/.ods-models-backup"
-    mkdir -p "$MODELS_BACKUP"
-    mv "$INSTALL_DIR/data/models"/* "$MODELS_BACKUP/" 2>/dev/null || true
+    # Move the directory as one unit so dotfiles are included and an existing
+    # backup cannot silently merge with (or overwrite) this install's models.
+    # A failed move must abort before the install directory is deleted.
+    if [[ -e "$MODELS_BACKUP" ]]; then
+        MODELS_BACKUP="${MODELS_BACKUP}-$(date +%Y%m%d-%H%M%S)-$$"
+    fi
+    mv "$INSTALL_DIR/data/models" "$MODELS_BACKUP"
     log_info "Models preserved at: $MODELS_BACKUP"
 fi
 
@@ -390,7 +395,7 @@ echo -e "${GREEN}║     ODS has been uninstalled.           ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 if $KEEP_MODELS; then
-    echo "Your models were saved to: $HOME/.ods-models-backup"
+    echo "Your models were saved to: $MODELS_BACKUP"
     echo "To reuse them on reinstall, move them back to ~/ods/data/models/"
 fi
 if $KEEP_DATA; then
