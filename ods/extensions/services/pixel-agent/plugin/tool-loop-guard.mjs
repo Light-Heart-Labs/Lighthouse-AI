@@ -117,7 +117,7 @@ export const VERIFICATION_COMMAND_NOT_AUDITABLE_REASON =
   "Pixel blocked this verification because a shell pipeline, redirect, or chained command can hide the test runner's exit status or truncate its evidence. Rerun the same test command directly, with no pipeline, redirection, chaining, or output filter, and inspect its complete output.";
 
 export const REQUESTED_UNITTEST_REQUIRED_REASON =
-  "The owner explicitly requested Python unittest coverage. Rewrite this same test file with import unittest, at least one class inheriting unittest.TestCase, and test_* methods containing the requested assertions. Do not use a print-only custom runner and do not run verification before this test file is accepted.";
+  "The owner explicitly requested Python unittest coverage, so that attempted file was not written. Make exactly one tool_call now with id write, the same path, and a complete replacement under 1000 characters. Begin with the needed imports including unittest; use one unittest.TestCase class with only the requested test_* methods and assertions; finish with unittest.main(). No narration, comments, docstrings, extra cases, or print-only custom runner. Do not run verification before this test file is accepted.";
 
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
@@ -4219,7 +4219,8 @@ export function createToolLoopGuard({
         ? ""
         : state.workspacePythonUnittestRequested
           ? " The owner explicitly requires unittest: include import unittest, at least one " +
-            "class inheriting unittest.TestCase, and test_* methods with the requested assertions."
+            "class inheriting unittest.TestCase, and only the requested test_* methods; omit " +
+            "comments, docstrings, helper cases, and a custom print runner."
           : " For a Python test file, include every required test-framework and implementation import.";
       return (
         "Inspection complete. Make exactly one tool call next: call tool_call with " +
@@ -5977,7 +5978,8 @@ export function createToolLoopGuard({
           ? ""
           : state.workspacePythonUnittestRequested
             ? " The owner explicitly requires unittest: include import unittest, at least one " +
-              "class inheriting unittest.TestCase, and test_* methods with the requested assertions."
+              "class inheriting unittest.TestCase, and only the requested test_* methods; omit " +
+              "comments, docstrings, helper cases, and a custom print runner."
             : " For a Python test file, include every required test-framework and implementation import.";
         return (
           "[ODS Pixel next step] Call tool_call next with id openclaw:core:write and " +

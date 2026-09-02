@@ -1435,7 +1435,7 @@ test("requires real unittest structure when the owner explicitly requests it", (
   );
   assert.match(
     persistedImplementation.message.content.at(-1).text,
-    /import unittest.*unittest\.TestCase.*test_\* methods/
+    /import unittest.*unittest\.TestCase.*only the requested test_\* methods/
   );
   assert.deepEqual(
     call(guard, "tool_call", {
@@ -1451,6 +1451,8 @@ test("requires real unittest structure when the owner explicitly requests it", (
     }),
     { block: true, blockReason: REQUESTED_UNITTEST_REQUIRED_REASON }
   );
+  assert.match(REQUESTED_UNITTEST_REQUIRED_REASON, /under 1000 characters/);
+  assert.match(REQUESTED_UNITTEST_REQUIRED_REASON, /No narration, comments, docstrings, extra cases/);
 
   const accepted = call(guard, "tool_call", {
     event: {
