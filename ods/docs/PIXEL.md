@@ -366,7 +366,7 @@ output ceiling to one quarter of the context; at 32K and above it allows up to
 4096 output tokens. ODS derives OpenClaw's compaction reserve from that output
 ceiling and enables a half-window reserve floor for 8K-31K adaptive profiles,
 where dense tool transcripts can otherwise outrun OpenClaw's character-based
-estimate. The retained recent tail is capped at one quarter of the selected
+estimate. The retained recent tail is capped at one sixteenth of the selected
 context (and 20K tokens globally), so compaction always removes real history
 instead of recording a no-op when the runtime's fixed 20K default exceeds the
 whole model window.

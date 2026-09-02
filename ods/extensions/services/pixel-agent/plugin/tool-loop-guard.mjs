@@ -3815,7 +3815,7 @@ export function createToolLoopGuard({
         }
         return undefined;
       })();
-      const compactPythonArgs = pendingParams.args.args;
+      const compactPythonArgs = pendingParams.args.args ?? [];
       const compactPythonRunner =
         (pendingParams.id === "python3" || nestedName === "exec") &&
         Object.keys(pendingParams.args).every((key) => key === "path" || key === "args") &&

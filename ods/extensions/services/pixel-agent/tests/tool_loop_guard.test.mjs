@@ -1115,6 +1115,17 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     context: { toolCallId: "compact-exec-runner" },
   });
   assert.deepEqual(compactExecRunner.params, compactPythonRunner.params);
+  const compactExecRunnerWithoutArgs = call(guard, "tool_call", {
+    event: {
+      toolCallId: "compact-exec-runner-without-args",
+      params: {
+        id: "exec",
+        args: { path: "test_normalize_name.py" },
+      },
+    },
+    context: { toolCallId: "compact-exec-runner-without-args" },
+  });
+  assert.deepEqual(compactExecRunnerWithoutArgs.params, compactPythonRunner.params);
   assert.equal(
     call(guard, "tool_call", {
       event: {

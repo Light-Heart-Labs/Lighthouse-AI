@@ -680,7 +680,7 @@ if not isinstance(compaction, dict):
     raise SystemExit("live stable-alias compaction policy is invalid")
 compaction["reserveTokens"] = (context + 4 * max_tokens + 4) // 5
 compaction["reserveTokensFloor"] = context // 2 if 8192 <= context < 32768 else 0
-compaction["keepRecentTokens"] = max(1024, min(20000, context // 4))
+compaction["keepRecentTokens"] = max(512, min(20000, context // 16))
 descriptor, temporary = tempfile.mkstemp(prefix=".ods-model-reconcile-", dir=live_path.parent)
 try:
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
@@ -1201,8 +1201,8 @@ normalized_compaction["reserveTokensFloor"] = (
 # recent tail so every admitted context can actually recover while preserving
 # the newest tool evidence and continuation state.
 normalized_compaction["keepRecentTokens"] = max(
-    1024,
-    min(20000, normalized_context_window // 4),
+    512,
+    min(20000, normalized_context_window // 16),
 )
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
 normalized_write_lock["maxHoldMs"] = 1920000
@@ -1693,8 +1693,8 @@ updated_compaction["reserveTokensFloor"] = (
 # profile. Scale it for all contexts so compaction always drops real history
 # instead of writing an empty no-op summary and blocking the recovery retry.
 updated_compaction["keepRecentTokens"] = max(
-    1024,
-    min(20000, context_window // 4),
+    512,
+    min(20000, context_window // 16),
 )
 # The legacy OpenAI-completions transport in OpenClaw 2026.6.33 coerces the literal
 # reasoning effort "off" with Boolean("off"), which wrongly sends
