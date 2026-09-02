@@ -871,6 +871,103 @@ test("streaming response exposes only the host-authoritative clean-context recov
   }
 });
 
+test("streaming response exposes only a strictly verified workspace preview marker", async () => {
+  const preview = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    relativeDirectory: "demo-website",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 3,
+    bytes: 4096,
+    sha256: "a".repeat(64),
+    entrySha256: "b".repeat(64),
+  };
+  const safeText = "Pixel published and independently read back the static website.";
+  const gw = await fakeGateway({
+    verification: { status: "passed", text: safeText, preview },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({
+          stream: true,
+          messages: [{ role: "user", content: "build and show a website" }],
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      const frames = response.body
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
+        .map((line) => JSON.parse(line.slice("data: ".length)));
+      assert.equal(frames[1].choices[0].delta.content, safeText);
+      assert.deepEqual(frames.at(-1).pixel, { schemaVersion: 1, preview });
+      assert.equal(frames.at(-1).choices[0].finish_reason, "stop");
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("workspace preview metadata fails closed for an unverified URL or extra field", async () => {
+  const base = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    relativeDirectory: "demo-website",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 3,
+    bytes: 4096,
+    sha256: "a".repeat(64),
+    entrySha256: "b".repeat(64),
+  };
+  for (const preview of [
+    { ...base, url: "https://attacker.example/" },
+    { ...base, modelClaim: true },
+    { ...base, relativeDirectory: "../outside" },
+  ]) {
+    const gw = await fakeGateway({
+      verification: { status: "passed", text: "untrusted", preview },
+    });
+    try {
+      const srv = await startIngress({ gatewayPort: gw.port });
+      try {
+        const response = await request(srv, "POST", "/v1/chat/completions", {
+          body: JSON.stringify({ messages: [{ role: "user", content: "show it" }] }),
+          headers: { "Content-Type": "application/json" },
+        });
+        assert.equal(response.status, 502);
+        assert.equal(JSON.parse(response.body).error.message, "verification state unavailable");
+      } finally {
+        await new Promise((resolve) => srv.close(resolve));
+      }
+    } finally {
+      await new Promise((resolve) => gw.server.close(resolve));
+    }
+  }
+  const gw = await fakeGateway({ verification: { status: "passed", preview: base } });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "show it" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 502);
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("rejects recovery metadata outside the exact failed zero-submission contract", async () => {
   const invalid = [
     { status: "passed", code: "operations-unavailable-zero-submissions" },

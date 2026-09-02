@@ -686,19 +686,62 @@ function parseVerificationResponse(value) {
   const suppressStaleExecWarning =
     value.suppressStaleExecWarning === true &&
     (status === "none" || status === "passed");
+  const hasPreview =
+    status === "passed" && Object.prototype.hasOwnProperty.call(value, "preview");
   const expectedKeys = carriesAuthoritativeText
     ? hasRecoveryCode
       ? ["status", "text", "code"]
       : ["status", "text"]
     : ["status"];
   if (suppressStaleExecWarning) expectedKeys.push("suppressStaleExecWarning");
+  if (hasPreview) expectedKeys.push("preview");
+  const preview = value.preview;
+  const previewKeys = [
+    "bytes",
+    "entrySha256",
+    "files",
+    "kind",
+    "port",
+    "relativeDirectory",
+    "schemaVersion",
+    "sha256",
+    "siteId",
+    "url",
+  ];
+  const previewValid =
+    !hasPreview ||
+    (carriesAuthoritativeText &&
+      preview &&
+      typeof preview === "object" &&
+      !Array.isArray(preview) &&
+      Object.keys(preview).sort().join("\n") === previewKeys.join("\n") &&
+      preview.schemaVersion === 1 &&
+      preview.kind === "ods-pixel-workspace-preview" &&
+      typeof preview.relativeDirectory === "string" &&
+      /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(
+        preview.relativeDirectory
+      ) &&
+      /^site-[a-f0-9]{24}$/.test(preview.siteId) &&
+      Number.isInteger(preview.port) &&
+      preview.port >= 1 &&
+      preview.port <= 65535 &&
+      preview.url === `http://localhost:${preview.port}/${preview.siteId}/` &&
+      Number.isInteger(preview.files) &&
+      preview.files >= 1 &&
+      preview.files <= 128 &&
+      Number.isInteger(preview.bytes) &&
+      preview.bytes >= 1 &&
+      preview.bytes <= 16 * 1024 * 1024 &&
+      /^[a-f0-9]{64}$/.test(preview.sha256) &&
+      /^[a-f0-9]{64}$/.test(preview.entrySha256));
   if (
     Object.keys(value).sort().join("\n") !== expectedKeys.sort().join("\n") ||
     (carriesAuthoritativeText &&
       (typeof value.text !== "string" ||
         value.text.length < 1 ||
         value.text.length > MAX_VERIFICATION_TEXT ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value.text)))
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value.text))) ||
+    !previewValid
   ) {
     throw new HttpError(502, "verification state unavailable");
   }
@@ -794,21 +837,22 @@ function completionSse(completion, verification) {
     Number.isSafeInteger(completion?.created) && completion.created > 0
       ? completion.created
       : Math.floor(Date.now() / 1000);
+  const terminalPixel = verification?.code === OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE
+    ? {
+        schemaVersion: 1,
+        recovery: "clean-context",
+        reason: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
+      }
+    : verification?.preview
+      ? { schemaVersion: 1, preview: verification.preview }
+      : undefined;
   const envelope = (delta, finishReason, terminal = false) => JSON.stringify({
     id: runId,
     object: "chat.completion.chunk",
     created,
     model,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
-    ...(terminal && verification?.code === OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE
-      ? {
-          pixel: {
-            schemaVersion: 1,
-            recovery: "clean-context",
-            reason: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
-          },
-        }
-      : {}),
+    ...(terminal && terminalPixel ? { pixel: terminalPixel } : {}),
   });
   return Buffer.from(
     `data: ${envelope({ role: "assistant" }, null)}\n\n` +

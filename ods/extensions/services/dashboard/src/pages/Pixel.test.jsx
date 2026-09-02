@@ -9,6 +9,7 @@ import Pixel, {
   formatElapsed,
   isCleanContextRecoveryFrame,
   parseApprovalReceipt,
+  parseVerifiedPreviewFrame,
 } from './Pixel'
 
 const response = (body, status = 200) => ({
@@ -103,6 +104,95 @@ describe('Pixel', () => {
       ...frame,
       pixel: { ...frame.pixel, reason: 'model-prose-matched' },
     })).toBe(false)
+  })
+
+  it('accepts only an exact host-authored workspace preview terminal marker', () => {
+    const preview = {
+      schemaVersion: 1,
+      kind: 'ods-pixel-workspace-preview',
+      relativeDirectory: 'demo-website',
+      siteId: 'site-0123456789abcdef01234567',
+      port: 9437,
+      url: 'http://localhost:9437/site-0123456789abcdef01234567/',
+      files: 3,
+      bytes: 4096,
+      sha256: 'a'.repeat(64),
+      entrySha256: 'b'.repeat(64),
+    }
+    const frame = {
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      pixel: { schemaVersion: 1, preview },
+    }
+    expect(parseVerifiedPreviewFrame(frame)).toEqual(preview)
+    expect(parseVerifiedPreviewFrame({
+      ...frame,
+      pixel: { schemaVersion: 1, preview: { ...preview, url: 'https://attacker.example/' } },
+    })).toBeNull()
+    expect(parseVerifiedPreviewFrame({
+      ...frame,
+      pixel: { schemaVersion: 1, preview, extra: true },
+    })).toBeNull()
+  })
+
+  it('opens an interactive side panel only from a verified terminal marker', async () => {
+    const preview = {
+      schemaVersion: 1,
+      kind: 'ods-pixel-workspace-preview',
+      relativeDirectory: 'demo-website',
+      siteId: 'site-0123456789abcdef01234567',
+      port: 9437,
+      url: 'http://localhost:9437/site-0123456789abcdef01234567/',
+      files: 3,
+      bytes: 4096,
+      sha256: 'a'.repeat(64),
+      entrySha256: 'b'.repeat(64),
+    }
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: `Preview: ${preview.url}` } }] }),
+      JSON.stringify({
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        pixel: { schemaVersion: 1, preview },
+      }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'Build and show me a demo website.' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+
+    const frame = await screen.findByTitle('Interactive Pixel preview')
+    expect(frame).toHaveAttribute('src', preview.url)
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
+    expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
+    expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', preview.url)
+
+    fireEvent.click(screen.getByTitle('Close preview'))
+    expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
+  })
+
+  it('does not open a preview from model-authored localhost text', async () => {
+    globalThis.fetch.mockResolvedValueOnce(
+      response({ available: true, model: 'pixel/default', detail: 'local' })
+    )
+    globalThis.fetch.mockResolvedValueOnce(sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: 'Live at http://localhost:3000/demo/' } }] }),
+      '[DONE]',
+    ]))
+
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
+      target: { value: 'Show my site.' },
+    })
+    fireEvent.click(screen.getByTitle('Send'))
+    expect(await screen.findByText(/Live at/)).toBeInTheDocument()
+    expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
   })
 
   it('renders a host-verified approval card without approving in the browser', async () => {

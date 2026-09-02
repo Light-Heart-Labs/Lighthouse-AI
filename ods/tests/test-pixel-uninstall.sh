@@ -31,6 +31,7 @@ OPS_POLICY_DIR="$TEST_ROOT/etc/pixel-ops-broker"
 OPS_POLICY="$OPS_POLICY_DIR/policy.json"
 OPS_INSTALL="$TEST_ROOT/opt/pixel-ops-broker"
 OPS_STATE="$TEST_ROOT/var/lib/pixel-ops-broker"
+PREVIEW_STATE="$TEST_ROOT/var/lib/ods-pixel-preview"
 OPS_IDENTITY_LOG="$TEST_ROOT/ops-identity.log"
 OPS_PASSWD_STATE="$TEST_ROOT/ops-passwd"
 OPS_GROUP_STATE="$TEST_ROOT/ops-group"
@@ -112,6 +113,7 @@ export ODS_PIXEL_UNINSTALL_OPS_ENV="$OPS_ENV"
 export ODS_PIXEL_UNINSTALL_OPS_POLICY="$OPS_POLICY"
 export ODS_PIXEL_UNINSTALL_OPS_INSTALL_DIR="$OPS_INSTALL"
 export ODS_PIXEL_UNINSTALL_OPS_STATE_DIR="$OPS_STATE"
+export ODS_PIXEL_UNINSTALL_PREVIEW_STATE_DIR="$PREVIEW_STATE"
 ODS_PIXEL_UNINSTALL_ROOT_UID="$(id -u)"
 ODS_PIXEL_UNINSTALL_ROOT_GID="$(id -g)"
 ODS_PIXEL_UNINSTALL_OPS_UID="$(id -u)"
@@ -188,7 +190,7 @@ fi
 
 write_fixture() {
     rm -rf "$SYSTEMD_DIR" "$ETC_DIR" "$LIBEXEC_DIR" "$HOME_DIR" "$INSTALL_DIR" \
-        "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE"
+        "$OPS_POLICY_DIR" "$OPS_INSTALL" "$OPS_STATE" "$PREVIEW_STATE"
     rm -f -- "$OPS_ENV" "$OPS_IDENTITY_LOG" "$OPS_PASSWD_STATE" "$OPS_GROUP_STATE"
     : >"$SYSTEMCTL_LOG"
     : >"$DOCKER_LOG"
@@ -321,6 +323,8 @@ JSON
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
     cp "$ROOT_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+    cp "$ROOT_DIR/extensions/services/pixel-agent/host/workspace_preview.py" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
     cp "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     python3 - "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
@@ -342,12 +346,24 @@ text = (text.replace("__PIXEL_SERVICE_USER__", owner)
             .replace("__PIXEL_WORKSPACE__", str(pathlib.Path(home) / ".openclaw/workspace-pixel")))
 pathlib.Path(target).write_text(text, encoding="utf-8")
 PY
+    python3 - "$ROOT_DIR/extensions/services/pixel-agent/host/pixel-workspace-preview.service" \
+        "$INSTALL_DIR/data/pixel/workspace-preview.service" "$HOME_DIR" "$(id -un)" <<'PY'
+import pathlib, sys
+source, target, home, owner = sys.argv[1:]
+text = pathlib.Path(source).read_text(encoding="utf-8")
+text = (text.replace("__PIXEL_SERVICE_USER__", owner)
+            .replace("__PIXEL_WORKSPACE__", str(pathlib.Path(home) / ".openclaw/workspace-pixel"))
+            .replace("__PIXEL_PREVIEW_PORT__", "9437"))
+pathlib.Path(target).write_text(text, encoding="utf-8")
+PY
     chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_manager.py"
     chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
+    chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
     chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     chmod 0600 "$INSTALL_DIR/data/pixel/extension-manager.service" \
-        "$INSTALL_DIR/data/pixel/artifact-promoter.service"
+        "$INSTALL_DIR/data/pixel/artifact-promoter.service" \
+        "$INSTALL_DIR/data/pixel/workspace-preview.service"
     cat >"$source/.generated/pixel-ops-broker.service" <<UNIT
 [Unit]
 Description=Pixel Operations Broker - isolated fleet execution and workflow service
@@ -390,6 +406,10 @@ ENV
         "$LIBEXEC_DIR/ods-pixel-artifact-promoter.py"
     cp "$INSTALL_DIR/data/pixel/artifact-promoter.service" \
         "$SYSTEMD_DIR/pixel-artifact-promoter.service"
+    cp "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py" \
+        "$LIBEXEC_DIR/ods-pixel-workspace-preview.py"
+    cp "$INSTALL_DIR/data/pixel/workspace-preview.service" \
+        "$SYSTEMD_DIR/pixel-workspace-preview.service"
     cp "$INSTALL_DIR/data/pixel/operations-policy.json" "$OPS_POLICY"
     chmod 0644 "$SYSTEMD_DIR/pixel-ops-broker.service"
     chmod 0755 "$OPS_DROPIN_DIR"
@@ -399,8 +419,10 @@ ENV
         "$OPS_INSTALL/ods-extension-search.py" "$OPS_INSTALL/ods-extension-manager.py" \
         "$LIBEXEC_DIR/ods-pixel-extension-manager.py" "$OPS_POLICY_DIR"
     chmod 0755 "$LIBEXEC_DIR/ods-pixel-artifact-promoter.py"
+    chmod 0755 "$LIBEXEC_DIR/ods-pixel-workspace-preview.py"
     chmod 0644 "$SYSTEMD_DIR/pixel-extension-manager.service" \
-        "$SYSTEMD_DIR/pixel-artifact-promoter.service"
+        "$SYSTEMD_DIR/pixel-artifact-promoter.service" \
+        "$SYSTEMD_DIR/pixel-workspace-preview.service"
     chmod 0640 "$OPS_INSTALL/ods-extension-catalog.json"
     chmod 0750 "$OPS_STATE"
     mkdir -m 2770 "$OPS_STATE/requests" "$OPS_STATE/cancel"
@@ -408,6 +430,12 @@ ENV
     mkdir -m 0700 "$OPS_STATE/private" "$OPS_STATE/authority"
     printf '%s\n' '{"status":"succeeded"}' >"$OPS_STATE/results/ops-test.json"
     chmod 0640 "$OPS_STATE/results/ops-test.json"
+    mkdir -p "$PREVIEW_STATE"
+    chmod 0700 "$PREVIEW_STATE"
+    mkdir -m 0700 "$PREVIEW_STATE/site-0123456789abcdef01234567"
+    printf '%s\n' '<!doctype html><title>fixture</title>' \
+        >"$PREVIEW_STATE/site-0123456789abcdef01234567/index.html"
+    chmod 0400 "$PREVIEW_STATE/site-0123456789abcdef01234567/index.html"
 
     printf 'pixel-ops-broker:x:%s:%s:Pixel Operations Broker:%s:/usr/sbin/nologin\n' \
         "$uid" "$gid" "$OPS_STATE" >"$OPS_PASSWD_STATE"
@@ -432,10 +460,12 @@ PY
         "$INSTALL_DIR/bin/ods-pixel-approve" \
         "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
         "$INSTALL_DIR/data/pixel/artifact-promoter.service" \
-        "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" <<'PY'
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
+        "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py" \
+        "$INSTALL_DIR/data/pixel/workspace-preview.service" <<'PY'
 import hashlib, pathlib, sys
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v7\0")
+digest.update(b"ods-pixel-contract-v8\0")
 for raw in sys.argv[1:]:
     payload = pathlib.Path(raw).read_bytes()
     digest.update(len(payload).to_bytes(8, "big"))
@@ -570,18 +600,23 @@ if ods_pixel_uninstall_managed "$INSTALL_DIR" "$HOME_DIR"; then
         && ! -e "$LIBEXEC_DIR/ods-pixel-extension-manager.py" \
         && ! -e "$SYSTEMD_DIR/pixel-artifact-promoter.service" \
         && ! -e "$LIBEXEC_DIR/ods-pixel-artifact-promoter.py" \
+        && ! -e "$SYSTEMD_DIR/pixel-workspace-preview.service" \
+        && ! -e "$LIBEXEC_DIR/ods-pixel-workspace-preview.py" \
+        && ! -e "$PREVIEW_STATE" \
         && ! -e "$OPS_ENV" && ! -e "$OPS_POLICY_DIR" \
         && ! -e "$OPS_INSTALL" && ! -e "$OPS_STATE" \
         && ! -e "$INSTALL_DIR/data/pixel/operations-policy.json" \
         && ! -e "$INSTALL_DIR/data/pixel/extension-catalog.json" \
         && ! -e "$INSTALL_DIR/data/pixel/extension-manager.service" \
         && ! -e "$INSTALL_DIR/data/pixel/artifact-promoter.service" \
+        && ! -e "$INSTALL_DIR/data/pixel/workspace-preview.service" \
         && ! -e "$OPS_PASSWD_STATE" && ! -e "$OPS_GROUP_STATE" \
         && "$(sed -n '1p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ingress.service" \
         && "$(sed -n '2p' "$SYSTEMCTL_LOG")" == "disable --now pixel-extension-manager.service" \
         && "$(sed -n '3p' "$SYSTEMCTL_LOG")" == "disable --now pixel-artifact-promoter.service" \
-        && "$(sed -n '4p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
-        && "$(sed -n '5p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ops-broker.service" \
+        && "$(sed -n '4p' "$SYSTEMCTL_LOG")" == "disable --now pixel-workspace-preview.service" \
+        && "$(sed -n '5p' "$SYSTEMCTL_LOG")" == "disable --now openclaw-gateway.service" \
+        && "$(sed -n '6p' "$SYSTEMCTL_LOG")" == "disable --now pixel-ops-broker.service" \
         && "$(sed -n '1p' "$OPS_IDENTITY_LOG")" == "userdel pixel-ops-broker" \
         && "$(sed -n '2p' "$OPS_IDENTITY_LOG")" == "groupdel pixel-ops" ]]; then
         pass "verified Operations Broker service, authority state, and identities are removed in bounded order"
@@ -621,6 +656,7 @@ done
 for drift_target in program broker-source-mode public-state-file extension-program extension-catalog extension-manager-client \
     extension-manager-program extension-manager-unit extension-manager-owner-unit approval-helper \
     artifact-promoter-program artifact-promoter-unit artifact-promoter-owner-unit \
+    workspace-preview-program workspace-preview-unit workspace-preview-owner-unit workspace-preview-state \
     unit dropin dropin-source environment policy; do
     write_ops_fixture
     case "$drift_target" in
@@ -637,6 +673,10 @@ for drift_target in program broker-source-mode public-state-file extension-progr
         artifact-promoter-program) printf '%s\n' '# drift' >>"$LIBEXEC_DIR/ods-pixel-artifact-promoter.py" ;;
         artifact-promoter-unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-artifact-promoter.service" ;;
         artifact-promoter-owner-unit) printf '%s\n' '# drift' >>"$INSTALL_DIR/data/pixel/artifact-promoter.service" ;;
+        workspace-preview-program) printf '%s\n' '# drift' >>"$LIBEXEC_DIR/ods-pixel-workspace-preview.py" ;;
+        workspace-preview-unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-workspace-preview.service" ;;
+        workspace-preview-owner-unit) printf '%s\n' '# drift' >>"$INSTALL_DIR/data/pixel/workspace-preview.service" ;;
+        workspace-preview-state) chmod 0600 "$PREVIEW_STATE/site-0123456789abcdef01234567/index.html" ;;
         unit) printf '%s\n' '# drift' >>"$SYSTEMD_DIR/pixel-ops-broker.service" ;;
         dropin) printf '%s\n' '# drift' >>"$OPS_DROPIN" ;;
         dropin-source) printf '%s\n' '# drift' >>"$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" ;;

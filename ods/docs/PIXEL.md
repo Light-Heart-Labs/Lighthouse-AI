@@ -98,7 +98,7 @@ Browser
             |                    |                      |                    |
             v                    v                      v                    v
  exact-digest ODS plugin   Operations plugin     sandbox coding      ods-gateway/
- seven typed tools        typed request spool    and public web      ods/current
+ eight typed tools        typed request spool    and public web      ods/current
             |                    |                                           |
             v                    v                                           v
  /run/ods-pixel/         isolated root-owned                         authenticated
@@ -110,6 +110,11 @@ Browser
                               v
                    fixed artifact-promoter
                    socket -> owner workspace
+                             |
+                             v
+                   create-only static snapshot
+                   -> localhost preview origin
+                   -> sandboxed Dashboard panel
 ```
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
@@ -377,7 +382,7 @@ case, and explicit `--pixel` fails visibly instead of implying provider parity.
 
 ## Bounded ODS tools
 
-The default ODS integration exposes seven narrowly scoped tools to Pixel. They
+The default ODS integration exposes eight narrowly scoped tools to Pixel. They
 remain available to every callable model through the same policy-filtered Tool
 Search catalog; model qualification labels describe observed quality and never
 act as a capability gate:
@@ -410,6 +415,18 @@ act as a capability gate:
 - `pixel_ods_download_promote` can publish one already-successful, exact broker
   download into one new relative path in Pixel's workspace. It cannot fetch,
   transform, overwrite, execute, or select an arbitrary host file.
+- `pixel_ods_workspace_preview` publishes one owner-requested static site from
+  a workspace-relative directory. The host service accepts only bounded,
+  owner-controlled, non-linked HTML/CSS/JavaScript/image/font files, requires
+  `index.html`, copies them into a create-only content-addressed snapshot, and
+  performs an HTTP readback before returning a receipt. The private ingress
+  carries that exact receipt in a structured terminal frame; the Dashboard
+  never opens a URL parsed from model prose. The Pixel portal automatically
+  shows the snapshot in a side panel with a script-capable iframe that omits
+  same-origin privilege and blocks outbound connections, forms, camera,
+  microphone, and geolocation. Starting a development server inside Pixel's
+  disposable sandbox is explicitly rejected because that port is not the
+  owner's browser-facing host.
 
 The status tools read only `/run/ods-pixel/ods-status.json`. The plugin does not
 receive the Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS
@@ -510,20 +527,22 @@ untouched.
 | `PIXEL_OPENWEBUI_KEY` | generated; installer | Narrow Open WebUI/Dashboard-to-edge key; secret |
 | `PIXEL_INGRESS_RUNTIME_DIR` | `/run/ods-pixel` | Host directory containing only the socket/projection |
 | `PIXEL_INGRESS_GID` | generated; installer | Numeric `ods-pixel` group used by the edge container |
+| `PIXEL_PREVIEW_PORT` | `9437` | Dedicated loopback-only static preview origin; must not collide with an ODS application port |
 
 Do not copy generated secrets into issues, logs, support bundles, or PRs.
 
 ## Health and operations
 
 ```bash
-systemctl status openclaw-gateway.service pixel-ingress.service pixel-ops-broker.service
+systemctl status openclaw-gateway.service pixel-ingress.service pixel-ops-broker.service \
+  pixel-workspace-preview.service
 sudo -u "$USER" curl --unix-socket /run/ods-pixel/pixel-ingress.sock \
   http://localhost/health
 docker inspect --format '{{.State.Health.Status}}' ods-pixel-edge
 docker compose ps
 ```
 
-Expected state is three active system services, `{"status":"ok"}` from the
+Expected state is four active system services, `{"status":"ok"}` from the
 private socket, a current Operations inventory projection, and a healthy
 `ods-pixel-edge`. The socket is intentionally not reachable over a host TCP
 port.
@@ -579,7 +598,10 @@ drifted Pixel/OpenClaw deployment untouched. For a fully bound ODS-created
 deployment, uninstall holds Pixel's deployment lock, verifies the installed
 release manifest, retires only Pixel's validated sandbox containers, and
 removes the exact live sandbox tag, active-release link, and runtime
-attestation. The same bounded teardown removes only a byte-matched Operations
+attestation. It also removes the exact byte-matched workspace preview service
+and a recursively revalidated preview snapshot tree; linked, foreign-owned,
+writable, or special-file-bearing preview state fails closed before mutation.
+The same bounded teardown removes only a byte-matched Operations
 Broker installation and a recursively validated broker state root; it never
 adopts or recursively deletes a partial ready, drifted, linked, mounted,
 foreign-owned, or special-file-bearing tree. It moves the byte-verified release
@@ -610,6 +632,9 @@ head:
 - a clean supported-host install with PID1 systemd;
 - a real Open WebUI `pixel/default` chat;
 - a real Dashboard `/pixel` streaming chat;
+- a real static website build whose host-readback receipt opens the interactive
+  Dashboard side panel, with click behavior verified and a model-authored
+  localhost URL proven unable to open the panel;
 - a fresh first turn with no workspace-bootstrap truncation warning and a
   visible `Working` state while a tool turn is active;
 - cancellation of a real long-running sandbox command, proving a clean
@@ -644,6 +669,7 @@ alone is not proof of live usability.
 | Open WebUI and Dashboard edge | `extensions/services/pixel-edge/` |
 | Host ingress and bounded ODS plugin | `extensions/services/pixel-agent/` |
 | Exact-download promotion boundary | `extensions/services/pixel-agent/host/artifact_promoter.py`, `extensions/services/pixel-agent/plugin/download-promote.mjs` |
+| Static workspace preview boundary | `extensions/services/pixel-agent/host/workspace_preview.py`, `extensions/services/pixel-agent/plugin/workspace-preview.mjs` |
 | Dashboard API/UI | `extensions/services/dashboard-api/routers/pixel.py`, `extensions/services/dashboard/src/pages/Pixel.jsx` |
 | Feature selection and Compose inclusion | `installers/phases/03-features.sh`, `installers/phases/11-services.sh` |
 | Generated secrets and pinned source | `installers/phases/06-directories.sh` |

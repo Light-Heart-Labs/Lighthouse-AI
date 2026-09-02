@@ -1,0 +1,100 @@
+import importlib.util
+import os
+import pathlib
+import tempfile
+
+
+MODULE_PATH = pathlib.Path(__file__).parents[1] / "host" / "workspace_preview.py"
+SPEC = importlib.util.spec_from_file_location("workspace_preview", MODULE_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(MODULE)
+
+
+def test_snapshot_is_content_addressed_and_create_only():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace = root / "workspace"
+        previews = root / "previews"
+        site = workspace / "demo-site"
+        site.mkdir(parents=True, mode=0o700)
+        previews.mkdir(mode=0o700)
+        (site / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
+        (site / "styles.css").write_text("h1{color:purple}", encoding="utf-8")
+        os.chmod(site / "index.html", 0o600)
+        os.chmod(site / "styles.css", 0o600)
+
+        first = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+        second = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+
+        assert first == second
+        assert first["siteId"].startswith("site-")
+        assert first["files"] == 2
+        assert first["overwritten"] is False
+        assert (previews / first["siteId"] / "index.html").read_text() == "<h1>Hello</h1>"
+
+
+def test_snapshot_rejects_symlinks_and_missing_entrypoint():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace = root / "workspace"
+        previews = root / "previews"
+        site = workspace / "demo-site"
+        site.mkdir(parents=True, mode=0o700)
+        previews.mkdir(mode=0o700)
+        (site / "styles.css").write_text("body{}", encoding="utf-8")
+        os.chmod(site / "styles.css", 0o600)
+        try:
+            MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+        except MODULE.PreviewError as error:
+            assert "index.html" in str(error)
+        else:
+            raise AssertionError("missing index.html was accepted")
+
+        (site / "index.html").symlink_to(site / "styles.css")
+        try:
+            MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+        except MODULE.PreviewError as error:
+            assert "file" in str(error)
+        else:
+            raise AssertionError("symlinked index.html was accepted")
+
+
+def test_request_parser_rejects_escape_and_extra_fields():
+    assert MODULE.parse_request(
+        b'{"schemaVersion":1,"action":"publish","relativeDirectory":"a/b"}'
+    )["relativeDirectory"] == "a/b"
+    for payload in (
+        b'{"schemaVersion":1,"action":"publish","relativeDirectory":"../a"}',
+        b'{"schemaVersion":1,"action":"publish","relativeDirectory":"a","extra":1}',
+    ):
+        try:
+            MODULE.parse_request(payload)
+        except MODULE.PreviewError:
+            pass
+        else:
+            raise AssertionError("unsafe request was accepted")
+
+
+def test_existing_snapshot_is_revalidated_before_receipt_reuse():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace = root / "workspace"
+        previews = root / "previews"
+        site = workspace / "demo-site"
+        site.mkdir(parents=True, mode=0o700)
+        previews.mkdir(mode=0o700)
+        (site / "index.html").write_text("<h1>Verified</h1>", encoding="utf-8")
+        os.chmod(site / "index.html", 0o600)
+
+        receipt = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+        snapshot = previews / receipt["siteId"] / "index.html"
+        os.chmod(snapshot, 0o600)
+        snapshot.write_text("<h1>Tampered</h1>", encoding="utf-8")
+        os.chmod(snapshot, 0o400)
+        try:
+            MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+        except MODULE.PreviewError as error:
+            assert "verification" in str(error)
+        else:
+            raise AssertionError("tampered content-addressed preview was reused")

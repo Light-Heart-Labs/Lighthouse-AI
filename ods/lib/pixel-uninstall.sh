@@ -37,6 +37,11 @@ ods_pixel_uninstall_managed() {
     local artifact_promoter_program="$libexec_dir/ods-pixel-artifact-promoter.py"
     local artifact_promoter_source="$install_dir/extensions/services/pixel-agent/host/artifact_promoter.py"
     local artifact_promoter_owner_unit="$install_dir/data/pixel/artifact-promoter.service"
+    local workspace_preview_unit="$systemd_dir/pixel-workspace-preview.service"
+    local workspace_preview_program="$libexec_dir/ods-pixel-workspace-preview.py"
+    local workspace_preview_source="$install_dir/extensions/services/pixel-agent/host/workspace_preview.py"
+    local workspace_preview_owner_unit="$install_dir/data/pixel/workspace-preview.service"
+    local workspace_preview_state="${ODS_PIXEL_UNINSTALL_PREVIEW_STATE_DIR:-/var/lib/ods-pixel-preview}"
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
@@ -86,7 +91,8 @@ ods_pixel_uninstall_managed() {
         "$ops_env" "$ops_policy" "$ops_install" "$ops_program" \
         "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" "$ops_state" \
         "$extension_manager_unit" "$extension_manager_program" \
-        "$artifact_promoter_unit" "$artifact_promoter_program"; do
+        "$artifact_promoter_unit" "$artifact_promoter_program" \
+        "$workspace_preview_unit" "$workspace_preview_program" "$workspace_preview_state"; do
         [[ "$path" == /* && "$path" != / ]] || {
             log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
             return 1
@@ -103,6 +109,10 @@ ods_pixel_uninstall_managed() {
         && "$ops_policy" != "$ops_state"/* \
         && "$ops_install" != "$ops_state"/* ]] || {
         log_error "Refusing Pixel Operations cleanup for overlapping targets"
+        return 1
+    }
+    [[ "${workspace_preview_state##*/}" == ods-pixel-preview ]] || {
+        log_error "Refusing Pixel workspace preview cleanup for an unexpected state root"
         return 1
     }
 
@@ -122,7 +132,8 @@ ods_pixel_uninstall_managed() {
         "$extension_manager_unit" "$extension_manager_program" "$extension_manager_source" \
         "$extension_manager_owner_unit" "$approval_source" \
         "$artifact_promoter_unit" "$artifact_promoter_program" "$artifact_promoter_source" \
-        "$artifact_promoter_owner_unit" \
+        "$artifact_promoter_owner_unit" "$workspace_preview_unit" "$workspace_preview_program" \
+        "$workspace_preview_source" "$workspace_preview_owner_unit" "$workspace_preview_state" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$ops_extension_source_program" "$ops_dropin_source" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
@@ -155,6 +166,11 @@ import sys
     artifact_promoter_program_raw,
     artifact_promoter_source_raw,
     artifact_promoter_owner_unit_raw,
+    workspace_preview_unit_raw,
+    workspace_preview_program_raw,
+    workspace_preview_source_raw,
+    workspace_preview_owner_unit_raw,
+    workspace_preview_state_raw,
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
@@ -451,6 +467,8 @@ extension_manager_owner_unit = pathlib.Path(extension_manager_owner_unit_raw)
 approval_source = pathlib.Path(approval_source_raw)
 artifact_promoter_source = pathlib.Path(artifact_promoter_source_raw)
 artifact_promoter_owner_unit = pathlib.Path(artifact_promoter_owner_unit_raw)
+workspace_preview_source = pathlib.Path(workspace_preview_source_raw)
+workspace_preview_owner_unit = pathlib.Path(workspace_preview_owner_unit_raw)
 ops_dropin_source = pathlib.Path(ops_dropin_source_raw)
 extension_manager_present = (
     extension_manager_source.exists() or extension_manager_source.is_symlink()
@@ -476,6 +494,15 @@ artifact_promoter_contract_present = (
 if artifact_promoter_contract_present:
     regular(artifact_promoter_source, owner_uid, 2 * 1024 * 1024)
     regular(artifact_promoter_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
+workspace_preview_source_present = workspace_preview_source.exists() or workspace_preview_source.is_symlink()
+workspace_preview_contract_present = (
+    workspace_preview_owner_unit.exists() or workspace_preview_owner_unit.is_symlink()
+)
+if workspace_preview_source_present != workspace_preview_contract_present:
+    raise SystemExit("ODS Pixel workspace preview source is incomplete")
+if workspace_preview_contract_present:
+    regular(workspace_preview_source, owner_uid, 2 * 1024 * 1024)
+    regular(workspace_preview_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
 ops_dropin_contract_present = ops_dropin_source.exists() or ops_dropin_source.is_symlink()
 if ops_dropin_contract_present:
     regular(ops_dropin_source, owner_uid, 2 * 1024 * 1024)
@@ -593,6 +620,26 @@ if onboarding.exists():
                                     v7.update(len(payload).to_bytes(8, "big"))
                                     v7.update(payload)
                                 accepted_contracts.add(v7.hexdigest())
+                                if workspace_preview_contract_present:
+                                    v8 = hashlib.sha256()
+                                    v8.update(b"ods-pixel-contract-v8\0")
+                                    for payload in (
+                                        onboarding_payload,
+                                        policy_payload,
+                                        ops_owner_extension_catalog.read_bytes(),
+                                        ops_extension_source_program.read_bytes(),
+                                        extension_manager_source.read_bytes(),
+                                        extension_manager_owner_unit.read_bytes(),
+                                        approval_source.read_bytes(),
+                                        artifact_promoter_source.read_bytes(),
+                                        artifact_promoter_owner_unit.read_bytes(),
+                                        ops_dropin_source.read_bytes(),
+                                        workspace_preview_source.read_bytes(),
+                                        workspace_preview_owner_unit.read_bytes(),
+                                    ):
+                                        v8.update(len(payload).to_bytes(8, "big"))
+                                        v8.update(payload)
+                                    accepted_contracts.add(v8.hexdigest())
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
@@ -607,6 +654,9 @@ extension_manager_unit = pathlib.Path(extension_manager_unit_raw)
 extension_manager_program = pathlib.Path(extension_manager_program_raw)
 artifact_promoter_unit = pathlib.Path(artifact_promoter_unit_raw)
 artifact_promoter_program = pathlib.Path(artifact_promoter_program_raw)
+workspace_preview_unit = pathlib.Path(workspace_preview_unit_raw)
+workspace_preview_program = pathlib.Path(workspace_preview_program_raw)
+workspace_preview_state = pathlib.Path(workspace_preview_state_raw)
 for path, maximum in (
     (gateway_unit, 256 * 1024),
     (ingress_unit, 256 * 1024),
@@ -616,6 +666,8 @@ for path, maximum in (
     (extension_manager_program, 2 * 1024 * 1024),
     (artifact_promoter_unit, 256 * 1024),
     (artifact_promoter_program, 2 * 1024 * 1024),
+    (workspace_preview_unit, 256 * 1024),
+    (workspace_preview_program, 2 * 1024 * 1024),
 ):
     if path.exists() or path.is_symlink():
         regular(path, root_uid, maximum)
@@ -637,6 +689,38 @@ if state == "ready" and artifact_promoter_contract_present != promoter_unit_pres
     raise SystemExit("ready ODS-managed Pixel artifact promotion deployment is partial")
 if promoter_unit_present and not artifact_promoter_contract_present:
     raise SystemExit("Pixel artifact promoter system artifacts lack an ODS contract")
+
+preview_unit_present = workspace_preview_unit.exists() or workspace_preview_unit.is_symlink()
+preview_program_present = workspace_preview_program.exists() or workspace_preview_program.is_symlink()
+if preview_unit_present != preview_program_present:
+    raise SystemExit("ODS-managed Pixel workspace preview system artifacts are partial")
+if state == "ready" and workspace_preview_contract_present != preview_unit_present:
+    raise SystemExit("ready ODS-managed Pixel workspace preview deployment is partial")
+if preview_unit_present and not workspace_preview_contract_present:
+    raise SystemExit("Pixel workspace preview system artifacts lack an ODS contract")
+
+if workspace_preview_state.exists() or workspace_preview_state.is_symlink():
+    root_info = workspace_preview_state.lstat()
+    if (not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode)
+            or root_info.st_uid != owner_uid or stat.S_IMODE(root_info.st_mode) != 0o700):
+        raise SystemExit("unsafe Pixel workspace preview state")
+    for root, directories, names in os.walk(workspace_preview_state, topdown=True, followlinks=False):
+        root_path = pathlib.Path(root)
+        info = root_path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != 0o700):
+            raise SystemExit("unsafe Pixel workspace preview state")
+        for directory in directories:
+            child = (root_path / directory).lstat()
+            if (not stat.S_ISDIR(child.st_mode) or stat.S_ISLNK(child.st_mode)
+                    or child.st_uid != owner_uid or stat.S_IMODE(child.st_mode) != 0o700):
+                raise SystemExit("unsafe Pixel workspace preview state")
+        for name in names:
+            child = (root_path / name).lstat()
+            if (not stat.S_ISREG(child.st_mode) or stat.S_ISLNK(child.st_mode)
+                    or child.st_nlink != 1 or child.st_uid != owner_uid
+                    or stat.S_IMODE(child.st_mode) != 0o400):
+                raise SystemExit("unsafe Pixel workspace preview state")
 
 if gateway_unit.exists():
     text = gateway_unit.read_text(encoding="utf-8")
@@ -671,6 +755,14 @@ if artifact_promoter_unit.exists():
 if artifact_promoter_program.exists():
     if artifact_promoter_program.read_bytes() != artifact_promoter_source.read_bytes():
         raise SystemExit("installed Pixel artifact promoter program drifted from this ODS install")
+
+if workspace_preview_unit.exists():
+    if workspace_preview_unit.read_bytes() != workspace_preview_owner_unit.read_bytes():
+        raise SystemExit("installed Pixel workspace preview unit drifted from this ODS install")
+
+if workspace_preview_program.exists():
+    if workspace_preview_program.read_bytes() != workspace_preview_source.read_bytes():
+        raise SystemExit("installed Pixel workspace preview program drifted from this ODS install")
 
 if ingress_env.exists():
     entries = {}
@@ -1165,6 +1257,9 @@ PY
         || -e "$extension_manager_program" || -L "$extension_manager_program" \
         || -e "$artifact_promoter_unit" || -L "$artifact_promoter_unit" \
         || -e "$artifact_promoter_program" || -L "$artifact_promoter_program" \
+        || -e "$workspace_preview_unit" || -L "$workspace_preview_unit" \
+        || -e "$workspace_preview_program" || -L "$workspace_preview_program" \
+        || -e "$workspace_preview_state" || -L "$workspace_preview_state" \
         || "$ops_artifacts_present" == true ]]; then
         root_artifacts_present=true
         command -v sudo >/dev/null 2>&1 || {
@@ -1174,7 +1269,7 @@ PY
     fi
 
     if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$extension_manager_unit" \
-        || -e "$artifact_promoter_unit" \
+        || -e "$artifact_promoter_unit" || -e "$workspace_preview_unit" \
         || -e "$ops_unit" ]]; then
         # Stop the ingress before the gateway it proxies to. Keep these as
         # separate calls so the shutdown order is an enforced contract rather
@@ -1196,6 +1291,11 @@ PY
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
             return 1
         fi
+        if [[ -e "$workspace_preview_unit" ]] \
+            && ! timeout 30s sudo systemctl disable --now pixel-workspace-preview.service; then
+            log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
+            return 1
+        fi
         if [[ -e "$gateway_unit" ]] \
             && ! timeout 30s sudo systemctl disable --now openclaw-gateway.service; then
             log_error "Could not stop ODS-managed Pixel system services; no Pixel files were removed"
@@ -1210,6 +1310,7 @@ PY
             || systemctl is-active --quiet pixel-ingress.service \
             || systemctl is-active --quiet pixel-extension-manager.service \
             || systemctl is-active --quiet pixel-artifact-promoter.service \
+            || systemctl is-active --quiet pixel-workspace-preview.service \
             || systemctl is-active --quiet pixel-ops-broker.service; then
             log_error "ODS-managed Pixel system services are still active; no Pixel files were removed"
             return 1
@@ -1483,9 +1584,36 @@ PY
     fi
 
     if [[ "$root_artifacts_present" == "true" ]]; then
+        if [[ -e "$workspace_preview_state" || -L "$workspace_preview_state" ]]; then
+            if ! sudo python3 - "$workspace_preview_state" "$owner_uid" <<'PY'
+import os, pathlib, shutil, stat, sys
+
+root = pathlib.Path(sys.argv[1])
+owner_uid = int(sys.argv[2])
+if root.name != "ods-pixel-preview" or not root.is_absolute() or root == pathlib.Path("/"):
+    raise SystemExit("unsafe Pixel workspace preview cleanup root")
+for path in [root, *root.rglob("*")]:
+    info = path.lstat()
+    if stat.S_ISDIR(info.st_mode):
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != 0o700:
+            raise SystemExit("unsafe Pixel workspace preview cleanup directory")
+    elif stat.S_ISREG(info.st_mode):
+        if (stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != 0o400):
+            raise SystemExit("unsafe Pixel workspace preview cleanup file")
+    else:
+        raise SystemExit("unsafe Pixel workspace preview cleanup artifact")
+shutil.rmtree(root)
+PY
+            then
+                log_error "Could not remove verified Pixel workspace preview state"
+                return 1
+            fi
+        fi
         if ! sudo rm -f -- "$gateway_unit" "$ingress_unit" "$ingress_env" "$ingress_program" \
             "$extension_manager_unit" "$extension_manager_program" \
             "$artifact_promoter_unit" "$artifact_promoter_program" \
+            "$workspace_preview_unit" "$workspace_preview_program" \
             || ! sudo systemctl daemon-reload; then
             log_error "Could not remove ODS-managed Pixel system artifacts"
             return 1
@@ -1493,7 +1621,8 @@ PY
         if [[ -e "$gateway_unit" || -e "$ingress_unit" || -e "$ingress_env" \
             || -e "$ingress_program" || -e "$extension_manager_unit" \
             || -e "$extension_manager_program" || -e "$artifact_promoter_unit" \
-            || -e "$artifact_promoter_program" ]]; then
+            || -e "$artifact_promoter_program" || -e "$workspace_preview_unit" \
+            || -e "$workspace_preview_program" || -e "$workspace_preview_state" ]]; then
             log_error "ODS-managed Pixel system artifact cleanup was incomplete"
             return 1
         fi
@@ -1529,12 +1658,13 @@ PY
     fi
     rm -f -- "$openclaw_config" "$gateway_env" "$onboarding" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$extension_manager_owner_unit" \
-        "$artifact_promoter_owner_unit"
+        "$artifact_promoter_owner_unit" "$workspace_preview_owner_unit"
     if [[ -e "$openclaw_config" || -e "$gateway_env" || -e "$onboarding" \
         || -e "$ops_owner_policy" || -L "$ops_owner_policy" \
         || -e "$ops_owner_extension_catalog" || -L "$ops_owner_extension_catalog" \
         || -e "$extension_manager_owner_unit" || -L "$extension_manager_owner_unit" \
         || -e "$artifact_promoter_owner_unit" || -L "$artifact_promoter_owner_unit" \
+        || -e "$workspace_preview_owner_unit" || -L "$workspace_preview_owner_unit" \
         || -e "$exec_control" || -L "$exec_control" ]]; then
         log_error "ODS-managed Pixel owner artifact cleanup was incomplete"
         return 1

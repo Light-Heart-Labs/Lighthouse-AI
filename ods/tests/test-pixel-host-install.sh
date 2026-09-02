@@ -583,6 +583,10 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
+  cp "$ROOT/extensions/services/pixel-agent/host/workspace_preview.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/pixel-workspace-preview.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-workspace-preview.service"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
   chmod 0644 "$INSTALL_DIR/extensions/services/pixel-agent/host/extension_search.py" \
@@ -590,6 +594,8 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-extension-manager.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-workspace-preview.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
   chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
 printf '%s\n' 'services: {}' >"$INSTALL_DIR/extensions/library/services/notebook/compose.yaml"
@@ -599,12 +605,15 @@ JSON
 extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
 extension_manager_unit="$INSTALL_DIR/data/pixel/extension-manager.service"
 artifact_promoter_unit="$INSTALL_DIR/data/pixel/artifact-promoter.service"
+workspace_preview_unit="$INSTALL_DIR/data/pixel/workspace-preview.service"
 _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"
 _ods_pixel_write_extension_manager_unit "$owner" "$home" "$extension_manager_unit"
 _ods_pixel_write_artifact_promoter_unit "$owner" "$home" "$artifact_promoter_unit"
+_ods_pixel_write_workspace_preview_unit "$owner" "$home" "$workspace_preview_unit" 9437
 check test "$(stat -c '%a' "$extension_catalog")" = 600
 check test "$(stat -c '%a' "$extension_manager_unit")" = 600
 check test "$(stat -c '%a' "$artifact_promoter_unit")" = 600
+check test "$(stat -c '%a' "$workspace_preview_unit")" = 600
 check grep -F "User=$owner" "$extension_manager_unit"
 check grep -F "Group=pixel-ops" "$extension_manager_unit"
 check grep -F "${INSTALL_DIR}/.env" "$extension_manager_unit"
@@ -625,6 +634,11 @@ check grep -F "$home/.openclaw/workspace-pixel" "$artifact_promoter_unit"
 check grep -F "RestrictAddressFamilies=AF_UNIX" "$artifact_promoter_unit"
 check grep -F "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE" "$artifact_promoter_unit"
 check grep -F "ReadOnlyPaths=/var/lib/pixel-ops-broker/results /var/lib/pixel-ops-broker/artifacts" "$artifact_promoter_unit"
+check grep -F "User=$owner" "$workspace_preview_unit"
+check grep -F " 9437" "$workspace_preview_unit"
+check grep -F "BindReadOnlyPaths=\"$home/.openclaw/workspace-pixel\"" "$workspace_preview_unit"
+check grep -F "RestrictAddressFamilies=AF_UNIX AF_INET" "$workspace_preview_unit"
+check grep -F "IPAddressAllow=localhost" "$workspace_preview_unit"
 check python3 -c '
 import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))
@@ -659,6 +673,15 @@ if _ods_pixel_write_artifact_promoter_unit "$owner" "$home" \
     fail "symlink artifact promoter unit rejected"
 else
     pass "symlink artifact promoter unit rejected"
+fi
+printf '%s\n' 'unsafe' >"$TEST_ROOT/workspace-preview-unit-target.service"
+ln -s "$TEST_ROOT/workspace-preview-unit-target.service" \
+    "$TEST_ROOT/linked-workspace-preview.service"
+if _ods_pixel_write_workspace_preview_unit "$owner" "$home" \
+    "$TEST_ROOT/linked-workspace-preview.service" 9437 >/dev/null 2>&1; then
+    fail "symlink workspace preview unit rejected"
+else
+    pass "symlink workspace preview unit rejected"
 fi
 operations_policy="$TEST_ROOT/operations-policy.json"
 _ods_pixel_write_operations_policy "$owner" "$home" "$operations_policy"
@@ -819,6 +842,25 @@ else
 fi
 mv "$TEST_ROOT/artifact-promoter-unit.original.service" "$artifact_promoter_unit"
 chmod 0600 "$artifact_promoter_unit"
+workspace_preview="$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
+cp "$workspace_preview" "$TEST_ROOT/workspace-preview.original.py"
+printf '\n# changed\n' >>"$workspace_preview"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds workspace preview bytes"
+else
+    pass "managed contract hash binds workspace preview bytes"
+fi
+mv "$TEST_ROOT/workspace-preview.original.py" "$workspace_preview"
+chmod 0644 "$workspace_preview"
+cp "$workspace_preview_unit" "$TEST_ROOT/workspace-preview-unit.original.service"
+printf '\n# changed\n' >>"$workspace_preview_unit"
+if [[ "$observed_contract_sha256" == "$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" ]]; then
+    fail "managed contract hash binds rendered workspace preview unit bytes"
+else
+    pass "managed contract hash binds rendered workspace preview unit bytes"
+fi
+mv "$TEST_ROOT/workspace-preview-unit.original.service" "$workspace_preview_unit"
+chmod 0600 "$workspace_preview_unit"
 operations_service_dropin="$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
 cp "$operations_service_dropin" "$TEST_ROOT/pixel-ops-broker-ods.original.conf"
 printf '\n# changed\n' >>"$operations_service_dropin"
@@ -877,7 +919,7 @@ assert v["modelMaxTokens"] == 4096
 assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
 assert v["operationsPolicyFile"] == sys.argv[2]
-assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_host_observe","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote"]}]
+assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_host_observe","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}]
 assert v["operationsLimbEnabled"] is True
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","frontierLimbEnabled"))
 ' "$answers" "$operations_policy"
@@ -1734,7 +1776,7 @@ import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
-assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_download_promote","pixel_ods_evidence_readback","pixel_ods_evidence_report","pixel_ods_host_observe","pixel_ods_status","pixel_ods_web_extract"]
+assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_download_promote","pixel_ods_evidence_readback","pixel_ods_evidence_report","pixel_ods_host_observe","pixel_ods_status","pixel_ods_web_extract","pixel_ods_workspace_preview"]
 import re
 reserved = re.compile(r"^pixel_(?:gmail|calendar|social|web|ops|frontier)_")
 assert all(name != "pixel_limb_status" and not reserved.match(name) for name in m["contracts"]["tools"])
@@ -1778,7 +1820,7 @@ assert "_ods_pixel_write_extension_manager_unit" in text
 assert "owner-private ODS Pixel extension manager service" in text
 assert "_ods_pixel_write_artifact_promoter_unit" in text
 assert "owner-private ODS Pixel artifact promoter service" in text
-assert "ods-pixel-contract-v7" in text
+assert "ods-pixel-contract-v8" in text
 assert "pixel-ops-broker-ods.conf" in text
 for family in ("AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"):
     assert family in text
@@ -1791,6 +1833,7 @@ assert "manage-extensions" in text
 assert "ods_sudo -u pixel-ops-broker /usr/bin/python3" in text
 assert "_ods_pixel_wait_extension_manager_probe" in text
 assert "_ods_pixel_wait_artifact_promoter_probe" in text
+assert "_ods_pixel_wait_workspace_preview_probe" in text
 assert "_ods_pixel_managed_contract_matches" in text
 assert "_ods_pixel_verified_source_matches" in text
 assert "_ods_pixel_candidate_config_matches_live" in text
@@ -1919,6 +1962,16 @@ assert "BindPaths=\"__PIXEL_WORKSPACE__\"" in text
 assert "ReadOnlyPaths=/var/lib/pixel-ops-broker/results /var/lib/pixel-ops-broker/artifacts" in text
 assert "IPAddressAllow" not in text
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
+check python3 -c '
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+assert "User=__PIXEL_SERVICE_USER__" in text
+assert "Group=__PIXEL_SERVICE_USER__" not in text
+assert "BindReadOnlyPaths=\"__PIXEL_WORKSPACE__\"" in text
+assert "IPAddressDeny=any" in text and "IPAddressAllow=localhost" in text
+assert "RestrictAddressFamilies=AF_UNIX AF_INET" in text
+assert "CapabilityBoundingSet=" in text
+' "$ROOT/extensions/services/pixel-agent/host/pixel-workspace-preview.service"
 check python3 -c '
 import pathlib,sys
 text=pathlib.Path(sys.argv[1]).read_text()

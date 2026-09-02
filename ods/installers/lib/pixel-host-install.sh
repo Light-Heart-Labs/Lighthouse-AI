@@ -291,14 +291,17 @@ _ods_pixel_contract_sha256() {
     local extension_manager_unit="${INSTALL_DIR:?}/data/pixel/extension-manager.service"
     local artifact_promoter="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/artifact_promoter.py"
     local artifact_promoter_unit="${INSTALL_DIR:?}/data/pixel/artifact-promoter.service"
+    local workspace_preview="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/workspace_preview.py"
+    local workspace_preview_unit="${INSTALL_DIR:?}/data/pixel/workspace-preview.service"
     local operations_service_dropin="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     local approval_helper="${INSTALL_DIR:?}/bin/ods-pixel-approve"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" \
         "$extension_helper" "$extension_manager" "$extension_manager_unit" "$approval_helper" \
-        "$artifact_promoter" "$artifact_promoter_unit" "$operations_service_dropin" <<'PY'
+        "$artifact_promoter" "$artifact_promoter_unit" "$operations_service_dropin" \
+        "$workspace_preview" "$workspace_preview_unit" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path = map(pathlib.Path, sys.argv[1:10])
+path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path = map(pathlib.Path, sys.argv[1:12])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -320,7 +323,7 @@ if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_p
 policy_payload = read_private_regular(expected_policy, "Operations policy")
 catalog_payload = read_private_regular(catalog_path, "extension catalog")
 helper_payloads = []
-for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path):
+for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path):
     helper_info = helper.lstat()
     if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
             or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
@@ -328,7 +331,7 @@ for helper in (helper_path, manager_path, manager_unit_path, approval_path, prom
         raise SystemExit("invalid ODS Pixel extension helper")
     helper_payloads.append(helper.read_bytes())
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v7\0")
+digest.update(b"ods-pixel-contract-v8\0")
 for payload in (answers_payload, policy_payload, catalog_payload, *helper_payloads):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
@@ -2562,6 +2565,68 @@ finally:
 PY
 }
 
+_ods_pixel_write_workspace_preview_unit() {
+    local owner="$1" home="$2" output="$3" port="${4:-9437}"
+    local source="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/pixel-workspace-preview.service"
+    local workspace="$home/.openclaw/workspace-pixel"
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || return 1
+
+    ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${output%/*}" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$source" "$output" \
+        "$owner" "$workspace" "$port" <<'PY'
+import os, pathlib, re, stat, sys, tempfile
+
+source_path, output_path = map(pathlib.Path, sys.argv[1:3])
+owner, workspace, port = sys.argv[3:6]
+if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", owner) is None:
+    raise SystemExit("unsafe Pixel workspace preview owner")
+if (not workspace.startswith("/") or workspace == "/" or len(workspace) > 1024
+        or any(character in workspace for character in '\n\r\0"\\%')):
+    raise SystemExit("unsafe Pixel workspace for preview")
+if not port.isdigit() or not 1 <= int(port) <= 65535:
+    raise SystemExit("unsafe Pixel workspace preview port")
+source_info = source_path.lstat()
+if (not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode)
+        or source_info.st_nlink != 1 or source_info.st_uid != os.getuid()
+        or source_info.st_mode & 0o022 or source_info.st_size > 1024 * 1024):
+    raise SystemExit("unsafe Pixel workspace preview service template")
+parent_info = output_path.parent.lstat()
+if (not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+        or parent_info.st_uid != os.getuid() or parent_info.st_mode & 0o077):
+    raise SystemExit("unsafe Pixel workspace preview output directory")
+if output_path.is_symlink():
+    raise SystemExit("Pixel workspace preview output cannot be a symlink")
+if output_path.exists():
+    output_info = output_path.lstat()
+    if (not stat.S_ISREG(output_info.st_mode) or output_info.st_nlink != 1
+            or output_info.st_uid != os.getuid() or output_info.st_mode & 0o077
+            or output_info.st_size > 1024 * 1024):
+        raise SystemExit("unsafe existing Pixel workspace preview output")
+text = (source_path.read_text(encoding="utf-8")
+        .replace("__PIXEL_SERVICE_USER__", owner)
+        .replace("__PIXEL_WORKSPACE__", workspace)
+        .replace("__PIXEL_PREVIEW_PORT__", port))
+if "__PIXEL_" in text:
+    raise SystemExit("unresolved Pixel workspace preview systemd placeholder")
+descriptor, temporary = tempfile.mkstemp(prefix=".workspace-preview.", dir=output_path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, output_path)
+    directory = os.open(output_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
 _ods_pixel_write_operations_policy() {
     local owner="$1" home="$2" policy="$3" install_root="${INSTALL_DIR:?}"
     local workspace="$home/.openclaw/workspace-pixel"
@@ -3147,7 +3212,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],
@@ -3247,9 +3312,34 @@ _ods_pixel_wait_artifact_promoter_probe() {
     return 1
 }
 
+_ods_pixel_wait_workspace_preview_probe() {
+    local owner="$1" home="$2" program="$3" port="${4:-9437}" attempts="${5:-30}" delay="${6:-1}"
+    local response attempt
+    [[ "$program" == /* && -f "$program" && ! -L "$program" \
+        && "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 \
+        && "$attempts" =~ ^[0-9]+$ && "$attempts" -ge 1 && "$attempts" -le 60 \
+        && "$delay" =~ ^[0-9]+$ && "$delay" -le 5 ]] || return 1
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if response="$(ods_pixel_run_as_owner "$owner" "$home" /usr/bin/python3 \
+            "$program" health /run/ods-pixel-preview/control.sock 2>/dev/null)" \
+            && jq -e --argjson port "$port" '.schemaVersion == 1
+                and .kind == "ods-pixel-workspace-preview"
+                and .status == "ok" and .port == $port
+                and .boundary == "Create-only static-site snapshot from the configured Pixel workspace to a dedicated loopback preview origin; no arbitrary host path, network destination, server process, overwrite, or execution authority."' \
+                <<<"$response" >/dev/null; then
+            return 0
+        fi
+        if (( attempt < attempts && delay > 0 )); then
+            sleep "$delay"
+        fi
+    done
+    return 1
+}
+
 _ods_pixel_install_ingress() {
     local owner="$1" home="$2" plugin_root="$3" extension_catalog="$4"
     local rendered_extension_manager_unit="$5" rendered_artifact_promoter_unit="$6"
+    local rendered_workspace_preview_unit="$7" preview_port="${PIXEL_PREVIEW_PORT:-9437}"
     local token_file="$home/.openclaw/openclaw.json"
     local runtime_token_file="/run/ods-pixel/openclaw.json"
     local extension_helper="$plugin_root/host/extension_search.py"
@@ -3260,6 +3350,8 @@ _ods_pixel_install_ingress() {
     local system_extension_manager="/usr/local/libexec/ods-pixel-extension-manager.py"
     local artifact_promoter="$plugin_root/host/artifact_promoter.py"
     local system_artifact_promoter="/usr/local/libexec/ods-pixel-artifact-promoter.py"
+    local workspace_preview="$plugin_root/host/workspace_preview.py"
+    local system_workspace_preview="/usr/local/libexec/ods-pixel-workspace-preview.py"
     local operations_service_dropin="$plugin_root/host/pixel-ops-broker-ods.conf"
     local operations_service_dropin_dir="/etc/systemd/system/pixel-ops-broker.service.d"
     local installed_operations_service_dropin="$operations_service_dropin_dir/10-ods-host-observation.conf"
@@ -3272,6 +3364,7 @@ _ods_pixel_install_ingress() {
     for projection_source in "$extension_helper" "$extension_catalog" \
         "$extension_manager" "$rendered_extension_manager_unit" \
         "$artifact_promoter" "$rendered_artifact_promoter_unit" \
+        "$workspace_preview" "$rendered_workspace_preview_unit" \
         "$operations_service_dropin"; do
         [[ -f "$projection_source" && ! -L "$projection_source" ]] || return 1
         IFS='|' read -r kind uid mode size < <(stat -c '%F|%u|%a|%s' -- "$projection_source")
@@ -3281,6 +3374,8 @@ _ods_pixel_install_ingress() {
     done
     (( (8#$(stat -c '%a' -- "$extension_catalog") & 0077) == 0 )) || return 1
 
+    [[ "$preview_port" =~ ^[0-9]+$ ]] || return 1
+    (( preview_port >= 1 && preview_port <= 65535 )) || return 1
     local app_port
     for app_port in \
         "${DASHBOARD_PORT:-3001}" "${WEBUI_PORT:-3000}" "${SEARXNG_PORT:-8888}" \
@@ -3290,6 +3385,7 @@ _ods_pixel_install_ingress() {
         "${TOKEN_SPY_PORT:-3005}" "${APE_PORT:-7890}" "${HERMES_PROXY_PORT:-9120}"; do
         [[ "$app_port" =~ ^[0-9]+$ ]] || return 1
         (( app_port >= 1 && app_port <= 65535 )) || return 1
+        (( preview_port != app_port )) || return 1
     done
 
     local stage extension_probe
@@ -3341,6 +3437,7 @@ EOF
     ods_sudo install -o root -g root -m 0755 "$extension_manager" "$installed_extension_manager"
     ods_sudo install -o root -g root -m 0755 "$extension_manager" "$system_extension_manager"
     ods_sudo install -o root -g root -m 0755 "$artifact_promoter" "$system_artifact_promoter"
+    ods_sudo install -o root -g root -m 0755 "$workspace_preview" "$system_workspace_preview"
     if ods_sudo test -e "$operations_service_dropin_dir" \
         || ods_sudo test -L "$operations_service_dropin_dir"; then
         ods_sudo test -d "$operations_service_dropin_dir" || return 1
@@ -3357,6 +3454,7 @@ EOF
     ods_sudo cmp -s -- "$extension_manager" "$installed_extension_manager"
     ods_sudo cmp -s -- "$extension_manager" "$system_extension_manager"
     ods_sudo cmp -s -- "$artifact_promoter" "$system_artifact_promoter"
+    ods_sudo cmp -s -- "$workspace_preview" "$system_workspace_preview"
     ods_sudo cmp -s -- "$operations_service_dropin" "$installed_operations_service_dropin" \
         || return 1
     extension_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
@@ -3376,6 +3474,10 @@ EOF
         /etc/systemd/system/pixel-artifact-promoter.service
     ods_sudo cmp -s -- "$rendered_artifact_promoter_unit" \
         /etc/systemd/system/pixel-artifact-promoter.service
+    ods_sudo install -o root -g root -m 0644 "$rendered_workspace_preview_unit" \
+        /etc/systemd/system/pixel-workspace-preview.service
+    ods_sudo cmp -s -- "$rendered_workspace_preview_unit" \
+        /etc/systemd/system/pixel-workspace-preview.service
     rm -f -- "$stage/pixel-agent.env" "$stage/pixel-ingress.service"
     rmdir -- "$stage"
     ods_sudo systemctl daemon-reload || return 1
@@ -3394,22 +3496,27 @@ if sys.argv[2]:
     raise SystemExit("Pixel Operations capability boundary is not empty")
 PY
     ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service \
-        pixel-extension-manager.service pixel-artifact-promoter.service || return 1
+        pixel-extension-manager.service pixel-artifact-promoter.service \
+        pixel-workspace-preview.service || return 1
     ods_sudo systemctl start openclaw-gateway.service || return 1
     ods_sudo systemctl restart pixel-extension-manager.service || return 1
     ods_sudo systemctl restart pixel-artifact-promoter.service || return 1
+    ods_sudo systemctl restart pixel-workspace-preview.service || return 1
     # `enable --now` does not refresh an already-running ingress after its
     # reviewed program or environment changes. Restart only the ingress here;
     # the Pixel gateway was already verified above and need not be disturbed.
     ods_sudo systemctl restart pixel-ingress.service || return 1
     ods_sudo systemctl is-active --quiet openclaw-gateway.service pixel-ingress.service \
-        pixel-extension-manager.service pixel-artifact-promoter.service || return 1
+        pixel-extension-manager.service pixel-artifact-promoter.service \
+        pixel-workspace-preview.service || return 1
     local extension_id
     extension_id="$(jq -er '.matches[0].id | select(type == "string")' \
         <<<"$extension_probe")" || return 1
     [[ "$extension_id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ && "$extension_id" != *. ]] || return 1
     _ods_pixel_wait_extension_manager_probe "$installed_extension_manager" "$extension_id" || return 1
-    _ods_pixel_wait_artifact_promoter_probe "$owner" "$home" "$system_artifact_promoter"
+    _ods_pixel_wait_artifact_promoter_probe "$owner" "$home" "$system_artifact_promoter" || return 1
+    _ods_pixel_wait_workspace_preview_probe "$owner" "$home" "$system_workspace_preview" \
+        "$preview_port"
 }
 
 _ods_pixel_wait_ingress() {
@@ -3511,7 +3618,7 @@ PY
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog extension_manager_unit artifact_promoter_unit openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
+    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog extension_manager_unit artifact_promoter_unit workspace_preview_unit openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
@@ -3529,6 +3636,8 @@ ods_pixel_install_default_agent() {
         && -f "$plugin_root/host/pixel-extension-manager.service" \
         && -f "$plugin_root/host/artifact_promoter.py" \
         && -f "$plugin_root/host/pixel-artifact-promoter.service" \
+        && -f "$plugin_root/host/workspace_preview.py" \
+        && -f "$plugin_root/host/pixel-workspace-preview.service" \
         && -f "$plugin_root/host/pixel-ops-broker-ods.conf" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
@@ -3584,6 +3693,7 @@ ods_pixel_install_default_agent() {
     extension_catalog="$INSTALL_DIR/data/pixel/extension-catalog.json"
     extension_manager_unit="$INSTALL_DIR/data/pixel/extension-manager.service"
     artifact_promoter_unit="$INSTALL_DIR/data/pixel/artifact-promoter.service"
+    workspace_preview_unit="$INSTALL_DIR/data/pixel/workspace-preview.service"
     if ! _ods_pixel_write_extension_catalog "$owner" "$home" "$extension_catalog"; then
         ai_bad "Could not write Pixel's secret-free ODS extension catalog."
         return 1
@@ -3598,6 +3708,11 @@ ods_pixel_install_default_agent() {
     fi
     if ! _ods_pixel_write_artifact_promoter_unit "$owner" "$home" "$artifact_promoter_unit"; then
         ai_bad "Could not write the owner-private ODS Pixel artifact promoter service."
+        return 1
+    fi
+    if ! _ods_pixel_write_workspace_preview_unit "$owner" "$home" "$workspace_preview_unit" \
+        "${PIXEL_PREVIEW_PORT:-9437}"; then
+        ai_bad "Could not write the owner-private ODS Pixel workspace preview service."
         return 1
     fi
     if ! _ods_pixel_write_onboarding "$owner" "$home" "$answers" "$openclaw_bin" "$plugin_root/plugin" "$plugin_digest"; then
@@ -3790,7 +3905,8 @@ ods_pixel_install_default_agent() {
         return 1
     fi
     if ! _ods_pixel_install_ingress "$owner" "$home" "$plugin_root" \
-        "$extension_catalog" "$extension_manager_unit" "$artifact_promoter_unit"; then
+        "$extension_catalog" "$extension_manager_unit" "$artifact_promoter_unit" \
+        "$workspace_preview_unit"; then
         ai_bad "Could not install and start the private Pixel ingress."
         return 1
     fi

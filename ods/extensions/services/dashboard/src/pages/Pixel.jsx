@@ -8,14 +8,18 @@ import {
   Code2,
   Copy,
   Globe2,
+  ExternalLink,
   Loader2,
+  PanelRightOpen,
   Plus,
+  RefreshCw,
   Send,
   ShieldCheck,
   Sparkles,
   Square,
   Terminal,
   Wrench,
+  X,
 } from 'lucide-react'
 
 const MARKDOWN_COMPONENTS = {
@@ -122,6 +126,52 @@ export function isCleanContextRecoveryFrame(frame) {
     && marker.recovery === 'clean-context'
     && marker.reason === CLEAN_CONTEXT_RECOVERY_REASON
   )
+}
+
+export function parseVerifiedPreviewFrame(frame) {
+  const marker = frame?.pixel
+  const preview = marker?.preview
+  const markerKeys = marker && typeof marker === 'object' && !Array.isArray(marker)
+    ? Object.keys(marker).sort().join('\n')
+    : ''
+  const previewKeys = preview && typeof preview === 'object' && !Array.isArray(preview)
+    ? Object.keys(preview).sort().join('\n')
+    : ''
+  if (
+    frame?.choices?.[0]?.finish_reason !== 'stop'
+    || markerKeys !== ['preview', 'schemaVersion'].join('\n')
+    || marker.schemaVersion !== 1
+    || previewKeys !== [
+      'bytes',
+      'entrySha256',
+      'files',
+      'kind',
+      'port',
+      'relativeDirectory',
+      'schemaVersion',
+      'sha256',
+      'siteId',
+      'url',
+    ].join('\n')
+    || preview.schemaVersion !== 1
+    || preview.kind !== 'ods-pixel-workspace-preview'
+    || typeof preview.relativeDirectory !== 'string'
+    || !/^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(preview.relativeDirectory)
+    || !/^site-[a-f0-9]{24}$/.test(preview.siteId)
+    || !Number.isInteger(preview.port)
+    || preview.port < 1
+    || preview.port > 65535
+    || preview.url !== `http://localhost:${preview.port}/${preview.siteId}/`
+    || !Number.isInteger(preview.files)
+    || preview.files < 1
+    || preview.files > 128
+    || !Number.isInteger(preview.bytes)
+    || preview.bytes < 1
+    || preview.bytes > 16 * 1024 * 1024
+    || !/^[a-f0-9]{64}$/.test(preview.sha256)
+    || !/^[a-f0-9]{64}$/.test(preview.entrySha256)
+  ) return null
+  return { ...preview }
 }
 
 export function OperationsApprovalCard({ content }) {
@@ -347,6 +397,8 @@ export default function Pixel({ systemStatus = null }) {
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
   const [agentRuntime, setAgentRuntime] = useState(null)
   const [modelSupport, setModelSupport] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const [previewRefresh, setPreviewRefresh] = useState(0)
 
   const abortRef = useRef(null)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
@@ -507,6 +559,7 @@ export default function Pixel({ systemStatus = null }) {
       let receivedDone = false
       let receivedError = false
       let recoveryEligible = false
+      let verifiedPreview = null
 
       try {
         const response = await fetch('/api/pixel/chat/stream', {
@@ -577,6 +630,8 @@ export default function Pixel({ systemStatus = null }) {
                 continue
               }
               if (isCleanContextRecoveryFrame(frame)) recoveryEligible = true
+              const candidatePreview = parseVerifiedPreviewFrame(frame)
+              if (candidatePreview) verifiedPreview = candidatePreview
               const content = frame?.choices?.[0]?.delta?.content
               if (typeof content === 'string' && content.length > 0) {
                 assistantText += content
@@ -598,6 +653,7 @@ export default function Pixel({ systemStatus = null }) {
           receivedDone,
           receivedError,
           recoveryEligible,
+          verifiedPreview,
         }
       } finally {
         reader?.releaseLock?.()
@@ -607,6 +663,10 @@ export default function Pixel({ systemStatus = null }) {
     function finishAttempt(attempt, recovered = false) {
       if (attempt.receivedError) return
       if (attempt.receivedDone) {
+        if (attempt.verifiedPreview) {
+          setPreview(attempt.verifiedPreview)
+          setPreviewRefresh(0)
+        }
         setMessages(previous => replaceLastAssistant(previous, {
           status: 'done',
           ...(recovered ? { recovered: true } : {}),
@@ -746,6 +806,8 @@ export default function Pixel({ systemStatus = null }) {
     chatIdRef.current = makeChatId()
     contextStartRef.current = 0
     setMessages([])
+    setPreview(null)
+    setPreviewRefresh(0)
     setInput('')
     inputRef.current?.focus?.()
   }, [sending])
@@ -834,6 +896,8 @@ export default function Pixel({ systemStatus = null }) {
         </div>
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
         {status === 'loading' && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-theme-text-muted">
@@ -1000,6 +1064,57 @@ export default function Pixel({ systemStatus = null }) {
           <p className="mx-auto mt-1 max-w-5xl px-1 text-xs text-red-400">
             Message too long (max {MAX_INPUT_LEN.toLocaleString()} characters)
           </p>
+        )}
+      </div>
+        </div>
+
+        {preview && (
+          <aside className="flex h-[46vh] min-h-80 shrink-0 flex-col border-t border-theme-border bg-theme-card/55 lg:h-auto lg:w-[42%] lg:border-l lg:border-t-0 xl:w-1/2">
+            <div className="flex items-center gap-2 border-b border-theme-border px-3 py-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-theme-accent/30 bg-theme-accent/15 text-theme-accent-light">
+                <PanelRightOpen className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-theme-text" title={preview.relativeDirectory}>
+                  Live preview · {preview.relativeDirectory}
+                </p>
+                <p className="text-[10px] text-emerald-400">Host verified · {preview.files} files</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewRefresh(value => value + 1)}
+                className="rounded-lg p-2 text-theme-text-muted transition hover:bg-theme-surface-hover hover:text-theme-text"
+                title="Reload preview"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+              <a
+                href={preview.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg p-2 text-theme-text-muted transition hover:bg-theme-surface-hover hover:text-theme-text"
+                title="Open preview in a new tab"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="rounded-lg p-2 text-theme-text-muted transition hover:bg-theme-surface-hover hover:text-theme-text"
+                title="Close preview"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <iframe
+              key={`${preview.siteId}-${previewRefresh}`}
+              src={preview.url}
+              title="Interactive Pixel preview"
+              sandbox="allow-scripts"
+              referrerPolicy="no-referrer"
+              className="min-h-0 flex-1 border-0 bg-white"
+            />
+          </aside>
         )}
       </div>
     </div>

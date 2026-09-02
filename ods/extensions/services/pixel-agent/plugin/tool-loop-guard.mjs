@@ -137,6 +137,18 @@ export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
 export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
   "Pixel could not establish the exact cancellation boundary for this command. Do not call another tool in this turn; explain that execution is temporarily unavailable.";
 
+export const WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON =
+  "A server started inside Pixel's disposable sandbox is not reachable from the owner's browser. Do not start python http.server, npm dev, Vite, or another background server and do not claim any localhost port. Finish the static files, then call pixel_ods_workspace_preview with their one workspace-relative directory; share only its independently verified URL.";
+
+export const WORKSPACE_PREVIEW_REQUIRES_FILES_REASON =
+  "Pixel cannot publish this website yet because this response has not created or inspected an index.html in the requested workspace directory. Create the static site files first, then call pixel_ods_workspace_preview with that one relative directory.";
+
+export const WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel preserved the website files in its workspace, but ODS did not verify a browser-accessible preview. No localhost URL is live or claimed; ask Pixel to continue and publish the static site through the workspace preview capability.";
+
+export const WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX =
+  "Pixel published and independently read back the static website:";
+
 export const CLIENT_CANCELLED_REASON =
   "The owner cancelled this Pixel response. Do not call another tool or continue the task in this turn.";
 
@@ -292,6 +304,7 @@ const OPERATIONS_SUBMISSION_TOOLS = new Set([
 const SYNCHRONOUS_HOST_OBSERVE_TOOL = "pixel_ods_host_observe";
 const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
 const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
+const WORKSPACE_PREVIEW_TOOL = "pixel_ods_workspace_preview";
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -3004,6 +3017,18 @@ function requestsRecursiveForcedDelete(params) {
   return false;
 }
 
+function execLaunchesWorkspaceServer(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+  const command = params.command;
+  if (typeof command !== "string" || !command.trim()) return false;
+  return (
+    /\bpython(?:3(?:\.\d+)?)?\s+-m\s+http\.server\b/i.test(command) ||
+    /\b(?:npx|pnpm\s+dlx|bunx)\s+(?:--yes\s+)?(?:vite|serve|http-server)\b/i.test(command) ||
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b/i.test(command) ||
+    /\b(?:vite|next\s+dev|astro\s+dev|hugo\s+server|jekyll\s+serve)\b/i.test(command)
+  );
+}
+
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return [];
@@ -3293,6 +3318,79 @@ export function userMessageRequestsWorkspaceMutation(messages, prompt = undefine
   return text
     .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
     .some((clause) => mutation.test(clause) && !rejection.test(clause));
+}
+
+export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return false;
+  const website =
+    /\b(?:website|web\s*site|web\s*page|landing\s+page|static\s+site|frontend)\b/i.test(text);
+  const build =
+    /\b(?:build|create|make|develop|generate|implement|write)\b/i.test(text);
+  const view =
+    /\b(?:demo|preview|show|view|open|see|live|browser|localhost|host|serve|publish)\b/i.test(text);
+  const directPreview =
+    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
+    /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text);
+  const unreachableLocalPreview =
+    /\b(?:localhost|local\s+host)\b/i.test(text) &&
+    /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
+  return directPreview || unreachableLocalPreview || (website && build && view);
+}
+
+function workspacePreviewDirectoryFromState(state) {
+  const indexDirectories = new Set(
+    [...(state?.successfulWritePaths ?? []), ...(state?.successfulReadPaths ?? [])]
+      .filter((value) => typeof value === "string" && value.endsWith("/index.html"))
+      .map((value) => value.slice(0, -"/index.html".length))
+      .filter(Boolean)
+  );
+  if (indexDirectories.size === 1) return [...indexDirectories][0];
+  return state?.workspacePreviewDirectory;
+}
+
+function workspacePreviewOutcome(event, expectedDirectory) {
+  const details = event?.result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    event?.result?.isError === true ||
+    details.schemaVersion !== 1 ||
+    details.kind !== "ods-pixel-workspace-preview" ||
+    details.status !== "succeeded" ||
+    details.relativeDirectory !== expectedDirectory ||
+    !/^site-[a-f0-9]{24}$/.test(details.siteId) ||
+    !Number.isInteger(details.port) ||
+    details.port < 1 ||
+    details.port > 65535 ||
+    details.url !== `http://localhost:${details.port}/${details.siteId}/` ||
+    !Number.isInteger(details.files) ||
+    details.files < 1 ||
+    details.files > 128 ||
+    !Number.isInteger(details.bytes) ||
+    details.bytes < 1 ||
+    details.bytes > 16 * 1024 * 1024 ||
+    details.entryFile !== "index.html" ||
+    !/^[a-f0-9]{64}$/.test(details.sha256) ||
+    !/^[a-f0-9]{64}$/.test(details.entrySha256) ||
+    details.httpStatus !== 200 ||
+    details.readbackVerified !== true ||
+    details.executable !== false ||
+    details.overwritten !== false
+  ) {
+    return undefined;
+  }
+  return {
+    relativeDirectory: details.relativeDirectory,
+    siteId: details.siteId,
+    port: details.port,
+    url: details.url,
+    files: details.files,
+    bytes: details.bytes,
+    sha256: details.sha256,
+    entrySha256: details.entrySha256,
+  };
 }
 
 export function userMessageWorkspaceContinuationPath(messages, prompt = undefined) {
@@ -3740,6 +3838,10 @@ export function createToolLoopGuard({
         workspacePythonUnittestRequested: false,
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
+        workspacePreviewRequested: false,
+        workspacePreviewDirectory: undefined,
+        workspacePreviewAttempted: false,
+        workspacePreview: undefined,
         workspaceToolSearchRouted: false,
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
@@ -4295,6 +4397,44 @@ export function createToolLoopGuard({
         },
       };
     }
+    const pendingSelectedName =
+      toolName === "tool_call" && typeof pendingParams?.id === "string"
+        ? pendingParams.id.split(":").at(-1)
+        : toolName;
+    if (state && pendingSelectedName === WORKSPACE_PREVIEW_TOOL) {
+      if (!state.workspacePreviewRequested) {
+        return {
+          block: true,
+          blockReason:
+            "Pixel blocked an unsolicited workspace publication. Publish a preview only when the owner's current request asks to view, demo, serve, show, or preview that website.",
+        };
+      }
+      const args =
+        toolName === "tool_call" ? pendingParams?.args : pendingParams;
+      const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
+      const observedDirectory = workspacePreviewDirectoryFromState(state);
+      const directory = observedDirectory ?? providedDirectory;
+      const hasObservedIndex =
+        typeof directory === "string" &&
+        (
+          state.successfulWritePaths.has(`${directory}/index.html`) ||
+          state.successfulReadPaths.has(`${directory}/index.html`)
+        );
+      if (!directory || !hasObservedIndex) {
+        return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
+      }
+      state.workspacePreviewDirectory = directory;
+      if (toolName === "tool_call") {
+        pendingParams = {
+          ...pendingParams,
+          id: WORKSPACE_PREVIEW_TOOL,
+          args: { relativeDirectory: directory },
+        };
+      } else {
+        normalizedParams = { relativeDirectory: directory };
+        pendingParams = normalizedParams;
+      }
+    }
     const selectedToolTarget =
       toolName === "tool_call" &&
       pendingParams &&
@@ -4436,6 +4576,13 @@ export function createToolLoopGuard({
         state.codingExhausted = true;
         state.codingTerminalBlocks = 1;
         return { block: true, blockReason: FOCUSED_EDIT_RETRY_EXHAUSTED_REASON };
+      }
+      if (
+        state.workspacePreviewRequested &&
+        selectedToolName === "exec" &&
+        execLaunchesWorkspaceServer(selectedParams)
+      ) {
+        return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON };
       }
       rememberToolRun(
         context?.toolCallId ?? event?.toolCallId,
@@ -5362,14 +5509,16 @@ export function createToolLoopGuard({
       }
       if (currentUserText(event?.messages, event?.prompt)) {
         state.ownerIntentObserved = true;
-        state.workspaceTaskRequested = userMessageRequestsWorkspaceTools(
+        state.workspacePreviewRequested = userMessageRequestsWorkspacePreview(
           event?.messages,
           event?.prompt
         );
-        state.workspaceMutationRequested = userMessageRequestsWorkspaceMutation(
-          event?.messages,
-          event?.prompt
-        );
+        state.workspaceTaskRequested =
+          state.workspacePreviewRequested ||
+          userMessageRequestsWorkspaceTools(event?.messages, event?.prompt);
+        state.workspaceMutationRequested =
+          state.workspacePreviewRequested ||
+          userMessageRequestsWorkspaceMutation(event?.messages, event?.prompt);
         state.workspaceTaskPath = userMessageWorkspaceContinuationPath(
           event?.messages,
           event?.prompt
@@ -5632,6 +5781,26 @@ export function createToolLoopGuard({
       : undefined;
     if (completedReadPath) {
       state.successfulReadPaths.add(completedReadPath);
+    }
+    const wrappedPreviewEvent =
+      toolName === "tool_call" &&
+      event?.params?.id?.split(":").at(-1) === WORKSPACE_PREVIEW_TOOL
+        ? toolSearchSelectedToolEvent(event, WORKSPACE_PREVIEW_TOOL, "pixel-ods")
+        : undefined;
+    const previewEvent = toolName === WORKSPACE_PREVIEW_TOOL
+      ? event
+      : wrappedPreviewEvent;
+    if (previewEvent) {
+      state.workspacePreviewAttempted = true;
+      const requestedDirectory = normalizeWorkspaceFilePath(
+        previewEvent?.params?.relativeDirectory
+      );
+      if (requestedDirectory) state.workspacePreviewDirectory = requestedDirectory;
+      const preview = workspacePreviewOutcome(
+        previewEvent,
+        state.workspacePreviewDirectory
+      );
+      if (preview) state.workspacePreview = preview;
     }
     if (state.operationsRequired) {
       const wrappedHostObservation =
@@ -6094,6 +6263,33 @@ export function createToolLoopGuard({
     return undefined;
   }
 
+  function trustedWorkspacePreviewContinuation(state) {
+    if (
+      !state?.workspacePreviewRequested ||
+      state.operationsRequired ||
+      state.exactDownloadRequested ||
+      state.workspacePreview
+    ) {
+      return undefined;
+    }
+    const directory = workspacePreviewDirectoryFromState(state);
+    if (!directory) {
+      return {
+        stage: "workspace-preview-files",
+        instruction:
+          "Do not reply yet. Create or inspect the requested static website in one workspace-relative directory with index.html and any local CSS or JavaScript assets. Do not start a server. After index.html has been written or read in this response, call pixel_ods_workspace_preview with that relative directory.",
+      };
+    }
+    state.workspacePreviewDirectory = directory;
+    return {
+      stage: "workspace-preview",
+      instruction:
+        `Do not reply yet. Call tool_call now with id ${WORKSPACE_PREVIEW_TOOL} ` +
+        `and args ${JSON.stringify({ relativeDirectory: directory })}. ` +
+        "Do not start a sandbox server or claim another localhost URL.",
+    };
+  }
+
   function toolResultPersist(event, context, agentId = "pixel") {
     if (context?.agentId !== agentId) return undefined;
     const toolCallId = context?.toolCallId ?? event?.toolCallId;
@@ -6211,7 +6407,10 @@ export function createToolLoopGuard({
     if (context?.agentId !== agentId) return undefined;
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return undefined;
-    const continuation = trustedOperationsContinuation(runs.get(runId), runId);
+    const state = runs.get(runId);
+    const continuation =
+      trustedOperationsContinuation(state, runId) ??
+      trustedWorkspacePreviewContinuation(state);
     if (!continuation) return undefined;
     return {
       action: "revise",
@@ -6228,6 +6427,33 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
+    if (
+      state.workspacePreviewRequested &&
+      !state.operationsRequired &&
+      !state.exactDownloadRequested
+    ) {
+      if (!state.workspacePreview) {
+        return {
+          status: "failed",
+          text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
+        };
+      }
+      return {
+        status: "passed",
+        text:
+          `${WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX}\n` +
+          `- [Open the verified preview](${state.workspacePreview.url})\n` +
+          `- Snapshot: ${state.workspacePreview.files} files, ` +
+          `${state.workspacePreview.bytes} bytes, SHA-256 ` +
+          `\`${state.workspacePreview.sha256}\`.\n` +
+          "- Browser readback: HTTP 200 from the dedicated loopback preview origin.",
+        preview: {
+          schemaVersion: 1,
+          kind: "ods-pixel-workspace-preview",
+          ...state.workspacePreview,
+        },
+      };
+    }
     if (state.exactDownloadRequested) {
       const terminalText = exactDownloadTerminalText(state.exactDownloadTerminalOutcome);
       if (terminalText) return { status: "failed", text: terminalText };

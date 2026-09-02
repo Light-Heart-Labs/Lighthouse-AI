@@ -77,6 +77,9 @@ import {
   WEB_LOOP_ABORT_REASON,
   WORKSPACE_TOOL_SEARCH_COMPLETE_REASON,
   WORKSPACE_UNREQUESTED_PROJECTION_REASON,
+  WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
+  WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
+  WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
   createExecCancellationControl,
   createToolLoopGuard,
   createToolLoopGuardRegistry,
@@ -96,6 +99,7 @@ import {
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceTools,
   userMessageRequestsWorkspaceMutation,
+  userMessageRequestsWorkspacePreview,
   userMessageWorkspaceContinuationPath,
   userMessageWorkspaceDirectoryPath,
   userMessageRequestsOperationsEvidenceArtifact,
@@ -7258,6 +7262,116 @@ test("bounds retained run counters without conversation access", () => {
     });
   }
   assert.equal(guard.trackedRunCount(), 256);
+});
+
+test("classifies a requested website demo as a verified workspace preview", () => {
+  assert.equal(
+    userMessageRequestsWorkspacePreview(
+      [],
+      "Build a website, any website, as a cool high-quality demo of your capabilities."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview([], "Explain how websites work."),
+    false
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview(
+      [],
+      "Not seeing it when I go to local host; could you investigate?"
+    ),
+    true
+  );
+});
+
+test("blocks sandbox web servers and requires the verified preview tool", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build a website as a high-quality demo I can view." }
+  );
+  const writeParams = {
+    path: "demo-site/index.html",
+    content: "<!doctype html><title>Verified demo</title>",
+  };
+  call(guard, "write", { event: { params: writeParams } });
+  afterCall(guard, "write", {
+    event: { params: writeParams, result: { details: { status: "completed" } } },
+  });
+  const server = call(guard, "exec", {
+    event: { params: { command: "python3 -m http.server 3000 &" } },
+  });
+  assert.equal(server.block, true);
+  assert.equal(server.blockReason, WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON);
+  assert.match(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "It is running." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ).retry.instruction,
+    /pixel_ods_workspace_preview.*demo-site/
+  );
+  assert.equal(reply(guard).payload.text, WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX);
+});
+
+test("accepts only a readback-verified dedicated preview receipt", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me a demo website." }
+  );
+  const writeParams = {
+    path: "demo-site/index.html",
+    content: "<!doctype html><title>Verified demo</title>",
+  };
+  call(guard, "write", { event: { params: writeParams } });
+  afterCall(guard, "write", {
+    event: { params: writeParams, result: { details: { status: "completed" } } },
+  });
+  const previewParams = { relativeDirectory: "wrong-site" };
+  const normalized = call(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams },
+  });
+  assert.deepEqual(normalized.params, { relativeDirectory: "demo-site" });
+  const details = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    status: "succeeded",
+    relativeDirectory: "demo-site",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 1,
+    bytes: 43,
+    sha256: "a".repeat(64),
+    entryFile: "index.html",
+    entrySha256: "b".repeat(64),
+    httpStatus: 200,
+    readbackVerified: true,
+    executable: false,
+    overwritten: false,
+  };
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: {
+      params: normalized.params,
+      result: { details },
+    },
+  });
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.match(verification.text, new RegExp(WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX));
+  assert.match(verification.text, /http:\/\/localhost:9437\/site-0123456789abcdef01234567\//);
+  assert.equal(
+    guard.beforeAgentFinalize(
+      { runId: "run-1" },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ),
+    undefined
+  );
 });
 
 test("an abort failure is contained and remains a blocked tool result", () => {

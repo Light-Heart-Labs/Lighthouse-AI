@@ -90,6 +90,14 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   honest host-authored result. Streaming responses are bounded and buffered
   until that check completes, so false content is never released and then
   retracted.
+- **Verified interactive previews.** A website request may use the separate
+  `pixel-workspace-preview.service` to snapshot bounded static files from the
+  Pixel workspace onto `127.0.0.1:${PIXEL_PREVIEW_PORT:-9437}`. The service
+  takes no arbitrary host path or destination, follows no links, executes
+  nothing, never overwrites a snapshot, and reads back `index.html` before its
+  receipt is accepted. Only that exact receipt can produce the structured SSE
+  marker that opens the Dashboard's sandboxed side panel; model-authored URLs
+  remain ordinary text.
 
 ## Configuration (nonsecret)
 
@@ -118,11 +126,14 @@ failure. It contains no credential.
 
 ## Rollback
 
-This ingress is an additive host service. Removing it restores the previous
+This ingress and the isolated preview origin are additive host services.
+Removing them restores the previous
 state: Open WebUI simply cannot reach the Pixel gateway, and the default agent
 surface falls back to the ODS-managed agent lanes (**Hermes**, or **OpenCode**
-for coding). There is no container, no port, and no persistent state to tear
-down beyond the runtime socket and status file in `/run/ods-pixel`.
+for coding). The preview listener is loopback-only; uninstall removes it and
+only its recursively revalidated content-addressed snapshots. The ingress
+itself still has no TCP listener or persistent state beyond the runtime socket
+and status file in `/run/ods-pixel`.
 
 ## Development
 
