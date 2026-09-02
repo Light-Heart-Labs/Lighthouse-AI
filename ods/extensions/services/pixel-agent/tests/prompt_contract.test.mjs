@@ -167,6 +167,15 @@ test("adds owner-requested projections and workspace continuation only after ter
   assert.match(exact, /continue the owner's explicit workspace work/);
 });
 
+test("keeps natural ODS application names and links in a combined host request", () => {
+  const prompt =
+    "Explore this machine broadly, report the active ODS model, and list the installed ODS application names and links.";
+  const exact = operationsRequestContract([], prompt);
+  assert.match(exact, /includeOdsStatus/);
+  assert.match(exact, /id pixel_ods_apps_list/);
+  assert.match(exact, /Every listed projection is required/);
+});
+
 test("adds a static visible-reply contract for the exact Pixel agent", () => {
   const result = promptContractForAgent({ agentId: "pixel" }, "pixel");
   assert.deepEqual(result, { appendSystemContext: ODS_CONVERSATION_CONTRACT });

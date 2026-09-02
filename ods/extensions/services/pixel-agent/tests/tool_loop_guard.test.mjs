@@ -3826,6 +3826,20 @@ test("adds only a sanitized ODS container projection after terminal host Operati
     ),
     false
   );
+  assert.equal(
+    userMessageRequiresOdsAppsProjection(
+      [],
+      "Explore this machine and report the installed ODS application names and links."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequiresOdsAppsProjection(
+      [],
+      "Build an application in the workspace and explain the links in its navigation."
+    ),
+    false
+  );
   assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
     block: true,
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,

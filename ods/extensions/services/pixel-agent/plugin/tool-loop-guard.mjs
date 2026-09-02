@@ -3387,7 +3387,12 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
 
 export function userMessageRequiresOdsAppsProjection(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
-  if (!text || !/\b(?:Docker\s+)?containers?\b/i.test(text)) return false;
+  if (!text || !userMessageOperationsRequirements(messages, prompt).required) return false;
+  const asksOdsApplications = userMessageOdsToolRequirements([], text).includes(
+    "pixel_ods_apps_list"
+  );
+  if (asksOdsApplications) return true;
+  if (!/\b(?:Docker\s+)?containers?\b/i.test(text)) return false;
   if (
     /\bnot\s+just\s+(?:the\s+)?(?:agent\s+)?(?:containers?|sandbox)\b/i.test(text) ||
     /\bdistinguish\b[^.!?;\n]{0,96}\bhost\b[^.!?;\n]{0,96}\bfrom\b[^.!?;\n]{0,96}\bcontainers?\b/i.test(text) ||
@@ -3398,7 +3403,6 @@ export function userMessageRequiresOdsAppsProjection(messages, prompt = undefine
   ) {
     return false;
   }
-  if (!userMessageOperationsRequirements(messages, prompt).required) return false;
   const asksContainerDetails =
     /(?:\b(?:list|name|identify|which|details?|statuses?|purposes?|links?|URLs?)\b[^.!?;\n]{0,96}\bcontainers?\b|\bcontainers?\b[^.!?;\n]{0,96}\b(?:list|names?|details?|statuses?|purposes?|links?|URLs?)\b)/i.test(
       text
