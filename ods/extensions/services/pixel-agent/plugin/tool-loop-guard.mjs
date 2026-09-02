@@ -563,8 +563,9 @@ function normalizeWorkspaceParams(toolName, params) {
     toolName === "exec" &&
     typeof updated.command !== "string" &&
     typeof params.shell === "string" &&
+    (params.context === undefined || params.context === "fork") &&
     Object.keys(params).every((key) =>
-      ["shell", "workdir", "yieldMs", "timeout", "pty", "background"].includes(key)
+      ["shell", "context", "workdir", "yieldMs", "timeout", "pty", "background"].includes(key)
     )
   ) {
     // `shell` is another common command-value spelling emitted by compact
@@ -573,6 +574,7 @@ function normalizeWorkspaceParams(toolName, params) {
     // The recovered command still traverses cancellation and safety policy.
     updated.command = params.shell;
     delete updated.shell;
+    if (updated.context === "fork") delete updated.context;
     changed = true;
   }
   if (

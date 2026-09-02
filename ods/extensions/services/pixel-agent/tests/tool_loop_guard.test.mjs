@@ -5251,12 +5251,13 @@ test("normalizes a compact-model exec shell alias before cancellable wrapping", 
     event: {
       params: {
         id: "exec",
-        args: { shell: "python3 -c 'print(1)'" },
+        args: { shell: "python3 -c 'print(1)'", context: "fork" },
       },
     },
   });
   assert.deepEqual(prepared, [["run-1", "python3 -c 'print(1)'"]]);
   assert.equal(result.params.args.shell, undefined);
+  assert.equal(result.params.args.context, undefined);
   assert.match(result.params.args.command, /^\/control\/wrapper run-1 /);
 
   const ambiguous = createToolLoopGuard();
@@ -5265,7 +5266,7 @@ test("normalizes a compact-model exec shell alias before cancellable wrapping", 
       event: {
         params: {
           id: "exec",
-          args: { shell: "printf unsafe", env: { PATH: "/tmp" } },
+          args: { shell: "printf unsafe", context: "host" },
         },
       },
     }),
