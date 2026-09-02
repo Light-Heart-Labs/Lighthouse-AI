@@ -7299,6 +7299,47 @@ test("classifies a requested website demo as a verified workspace preview", () =
     ),
     true
   );
+  assert.equal(
+    userMessageRequestsWorkspacePreview(
+      [],
+      "Improve the website in the same workspace, verify the update, and show the refreshed preview here."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview([], "Show the refreshed preview here."),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview(
+      [],
+      "Update the website files without showing or publishing a preview."
+    ),
+    false
+  );
+});
+
+test("permits an explicitly requested preview after inspecting an existing site", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Improve the website in the same workspace, verify the update, and show the refreshed preview here.",
+    }
+  );
+  const readParams = { path: "interactive-demo/index.html" };
+  call(guard, "read", { event: { params: readParams } });
+  afterCall(guard, "read", {
+    event: { params: readParams, result: { details: { status: "completed" } } },
+  });
+  assert.deepEqual(
+    call(guard, "pixel_ods_workspace_preview", {
+      event: { params: { relativeDirectory: "interactive-demo" } },
+    }),
+    { params: { relativeDirectory: "interactive-demo" } }
+  );
 });
 
 test("blocks sandbox web servers and requires the verified preview tool", () => {

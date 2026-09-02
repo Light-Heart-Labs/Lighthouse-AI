@@ -3361,15 +3361,23 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:website|web\s*site|web\s*page|landing\s+page|static\s+site|frontend)\b/i.test(text);
   const build =
     /\b(?:build|create|make|develop|generate|implement|write)\b/i.test(text);
+  const revise =
+    /\b(?:continue|edit|improve|modify|patch|refresh|republish|update|work)\b/i.test(text);
   const view =
     /\b(?:demo|preview|show|view|open|see|live|browser|localhost|host|serve|publish)\b/i.test(text);
+  const rejectsPreview =
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:demo|preview|show|view|open|serve|publish)\b/i.test(
+      text
+    );
+  if (rejectsPreview) return false;
   const directPreview =
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
-    /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text);
+    /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
+    /\b(?:open|refresh|republish|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(text);
   const unreachableLocalPreview =
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
-  return directPreview || unreachableLocalPreview || (website && build && view);
+  return directPreview || unreachableLocalPreview || (website && (build || revise) && view);
 }
 
 export function userMessageRequestsWorkspaceDemoScaffold(
