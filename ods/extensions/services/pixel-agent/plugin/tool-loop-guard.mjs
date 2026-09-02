@@ -3487,9 +3487,17 @@ export function userMessageRequestsWorkspaceDemoScaffold(
   prompt = undefined
 ) {
   const text = currentOwnerIntentText(messages, prompt);
+  const exactNameRequested =
+    /\b(?:called|named)\s+[a-z0-9][a-z0-9._-]{1,80}\b/i.test(text);
+  const customInteractionRequested =
+    /\b(?:with|include|including|containing|feature|featuring|must\s+have|should\s+have)\b[^.!?;\n]{0,180}\b(?:button|control|counter|form|game|input|menu|navigation|slider|table|toggle)\b/i.test(
+      text
+    );
   return Boolean(
     text &&
     userMessageRequestsWorkspacePreview(messages, prompt) &&
+    !exactNameRequested &&
+    !customInteractionRequested &&
     /\b(?:demo|demonstrat(?:e|ion)|showcase|any\s+(?:website|site|web\s*page)|capabilit(?:y|ies))\b/i.test(
       text
     )

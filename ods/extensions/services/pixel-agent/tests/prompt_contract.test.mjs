@@ -58,6 +58,20 @@ test("adds a bounded first-write contract only for requested website previews", 
     /Static readback does not prove a button was clicked or an interaction worked/
   );
 
+  const specifiedDemo = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 65536 },
+    "pixel",
+    {
+      prompt:
+        "Build and open a website demo named swiss-watch-preview with a theme button and a counter button.",
+    },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(
+    specifiedDemo.appendSystemContext,
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+  );
+
   const explanation = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },
     "pixel",

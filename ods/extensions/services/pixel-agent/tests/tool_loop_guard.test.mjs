@@ -7356,6 +7356,20 @@ test("classifies a requested website demo as a verified workspace preview", () =
     false
   );
   assert.equal(
+    userMessageRequestsWorkspaceDemoScaffold(
+      [],
+      "Build and open a fresh interactive website demo named swiss-watch-preview with a semantic theme button and a separate semantic counter button."
+    ),
+    false
+  );
+  assert.equal(
+    userMessageRequestsWorkspaceDemoScaffold(
+      [],
+      "Demonstrate your capabilities with a website that includes a working form."
+    ),
+    false
+  );
+  assert.equal(
     userMessageRequestsWorkspacePreview(
       [],
       "Not seeing it when I go to local host; could you investigate?"
