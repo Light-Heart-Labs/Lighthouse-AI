@@ -63,6 +63,7 @@ import {
   REPEATED_WRITE_REQUIRES_PATCH_REASON,
   REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
   REQUESTED_UNITTEST_REQUIRED_REASON,
+  REQUESTED_UNITTEST_RETRY_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
   VERIFICATION_NOT_RUN_DELIVERY_PREFIX,
   VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
@@ -1453,6 +1454,22 @@ test("requires real unittest structure when the owner explicitly requests it", (
   );
   assert.match(REQUESTED_UNITTEST_REQUIRED_REASON, /under 1000 characters/);
   assert.match(REQUESTED_UNITTEST_REQUIRED_REASON, /No narration, comments, docstrings, extra cases/);
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: {
+          id: "write",
+          args: {
+            path: "test_stats_report.py",
+            content: "def run_normal_test():\n    return True\n",
+          },
+        },
+      },
+    }),
+    { block: true, blockReason: REQUESTED_UNITTEST_RETRY_REASON }
+  );
+  assert.match(REQUESTED_UNITTEST_RETRY_REASON, /exact outer shape/);
+  assert.match(REQUESTED_UNITTEST_RETRY_REASON, /class Tests\(unittest\.TestCase\)/);
 
   const accepted = call(guard, "tool_call", {
     event: {

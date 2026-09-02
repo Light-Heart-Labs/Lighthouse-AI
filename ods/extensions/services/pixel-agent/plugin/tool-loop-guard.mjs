@@ -119,6 +119,9 @@ export const VERIFICATION_COMMAND_NOT_AUDITABLE_REASON =
 export const REQUESTED_UNITTEST_REQUIRED_REASON =
   "The owner explicitly requested Python unittest coverage, so that attempted file was not written. Make exactly one tool_call now with id write, the same path, and a complete replacement under 1000 characters. Begin with the needed imports including unittest; use one unittest.TestCase class with only the requested test_* methods and assertions; finish with unittest.main(). No narration, comments, docstrings, extra cases, or print-only custom runner. Do not run verification before this test file is accepted.";
 
+export const REQUESTED_UNITTEST_RETRY_REASON =
+  "That replacement still was not unittest and was not written. Make one final write call now, with no prose, using this exact outer shape: `import subprocess, sys, unittest`; `class Tests(unittest.TestCase):`; one `def test_name(self):` per owner-requested case; each method calls `subprocess.run(...)` and uses `self.assertEqual(...)`; finish with `if __name__ == '__main__': unittest.main()`. Keep the complete file under 1000 characters. A third invalid shape will stop this turn.";
+
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
 
@@ -4015,6 +4018,9 @@ export function createToolLoopGuard({
           state.invalidUnittestBlocks += 1;
           if (state.invalidUnittestBlocks === 1) {
             return { block: true, blockReason: REQUESTED_UNITTEST_REQUIRED_REASON };
+          }
+          if (state.invalidUnittestBlocks === 2) {
+            return { block: true, blockReason: REQUESTED_UNITTEST_RETRY_REASON };
           }
           state.codingExhausted = true;
           state.codingTerminalBlocks = 1;
