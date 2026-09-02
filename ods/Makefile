@@ -134,6 +134,9 @@ test: ## Run unit and contract tests
 	@echo "=== macOS CLI .env quote handling ==="
 	@bash tests/test-macos-env-quote-strip.sh
 	@echo ""
+	@echo "=== macOS Podman docker-CLI preflight ==="
+	@bash tests/test-macos-podman-docker-preflight.sh
+	@echo ""
 	@echo "=== macOS uninstall LaunchAgent cleanup ==="
 	@bash tests/test-macos-uninstall-launchagents.sh
 	@echo ""
