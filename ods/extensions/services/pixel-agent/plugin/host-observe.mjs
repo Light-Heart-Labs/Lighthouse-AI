@@ -26,11 +26,13 @@ const HOST_ACTIONS = Object.freeze([
   "host.processes",
   "host.services",
   "host.cpu",
+  "host.gpu",
   "host.memory",
   "host.storage",
   "host.network-addresses",
   "host.network-routes",
   "host.listening-ports",
+  "host.tailscale",
 ]);
 const HOST_ACTION_SET = new Set(HOST_ACTIONS);
 const SAFE_ID = /^ops-[0-9]{13}-[a-f0-9]{12}$/;

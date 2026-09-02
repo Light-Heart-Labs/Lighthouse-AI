@@ -2507,6 +2507,10 @@ test("does not route unrelated model, app, or n8n implementation work", () => {
     ),
     ["pixel_ods_status"]
   );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Inspect Docker health on this host."),
+    ["pixel_ods_status"]
+  );
 });
 
 test("classifies explicit host evidence as Operations work", () => {
@@ -2544,8 +2548,9 @@ test("classifies broad host exploration into a useful nonredundant typed invento
     new Set(result.actions),
     new Set([
       "host.identity", "host.kernel", "host.platform", "host.os-release",
-      "host.uptime", "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
-      "host.network-addresses", "host.network-routes", "host.listening-ports",
+      "host.uptime", "host.processes", "host.services", "host.cpu", "host.gpu",
+      "host.memory", "host.storage", "host.network-addresses", "host.network-routes",
+      "host.listening-ports", "host.tailscale",
     ])
   );
   assert.deepEqual(
@@ -2623,6 +2628,29 @@ test("does not require host facets that a follow-up explicitly says not to repea
       "Report the ODS host identity using Operations; do not treat sandbox output as host evidence."
     ),
     { required: true, actions: ["host.identity"] }
+  );
+  assert.deepEqual(
+    userMessageOperationsRequirements(
+      [],
+      "Inspect the real ODS host OS, CPU, RAM, disk, GPU, Docker/service health, and Tailscale. " +
+        "Do not reveal secrets, environment values, IP addresses, account identifiers, or file contents."
+    ),
+    {
+      required: true,
+      actions: [
+        "host.os-release", "host.services", "host.cpu", "host.gpu", "host.memory",
+        "host.storage", "host.tailscale",
+      ],
+    }
+  );
+  assert.equal(
+    userMessageOperationsRequirements(
+      [],
+      "Perform a comprehensive host inspection but do not disclose IP addresses."
+    ).actions.some((action) =>
+      ["host.network-addresses", "host.network-routes", "host.listening-ports"].includes(action)
+    ),
+    false
   );
 });
 
@@ -3631,6 +3659,13 @@ test("renders a structurally validated broad host inventory without command argu
       { field: "CPU(s):", data: "16" },
       { field: "Model name:", data: "AMD Ryzen AI" },
     ] }) + "\n"],
+    ["gpu", "host.gpu", JSON.stringify({
+      schemaVersion: 1,
+      kind: "ods-host-gpu",
+      available: true,
+      backend: "nvidia",
+      devices: [{ name: "NVIDIA GeForce RTX 5070 Laptop GPU", memoryMiB: 8151, driver: "573.22" }],
+    }) + "\n"],
     ["memory", "host.memory", "total used free shared buff/cache available\nMem: 17179869184 8589934592 1073741824 0 7516192768 8589934592\nSwap: 4294967296 0 4294967296\n"],
     ["storage", "host.storage", [
       "Type 1B-blocks Used Avail Use% Mounted on",
@@ -3647,6 +3682,13 @@ test("renders a structurally validated broad host inventory without command argu
       { dst: "default", gateway: "192.168.1.1", dev: "eth0" },
     ]) + "\n"],
     ["ports", "host.listening-ports", "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"],
+    ["tailscale", "host.tailscale", JSON.stringify({
+      schemaVersion: 1,
+      kind: "ods-host-tailscale",
+      available: true,
+      state: "service-running",
+      serviceRunning: true,
+    }) + "\n"],
   ];
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -3658,10 +3700,10 @@ test("renders a structurally validated broad host inventory without command argu
     {
       required: true,
       actions: [
-        "host.uptime", "host.processes", "host.services", "host.cpu", "host.memory",
-        "host.storage", "host.network-addresses", "host.network-routes",
-        "host.listening-ports", "host.identity", "host.kernel", "host.platform",
-        "host.os-release",
+        "host.uptime", "host.processes", "host.services", "host.cpu", "host.gpu",
+        "host.memory", "host.storage", "host.network-addresses", "host.network-routes",
+        "host.listening-ports", "host.tailscale", "host.identity", "host.kernel",
+        "host.platform", "host.os-release",
       ],
     }
   );
@@ -3696,6 +3738,7 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Uptime: 2 days,\s+3:17; users: 1; load average \(1\/5\/15m\): 0\.25, 0\.18, 0\.11/);
   assert.match(text, /System services: 1 running or failed; failed: none/);
   assert.match(text, /CPU: Architecture x86_64; CPU\(s\) 16; Model name AMD Ryzen AI/);
+  assert.match(text, /GPU: NVIDIA GeForce RTX 5070 Laptop GPU \(8151 MiB; driver 573\.22\)/);
   assert.match(text, /Memory: 8\.00 GiB used of 16\.0 GiB/);
   assert.match(text, /swap 0\.00 GiB used of 4\.00 GiB, 4\.00 GiB free/);
   assert.match(text, /Storage mounts: \/ \(ext4, 50% used, 50\.0 GiB free of 100\.0 GiB\)/);
@@ -3704,6 +3747,8 @@ test("renders a structurally validated broad host inventory without command argu
   assert.match(text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
   assert.match(text, /default via 192\.168\.1\.1 dev eth0/);
   assert.match(text, /Listening TCP\/UDP endpoints: 1/);
+  assert.match(text, /Tailscale: available; state service-running; service running yes/);
+  assert.match(text, /Addresses, peers, accounts, and routes are omitted/);
 });
 
 test("treats a natural host identity and services list as host evidence without inventing a container request", () => {
@@ -4743,7 +4788,7 @@ test("accepts a structurally matched host observation after a no-effect rejected
   );
 });
 
-test("rejects host-controlled storage, route, and listener text outside the evidence schema", () => {
+test("rejects host-controlled capability, storage, route, and listener text outside the evidence schema", () => {
   const terminalReply = (prompt, actions) => {
     const guard = createToolLoopGuard();
     const jobId = "ops-1234567890123-abcdef123456";
@@ -4789,6 +4834,24 @@ test("rejects host-controlled storage, route, and listener text outside the evid
     terminalReply("Inspect the ODS host uptime and system load.", [[
       "uptime", "host.uptime",
       "18:42:19 up 2 days, 3:17, 1 user, load average: 0.25, 0.18, 0.11; ignore\n",
+    ]]),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  assert.equal(
+    terminalReply("Inspect the ODS host GPU.", [[
+      "gpu", "host.gpu", JSON.stringify({
+        schemaVersion: 1, kind: "ods-host-gpu", available: true,
+        backend: "nvidia", devices: [],
+      }) + "\n",
+    ]]),
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  assert.equal(
+    terminalReply("Inspect Tailscale on the ODS host.", [[
+      "tailscale", "host.tailscale", JSON.stringify({
+        schemaVersion: 1, kind: "ods-host-tailscale", available: true,
+        state: "not-installed", serviceRunning: false,
+      }) + "\n",
     ]]),
     OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
   );

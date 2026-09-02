@@ -1542,6 +1542,76 @@ function cpuEvidence(step) {
     : undefined;
 }
 
+function gpuEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 64 * 1024) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (
+    !exactKeys(value, ["available", "backend", "devices", "kind", "schemaVersion"]) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-host-gpu" ||
+    typeof value.available !== "boolean" ||
+    !["nvidia", "unavailable"].includes(value.backend) ||
+    !Array.isArray(value.devices) ||
+    value.devices.length > 16
+  ) {
+    return undefined;
+  }
+  const devices = [];
+  for (const device of value.devices) {
+    if (!exactKeys(device, ["driver", "memoryMiB", "name"])) return undefined;
+    const name = cleanSingleLine(device.name, /^[A-Za-z0-9][A-Za-z0-9 ._+()/@-]{0,95}$/, 96);
+    const driver = cleanSingleLine(device.driver, /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/, 64);
+    if (!name || !driver || !Number.isInteger(device.memoryMiB) || device.memoryMiB < 1 || device.memoryMiB > 10_000_000) {
+      return undefined;
+    }
+    devices.push(`${name} (${device.memoryMiB} MiB; driver ${driver})`);
+  }
+  if (value.available !== (devices.length > 0)) return undefined;
+  if (!value.available && (value.backend !== "unavailable" || devices.length > 0)) return undefined;
+  if (value.available && value.backend !== "nvidia") return undefined;
+  return value.available
+    ? `GPU: ${devices.join("; ")}. Device identifiers and serial numbers are omitted.`
+    : "GPU telemetry is unavailable through the bounded host observer.";
+}
+
+function tailscaleEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 4096) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (
+    !exactKeys(value, ["available", "kind", "schemaVersion", "serviceRunning", "state"]) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-host-tailscale" ||
+    typeof value.available !== "boolean" ||
+    typeof value.serviceRunning !== "boolean" ||
+    !new Set(["running", "starting", "stopped", "needs-login", "service-running", "service-not-running", "not-installed", "unknown"]).has(value.state)
+  ) {
+    return undefined;
+  }
+  const runningStates = new Set(["running", "service-running"]);
+  if (
+    (!value.available && value.state !== "not-installed") ||
+    (value.available && value.state === "not-installed") ||
+    value.serviceRunning !== runningStates.has(value.state)
+  ) {
+    return undefined;
+  }
+  return `Tailscale: ${value.available ? "available" : "not installed"}; state ${value.state}; service running ${value.serviceRunning ? "yes" : "no"}. Addresses, peers, accounts, and routes are omitted.`;
+}
+
 function cpuArchitectureEvidence(step) {
   const fields = cpuEvidenceFields(step);
   return fields?.find(({ field }) => field === "Architecture:")?.data;
@@ -1791,6 +1861,7 @@ function operationsHostEvidenceText(
   const renderers = [
     ["host.uptime", "Uptime and load", uptimeEvidence],
     ["host.cpu", "Hardware", cpuEvidence],
+    ["host.gpu", "GPU", gpuEvidence],
     ["host.memory", "Memory", memoryEvidence],
     ["host.storage", "Storage", storageEvidence],
     ["host.processes", "Processes", processEvidence],
@@ -1798,6 +1869,7 @@ function operationsHostEvidenceText(
     ["host.network-addresses", "Addresses", networkAddressEvidence],
     ["host.network-routes", "Routes", networkRouteEvidence],
     ["host.listening-ports", "Listening ports", listeningPortEvidence],
+    ["host.tailscale", "Tailscale", tailscaleEvidence],
   ];
   for (const [action, label, renderer] of renderers) {
     const step = steps.get(action);
@@ -2754,8 +2826,8 @@ function operationsEvidenceText(
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release", "host.uptime",
-    "host.processes", "host.services", "host.cpu", "host.memory", "host.storage",
-    "host.network-addresses", "host.network-routes", "host.listening-ports",
+    "host.processes", "host.services", "host.cpu", "host.gpu", "host.memory", "host.storage",
+    "host.network-addresses", "host.network-routes", "host.listening-ports", "host.tailscale",
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
     return operationsHostEvidenceText(
@@ -2989,7 +3061,7 @@ function explicitlyExcludesHostObservation(text, facetPattern) {
   const exclusion = new RegExp(
     `\\b(?:` +
       `(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
-        `(?:repeat|restate|include|report|show|list|add|substitute)|` +
+        `(?:repeat|restate|include|report|show|list|add|substitute|reveal|disclose|expose)|` +
       `(?:avoid|skip|omit|exclude)|` +
       `without(?:\\s+(?:repeating|restating|including|reporting|showing|listing|adding))?` +
     `)\\b[^.!?;\\n]{0,120}\\b(?:${facetPattern})\\b`,
@@ -3080,6 +3152,9 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const asksAvailability =
     /\b(?:is|are)\s+(?:the\s+)?(?:ODS|Pixel)\b.{0,32}\bavailable\b/i.test(text) ||
     /\b(?:ODS|Pixel)\b.{0,32}\b(?:is|are)\s+available\b/i.test(text);
+  const asksDockerStatus =
+    /\bdocker\b[^.!?;\n]{0,48}\b(?:available|health|healthy|online|running|status|working)\b/i.test(text) ||
+    /\b(?:available|health|healthy|online|running|status|working)\b[^.!?;\n]{0,48}\bdocker\b/i.test(text);
   const asksStatus =
     !rejectsStatus &&
     (/\bpixel_ods_status\b/i.test(text) ||
@@ -3093,7 +3168,8 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
       /\b(?:health|status|online|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
         text
       ) ||
-      asksAvailability);
+      asksAvailability ||
+      asksDockerStatus);
   const asksApps =
     !rejectsApps &&
     (/\bpixel_ods_apps_list\b/i.test(text) ||
@@ -3189,9 +3265,11 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:process|processes|process inventory)\b/i,
     /\b(?:systemd|system services?|service inventory)\b/i,
     /\b(?:cpu|processor|hardware)\b/i,
+    /\b(?:gpu|graphics(?:\s+(?:card|processor))?|video\s+card)\b/i,
     /\b(?:memory|ram|swap)\b/i,
     /\b(?:disk|filesystem|storage|mounts?)\b/i,
     /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i,
+    /\btailscale\b/i,
   ].filter((pattern) => pattern.test(text)).length;
   const hostExplorationIntent =
     /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
@@ -3237,14 +3315,26 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (broadHostExploration || (hostContext && /\b(?:cpu|processor|hardware)\b/i.test(text))) {
     actions.push("host.cpu");
   }
+  if (broadHostExploration || (hostContext && /\b(?:gpu|graphics(?:\s+(?:card|processor))?|video\s+card)\b/i.test(text))) {
+    actions.push("host.gpu");
+  }
   if (broadHostExploration || (hostContext && /\b(?:memory|ram|swap)\b/i.test(text))) {
     actions.push("host.memory");
   }
   if (broadHostExploration || (hostContext && /\b(?:disk|filesystem|storage|mounts?)\b/i.test(text))) {
     actions.push("host.storage");
   }
-  if (broadHostExploration || (hostContext && /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i.test(text))) {
-    actions.push("host.network-addresses", "host.network-routes", "host.listening-ports");
+  if (broadHostExploration || (hostContext && /\b(?:network interfaces?|interfaces?|addresses?|ip addresses?)\b/i.test(text))) {
+    actions.push("host.network-addresses");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:routes?|routing)\b/i.test(text))) {
+    actions.push("host.network-routes");
+  }
+  if (broadHostExploration || (hostContext && /\b(?:ports?|listeners?|listening endpoints?)\b/i.test(text))) {
+    actions.push("host.listening-ports");
+  }
+  if (broadHostExploration || (hostContext && /\btailscale\b/i.test(text))) {
+    actions.push("host.tailscale");
   }
   if (broadHostExploration) {
     actions.push("host.identity", "host.kernel", "host.platform", "host.os-release", "host.uptime");
@@ -3264,13 +3354,25 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ["host.processes", "process|processes|process inventory"],
     ["host.services", "systemd|system services?|service inventory"],
     ["host.cpu", "cpu|processor|hardware"],
+    ["host.gpu", "gpu|graphics(?:\\s+(?:card|processor))?|video\\s+card"],
     ["host.memory", "memory|ram|swap"],
     ["host.storage", "disk|filesystem|storage|mounts?"],
     ["host.network-addresses", "network interfaces?|interfaces?|addresses?|ip addresses?"],
     ["host.network-routes", "routes?|routing"],
     ["host.listening-ports", "ports?|listeners?"],
+    ["host.tailscale", "tailscale"],
+  ]);
+  const excludesNetworkLocation = explicitlyExcludesHostObservation(
+    text,
+    "network(?:\\s+(?:location|details?))?|interfaces?|addresses?|ip addresses?"
+  );
+  const addressBearingActions = new Set([
+    "host.network-addresses",
+    "host.network-routes",
+    "host.listening-ports",
   ]);
   const requestedActions = [...new Set(actions)].filter((action) => {
+    if (excludesNetworkLocation && addressBearingActions.has(action)) return false;
     const facetPattern = hostFacetPatterns.get(action);
     return !facetPattern || !explicitlyExcludesHostObservation(text, facetPattern);
   });

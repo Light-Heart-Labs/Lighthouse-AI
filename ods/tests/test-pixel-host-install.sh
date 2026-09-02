@@ -585,6 +585,8 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service"
   cp "$ROOT/extensions/services/pixel-agent/host/workspace_preview.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
+  cp "$ROOT/extensions/services/pixel-agent/host/system_observe.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/system_observe.py"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-workspace-preview.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-workspace-preview.service"
   cp "$ROOT/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf" \
@@ -595,6 +597,7 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/config" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/artifact_promoter.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-artifact-promoter.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py" \
+      "$INSTALL_DIR/extensions/services/pixel-agent/host/system_observe.py" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-workspace-preview.service" \
       "$INSTALL_DIR/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
   chmod 0755 "$INSTALL_DIR/bin/ods-pixel-approve"
@@ -704,7 +707,7 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports"}
+host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.gpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports","host.tailscale"}
 assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
 for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect"}:
     assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
@@ -718,11 +721,13 @@ assert pathlib.Path(v["actions"]["host.processes"]["argv"][0]).name == "ps"
 assert v["actions"]["host.processes"]["argv"][1:] == ["-eo","pid=,ppid=,user=,stat=,%cpu=,%mem=,comm=","--sort=-%cpu"]
 assert pathlib.Path(v["actions"]["host.services"]["argv"][0]).name == "systemctl"
 assert v["actions"]["host.cpu"]["argv"][1:] == ["--json"]
+assert v["actions"]["host.gpu"]["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "gpu"]
 assert v["actions"]["host.memory"]["argv"][1:] == ["--bytes"]
 assert v["actions"]["host.storage"]["argv"][1:] == ["--block-size=1","--output=fstype,size,used,avail,pcent,target"]
 assert v["actions"]["host.network-addresses"]["argv"][1:] == ["-j","address","show"]
 assert v["actions"]["host.network-routes"]["argv"][1:] == ["-j","route","show"]
 assert v["actions"]["host.listening-ports"]["argv"][1:] == ["-H","-lntu"]
+assert v["actions"]["host.tailscale"]["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "tailscale"]
 extension_search=v["actions"]["ods.extensions.search"]
 assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
 assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]
@@ -1820,7 +1825,8 @@ assert "_ods_pixel_write_extension_manager_unit" in text
 assert "owner-private ODS Pixel extension manager service" in text
 assert "_ods_pixel_write_artifact_promoter_unit" in text
 assert "owner-private ODS Pixel artifact promoter service" in text
-assert "ods-pixel-contract-v8" in text
+assert "ods-pixel-contract-v9" in text
+assert "ods-pixel-system-observe.py" in text
 assert "pixel-ops-broker-ods.conf" in text
 for family in ("AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"):
     assert family in text

@@ -168,13 +168,27 @@ _HOST_ACTION_RULES = (
     (re.compile(r"\b(?:disks?|filesystem|mount(?:ed|s)?|storage)\b", re.IGNORECASE), "host.storage"),
     (re.compile(r"\bprocess(?:es)?\b", re.IGNORECASE), "host.processes"),
     (re.compile(r"\b(?:cpu|processor|architecture)\b", re.IGNORECASE), "host.cpu"),
+    (re.compile(r"\b(?:gpu|graphics(?:\s+(?:card|processor))?|video\s+card)\b", re.IGNORECASE), "host.gpu"),
     (re.compile(r"\b(?:hostname|identity)\b", re.IGNORECASE), "host.identity"),
     (re.compile(r"\buptime\b", re.IGNORECASE), "host.uptime"),
     (re.compile(r"\bservices?\b", re.IGNORECASE), "host.services"),
     (re.compile(r"\b(?:listening\s+ports?|open\s+ports?)\b", re.IGNORECASE), "host.listening-ports"),
     (re.compile(r"\b(?:network\s+addresses?|ip\s+addresses?)\b", re.IGNORECASE), "host.network-addresses"),
     (re.compile(r"\b(?:network\s+routes?|routing\s+table)\b", re.IGNORECASE), "host.network-routes"),
+    (re.compile(r"\btailscale\b", re.IGNORECASE), "host.tailscale"),
 )
+_NETWORK_DISCLOSURE_EXCLUSION = re.compile(
+    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not)\s+"
+    r"(?:include|report|show|list|reveal|disclose|expose)\b"
+    r"[^.!?;\n]{0,120}\b(?:network(?:\s+(?:location|details?))?|"
+    r"interfaces?|addresses?|ip\s+addresses?)\b",
+    re.IGNORECASE,
+)
+_ADDRESS_BEARING_HOST_ACTIONS = {
+    "host.network-addresses",
+    "host.network-routes",
+    "host.listening-ports",
+}
 _CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
 _ACTIVE_REQUESTS_KEY = web.AppKey("pixel_active_requests", set)
 
@@ -281,7 +295,13 @@ def _with_interactive_delivery_contract(data: dict) -> dict:
         and _HOST_INSPECTION_INTENT.search(owner_text)
         and not (_ARTIFACT_DRAFT_PREFIX.search(owner_text) and _ARTIFACT_NOUN.search(owner_text))
     ):
-        actions = [action for pattern, action in _HOST_ACTION_RULES if pattern.search(owner_text)]
+        excludes_network_location = bool(_NETWORK_DISCLOSURE_EXCLUSION.search(owner_text))
+        actions = [
+            action
+            for pattern, action in _HOST_ACTION_RULES
+            if pattern.search(owner_text)
+            and not (excludes_network_location and action in _ADDRESS_BEARING_HOST_ACTIONS)
+        ]
         route = (
             "\n[ODS Pixel host inspection route: Generic sandbox commands and "
             "status projections cannot establish host facts. Use the visible "

@@ -42,6 +42,8 @@ ods_pixel_uninstall_managed() {
     local workspace_preview_source="$install_dir/extensions/services/pixel-agent/host/workspace_preview.py"
     local workspace_preview_owner_unit="$install_dir/data/pixel/workspace-preview.service"
     local workspace_preview_state="${ODS_PIXEL_UNINSTALL_PREVIEW_STATE_DIR:-/var/lib/ods-pixel-preview}"
+    local system_observer_program="$libexec_dir/ods-pixel-system-observe.py"
+    local system_observer_source="$install_dir/extensions/services/pixel-agent/host/system_observe.py"
     local ops_user="pixel-ops-broker"
     local ops_group="pixel-ops"
     local ops_unit="$systemd_dir/pixel-ops-broker.service"
@@ -92,7 +94,8 @@ ods_pixel_uninstall_managed() {
         "$ops_extension_program" "$ops_extension_catalog" "$ops_extension_manager" "$ops_state" \
         "$extension_manager_unit" "$extension_manager_program" \
         "$artifact_promoter_unit" "$artifact_promoter_program" \
-        "$workspace_preview_unit" "$workspace_preview_program" "$workspace_preview_state"; do
+        "$workspace_preview_unit" "$workspace_preview_program" "$workspace_preview_state" \
+        "$system_observer_program"; do
         [[ "$path" == /* && "$path" != / ]] || {
             log_error "Refusing Pixel Operations cleanup for an invalid absolute target"
             return 1
@@ -134,6 +137,7 @@ ods_pixel_uninstall_managed() {
         "$artifact_promoter_unit" "$artifact_promoter_program" "$artifact_promoter_source" \
         "$artifact_promoter_owner_unit" "$workspace_preview_unit" "$workspace_preview_program" \
         "$workspace_preview_source" "$workspace_preview_owner_unit" "$workspace_preview_state" \
+        "$system_observer_program" "$system_observer_source" \
         "$openclaw_config" "$gateway_env" "$onboarding" "$exec_control" "$ops_owner_policy" \
         "$ops_owner_extension_catalog" "$ops_extension_source_program" "$ops_dropin_source" \
         "$current" "$runtime_attestation" "$staged_current" "$staged_attestation" "$deployment_lock" \
@@ -171,6 +175,8 @@ import sys
     workspace_preview_source_raw,
     workspace_preview_owner_unit_raw,
     workspace_preview_state_raw,
+    system_observer_program_raw,
+    system_observer_source_raw,
     openclaw_config_raw,
     gateway_env_raw,
     onboarding_raw,
@@ -469,6 +475,7 @@ artifact_promoter_source = pathlib.Path(artifact_promoter_source_raw)
 artifact_promoter_owner_unit = pathlib.Path(artifact_promoter_owner_unit_raw)
 workspace_preview_source = pathlib.Path(workspace_preview_source_raw)
 workspace_preview_owner_unit = pathlib.Path(workspace_preview_owner_unit_raw)
+system_observer_source = pathlib.Path(system_observer_source_raw)
 ops_dropin_source = pathlib.Path(ops_dropin_source_raw)
 extension_manager_present = (
     extension_manager_source.exists() or extension_manager_source.is_symlink()
@@ -503,6 +510,12 @@ if workspace_preview_source_present != workspace_preview_contract_present:
 if workspace_preview_contract_present:
     regular(workspace_preview_source, owner_uid, 2 * 1024 * 1024)
     regular(workspace_preview_owner_unit, owner_uid, 2 * 1024 * 1024, private=True)
+system_observer_source_present = system_observer_source.exists() or system_observer_source.is_symlink()
+system_observer_contract_present = False
+if system_observer_source_present:
+    observer_info = regular(system_observer_source, owner_uid, 2 * 1024 * 1024)
+    if observer_info.st_mode & 0o022:
+        raise SystemExit("ODS Pixel system observer source is writable by another identity")
 ops_dropin_contract_present = ops_dropin_source.exists() or ops_dropin_source.is_symlink()
 if ops_dropin_contract_present:
     regular(ops_dropin_source, owner_uid, 2 * 1024 * 1024)
@@ -640,6 +653,29 @@ if onboarding.exists():
                                         v8.update(len(payload).to_bytes(8, "big"))
                                         v8.update(payload)
                                     accepted_contracts.add(v8.hexdigest())
+                                    if system_observer_source_present:
+                                        v9 = hashlib.sha256()
+                                        v9.update(b"ods-pixel-contract-v9\0")
+                                        for payload in (
+                                            onboarding_payload,
+                                            policy_payload,
+                                            ops_owner_extension_catalog.read_bytes(),
+                                            ops_extension_source_program.read_bytes(),
+                                            extension_manager_source.read_bytes(),
+                                            extension_manager_owner_unit.read_bytes(),
+                                            approval_source.read_bytes(),
+                                            artifact_promoter_source.read_bytes(),
+                                            artifact_promoter_owner_unit.read_bytes(),
+                                            ops_dropin_source.read_bytes(),
+                                            workspace_preview_source.read_bytes(),
+                                            workspace_preview_owner_unit.read_bytes(),
+                                            system_observer_source.read_bytes(),
+                                        ):
+                                            v9.update(len(payload).to_bytes(8, "big"))
+                                            v9.update(payload)
+                                        v9_digest = v9.hexdigest()
+                                        accepted_contracts.add(v9_digest)
+                                        system_observer_contract_present = value.get("contract_sha256") == v9_digest
         if value.get("contract_sha256") not in accepted_contracts:
             raise SystemExit("Pixel onboarding drifted from its ODS marker")
 elif cleanup[0] != "none" and state != "deactivating":
@@ -657,6 +693,7 @@ artifact_promoter_program = pathlib.Path(artifact_promoter_program_raw)
 workspace_preview_unit = pathlib.Path(workspace_preview_unit_raw)
 workspace_preview_program = pathlib.Path(workspace_preview_program_raw)
 workspace_preview_state = pathlib.Path(workspace_preview_state_raw)
+system_observer_program = pathlib.Path(system_observer_program_raw)
 for path, maximum in (
     (gateway_unit, 256 * 1024),
     (ingress_unit, 256 * 1024),
@@ -668,6 +705,7 @@ for path, maximum in (
     (artifact_promoter_program, 2 * 1024 * 1024),
     (workspace_preview_unit, 256 * 1024),
     (workspace_preview_program, 2 * 1024 * 1024),
+    (system_observer_program, 2 * 1024 * 1024),
 ):
     if path.exists() or path.is_symlink():
         regular(path, root_uid, maximum)
@@ -698,6 +736,12 @@ if state == "ready" and workspace_preview_contract_present != preview_unit_prese
     raise SystemExit("ready ODS-managed Pixel workspace preview deployment is partial")
 if preview_unit_present and not workspace_preview_contract_present:
     raise SystemExit("Pixel workspace preview system artifacts lack an ODS contract")
+
+system_observer_program_present = system_observer_program.exists() or system_observer_program.is_symlink()
+if state == "ready" and system_observer_contract_present != system_observer_program_present:
+    raise SystemExit("ready ODS-managed Pixel system observer deployment is partial")
+if system_observer_program_present and not system_observer_contract_present:
+    raise SystemExit("Pixel system observer artifact lacks an ODS contract")
 
 if workspace_preview_state.exists() or workspace_preview_state.is_symlink():
     root_info = workspace_preview_state.lstat()
@@ -763,6 +807,10 @@ if workspace_preview_unit.exists():
 if workspace_preview_program.exists():
     if workspace_preview_program.read_bytes() != workspace_preview_source.read_bytes():
         raise SystemExit("installed Pixel workspace preview program drifted from this ODS install")
+
+if system_observer_program.exists():
+    if system_observer_program.read_bytes() != system_observer_source.read_bytes():
+        raise SystemExit("installed Pixel system observer drifted from this ODS install")
 
 if ingress_env.exists():
     entries = {}
@@ -1259,6 +1307,7 @@ PY
         || -e "$artifact_promoter_program" || -L "$artifact_promoter_program" \
         || -e "$workspace_preview_unit" || -L "$workspace_preview_unit" \
         || -e "$workspace_preview_program" || -L "$workspace_preview_program" \
+        || -e "$system_observer_program" || -L "$system_observer_program" \
         || -e "$workspace_preview_state" || -L "$workspace_preview_state" \
         || "$ops_artifacts_present" == true ]]; then
         root_artifacts_present=true
@@ -1614,6 +1663,7 @@ PY
             "$extension_manager_unit" "$extension_manager_program" \
             "$artifact_promoter_unit" "$artifact_promoter_program" \
             "$workspace_preview_unit" "$workspace_preview_program" \
+            "$system_observer_program" \
             || ! sudo systemctl daemon-reload; then
             log_error "Could not remove ODS-managed Pixel system artifacts"
             return 1
@@ -1622,7 +1672,8 @@ PY
             || -e "$ingress_program" || -e "$extension_manager_unit" \
             || -e "$extension_manager_program" || -e "$artifact_promoter_unit" \
             || -e "$artifact_promoter_program" || -e "$workspace_preview_unit" \
-            || -e "$workspace_preview_program" || -e "$workspace_preview_state" ]]; then
+            || -e "$workspace_preview_program" || -e "$system_observer_program" \
+            || -e "$workspace_preview_state" ]]; then
             log_error "ODS-managed Pixel system artifact cleanup was incomplete"
             return 1
         fi

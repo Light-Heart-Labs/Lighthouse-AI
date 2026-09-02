@@ -223,13 +223,15 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /typed ods-host observations that match the request/);
   assert.match(result.appendSystemContext, /host\.identity, host\.kernel, host\.architecture/);
   assert.match(result.appendSystemContext, /host\.os-release, host\.uptime, host\.processes/);
-  assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.memory, host\.storage/);
-  assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, and host\.listening-ports/);
+  assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.gpu, host\.memory, host\.storage/);
+  assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, host\.listening-ports, and host\.tailscale/);
   assert.match(result.appendSystemContext, /Call pixel_ods_host_observe exactly once/);
   assert.match(result.appendSystemContext, /complete requested host\.\* action list/);
   assert.match(result.appendSystemContext, /returns one terminal receipt/);
   assert.match(result.appendSystemContext, /Reserve pixel_ods_status, pixel_ods_apps_list, exec, and workspace tools/);
   assert.match(result.appendSystemContext, /process action intentionally omits command arguments and environments/);
+  assert.match(result.appendSystemContext, /GPU observation omits device identifiers/);
+  assert.match(result.appendSystemContext, /Tailscale observation omits addresses, peers, accounts, and routes/);
   assert.match(result.appendSystemContext, /Use pixel_ops_inventory, pixel_ops_run, and pixel_ops_job_wait only for explicit non-host Operations/);
   assert.match(result.appendSystemContext, /broad request to explore or inventory the host uses identity, kernel, platform/);
   assert.match(result.appendSystemContext, /host\.architecture remains available and is required/);

@@ -293,15 +293,16 @@ _ods_pixel_contract_sha256() {
     local artifact_promoter_unit="${INSTALL_DIR:?}/data/pixel/artifact-promoter.service"
     local workspace_preview="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/workspace_preview.py"
     local workspace_preview_unit="${INSTALL_DIR:?}/data/pixel/workspace-preview.service"
+    local system_observer="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/system_observe.py"
     local operations_service_dropin="${INSTALL_DIR:?}/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
     local approval_helper="${INSTALL_DIR:?}/bin/ods-pixel-approve"
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" "$extension_catalog" \
         "$extension_helper" "$extension_manager" "$extension_manager_unit" "$approval_helper" \
         "$artifact_promoter" "$artifact_promoter_unit" "$operations_service_dropin" \
-        "$workspace_preview" "$workspace_preview_unit" <<'PY'
+        "$workspace_preview" "$workspace_preview_unit" "$system_observer" <<'PY'
 import hashlib, json, os, pathlib, stat, sys
 
-path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path = map(pathlib.Path, sys.argv[1:12])
+path, catalog_path, helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path, system_observer_path = map(pathlib.Path, sys.argv[1:13])
 
 def read_private_regular(candidate, label):
     info = candidate.lstat()
@@ -323,7 +324,7 @@ if not isinstance(policy_value, str) or pathlib.Path(policy_value) != expected_p
 policy_payload = read_private_regular(expected_policy, "Operations policy")
 catalog_payload = read_private_regular(catalog_path, "extension catalog")
 helper_payloads = []
-for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path):
+for helper in (helper_path, manager_path, manager_unit_path, approval_path, promoter_path, promoter_unit_path, operations_service_dropin_path, preview_path, preview_unit_path, system_observer_path):
     helper_info = helper.lstat()
     if (not stat.S_ISREG(helper_info.st_mode) or stat.S_ISLNK(helper_info.st_mode)
             or helper_info.st_nlink != 1 or helper_info.st_uid != os.getuid()
@@ -331,7 +332,7 @@ for helper in (helper_path, manager_path, manager_unit_path, approval_path, prom
         raise SystemExit("invalid ODS Pixel extension helper")
     helper_payloads.append(helper.read_bytes())
 digest = hashlib.sha256()
-digest.update(b"ods-pixel-contract-v8\0")
+digest.update(b"ods-pixel-contract-v9\0")
 for payload in (answers_payload, policy_payload, catalog_payload, *helper_payloads):
     digest.update(len(payload).to_bytes(8, "big"))
     digest.update(payload)
@@ -2639,12 +2640,14 @@ PY
 _ods_pixel_write_operations_policy() {
     local owner="$1" home="$2" policy="$3" install_root="${INSTALL_DIR:?}"
     local workspace="$home/.openclaw/workspace-pixel"
+    local system_observer_source="$install_root/extensions/services/pixel-agent/host/system_observe.py"
 
     ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "${policy%/*}" || return 1
-    ods_pixel_run_as_owner "$owner" "$home" python3 - "$policy" "$install_root" "$workspace" <<'PY'
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$policy" "$install_root" "$workspace" \
+        "$system_observer_source" <<'PY'
 import json, os, pathlib, re, shutil, socket, stat, sys, tempfile
 
-out, install_root, workspace = sys.argv[1:]
+out, install_root, workspace, system_observer_source_raw = sys.argv[1:]
 path = pathlib.Path(out)
 if not path.is_absolute() or path == pathlib.Path("/"):
     raise SystemExit("ODS Pixel Operations policy path must be absolute and non-root")
@@ -2676,6 +2679,8 @@ workspace = normalized_root(workspace, "Pixel workspace")
 manager_socket_root = "/run/ods-pixel-manager"
 manager_socket = manager_socket_root + "/extension-manager.sock"
 manager_program = "/opt/pixel-ops-broker/ods-extension-manager.py"
+system_observer = "/usr/local/libexec/ods-pixel-system-observe.py"
+system_observer_source = pathlib.Path(system_observer_source_raw)
 python_binary = str(pathlib.Path("/usr/bin/python3").resolve(strict=True))
 hostname_binary = "/usr/bin/hostname"
 uname_binary = "/usr/bin/uname"
@@ -2704,6 +2709,11 @@ for binary in (
             or info.st_uid != 0 or info.st_mode & 0o022
             or not os.access(binary, os.X_OK)):
         raise SystemExit(f"unsafe Pixel Operations executable: {binary}")
+observer_info = system_observer_source.lstat()
+if (not stat.S_ISREG(observer_info.st_mode) or stat.S_ISLNK(observer_info.st_mode)
+        or observer_info.st_nlink != 1 or observer_info.st_uid != os.getuid()
+        or observer_info.st_mode & 0o022 or observer_info.st_size > 2 * 1024 * 1024):
+    raise SystemExit("unsafe ODS Pixel system observer source")
 
 payload = {
     "schemaVersion": 2,
@@ -2881,6 +2891,18 @@ payload = {
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },
+        "host.gpu": {
+            "description": "Report a bounded GPU name, memory capacity, and driver projection without UUIDs or serial numbers.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [python_binary, system_observer, "gpu"],
+            "timeoutSeconds": 15,
+            "exclusiveTarget": False,
+        },
         "host.memory": {
             "description": "Report host memory and swap capacity in bytes.",
             "tier": "read",
@@ -2941,6 +2963,18 @@ payload = {
             "targets": ["ods-host"],
             "argv": [ss_binary, "-H", "-lntu"],
             "timeoutSeconds": 10,
+            "exclusiveTarget": False,
+        },
+        "host.tailscale": {
+            "description": "Report only whether Tailscale is installed and running, without addresses, peers, accounts, or routes.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [python_binary, system_observer, "tailscale"],
+            "timeoutSeconds": 15,
             "exclusiveTarget": False,
         },
         "ods.extensions.search": {
@@ -3361,6 +3395,8 @@ _ods_pixel_install_ingress() {
     local system_artifact_promoter="/usr/local/libexec/ods-pixel-artifact-promoter.py"
     local workspace_preview="$plugin_root/host/workspace_preview.py"
     local system_workspace_preview="/usr/local/libexec/ods-pixel-workspace-preview.py"
+    local system_observer="$plugin_root/host/system_observe.py"
+    local installed_system_observer="/usr/local/libexec/ods-pixel-system-observe.py"
     local operations_service_dropin="$plugin_root/host/pixel-ops-broker-ods.conf"
     local operations_service_dropin_dir="/etc/systemd/system/pixel-ops-broker.service.d"
     local installed_operations_service_dropin="$operations_service_dropin_dir/10-ods-host-observation.conf"
@@ -3374,6 +3410,7 @@ _ods_pixel_install_ingress() {
         "$extension_manager" "$rendered_extension_manager_unit" \
         "$artifact_promoter" "$rendered_artifact_promoter_unit" \
         "$workspace_preview" "$rendered_workspace_preview_unit" \
+        "$system_observer" \
         "$operations_service_dropin"; do
         [[ -f "$projection_source" && ! -L "$projection_source" ]] || return 1
         IFS='|' read -r kind uid mode size < <(stat -c '%F|%u|%a|%s' -- "$projection_source")
@@ -3447,6 +3484,7 @@ EOF
     ods_sudo install -o root -g root -m 0755 "$extension_manager" "$system_extension_manager"
     ods_sudo install -o root -g root -m 0755 "$artifact_promoter" "$system_artifact_promoter"
     ods_sudo install -o root -g root -m 0755 "$workspace_preview" "$system_workspace_preview"
+    ods_sudo install -o root -g root -m 0755 "$system_observer" "$installed_system_observer"
     if ods_sudo test -e "$operations_service_dropin_dir" \
         || ods_sudo test -L "$operations_service_dropin_dir"; then
         ods_sudo test -d "$operations_service_dropin_dir" || return 1
@@ -3464,6 +3502,7 @@ EOF
     ods_sudo cmp -s -- "$extension_manager" "$system_extension_manager"
     ods_sudo cmp -s -- "$artifact_promoter" "$system_artifact_promoter"
     ods_sudo cmp -s -- "$workspace_preview" "$system_workspace_preview"
+    ods_sudo cmp -s -- "$system_observer" "$installed_system_observer"
     ods_sudo cmp -s -- "$operations_service_dropin" "$installed_operations_service_dropin" \
         || return 1
     extension_probe="$(ods_sudo -u pixel-ops-broker /usr/bin/python3 \
@@ -3647,6 +3686,7 @@ ods_pixel_install_default_agent() {
         && -f "$plugin_root/host/pixel-artifact-promoter.service" \
         && -f "$plugin_root/host/workspace_preview.py" \
         && -f "$plugin_root/host/pixel-workspace-preview.service" \
+        && -f "$plugin_root/host/system_observe.py" \
         && -f "$plugin_root/host/pixel-ops-broker-ods.conf" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
@@ -3659,7 +3699,6 @@ ods_pixel_install_default_agent() {
         ai_bad "Could not install Pixel's owner-private cancellable execution control."
         return 1
     fi
-
     gateway_alias="$(_ods_pixel_gateway_model_alias)" || {
         ai_bad "Pixel received an unsupported ODS model Switchboard mode."
         return 1

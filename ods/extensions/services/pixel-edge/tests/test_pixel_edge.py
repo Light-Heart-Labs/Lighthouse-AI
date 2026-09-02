@@ -600,6 +600,30 @@ class TestModelAllowlist(BaseEdgeTest):
         self.assertNotIn("pixel_ops_workflow_submit", content)
         self.assertNotIn("pixel_ops_job_wait", content)
 
+    async def test_host_inspection_route_honors_network_disclosure_exclusion(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Inspect this laptop OS, CPU, memory, disks, services, and IP addresses. "
+                        "Do not reveal IP addresses or other network location details."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("id pixel_ods_host_observe", content)
+        self.assertIn("host.os-release", content)
+        self.assertIn("host.cpu", content)
+        self.assertNotIn("host.network-addresses", content)
+        self.assertNotIn("host.network-routes", content)
+        self.assertNotIn("host.listening-ports", content)
+
     async def test_code_about_a_machine_does_not_get_host_execution_route(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",

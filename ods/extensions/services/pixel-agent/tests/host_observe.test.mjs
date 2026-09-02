@@ -26,6 +26,8 @@ test("host observation schema exposes no target, command, parameters, or approva
   assert.equal(tool.parameters.additionalProperties, false);
   assert.equal(tool.parameters.properties.actions.uniqueItems, true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("host.identity"), true);
+  assert.equal(tool.parameters.properties.actions.items.enum.includes("host.gpu"), true);
+  assert.equal(tool.parameters.properties.actions.items.enum.includes("host.tailscale"), true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("raw-shell"), false);
   assert.deepEqual(tool.parameters.properties.includeOdsStatus, { type: "boolean" });
 
