@@ -40,6 +40,14 @@ cmp "$baseline_dir/demo.md" "$memory_dir/MEMORY.md"
 archive_file="$(find "$archive_dir" -type f -name '*.md' -print -quit)"
 [[ -n "$archive_file" ]]
 grep -Fq 'keep this note' "$archive_file"
+
+install_output="$(HOME="$home_dir" MEMORY_SHEPHERD_CONF="$config" \
+    bash "$ROOT_DIR/memory-shepherd/install.sh" \
+    --dry-run --prefix "$TEST_ROOT/units")"
+[[ "$install_output" == *"Baselines:     $baseline_dir"* ]]
+[[ "$install_output" == *"Archives:      ${archive_dir%/demo}"* ]]
+[[ "$install_output" != *"memory-shepherd/~/ods"* ]]
+
 if find "$ROOT_DIR/memory-shepherd" -maxdepth 1 -name '~' -print -quit | grep -q .; then
     echo "tilde path was resolved beneath the script directory" >&2
     exit 1
