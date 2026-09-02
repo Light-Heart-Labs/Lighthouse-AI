@@ -24,8 +24,13 @@ esac
 
 REPORT_FILE="${1:-/tmp/ods-doctor-report.json}"
 
-CAP_FILE="/tmp/ods-doctor-capabilities.json"
-PREFLIGHT_FILE="/tmp/ods-doctor-preflight.json"
+DOCTOR_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ods-doctor.XXXXXX")"
+cleanup_doctor_tmp() {
+    rm -rf "$DOCTOR_TMP_DIR"
+}
+trap cleanup_doctor_tmp EXIT
+CAP_FILE="$DOCTOR_TMP_DIR/capabilities.json"
+PREFLIGHT_FILE="$DOCTOR_TMP_DIR/preflight.json"
 DOCTOR_BASH_CMD="${BASH:-}"
 if [[ -z "$DOCTOR_BASH_CMD" || ! -x "$DOCTOR_BASH_CMD" ]]; then
     DOCTOR_BASH_CMD="$(command -v bash 2>/dev/null || printf '%s\n' bash)"
@@ -559,6 +564,7 @@ import pathlib
 import re
 import shlex
 import sys
+import tempfile
 from datetime import datetime, timezone
 from urllib import error, parse, request
 
@@ -1663,7 +1669,23 @@ report["autofix_hints"] = uniq_hints  # overwrite initial empty list
 
 path = pathlib.Path(report_file)
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+if path.is_symlink():
+    path = path.resolve(strict=False)
+fd, temporary_name = tempfile.mkstemp(
+    dir=path.parent,
+    prefix=f".{path.name}.",
+    suffix=".tmp",
+)
+temporary = pathlib.Path(temporary_name)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+finally:
+    temporary.unlink(missing_ok=True)
 PY
 
 echo "ODS Doctor report: $REPORT_FILE"
