@@ -189,6 +189,30 @@ def test_dashboard_csp_allows_ods_talk_tts_blob_audio() -> None:
     assert_true("media-src 'self' blob:" in nginx_conf, "ODS Talk TTS playback uses blob: audio URLs")
 
 
+def test_dashboard_csp_allows_only_the_configured_loopback_pixel_preview() -> None:
+    nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
+    entrypoint = read(SERVICES / "dashboard" / "entrypoint.sh")
+    compose = read(ROOT / "docker-compose.base.yml")
+
+    assert_true(
+        "frame-src http://localhost:__PIXEL_PREVIEW_PORT__ "
+        "http://127.0.0.1:__PIXEL_PREVIEW_PORT__;" in nginx_conf,
+        "dashboard CSP must permit only the configured loopback Pixel preview origin",
+    )
+    assert_true(
+        "PIXEL_PREVIEW_PORT=${PIXEL_PREVIEW_PORT:-9437}" in compose,
+        "dashboard container must receive the configured Pixel preview port",
+    )
+    assert_true(
+        "*[!0-9]*" in entrypoint and '"$PREVIEW_PORT" -gt 65535' in entrypoint,
+        "dashboard must reject a non-numeric or out-of-range preview port",
+    )
+    assert_true(
+        's|__PIXEL_PREVIEW_PORT__|${PREVIEW_PORT}|g' in entrypoint,
+        "dashboard must substitute only the validated preview port into its CSP",
+    )
+
+
 def test_dashboard_csp_allows_huggingface_author_avatars_only_as_images() -> None:
     nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
 
@@ -275,6 +299,7 @@ def main() -> int:
         test_hermes_local_provider_has_generous_timeouts,
         test_ods_proxy_routes_talk_portal,
         test_dashboard_csp_allows_ods_talk_tts_blob_audio,
+        test_dashboard_csp_allows_only_the_configured_loopback_pixel_preview,
         test_ods_proxy_caps_request_body_sizes,
         test_hermes_proxy_caps_request_body,
         test_dashboard_pre_stages_hsts,
