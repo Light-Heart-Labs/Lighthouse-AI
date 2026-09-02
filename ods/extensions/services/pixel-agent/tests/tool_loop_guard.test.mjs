@@ -78,6 +78,7 @@ import {
   WORKSPACE_TOOL_SEARCH_COMPLETE_REASON,
   WORKSPACE_UNREQUESTED_PROJECTION_REASON,
   WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
+  WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
   createExecCancellationControl,
@@ -7314,6 +7315,47 @@ test("blocks sandbox web servers and requires the verified preview tool", () => 
     /pixel_ods_workspace_preview.*demo-site/
   );
   assert.equal(reply(guard).payload.text, WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX);
+});
+
+test("turns a setup-only preview mkdir into an immediate bounded write correction", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build a fresh interactive website demo and show it to me." }
+  );
+  const mkdir = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "exec",
+        args: {
+          command: "mkdir -p /workspace/demo-interactive",
+          workdir: "/workspace",
+        },
+      },
+    },
+  });
+  assert.equal(mkdir.block, true);
+  assert.match(mkdir.blockReason, /id write/);
+  assert.match(mkdir.blockReason, /demo-interactive\/index\.html/);
+  assert.match(mkdir.blockReason, /under 7000 characters/);
+  assert.equal(
+    reply(guard).payload.text,
+    WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX
+  );
+
+  const unrelated = createToolLoopGuard();
+  unrelated.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Create a workspace directory for my notes." }
+  );
+  assert.notEqual(
+    call(unrelated, "exec", {
+      event: { params: { command: "mkdir -p notes", workdir: "/workspace" } },
+    }).block,
+    true
+  );
 });
 
 test("accepts only a readback-verified dedicated preview receipt", () => {

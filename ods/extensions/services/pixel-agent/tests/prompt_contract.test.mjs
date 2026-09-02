@@ -12,11 +12,40 @@ import {
   ODS_TOOL_REPLY_CONTRACT,
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
+  ODS_WORKSPACE_PREVIEW_CONTRACT,
   githubSourceContract,
   needsLoopRecovery,
   operationsRequestContract,
   promptContractForAgent,
 } from "../plugin/prompt-contract.mjs";
+
+test("adds a bounded first-write contract only for requested website previews", () => {
+  const preview = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 65536 },
+    "pixel",
+    {
+      prompt:
+        "Build a fresh polished interactive website demo in a new workspace directory and show it to me.",
+    },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(
+    preview.appendSystemContext,
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+  );
+  assert.match(preview.appendSystemContext, /first tool step call tool_call with id write/);
+  assert.match(preview.appendSystemContext, /under 7000 characters/);
+  assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
+  assert.match(preview.appendSystemContext, /Do not call exec, mkdir, or start a server/);
+
+  const explanation = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 65536 },
+    "pixel",
+    { prompt: "Explain how websites work." },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(explanation.appendSystemContext, ODS_COMPACT_CONVERSATION_CONTRACT);
+});
 
 test("uses a bounded complete core on compact contexts without changing requested routes", () => {
   const plain = promptContractForAgent(

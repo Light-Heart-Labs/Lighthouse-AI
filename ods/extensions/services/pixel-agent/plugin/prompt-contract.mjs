@@ -16,6 +16,7 @@ import {
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
+  userMessageRequestsWorkspacePreview,
 } from "./tool-loop-guard.mjs";
 
 export const ODS_CONVERSATION_CONTRACT = [
@@ -116,6 +117,9 @@ export const ODS_PRIVATE_URL_CONTRACT =
 
 export const ODS_EXACT_DOWNLOAD_CONTRACT =
   "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
+
+export const ODS_WORKSPACE_PREVIEW_CONTRACT =
+  "The owner's current request requires a live static website preview. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete self-contained HTML document under 7000 characters with inline CSS and JavaScript. Parent directories are created by write. Make that first file visually polished and interactive within the bounded call. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply.";
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
@@ -266,6 +270,12 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXACT_DOWNLOAD_CONTRACT}`
     : "";
+  const workspacePreview = userMessageRequestsWorkspacePreview(
+    event?.messages,
+    event?.prompt
+  )
+    ? ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+    : "";
   const verification =
     verificationStatus === "pending"
       ? ` ${ODS_VERIFICATION_PENDING_CONTRACT}`
@@ -274,6 +284,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${conversationContract}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsRequest}${exactDownload}${recovery}${verification}${privateUrl}`,
+      `${conversationContract}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsRequest}${exactDownload}${workspacePreview}${recovery}${verification}${privateUrl}`,
   };
 }

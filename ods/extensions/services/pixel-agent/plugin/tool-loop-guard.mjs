@@ -146,6 +146,9 @@ export const WORKSPACE_PREVIEW_REQUIRES_FILES_REASON =
 export const WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel preserved the website files in its workspace, but ODS did not verify a browser-accessible preview. No localhost URL is live or claimed; ask Pixel to continue and publish the static site through the workspace preview capability.";
 
+export const WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX =
+  "Pixel did not create or verify the requested website files, so ODS did not publish a browser preview. No localhost URL is live or claimed; ask Pixel to retry the build.";
+
 export const WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX =
   "Pixel published and independently read back the static website:";
 
@@ -3029,6 +3032,37 @@ function execLaunchesWorkspaceServer(params) {
   );
 }
 
+function workspacePreviewMkdirDirectory(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
+  const command = params.command;
+  if (typeof command !== "string" || !command.trim()) return undefined;
+  const match = command.trim().match(
+    /^mkdir\s+-p\s+(?:--\s+)?(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;&|><`$()]+))$/i
+  );
+  if (!match) return undefined;
+  const rawDirectory = match[1] ?? match[2] ?? match[3];
+  const absoluteWorkspacePath = rawDirectory.startsWith("/workspace/");
+  if (
+    !absoluteWorkspacePath &&
+    normalizeExecWorkdir(params.workdir ?? ".") !== "."
+  ) {
+    return undefined;
+  }
+  const directory = normalizeWorkspaceFilePath(rawDirectory);
+  const parts = typeof directory === "string" ? directory.split("/") : [];
+  if (
+    parts.length === 0 ||
+    parts.length > 16 ||
+    parts.some(
+      (part) =>
+        ["", ".", ".."].includes(part) || !WORKSPACE_PATH_COMPONENT.test(part)
+    )
+  ) {
+    return undefined;
+  }
+  return directory;
+}
+
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return [];
@@ -4583,6 +4617,24 @@ export function createToolLoopGuard({
         execLaunchesWorkspaceServer(selectedParams)
       ) {
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON };
+      }
+      const setupDirectory =
+        state.workspacePreviewRequested && selectedToolName === "exec"
+          ? workspacePreviewMkdirDirectory(selectedParams)
+          : undefined;
+      if (setupDirectory) {
+        return {
+          block: true,
+          blockReason:
+            "Pixel does not need a separate directory-preparation command for this preview. " +
+            "Call tool_call now with id write and args " +
+            JSON.stringify({
+              path: `${setupDirectory}/index.html`,
+              content: "<!doctype html>...complete self-contained site...",
+            }) +
+            "; use one visually polished interactive HTML document under 7000 characters, " +
+            "then call pixel_ods_workspace_preview for that directory.",
+        };
       }
       rememberToolRun(
         context?.toolCallId ?? event?.toolCallId,
@@ -6433,9 +6485,17 @@ export function createToolLoopGuard({
       !state.exactDownloadRequested
     ) {
       if (!state.workspacePreview) {
+        const hasIndexEvidence = [
+          ...state.successfulWritePaths,
+          ...state.successfulReadPaths,
+        ].some(
+          (value) => typeof value === "string" && value.endsWith("/index.html")
+        );
         return {
           status: "failed",
-          text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
+          text: hasIndexEvidence
+            ? WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX
+            : WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
         };
       }
       return {
