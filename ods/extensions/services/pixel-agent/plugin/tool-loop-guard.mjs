@@ -786,7 +786,6 @@ function canonicalRequestedUnittestParams(params, state) {
   if (
     !parsed ||
     !verificationCommandIsAuditable(params) ||
-    !/^python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b/i.test(parsed.command) ||
     typeof state?.workspaceTaskDirectory !== "string" ||
     !/^[A-Za-z0-9._/-]+$/.test(state.workspaceTaskDirectory)
   ) {
@@ -807,6 +806,22 @@ function canonicalRequestedUnittestParams(params, state) {
       new RegExp(`(^|\\s)(["']?)${escapeRegExp(path)}\\2(?=\\s|$)`, "g"),
       `$1${testFile}`
     );
+  }
+  const directScript = command.match(
+    new RegExp(
+      `^(python(?:3(?:\\.\\d+)?)?)(?:\\s+(?:-B|-u))*\\s+(?:\\./)?${escapeRegExp(testFile)}(?:\\s+-v)?\\s*$`,
+      "i"
+    )
+  );
+  if (directScript) {
+    // A directly executed test module can implement its own ad-hoc runner and
+    // still exit zero after printing failures. For the one Python test file
+    // explicitly named by the owner and bound to this workspace task, run the
+    // standard unittest loader instead. A file with no discoverable tests then
+    // produces an auditable `Ran 0 tests` receipt rather than false success.
+    command = `${directScript[1]} -m unittest -v ${testFile}`;
+  } else if (!/^python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b/i.test(command)) {
+    return undefined;
   }
   const canonical = {
     ...params,
@@ -829,7 +844,7 @@ function verificationFingerprintIsPythonUnittest(fingerprint) {
     return (
       Array.isArray(parsed) &&
       typeof parsed[0] === "string" &&
-      /^python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b/i.test(parsed[0])
+      /^(?:python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b|python(?:3(?:\.\d+)?)?\s+(?:(?:-B|-u)\s+)*(?:\.\/)?(?:[A-Za-z0-9._-]+\/)*(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py\b)/i.test(parsed[0])
     );
   } catch {
     return false;
@@ -854,7 +869,12 @@ function execResultHasNonCleanUnittestOutcome(event) {
         /\bexpected failures?\s*=\s*[1-9][0-9]*\b/i.test(value) ||
         /\bunexpected successes?\s*=\s*[1-9][0-9]*\b/i.test(value) ||
         /\.\.\.\s+expected failure\b/i.test(value) ||
-        /\.\.\.\s+unexpected success\b/i.test(value)
+        /\.\.\.\s+unexpected success\b/i.test(value) ||
+        /(?:^|\n)\s*(?:FAIL|ERROR)(?::|\s|\()/i.test(value) ||
+        /\bAssertionError\b/i.test(value) ||
+        /(?:^|\n)\s*FAILED\s*\(/i.test(value) ||
+        /\bRan\s+0\s+tests?\b/i.test(value) ||
+        /\bNO\s+TESTS?\s+RAN\b/i.test(value)
       )
   );
 }
@@ -3218,6 +3238,12 @@ export function userMessageWorkspaceDirectoryPath(messages, prompt = undefined) 
     "in ", "inside ", "within ", "under ",
     "in the directory ", "inside the directory ",
     "within the directory ", "under the directory ",
+    "in the new directory ", "inside the new directory ",
+    "within the new directory ", "under the new directory ",
+    "in the existing directory ", "inside the existing directory ",
+    "within the existing directory ", "under the existing directory ",
+    "in the preserved directory ", "inside the preserved directory ",
+    "within the preserved directory ", "under the preserved directory ",
     "workdir ", "working directory ", "as the working directory ",
   ]) {
     const needle = `${prefix}/workspace/${lowerPath}`;

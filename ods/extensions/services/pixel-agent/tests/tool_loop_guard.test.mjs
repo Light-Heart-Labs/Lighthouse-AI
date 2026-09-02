@@ -1126,6 +1126,21 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     context: { toolCallId: "compact-exec-runner-without-args" },
   });
   assert.deepEqual(compactExecRunnerWithoutArgs.params, compactPythonRunner.params);
+  const compactScriptRunner = call(guard, "tool_call", {
+    event: {
+      toolCallId: "compact-script-runner",
+      params: {
+        id: "exec",
+        args: {
+          script: "python3 test_normalize_name.py",
+          context: "fork",
+        },
+      },
+    },
+    context: { toolCallId: "compact-script-runner" },
+  });
+  assert.equal(compactScriptRunner.params.id, "exec");
+  assert.deepEqual(compactScriptRunner.params.args, compactPythonRunner.params.args);
   assert.equal(
     call(guard, "tool_call", {
       event: {
@@ -1205,6 +1220,34 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
   assert.match(
     rereadTest.blockReason,
     /file implicated by the failure \(test or implementation\)/
+  );
+});
+
+test("binds writes under a naturally named new workspace directory", () => {
+  const guard = createToolLoopGuard();
+  const prompt =
+    "Work only in the new directory /workspace/pixel-qualification/2b-adaptive-v73. " +
+    "Build stats_report.py and test_stats_report.py, then run the tests.";
+  assert.equal(
+    userMessageWorkspaceDirectoryPath([], prompt),
+    "pixel-qualification/2b-adaptive-v73"
+  );
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  const write = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "write",
+        args: { path: "stats_report.py", content: "print('ready')\n" },
+      },
+    },
+  });
+  assert.equal(
+    write.params.args.path,
+    "pixel-qualification/2b-adaptive-v73/stats_report.py"
   );
 });
 
@@ -5876,11 +5919,54 @@ test("a passing direct unittest script clears an earlier runner failure", () => 
 
   call(guard, "exec", { event: { params: directScript } });
   afterCall(guard, "exec", {
-    event: { params: directScript, result: { isError: false, details: { exitCode: 0 } } },
+    event: {
+      params: directScript,
+      result: {
+        isError: false,
+        content: [{ type: "text", text: "Ran 1 test in 0.001s\n\nOK" }],
+        details: {
+          status: "completed",
+          exitCode: 0,
+          aggregated: "Ran 1 test in 0.001s\n\nOK",
+        },
+      },
+    },
   });
 
   assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" });
   assert.equal(reply(guard), undefined);
+});
+
+test("an exit-zero direct Python test failure cannot become verified success", () => {
+  const params = {
+    id: "exec",
+    args: {
+      command: "python3 test_stats_report.py",
+      workdir: "/workspace/project",
+    },
+  };
+  for (const output of [
+    "FAIL: negative numbers\nAssertionError",
+    "Ran 0 tests in 0.000s\n\nOK",
+  ]) {
+    const guard = createToolLoopGuard();
+    call(guard, "tool_call", { event: { params } });
+    afterCall(guard, "tool_call", {
+      event: {
+        params,
+        result: wrappedCoreResult("exec", {
+          content: [{ type: "text", text: output }],
+          details: { status: "completed", exitCode: 0, aggregated: output },
+        }),
+      },
+    });
+
+    assert.deepEqual(guard.verificationForRun("run-1"), {
+      status: "failed",
+      text: VERIFICATION_FAILED_DELIVERY_PREFIX,
+    });
+    assert.equal(reply(guard).payload.text, VERIFICATION_FAILED_DELIVERY_PREFIX);
+  }
 });
 
 test("direct unittest scripts remain fail-closed and auditable", () => {
