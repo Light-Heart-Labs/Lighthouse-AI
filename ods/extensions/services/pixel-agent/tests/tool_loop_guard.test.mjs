@@ -395,6 +395,110 @@ test("compacts an owner-workspace unittest failure to its actionable traceback t
   assert.doesNotMatch(assertionText, /framework output/);
 });
 
+test("compacts a truncated Tool Search unittest envelope from structured details", () => {
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: (runId, command) =>
+        `/control/wrapper ${runId} ${Buffer.from(command).toString("base64")}`,
+      signal: () => true,
+    },
+  });
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Work only in the new directory /workspace/project. Create probe.py and " +
+        "test_probe.py with unittest coverage, then run python3 test_probe.py.",
+    }
+  );
+  for (const [toolCallId, filePath, content] of [
+    ["write-probe", "probe.py", "def probe():\n    return 1\n"],
+    [
+      "write-test-probe",
+      "test_probe.py",
+      "import unittest\nfrom probe import probe\n\n" +
+        "class TestProbe(unittest.TestCase):\n" +
+        "    def test_value(self):\n" +
+        "        self.assertEqual(probe(), 2)\n",
+    ],
+  ]) {
+    const write = call(guard, "tool_call", {
+      event: {
+        toolCallId,
+        params: { id: "write", args: { path: filePath, content } },
+      },
+      context: { toolCallId },
+    });
+    afterCall(guard, "tool_call", {
+      event: {
+        toolCallId,
+        params: write.params,
+        result: wrappedCoreResult("write", {
+          content: [{ type: "text", text: `Successfully wrote ${content.length} bytes` }],
+        }),
+      },
+      context: { toolCallId },
+    });
+  }
+  const verification = call(guard, "tool_call", {
+    event: {
+      toolCallId: "truncated-failure",
+      params: {
+        id: "exec",
+        args: { shell: "python3 test_probe.py", context: "fork" },
+      },
+    },
+    context: { toolCallId: "truncated-failure" },
+  });
+  assert.match(verification.params.args.command, /^\/control\/wrapper run-1 /);
+  const noisy =
+    `${"framework output\n".repeat(300)}` +
+    "FAIL: test_value (test_probe.TestProbe.test_value)\n" +
+    "----------------------------------------------------------------------\n" +
+    "Traceback (most recent call last):\n" +
+    "  File \"/workspace/project/test_probe.py\", line 7, in test_value\n" +
+    "    self.assertEqual(probe(), 2)\n" +
+    "AssertionError: 1 != 2\n\n" +
+    "----------------------------------------------------------------------\n" +
+    "Ran 1 test in 0.001s\n\nFAILED (failures=1)";
+  const result = wrappedCoreResult("exec", {
+    content: [{ type: "text", text: noisy }],
+    details: {
+      status: "completed",
+      exitCode: 1,
+      aggregated: noisy,
+      cwd: "/workspace/project",
+    },
+  });
+  result.content[0].text =
+    `${result.content[0].text.slice(0, 4000)}[... more characters truncated]`;
+  afterCall(guard, "tool_call", {
+    event: {
+      toolCallId: "truncated-failure",
+      params: verification.params,
+      result,
+    },
+    context: { toolCallId: "truncated-failure" },
+  });
+  const persisted = persistToolResult(
+    guard,
+    "tool_call",
+    "truncated-failure",
+    result
+  );
+  const text = persisted.message.content[0].text;
+  assert.ok(text.length < 900);
+  assert.match(text, /Earlier unittest framework frames compacted/);
+  assert.match(text, /\/workspace\/project\/test_probe\.py/);
+  assert.match(text, /AssertionError: 1 != 2/);
+  assert.doesNotMatch(text, /framework output/);
+  assert.match(
+    persisted.message.content.at(-1).text,
+    /file implicated by the failure \(test or implementation\)/
+  );
+});
+
 test("rejects identical edits as bounded no-progress repairs", () => {
   const guard = createToolLoopGuard();
   const context = { agentId: "pixel", runId: "noop-run", sessionId: "noop-session" };

@@ -2013,16 +2013,8 @@ function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName
 }
 
 function persistedToolSearchEnvelope(message, expectedToolName, expectedSourceName) {
-  if (!Array.isArray(message?.content)) return false;
-  for (const block of message.content) {
-    if (block?.type !== "text" || typeof block.text !== "string") continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(block.text);
-    } catch {
-      continue;
-    }
-    const value = boundedJsonSnapshot(parsed);
+  const validatedEnvelope = (candidate) => {
+    const value = boundedJsonSnapshot(candidate);
     const tool = value?.tool;
     if (
       tool &&
@@ -2038,6 +2030,26 @@ function persistedToolSearchEnvelope(message, expectedToolName, expectedSourceNa
     ) {
       return { tool, result: value.result };
     }
+    return undefined;
+  };
+  // OpenClaw keeps the complete, framework-owned Tool Search envelope in
+  // message.details even when it truncates the model-visible JSON text block.
+  // Validate that bounded structured copy first so large failures can still be
+  // reduced to actionable evidence instead of consuming a compact model's
+  // entire remaining context. Retain the JSON block path for older runtimes.
+  const structuredEnvelope = validatedEnvelope(message?.details);
+  if (structuredEnvelope) return structuredEnvelope;
+  if (!Array.isArray(message?.content)) return undefined;
+  for (const block of message.content) {
+    if (block?.type !== "text" || typeof block.text !== "string") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(block.text);
+    } catch {
+      continue;
+    }
+    const envelope = validatedEnvelope(parsed);
+    if (envelope) return envelope;
   }
   return undefined;
 }
