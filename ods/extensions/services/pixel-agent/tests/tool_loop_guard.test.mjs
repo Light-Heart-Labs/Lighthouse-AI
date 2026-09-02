@@ -100,6 +100,7 @@ import {
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceTools,
   userMessageRequestsWorkspaceMutation,
+  userMessageRequestsWorkspaceDemoScaffold,
   userMessageRequestsWorkspacePreview,
   userMessageWorkspaceContinuationPath,
   userMessageWorkspaceDirectoryPath,
@@ -7278,6 +7279,20 @@ test("classifies a requested website demo as a verified workspace preview", () =
     false
   );
   assert.equal(
+    userMessageRequestsWorkspaceDemoScaffold(
+      [],
+      "Build a website, any website, as a cool high-quality demo of your capabilities."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspaceDemoScaffold(
+      [],
+      "Build and show me a website for Acme's accounting product."
+    ),
+    false
+  );
+  assert.equal(
     userMessageRequestsWorkspacePreview(
       [],
       "Not seeing it when I go to local host; could you investigate?"
@@ -7414,6 +7429,32 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
     ),
     undefined
   );
+});
+
+test("permits a bounded create-only demo scaffold before an index exists", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me an interactive website demo." }
+  );
+  const scaffold = {
+    title: "Signal Garden",
+    tagline: "A responsive field of local light.",
+    theme: "aurora",
+  };
+  const normalized = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_workspace_preview",
+        args: { relativeDirectory: "signal-garden", scaffold },
+      },
+    },
+  });
+  assert.deepEqual(normalized.params.args, {
+    relativeDirectory: "signal-garden",
+    scaffold,
+  });
 });
 
 test("an abort failure is contained and remains a blocked tool result", () => {

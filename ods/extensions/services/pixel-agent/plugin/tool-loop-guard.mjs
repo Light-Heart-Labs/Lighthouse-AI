@@ -3372,6 +3372,20 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   return directPreview || unreachableLocalPreview || (website && build && view);
 }
 
+export function userMessageRequestsWorkspaceDemoScaffold(
+  messages,
+  prompt = undefined
+) {
+  const text = currentOwnerIntentText(messages, prompt);
+  return Boolean(
+    text &&
+    userMessageRequestsWorkspacePreview(messages, prompt) &&
+    /\b(?:demo|demonstrat(?:e|ion)|showcase|any\s+(?:website|site|web\s*page)|capabilit(?:y|ies))\b/i.test(
+      text
+    )
+  );
+}
+
 function workspacePreviewDirectoryFromState(state) {
   const indexDirectories = new Set(
     [...(state?.successfulWritePaths ?? []), ...(state?.successfulReadPaths ?? [])]
@@ -4448,13 +4462,18 @@ export function createToolLoopGuard({
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
       const observedDirectory = workspacePreviewDirectoryFromState(state);
       const directory = observedDirectory ?? providedDirectory;
+      const scaffoldRequested = Boolean(
+        args?.scaffold &&
+        typeof args.scaffold === "object" &&
+        !Array.isArray(args.scaffold)
+      );
       const hasObservedIndex =
         typeof directory === "string" &&
         (
           state.successfulWritePaths.has(`${directory}/index.html`) ||
           state.successfulReadPaths.has(`${directory}/index.html`)
         );
-      if (!directory || !hasObservedIndex) {
+      if (!directory || (!hasObservedIndex && !scaffoldRequested)) {
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
       }
       state.workspacePreviewDirectory = directory;
@@ -4462,10 +4481,16 @@ export function createToolLoopGuard({
         pendingParams = {
           ...pendingParams,
           id: WORKSPACE_PREVIEW_TOOL,
-          args: { relativeDirectory: directory },
+          args: {
+            relativeDirectory: directory,
+            ...(scaffoldRequested ? { scaffold: args.scaffold } : {}),
+          },
         };
       } else {
-        normalizedParams = { relativeDirectory: directory };
+        normalizedParams = {
+          relativeDirectory: directory,
+          ...(scaffoldRequested ? { scaffold: args.scaffold } : {}),
+        };
         pendingParams = normalizedParams;
       }
     }

@@ -9,6 +9,7 @@ import {
   ODS_EXACT_DOWNLOAD_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
+  ODS_WORKSPACE_DEMO_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
@@ -31,12 +32,25 @@ test("adds a bounded first-write contract only for requested website previews", 
   );
   assert.equal(
     preview.appendSystemContext,
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_DEMO_CONTRACT}`
+  );
+  assert.match(preview.appendSystemContext, /exactly one tool call now/);
+  assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
+  assert.match(preview.appendSystemContext, /scaffold with a creative title/);
+  assert.match(preview.appendSystemContext, /Do not generate HTML/);
+
+  const custom = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 65536 },
+    "pixel",
+    { prompt: "Build and show me a website for Acme's accounting product." },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(
+    custom.appendSystemContext,
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(preview.appendSystemContext, /first tool step call tool_call with id write/);
-  assert.match(preview.appendSystemContext, /under 7000 characters/);
-  assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
-  assert.match(preview.appendSystemContext, /Do not call exec, mkdir, or start a server/);
+  assert.match(custom.appendSystemContext, /first tool step call tool_call with id write/);
+  assert.match(custom.appendSystemContext, /under 2500 characters/);
 
   const explanation = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },

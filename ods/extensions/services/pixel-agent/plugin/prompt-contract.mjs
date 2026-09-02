@@ -16,6 +16,7 @@ import {
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
+  userMessageRequestsWorkspaceDemoScaffold,
   userMessageRequestsWorkspacePreview,
 } from "./tool-loop-guard.mjs";
 
@@ -119,7 +120,10 @@ export const ODS_EXACT_DOWNLOAD_CONTRACT =
   "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
 
 export const ODS_WORKSPACE_PREVIEW_CONTRACT =
-  "The owner's current request requires a live static website preview. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete self-contained HTML document under 7000 characters with inline CSS and JavaScript. Parent directories are created by write. Make that first file visually polished and interactive within the bounded call. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply.";
+  "The owner's current request requires a live static website preview. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete self-contained HTML document under 2500 characters with inline CSS and JavaScript. Parent directories are created by write. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply.";
+
+export const ODS_WORKSPACE_DEMO_CONTRACT =
+  "The owner asked for an open-ended website demonstration. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory as one fresh short directory name plus scaffold with a creative title, a concise tagline, and theme set to exactly one of aurora, ember, ocean, orchid, or solar. This create-only ODS tool generates a polished responsive interactive site and publishes it through independent loopback readback. Do not generate HTML, call write, call exec, plan the design, or start a server. Reply only after the verified tool receipt.";
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
@@ -274,7 +278,9 @@ export function promptContractForAgent(
     event?.messages,
     event?.prompt
   )
-    ? ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+    ? userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
+      ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
+      : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
     : "";
   const verification =
     verificationStatus === "pending"
