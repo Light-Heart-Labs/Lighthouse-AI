@@ -284,6 +284,40 @@ test_8gpus_nv1_nv2_partial_mesh() {
     fi
 }
 
+test_large_mig_query_under_pipefail() {
+    echo -e "${BLU}Testing: large MIG query under pipefail${NC}"
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    nvidia-smi() {
+        if [[ "$1" == "topo" && "$2" == "-m" ]]; then
+            cat "$FIXTURES_DIR/nvidia_smi_topo_matrix_1gpu_pcie.txt"
+        elif [[ "$*" == "--query-gpu=index,name,memory.total,memory.free,pcie.link.gen.current,pcie.link.width.current,uuid --format=csv,noheader,nounits" ]]; then
+            echo "0, NVIDIA A100-SXM4-80GB, 81920, 81920, 4, 16, GPU-00000000-0000-0000-0000-000000000000"
+        elif [[ "$*" == "--query-gpu=driver_version --format=csv,noheader" ]]; then
+            echo "535.129.03"
+        elif [[ "$1" == "-q" ]]; then
+            echo "MIG Mode: Enabled"
+            for _ in {1..20000}; do
+                echo "Additional NVIDIA diagnostic data"
+            done
+        fi
+    }
+
+    source "$TOPO_SCRIPT"
+    local result
+    result=$(set -o pipefail; detect_nvidia_topo)
+    local mig_enabled
+    mig_enabled=$(echo "$result" | jq -r '.mig_enabled')
+
+    if [[ "$mig_enabled" == "true" ]]; then
+        echo -e "${GRN}âœ“ PASS: MIG remains detected with pipefail and large output${NC}"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}âœ— FAIL: Expected MIG enabled, got $mig_enabled${NC}"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
 # Main test runner
 echo -e "${MAG}=== NVIDIA Topology Detection Tests ===${NC}\n"
 
@@ -294,6 +328,7 @@ test_5gpus_nv12_with_mlx5
 test_8gpus_nv12_full_mesh
 test_8gpus_nv12_full_mesh_with_numa
 test_8gpus_nv1_nv2_partial_mesh
+test_large_mig_query_under_pipefail
 
 echo -e "\n${MAG}=== Test Summary ===${NC}"
 echo -e "Tests run:    $TESTS_RUN"

@@ -129,7 +129,7 @@ detect_nvidia_topo() {
 
   # MIG detection
   local mig_mode="false"
-  if nvidia-smi -q 2>/dev/null | grep -q "MIG Mode.*Enabled"; then
+  if nvidia-smi -q 2>/dev/null | grep "MIG Mode.*Enabled" >/dev/null; then
     mig_mode="true"
   fi
 
