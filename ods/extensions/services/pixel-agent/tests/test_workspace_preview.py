@@ -2,6 +2,8 @@ import importlib.util
 import os
 import pathlib
 import tempfile
+import threading
+import urllib.request
 
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "host" / "workspace_preview.py"
@@ -98,3 +100,34 @@ def test_existing_snapshot_is_revalidated_before_receipt_reuse():
             assert "verification" in str(error)
         else:
             raise AssertionError("tampered content-addressed preview was reused")
+
+
+def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace = root / "workspace"
+        previews = root / "previews"
+        site = workspace / "demo-site"
+        site.mkdir(parents=True, mode=0o700)
+        previews.mkdir(mode=0o700)
+        (site / "index.html").write_text("<h1>Interactive</h1>", encoding="utf-8")
+        os.chmod(site / "index.html", 0o600)
+        receipt = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+
+        with MODULE.PreviewHTTPServer(("127.0.0.1", 0), previews) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/{receipt['siteId']}/",
+                    timeout=5,
+                ) as response:
+                    assert response.status == 200
+                    assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+                    assert "frame-ancestors http://localhost:* http://127.0.0.1:*" in (
+                        response.headers["Content-Security-Policy"]
+                    )
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)

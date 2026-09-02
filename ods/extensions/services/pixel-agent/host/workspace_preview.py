@@ -372,7 +372,10 @@ class PreviewHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        # The ODS dashboard and preview service intentionally use separate
+        # loopback ports. CSP restricts which local parents may frame a site;
+        # CORP must therefore permit that cross-origin iframe navigation.
+        self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
