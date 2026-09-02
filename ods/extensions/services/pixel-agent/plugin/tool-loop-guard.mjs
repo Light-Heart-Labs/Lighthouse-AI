@@ -123,7 +123,10 @@ export const REQUESTED_UNITTEST_REQUIRED_REASON =
   "The owner explicitly requested Python unittest coverage, so that attempted file was not written. Make exactly one tool_call now with id write, the same path, and a complete replacement under 1000 characters. Begin with the needed imports including unittest; use one unittest.TestCase class with only the requested test_* methods and assertions; finish with unittest.main(). No narration, comments, docstrings, extra cases, or print-only custom runner. Do not run verification before this test file is accepted.";
 
 export const REQUESTED_UNITTEST_RETRY_REASON =
-  "That replacement still was not unittest and was not written. Make one final write call now, with no prose, using this exact outer shape: `import subprocess, sys, unittest`; `class Tests(unittest.TestCase):`; one `def test_name(self):` per owner-requested case; each method calls `subprocess.run(...)` and uses `self.assertEqual(...)`; finish with `if __name__ == '__main__': unittest.main()`. Keep the complete file under 1000 characters. A third invalid shape will stop this turn.";
+  "That replacement still was not unittest and was not written. Make another write call now, with no prose, using this exact outer shape: `import subprocess, sys, unittest`; `class Tests(unittest.TestCase):`; one `def test_name(self):` per owner-requested case; each method calls `subprocess.run(...)` and uses `self.assertEqual(...)`; finish with `if __name__ == '__main__': unittest.main()`. Keep the complete file under 1000 characters. If this shape is still invalid, one final literal scaffold remains before the turn stops.";
+
+export const REQUESTED_UNITTEST_FINAL_RETRY_REASON =
+  "Your previous replacement repeated the forbidden custom runner and was not written. One last attempt: discard every prior byte. Begin exactly with `import json, subprocess, sys, unittest`, then `class Tests(unittest.TestCase):`. Put each owner-requested case in its own `def test_name(self):`, call `result = subprocess.run([sys.executable, 'PROGRAM.py', 'INPUT'], capture_output=True, text=True)`, and assert its returncode, parsed stdout, or stderr with `self.assertEqual`. Finish with `if __name__ == '__main__': unittest.main()`. Replace PROGRAM.py and INPUT with the requested values. Do not define run_test, all_passed, print, comments, docstrings, or top-level subprocess code. Keep it under 1000 characters. Another invalid shape will stop this turn.";
 
 export const REQUESTED_PARSED_JSON_REQUIRED_REASON =
   "The owner explicitly required parsed JSON verification, so that raw-text comparison test was not written. Write the same test file with `json.loads(result.stdout)` and compare the resulting Python object and numeric values; do not compare JSON whitespace or a literal expression such as `10/3` inside a string.";
@@ -487,6 +490,16 @@ function hasRequestedUnittestStructure(value) {
     /class\s+[A-Za-z_][A-Za-z0-9_]*\s*\(\s*(?:unittest\.)?TestCase\s*\)\s*:/m.test(value) &&
     /\bdef\s+test_[A-Za-z0-9_]*\s*\(/m.test(value)
   );
+}
+
+function requestedUnittestFinalRetryReason(state) {
+  const program = state?.workspaceRequestedFiles?.find((file) =>
+    /^[A-Za-z_][A-Za-z0-9._-]*\.py$/i.test(file) &&
+    !/^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file)
+  );
+  return program
+    ? REQUESTED_UNITTEST_FINAL_RETRY_REASON.replaceAll("PROGRAM.py", program)
+    : REQUESTED_UNITTEST_FINAL_RETRY_REASON;
 }
 
 function normalizeExecWorkdir(value) {
@@ -4052,6 +4065,12 @@ export function createToolLoopGuard({
           }
           if (state.invalidUnittestBlocks === 2) {
             return { block: true, blockReason: REQUESTED_UNITTEST_RETRY_REASON };
+          }
+          if (state.invalidUnittestBlocks === 3) {
+            return {
+              block: true,
+              blockReason: requestedUnittestFinalRetryReason(state),
+            };
           }
           state.codingExhausted = true;
           state.codingTerminalBlocks = 1;

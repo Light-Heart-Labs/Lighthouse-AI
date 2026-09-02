@@ -63,6 +63,7 @@ import {
   REPEATED_WRITE_REQUIRES_PATCH_REASON,
   REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
   REQUESTED_PARSED_JSON_REQUIRED_REASON,
+  REQUESTED_UNITTEST_FINAL_RETRY_REASON,
   REQUESTED_UNITTEST_REQUIRED_REASON,
   REQUESTED_UNITTEST_RETRY_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
@@ -1579,6 +1580,22 @@ test("requires real unittest structure when the owner explicitly requests it", (
   );
   assert.match(REQUESTED_UNITTEST_RETRY_REASON, /exact outer shape/);
   assert.match(REQUESTED_UNITTEST_RETRY_REASON, /class Tests\(unittest\.TestCase\)/);
+  const finalRetry = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "write",
+        args: {
+          path: "test_stats_report.py",
+          content: "def run_test():\n    return True\n",
+        },
+      },
+    },
+  });
+  assert.equal(finalRetry.block, true);
+  assert.match(finalRetry.blockReason, /discard every prior byte/);
+  assert.match(finalRetry.blockReason, /stats_report\.py/);
+  assert.doesNotMatch(finalRetry.blockReason, /PROGRAM\.py/);
+  assert.match(REQUESTED_UNITTEST_FINAL_RETRY_REASON, /Do not define run_test/);
 
   const accepted = call(guard, "tool_call", {
     event: {
