@@ -1853,9 +1853,12 @@ assert "_ods_pixel_restart_gateway_and_verify" not in stable_branch
 assert "\"$pixel_root/pixel\" verify" not in stable_branch
 assert "_ods_pixel_wait_ingress \"$owner\" \"$home\" 6 1" in stable_branch
 assert "_ods_pixel_verify_plugin_loaded \"$owner\" \"$home\" \"$openclaw_bin\"" in stable_branch
+assert "if _ods_pixel_managed_contract_matches \"$owner\" \"$home\" \"$contract_sha256\"; then" in stable_branch
+assert "_ods_pixel_managed_contract_matches \"$owner\" \"$home\" \"$contract_sha256\" || return 1" not in stable_branch
 assert stable_branch.index("_ods_pixel_managed_contract_matches") < stable_branch.index("_ods_pixel_wait_ingress")
 assert stable_branch.index("_ods_pixel_wait_ingress") < stable_branch.index("_ods_pixel_verify_plugin_loaded")
 assert stable_branch.index("_ods_pixel_verify_plugin_loaded") < stable_branch.index("_ods_pixel_mark_ready")
+assert stable_branch.index("Pixel stable model alias remains active") < stable_branch.index("stable_alias=true")
 assert "failure_phase=\"onboarding-update\"" in text
 assert "failure_phase=\"pixel-configure\"" in text
 assert "failure_phase=\"pixel-plan\"" in text

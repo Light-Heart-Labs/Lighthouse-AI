@@ -1966,17 +1966,24 @@ ods_pixel_reconcile_promoted_model() {
             "$promoted_model" "$promoted_context" "$promoted_max_tokens" \
             "$promoted_reasoning"; then
             contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1
-            _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256" || return 1
-            _ods_pixel_wait_ingress "$owner" "$home" 6 1 || return 1
-            _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" \
-                "${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin" || return 1
-            if [[ "$final_state" == ready ]]; then
-                _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
-            else
-                _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+            # This is a no-op model reconciliation only when the complete
+            # ODS-managed contract is already active. A same-model installer
+            # upgrade can legitimately change the extension or host-service
+            # contract first; continue through the transactional path below
+            # so that change is installed instead of requiring its new hash
+            # to already exist in the old ready marker.
+            if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
+                _ods_pixel_wait_ingress "$owner" "$home" 6 1 || return 1
+                _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" \
+                    "${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin" || return 1
+                if [[ "$final_state" == ready ]]; then
+                    _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+                else
+                    _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+                fi
+                printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
+                return 0
             fi
-            printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
-            return 0
         fi
         stable_alias=true
     fi
