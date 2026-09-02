@@ -77,9 +77,8 @@ sr_load() {
         if ! "$PYTHON_CMD" -c "import yaml" 2>/dev/null; then
             declare -f warn &>/dev/null && warn "PyYAML not available. Service registry will be incomplete and lifecycle commands ('ods enable', 'ods start') will fail."
             declare -f warn &>/dev/null && warn "Install manually: pip3 install pyyaml"
-            _SR_LOADED=true  # Prevent repeated retries
             _SR_FAILED=true
-            return 0
+            return 1
         fi
     fi
 
@@ -221,9 +220,8 @@ PYEOF
     then
         rm -f "$_SR_CACHE"
         declare -f warn &>/dev/null && warn "Service registry: manifest parser failed"
-        _SR_LOADED=true  # Prevent repeated retries
         _SR_FAILED=true
-        return 0
+        return 1
     fi
 
     # Source the generated registry (one subprocess for all manifests)

@@ -103,6 +103,7 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== Manifest schema source of truth ==="
 	@bash tests/test-validate-manifest-schema.sh
+	@bash tests/test-service-registry-pyyaml-fail-closed.sh
 	@echo ""
 	@echo "=== macOS ods config show secret-mask ==="
 	@bash tests/test-macos-config-show-secret-mask.sh
