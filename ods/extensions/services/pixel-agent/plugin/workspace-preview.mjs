@@ -3,6 +3,7 @@
 // and snapshots every byte before returning a browser-verifiable URL.
 
 import net from "node:net";
+import { randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, realpath } from "node:fs/promises";
 import os from "node:os";
@@ -44,7 +45,8 @@ function normalizedScaffold(value, relativeDirectory) {
     typeof value !== "object" ||
     Array.isArray(value) ||
     Object.keys(value).sort().join("\n") !== "tagline\ntheme\ntitle" ||
-    relativeDirectory.includes("/")
+    relativeDirectory.includes("/") ||
+    relativeDirectory.length > 118
   ) {
     throw new Error("invalid Pixel workspace preview request");
   }
@@ -119,7 +121,10 @@ const c=document.querySelector('#sky'),x=c.getContext('2d'),pts=Array.from({leng
 
 export async function createWorkspaceScaffold(
   { workspaceRoot, relativeDirectory, scaffold },
-  { currentUid = () => process.getuid?.() } = {}
+  {
+    currentUid = () => process.getuid?.(),
+    uniqueSuffix = () => randomBytes(4).toString("hex"),
+  } = {}
 ) {
   const resolvedRoot = path.resolve(workspaceRoot);
   const canonicalRoot = await realpath(resolvedRoot);
@@ -135,7 +140,12 @@ export async function createWorkspaceScaffold(
   ) {
     throw new Error("unsafe Pixel workspace root");
   }
-  const directory = path.join(canonicalRoot, relativeDirectory);
+  const suffix = uniqueSuffix();
+  if (typeof suffix !== "string" || !/^[a-f0-9]{8}$/.test(suffix)) {
+    throw new Error("invalid Pixel workspace scaffold suffix");
+  }
+  const allocatedDirectory = `${relativeDirectory}-${suffix}`;
+  const directory = path.join(canonicalRoot, allocatedDirectory);
   await mkdir(directory, { mode: 0o700 });
   const canonicalDirectory = await realpath(directory);
   const directoryStat = await lstat(canonicalDirectory);
@@ -160,6 +170,7 @@ export async function createWorkspaceScaffold(
   } finally {
     await handle.close();
   }
+  return allocatedDirectory;
 }
 
 function validResponse(value, request) {
@@ -313,17 +324,28 @@ export function createWorkspacePreviewTool({
     execute: async (_toolCallId, params) => {
       try {
         const normalized = normalizeWorkspacePreviewParams(params);
+        let publishDirectory = normalized.relativeDirectory;
         if (normalized.scaffold) {
-          await scaffold({
+          publishDirectory = await scaffold({
             workspaceRoot,
             relativeDirectory: normalized.relativeDirectory,
             scaffold: normalized.scaffold,
           });
+          if (
+            !validRelativeDirectory(publishDirectory) ||
+            publishDirectory.includes("/") ||
+            !publishDirectory.startsWith(`${normalized.relativeDirectory}-`) ||
+            !/^[a-f0-9]{8}$/.test(
+              publishDirectory.slice(normalized.relativeDirectory.length + 1)
+            )
+          ) {
+            throw new Error("invalid allocated Pixel workspace scaffold directory");
+          }
         }
         const publishRequest = {
           schemaVersion: normalized.schemaVersion,
           action: normalized.action,
-          relativeDirectory: normalized.relativeDirectory,
+          relativeDirectory: publishDirectory,
         };
         const response = validResponse(await request(publishRequest), publishRequest);
         return {

@@ -3397,8 +3397,17 @@ function workspacePreviewDirectoryFromState(state) {
   return state?.workspacePreviewDirectory;
 }
 
-function workspacePreviewOutcome(event, expectedDirectory) {
+function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = false) {
   const details = event?.result?.details;
+  const exactDirectory = details?.relativeDirectory === expectedDirectory;
+  const allocatedScaffoldDirectory = Boolean(
+    scaffoldRequested &&
+    typeof details?.relativeDirectory === "string" &&
+    details.relativeDirectory.startsWith(`${expectedDirectory}-`) &&
+    /^[a-f0-9]{8}$/.test(
+      details.relativeDirectory.slice(expectedDirectory.length + 1)
+    )
+  );
   if (
     !details ||
     typeof details !== "object" ||
@@ -3407,7 +3416,7 @@ function workspacePreviewOutcome(event, expectedDirectory) {
     details.schemaVersion !== 1 ||
     details.kind !== "ods-pixel-workspace-preview" ||
     details.status !== "succeeded" ||
-    details.relativeDirectory !== expectedDirectory ||
+    (!exactDirectory && !allocatedScaffoldDirectory) ||
     !/^site-[a-f0-9]{24}$/.test(details.siteId) ||
     !Number.isInteger(details.port) ||
     details.port < 1 ||
@@ -5875,9 +5884,13 @@ export function createToolLoopGuard({
       if (requestedDirectory) state.workspacePreviewDirectory = requestedDirectory;
       const preview = workspacePreviewOutcome(
         previewEvent,
-        state.workspacePreviewDirectory
+        state.workspacePreviewDirectory,
+        Boolean(previewEvent?.params?.scaffold)
       );
-      if (preview) state.workspacePreview = preview;
+      if (preview) {
+        state.workspacePreviewDirectory = preview.relativeDirectory;
+        state.workspacePreview = preview;
+      }
     }
     if (state.operationsRequired) {
       const wrappedHostObservation =

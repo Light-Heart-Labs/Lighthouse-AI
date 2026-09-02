@@ -7455,6 +7455,44 @@ test("permits a bounded create-only demo scaffold before an index exists", () =>
     relativeDirectory: "signal-garden",
     scaffold,
   });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: normalized.params,
+      result: {
+        details: {
+          tool: {
+            id: "openclaw:pixel-ods:pixel_ods_workspace_preview",
+            source: "openclaw",
+            sourceName: "pixel-ods",
+            name: "pixel_ods_workspace_preview",
+          },
+          result: {
+            details: {
+              schemaVersion: 1,
+              kind: "ods-pixel-workspace-preview",
+              status: "succeeded",
+              relativeDirectory: "signal-garden-12345678",
+              siteId: "site-0123456789abcdef01234567",
+              port: 9437,
+              url: "http://localhost:9437/site-0123456789abcdef01234567/",
+              files: 1,
+              bytes: 6200,
+              sha256: "a".repeat(64),
+              entryFile: "index.html",
+              entrySha256: "b".repeat(64),
+              httpStatus: 200,
+              readbackVerified: true,
+              executable: false,
+              overwritten: false,
+            },
+          },
+        },
+      },
+    },
+  });
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.equal(verification.preview.relativeDirectory, "signal-garden-12345678");
 });
 
 test("an abort failure is contained and remains a blocked tool result", () => {

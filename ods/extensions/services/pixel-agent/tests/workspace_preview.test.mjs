@@ -29,7 +29,7 @@ test("normalizes one bounded workspace-relative directory", () => {
 test("creates one owner-private self-contained interactive scaffold without overwrite", async () => {
   const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-scaffold-"));
   try {
-    await createWorkspaceScaffold({
+    const request = {
       workspaceRoot,
       relativeDirectory: "signal-garden",
       scaffold: {
@@ -37,8 +37,11 @@ test("creates one owner-private self-contained interactive scaffold without over
         tagline: "A local & interactive field.",
         theme: "ocean",
       },
+    };
+    const firstDirectory = await createWorkspaceScaffold(request, {
+      uniqueSuffix: () => "12345678",
     });
-    const entry = path.join(workspaceRoot, "signal-garden", "index.html");
+    const entry = path.join(workspaceRoot, firstDirectory, "index.html");
     const html = await readFile(entry, "utf8");
     assert.match(html, /Signal &lt;Garden&gt;/);
     assert.match(html, /A local &amp; interactive field/);
@@ -46,13 +49,13 @@ test("creates one owner-private self-contained interactive scaffold without over
     assert.match(html, /Launch sequence/);
     assert.match(html, /requestAnimationFrame/);
     assert.equal((await stat(entry)).mode & 0o777, 0o600);
-    await assert.rejects(
-      createWorkspaceScaffold({
-        workspaceRoot,
-        relativeDirectory: "signal-garden",
-        scaffold: { title: "Again", tagline: "No overwrite.", theme: "aurora" },
-      })
-    );
+    const secondDirectory = await createWorkspaceScaffold(request, {
+      uniqueSuffix: () => "90abcdef",
+    });
+    assert.equal(firstDirectory, "signal-garden-12345678");
+    assert.equal(secondDirectory, "signal-garden-90abcdef");
+    assert.notEqual(firstDirectory, secondDirectory);
+    assert.equal((await stat(entry)).size > 0, true);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
@@ -145,7 +148,7 @@ test("creates a requested scaffold before sending the narrow publish request", a
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     status: "succeeded",
-    relativeDirectory: "signal-garden",
+    relativeDirectory: "signal-garden-12345678",
     siteId: "site-0123456789abcdef01234567",
     port: 9437,
     url: "http://localhost:9437/site-0123456789abcdef01234567/",
@@ -162,7 +165,10 @@ test("creates a requested scaffold before sending the narrow publish request", a
   };
   const tool = createWorkspacePreviewTool({
     workspaceRoot: "/workspace",
-    scaffold: async (request) => scaffolds.push(request),
+    scaffold: async (request) => {
+      scaffolds.push(request);
+      return "signal-garden-12345678";
+    },
     request: async (request) => {
       calls.push(request);
       return response;
@@ -187,7 +193,7 @@ test("creates a requested scaffold before sending the narrow publish request", a
   assert.deepEqual(calls, [{
     schemaVersion: 1,
     action: "publish",
-    relativeDirectory: "signal-garden",
+    relativeDirectory: "signal-garden-12345678",
   }]);
 });
 
