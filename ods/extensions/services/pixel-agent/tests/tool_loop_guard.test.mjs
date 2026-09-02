@@ -589,6 +589,114 @@ test("requires focused edits after a successful write without narrowing workspac
   );
 });
 
+test("turns bounded post-failure rewrites of run-created files into compare-and-swap edits", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Work in /workspace/project. Create probe.py and run the tests." }
+  );
+  const firstWrite = call(guard, "tool_call", {
+    event: {
+      toolCallId: "cas-first-write",
+      params: { id: "write", args: { path: "probe.py", content: "value = 1\n" } },
+    },
+    context: { toolCallId: "cas-first-write" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      toolCallId: "cas-first-write",
+      params: firstWrite.params,
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 10 bytes" }],
+      }),
+    },
+    context: { toolCallId: "cas-first-write" },
+  });
+  const verification = { command: "python3 -m unittest -v", workdir: "/workspace/project" };
+  call(guard, "exec", { event: { params: verification } });
+  afterCall(guard, "exec", {
+    event: { params: verification, result: { isError: true, details: { exitCode: 1 } } },
+  });
+
+  const repair = call(guard, "tool_call", {
+    event: {
+      toolCallId: "cas-repair",
+      params: { id: "write", args: { path: "probe.py", content: "value = 2\n" } },
+    },
+    context: { toolCallId: "cas-repair" },
+  });
+  assert.deepEqual(repair.params, {
+    id: "edit",
+    args: {
+      path: "project/probe.py",
+      edits: [{ oldText: "value = 1\n", newText: "value = 2\n" }],
+    },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      toolCallId: "cas-repair",
+      params: repair.params,
+      result: wrappedCoreResult("edit", {
+        content: [{ type: "text", text: "Successfully replaced 1 block" }],
+      }),
+    },
+    context: { toolCallId: "cas-repair" },
+  });
+  call(guard, "exec", { event: { params: verification } });
+  afterCall(guard, "exec", {
+    event: { params: verification, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  const secondRepair = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "probe.py", content: "value = 3\n" } },
+    },
+  });
+  assert.deepEqual(secondRepair.params.args.edits, [
+    { oldText: "value = 2\n", newText: "value = 3\n" },
+  ]);
+  afterCall(guard, "tool_call", {
+    event: {
+      params: secondRepair.params,
+      result: wrappedCoreResult("edit", {
+        content: [{ type: "text", text: "Successfully replaced 1 block" }],
+      }),
+    },
+  });
+  call(guard, "exec", { event: { params: verification } });
+  afterCall(guard, "exec", {
+    event: { params: verification, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  const thirdRepair = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "probe.py", content: "value = 4\n" } },
+    },
+  });
+  assert.deepEqual(thirdRepair.params.args.edits, [
+    { oldText: "value = 3\n", newText: "value = 4\n" },
+  ]);
+  afterCall(guard, "tool_call", {
+    event: {
+      params: thirdRepair.params,
+      result: wrappedCoreResult("edit", {
+        content: [{ type: "text", text: "Successfully replaced 1 block" }],
+      }),
+    },
+  });
+  call(guard, "exec", { event: { params: verification } });
+  afterCall(guard, "exec", {
+    event: { params: verification, result: { isError: true, details: { exitCode: 1 } } },
+  });
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "probe.py", content: "value = 5\n" } },
+      },
+    }),
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
+  );
+});
+
 test("routes a compact workspace task to core tools and blocks unrequested Operations", () => {
   const prepared = [];
   const guard = createToolLoopGuard({

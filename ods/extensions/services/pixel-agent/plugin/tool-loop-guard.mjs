@@ -23,6 +23,9 @@ export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
   failedVerificationAttempts: 6,
 });
 
+const MAX_COMPARE_SWAP_REPAIR_CHARS = 32_768;
+const MAX_COMPARE_SWAP_REPAIRS_PER_PATH = 3;
+
 export const WEB_BUDGET_EXHAUSTED_REASON =
   "Pixel's web-research budget is exhausted for this response. Do not call any tool again in this turn. Give the user a visible final answer now using the evidence already collected, clearly stating any uncertainty.";
 
@@ -3644,6 +3647,8 @@ export function createToolLoopGuard({
         invalidEditCreateBlocks: 0,
         oversizedEditBlocks: 0,
         successfulWritePaths: new Set(),
+        successfulWriteContentByPath: new Map(),
+        compareSwapRepairCounts: new Map(),
         successfulReadPaths: new Set(),
         repeatedWriteBlocks: new Map(),
         privateNetworkExhausted: false,
@@ -4150,6 +4155,48 @@ export function createToolLoopGuard({
           workdir: `/workspace/${state.workspaceTaskDirectory}`,
         },
       };
+    }
+    if (
+      state?.workspaceTaskDirectory &&
+      state.latestVerificationStatus === "failed" &&
+      toolName === "tool_call" &&
+      pendingParams?.id?.split(":").at(-1) === "write" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args)
+    ) {
+      const repairPath = normalizeWorkspaceFilePath(pendingParams.args.path);
+      const previousContent = state.successfulWriteContentByPath.get(repairPath);
+      const replacementContent = pendingParams.args.content;
+      const ownerRequestedPath = state.workspaceRequestedFiles.some(
+        (file) => repairPath === `${state.workspaceTaskDirectory}/${file}`
+      );
+      const repairCount = state.compareSwapRepairCounts.get(repairPath) ?? 0;
+      if (
+        ownerRequestedPath &&
+        state.successfulWritePaths.has(repairPath) &&
+        typeof previousContent === "string" &&
+        typeof replacementContent === "string" &&
+        previousContent !== replacementContent &&
+        previousContent.length <= MAX_COMPARE_SWAP_REPAIR_CHARS &&
+        replacementContent.length <= MAX_COMPARE_SWAP_REPAIR_CHARS &&
+        repairCount < MAX_COMPARE_SWAP_REPAIRS_PER_PATH
+      ) {
+        // Compact models often regenerate a complete short file after a real
+        // failed verification even when directed to use edit. Preserve the
+        // no-clobber property by turning that replacement into an exact
+        // compare-and-swap edit against only the bytes this run wrote. A
+        // concurrent or external change makes the edit fail instead of being
+        // overwritten, and the per-path cap preserves the repair-loop fuse.
+        pendingParams = {
+          id: "edit",
+          args: {
+            path: repairPath,
+            edits: [{ oldText: previousContent, newText: replacementContent }],
+          },
+        };
+        state.compareSwapRepairCounts.set(repairPath, repairCount + 1);
+      }
     }
     if (
       state?.workspaceTaskDirectory &&
@@ -5479,6 +5526,33 @@ export function createToolLoopGuard({
     if (completedWritePath) {
       state.successfulWritePaths.add(completedWritePath);
       state.repeatedWriteBlocks.delete(completedWritePath);
+      const writtenContent = successfulMutation.event?.params?.content;
+      if (
+        typeof writtenContent === "string" &&
+        writtenContent.length <= MAX_COMPARE_SWAP_REPAIR_CHARS
+      ) {
+        state.successfulWriteContentByPath.set(completedWritePath, writtenContent);
+      } else {
+        state.successfulWriteContentByPath.delete(completedWritePath);
+      }
+    }
+    const completedEditPath = successfulMutation?.name === "edit"
+      ? normalizeWorkspaceFilePath(successfulMutation.event?.params?.path)
+      : undefined;
+    const completedEditPairs = successfulMutation?.name === "edit"
+      ? editReplacementPairs(successfulMutation.event?.params)
+      : [];
+    if (
+      completedEditPath &&
+      completedEditPairs.length === 1 &&
+      state.successfulWriteContentByPath.get(completedEditPath) ===
+        completedEditPairs[0].oldText &&
+      completedEditPairs[0].newText.length <= MAX_COMPARE_SWAP_REPAIR_CHARS
+    ) {
+      state.successfulWriteContentByPath.set(
+        completedEditPath,
+        completedEditPairs[0].newText
+      );
     }
     const completedRead =
       toolName === "read" && event?.result && typeof event.result === "object"
