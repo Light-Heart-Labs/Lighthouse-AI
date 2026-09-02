@@ -305,7 +305,6 @@ def publish_snapshot(
             observed.add(relative)
     if observed != set(expected):
         raise PreviewError("preview snapshot verification failed")
-    entry = destination / "index.html"
     entry_data = expected["index.html"]
     entry_sha256 = hashlib.sha256(entry_data).hexdigest()
     return {
