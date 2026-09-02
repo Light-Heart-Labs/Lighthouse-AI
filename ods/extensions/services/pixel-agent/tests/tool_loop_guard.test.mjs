@@ -485,7 +485,7 @@ test("compacts a truncated Tool Search unittest envelope from structured details
     guard,
     "tool_call",
     "truncated-failure",
-    result
+    { content: result.content }
   );
   const text = persisted.message.content[0].text;
   assert.ok(text.length < 900);

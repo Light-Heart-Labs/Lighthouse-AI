@@ -1976,20 +1976,11 @@ function operationsOdsStatusProjection(event) {
   };
 }
 
-function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName) {
-  if (toolCallFailed(event)) return undefined;
-  const params = event?.params;
-  const details = event?.result?.details;
-  const tool = details?.tool;
-  const result = details?.result;
+function validatedToolSearchEnvelope(candidate, expectedToolName, expectedSourceName) {
+  const value = boundedJsonSnapshot(candidate);
+  const tool = value?.tool;
+  const result = value?.result;
   if (
-    !params ||
-    typeof params !== "object" ||
-    Array.isArray(params) ||
-    params.id !== expectedToolName ||
-    !details ||
-    typeof details !== "object" ||
-    Array.isArray(details) ||
     !tool ||
     typeof tool !== "object" ||
     Array.isArray(tool) ||
@@ -2003,42 +1994,63 @@ function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName
   ) {
     return undefined;
   }
+  return { tool, result };
+}
+
+function toolSearchEventEnvelope(event, expectedToolName, expectedSourceName) {
+  const params = event?.params;
+  if (
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    params.id !== expectedToolName
+  ) {
+    return undefined;
+  }
+  const envelope = validatedToolSearchEnvelope(
+    event?.result?.details,
+    expectedToolName,
+    expectedSourceName
+  );
+  if (!envelope) return undefined;
   return {
     params:
       params.args && typeof params.args === "object" && !Array.isArray(params.args)
         ? params.args
         : {},
-    result,
+    ...envelope,
   };
 }
 
-function persistedToolSearchEnvelope(message, expectedToolName, expectedSourceName) {
-  const validatedEnvelope = (candidate) => {
-    const value = boundedJsonSnapshot(candidate);
-    const tool = value?.tool;
-    if (
-      tool &&
-      typeof tool === "object" &&
-      !Array.isArray(tool) &&
-      tool.id === `openclaw:${expectedSourceName}:${expectedToolName}` &&
-      tool.source === "openclaw" &&
-      tool.sourceName === expectedSourceName &&
-      tool.name === expectedToolName &&
-      value.result &&
-      typeof value.result === "object" &&
-      !Array.isArray(value.result)
-    ) {
-      return { tool, result: value.result };
-    }
-    return undefined;
-  };
+function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName) {
+  if (toolCallFailed(event)) return undefined;
+  const envelope = toolSearchEventEnvelope(event, expectedToolName, expectedSourceName);
+  return envelope ? { params: envelope.params, result: envelope.result } : undefined;
+}
+
+function persistedToolSearchEnvelope(
+  message,
+  expectedToolName,
+  expectedSourceName,
+  capturedEnvelope
+) {
   // OpenClaw keeps the complete, framework-owned Tool Search envelope in
   // message.details even when it truncates the model-visible JSON text block.
   // Validate that bounded structured copy first so large failures can still be
   // reduced to actionable evidence instead of consuming a compact model's
   // entire remaining context. Retain the JSON block path for older runtimes.
-  const structuredEnvelope = validatedEnvelope(message?.details);
+  const structuredEnvelope = validatedToolSearchEnvelope(
+    message?.details,
+    expectedToolName,
+    expectedSourceName
+  );
   if (structuredEnvelope) return structuredEnvelope;
+  const boundedCapturedEnvelope = validatedToolSearchEnvelope(
+    capturedEnvelope,
+    expectedToolName,
+    expectedSourceName
+  );
+  if (boundedCapturedEnvelope) return boundedCapturedEnvelope;
   if (!Array.isArray(message?.content)) return undefined;
   for (const block of message.content) {
     if (block?.type !== "text" || typeof block.text !== "string") continue;
@@ -2048,7 +2060,11 @@ function persistedToolSearchEnvelope(message, expectedToolName, expectedSourceNa
     } catch {
       continue;
     }
-    const envelope = validatedEnvelope(parsed);
+    const envelope = validatedToolSearchEnvelope(
+      parsed,
+      expectedToolName,
+      expectedSourceName
+    );
     if (envelope) return envelope;
   }
   return undefined;
@@ -2089,7 +2105,12 @@ function compactCleanVerificationResult(message, pending) {
   if (!verificationFingerprintIsPythonUnittest(pending?.verificationFingerprint)) {
     return undefined;
   }
-  const envelope = persistedToolSearchEnvelope(message, "exec", "core");
+  const envelope = persistedToolSearchEnvelope(
+    message,
+    "exec",
+    "core",
+    pending?.capturedToolSearchEnvelope
+  );
   const summary = cleanUnittestSummary(envelope?.result);
   if (!summary) return undefined;
   const details = envelope.result.details;
@@ -2187,7 +2208,12 @@ function compactWorkspaceCoreResult(message, pending, state) {
   ) {
     return undefined;
   }
-  const envelope = persistedToolSearchEnvelope(message, toolName, "core");
+  const envelope = persistedToolSearchEnvelope(
+    message,
+    toolName,
+    "core",
+    pending?.capturedToolSearchEnvelope
+  );
   if (!envelope) return undefined;
   const result = envelope.result;
   let content = Array.isArray(result.content)
@@ -5372,6 +5398,30 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    const toolCallId = context?.toolCallId ?? event?.toolCallId;
+    const pendingToolRun = pendingToolRuns.get(toolCallId);
+    if (
+      toolName === "tool_call" &&
+      ["read", "write", "edit", "apply_patch", "exec", "process"].includes(
+        pendingToolRun?.selectedToolName
+      )
+    ) {
+      const envelope = toolSearchEventEnvelope(
+        event,
+        pendingToolRun.selectedToolName,
+        "core"
+      );
+      if (envelope) {
+        // `tool_result_persist` runs with the same opaque call ID but may see
+        // only the already-truncated model-visible content. Preserve this
+        // bounded, structurally validated post-tool snapshot on that exact
+        // pending call so persistence cannot confuse results across runs.
+        pendingToolRun.capturedToolSearchEnvelope = {
+          tool: envelope.tool,
+          result: envelope.result,
+        };
+      }
+    }
     const directMutation =
       WORKSPACE_MUTATION_TOOLS.has(toolName) &&
       event?.result &&
