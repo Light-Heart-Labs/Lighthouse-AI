@@ -109,12 +109,15 @@ gateway. It verifies the new runtime and downstream routes before reporting
 success. A late failure restores the prior files, runtime, persisted app routes,
 and Pixel binding, then proves the previous model is serving again.
 
-An ODS-managed Pixel route requires at least 16384 tokens of context so its
-fixed agent/tool prompt and a useful output reserve both fit. When Pixel is
-installed, a smaller requested context is rejected before the activation writes
-files or restarts services. ODS derives Pixel's output and compaction reserve
-from the committed context: one eighth of the context below 32K, capped at 4096
-tokens at 32K and above.
+An ODS-managed Pixel route supports OpenClaw's 4096-token minimum. Below 16K it
+uses a deliberately constrained adaptive prompt, so complex-task reliability
+still depends on the selected model and available context, but the route is not
+blocked. A requested context below 4K is rejected before activation writes
+files or restarts services. Below 32K, ODS gives Pixel an output ceiling of one
+quarter of the committed context; at 32K and above it allows up to 4096 output
+tokens. Compaction keeps a context-scaled recent tail and uses extra headroom
+for 8K-31K profiles so recovery occurs before a dense tool transcript exhausts
+the model window.
 
 ### Choosing the runtime context
 

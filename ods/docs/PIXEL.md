@@ -363,10 +363,13 @@ adaptive mode, where task complexity and reliability vary with the available
 prompt budget; they are not excluded. An advanced custom activation below 4K
 is rejected before any model state changes. Below 32K, ODS lowers Pixel's
 output ceiling to one quarter of the context; at 32K and above it allows up to
-4096 output tokens. The same value is applied as
-OpenClaw's compaction reserve, with its larger embedded reserve floor disabled,
-so a smaller qualified context still leaves room for Pixel's fixed prompt and
-tool results.
+4096 output tokens. ODS derives OpenClaw's compaction reserve from that output
+ceiling and enables a half-window reserve floor for 8K-31K adaptive profiles,
+where dense tool transcripts can otherwise outrun OpenClaw's character-based
+estimate. The retained recent tail is capped at one quarter of the selected
+context (and 20K tokens globally), so compaction always removes real history
+instead of recording a no-op when the runtime's fixed 20K default exceeds the
+whole model window.
 
 Generic `EXTERNAL_LLM_URL` reuse remains outside this contract because it
 bypasses the managed LiteLLM route. Automatic selection uses Hermes for that

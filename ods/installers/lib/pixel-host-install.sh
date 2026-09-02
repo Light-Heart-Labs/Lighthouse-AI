@@ -679,7 +679,8 @@ compaction = defaults.setdefault("compaction", {}) if isinstance(defaults, dict)
 if not isinstance(compaction, dict):
     raise SystemExit("live stable-alias compaction policy is invalid")
 compaction["reserveTokens"] = (context + 4 * max_tokens + 4) // 5
-compaction["reserveTokensFloor"] = 0
+compaction["reserveTokensFloor"] = context // 2 if 8192 <= context < 32768 else 0
+compaction["keepRecentTokens"] = max(1024, min(20000, context // 4))
 descriptor, temporary = tempfile.mkstemp(prefix=".ods-model-reconcile-", dir=live_path.parent)
 try:
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
@@ -1190,7 +1191,19 @@ normalized_sandbox_docker["dangerouslyAllowExternalBindSources"] = True
 normalized_compaction["reserveTokens"] = (
     contract.get("modelContextWindow") + 4 * contract.get("modelMaxTokens") + 4
 ) // 5
-normalized_compaction["reserveTokensFloor"] = 0
+normalized_compaction["reserveTokensFloor"] = (
+    normalized_context_window // 2
+    if 8192 <= normalized_context_window < 32768 else 0
+)
+# OpenClaw otherwise retains its fixed 20K recent-token default. On compact
+# contexts that can select nothing to summarize, create a no-op compaction,
+# and then reject the useful retry as already compacted. Keep a context-scaled
+# recent tail so every admitted context can actually recover while preserving
+# the newest tool evidence and continuation state.
+normalized_compaction["keepRecentTokens"] = max(
+    1024,
+    min(20000, normalized_context_window // 4),
+)
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
 normalized_write_lock["maxHoldMs"] = 1920000
 normalized_write_lock["staleMs"] = 3600000
@@ -1667,7 +1680,22 @@ updated_agent_context_limits["toolResultMaxChars"] = max(
 updated_compaction["reserveTokens"] = (
     context_window + 4 * model_max_tokens + 4
 ) // 5
-updated_compaction["reserveTokensFloor"] = 0
+# OpenClaw's LLM-boundary estimate is character based and can undercount dense
+# tool transcripts. Its context-aware floor is intentionally capped to half of
+# a compact window; enable that same bound for the 8K-31K adaptive profiles so
+# compaction begins before a provider can end the continuation at length. A 4K
+# best-effort profile keeps the formula above because half the window may be
+# smaller than its first useful prompt.
+updated_compaction["reserveTokensFloor"] = (
+    context_window // 2 if 8192 <= context_window < 32768 else 0
+)
+# OpenClaw's fixed 20K keep-recent default is larger than every compact ODS
+# profile. Scale it for all contexts so compaction always drops real history
+# instead of writing an empty no-op summary and blocking the recovery retry.
+updated_compaction["keepRecentTokens"] = max(
+    1024,
+    min(20000, context_window // 4),
+)
 # The legacy OpenAI-completions transport in OpenClaw 2026.6.33 coerces the literal
 # reasoning effort "off" with Boolean("off"), which wrongly sends
 # chat_template_kwargs.enable_thinking=true. With the llama.cpp Qwen template
