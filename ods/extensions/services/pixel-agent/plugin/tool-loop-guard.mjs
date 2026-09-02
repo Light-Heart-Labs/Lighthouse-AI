@@ -3815,6 +3815,37 @@ export function createToolLoopGuard({
         }
         return undefined;
       })();
+      const compactPythonArgs = pendingParams.args.args;
+      const compactPythonRunner =
+        (pendingParams.id === "python3" || nestedName === "exec") &&
+        Object.keys(pendingParams.args).every((key) => key === "path" || key === "args") &&
+        Array.isArray(compactPythonArgs) &&
+        (compactPythonArgs.length === 0 ||
+          (compactPythonArgs.length === 1 && compactPythonArgs[0] === "-v")) &&
+        readbackCandidate &&
+        state.successfulWritePaths.has(readbackCandidate);
+      const compactPythonFile = compactPythonRunner
+        ? readbackCandidate.slice(`${state.workspaceTaskDirectory}/`.length)
+        : undefined;
+      if (
+        typeof compactPythonFile === "string" &&
+        /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(compactPythonFile)
+      ) {
+        // A compact model can treat the generic Tool Search transport as a
+        // language runner, either inventing `python3` as the catalog id or
+        // selecting exec with `{path,args}`. Adapt only a test file that the
+        // owner named and this run successfully wrote, and only the observed
+        // optional verbose flag. Use the auditable unittest runner so failure
+        // evidence and retry fuses remain authoritative.
+        pendingParams = {
+          id: "openclaw:core:exec",
+          args: {
+            command: `python3 -m unittest -v ${compactPythonFile}`,
+            workdir: `/workspace/${state.workspaceTaskDirectory}`,
+          },
+        };
+        nestedName = "exec";
+      }
       // Compact models sometimes invent a bare `readback` id after a successful
       // write. Adapt only the exact owner-requested path, with only a path
       // argument, to the native read tool. Namespaced or unrelated readback

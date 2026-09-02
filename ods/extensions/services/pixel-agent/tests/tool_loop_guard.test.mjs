@@ -1086,6 +1086,49 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     /Run the owner-requested verification command now/
   );
 
+  const compactPythonRunner = call(guard, "tool_call", {
+    event: {
+      toolCallId: "compact-python-runner",
+      params: {
+        id: "python3",
+        args: { path: "test_normalize_name.py", args: ["-v"] },
+      },
+    },
+    context: { toolCallId: "compact-python-runner" },
+  });
+  assert.equal(compactPythonRunner.params.id, "openclaw:core:exec");
+  assert.deepEqual(compactPythonRunner.params.args, {
+    command: "python3 -m unittest -v test_normalize_name.py",
+    workdir: "/workspace/project",
+    pty: false,
+    background: false,
+    yieldMs: 30_000,
+  });
+  const compactExecRunner = call(guard, "tool_call", {
+    event: {
+      toolCallId: "compact-exec-runner",
+      params: {
+        id: "openclaw:core:exec",
+        args: { path: "test_normalize_name.py", args: ["-v"] },
+      },
+    },
+    context: { toolCallId: "compact-exec-runner" },
+  });
+  assert.deepEqual(compactExecRunner.params, compactPythonRunner.params);
+  assert.equal(
+    call(guard, "tool_call", {
+      event: {
+        toolCallId: "unrequested-python-runner",
+        params: {
+          id: "python3",
+          args: { path: "unrequested.py", args: ["-v"] },
+        },
+      },
+      context: { toolCallId: "unrequested-python-runner" },
+    }),
+    undefined
+  );
+
   const verification = call(guard, "tool_call", {
     event: {
       toolCallId: "failed-verification",
