@@ -5176,6 +5176,47 @@ test("normalizes a compact-model exec shell alias before cancellable wrapping", 
   );
 });
 
+test("normalizes a compact-model exec script envelope before cancellable wrapping", () => {
+  const prepared = [];
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: (runId, command) => {
+        prepared.push([runId, command]);
+        return `/control/wrapper ${runId} ${Buffer.from(command).toString("base64")}`;
+      },
+      signal: () => true,
+    },
+  });
+  const result = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "exec",
+        args: {
+          script: "python3 test_stats_report.py",
+          context: "fork",
+        },
+      },
+    },
+  });
+  assert.deepEqual(prepared, [["run-1", "python3 test_stats_report.py"]]);
+  assert.equal(result.params.args.script, undefined);
+  assert.equal(result.params.args.context, undefined);
+  assert.match(result.params.args.command, /^\/control\/wrapper run-1 /);
+
+  const unrelated = createToolLoopGuard();
+  assert.equal(
+    call(unrelated, "tool_call", {
+      event: {
+        params: {
+          id: "exec",
+          args: { script: "printf unsafe", context: "host" },
+        },
+      },
+    }),
+    undefined
+  );
+});
+
 test("repairs a new-file edit into write and bounds an ignored correction", () => {
   const aborts = [];
   const guard = createToolLoopGuard({

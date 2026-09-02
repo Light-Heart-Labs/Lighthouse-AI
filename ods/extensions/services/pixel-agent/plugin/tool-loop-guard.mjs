@@ -577,6 +577,27 @@ function normalizeWorkspaceParams(toolName, params) {
   }
   if (
     toolName === "exec" &&
+    typeof updated.command !== "string" &&
+    typeof params.script === "string" &&
+    (params.context === undefined || params.context === "fork") &&
+    Object.keys(params).every((key) =>
+      ["script", "context", "workdir", "yieldMs", "timeout", "pty", "background"].includes(key)
+    )
+  ) {
+    // A compact model can borrow the `script` + `context: fork` envelope from
+    // another agent harness even after selecting OpenClaw's exact exec tool.
+    // Recover only that observed, closed set of fields. OpenClaw already runs
+    // this agent's commands in its isolated workspace, so the foreign `fork`
+    // hint adds no execution property and is discarded. The command still
+    // traverses the cancellation wrapper, private-network policy, destructive
+    // operation checks, and retry accounting below.
+    updated.command = params.script;
+    delete updated.script;
+    if (updated.context === "fork") delete updated.context;
+    changed = true;
+  }
+  if (
+    toolName === "exec" &&
     typeof updated.command === "string" &&
     updated.workdir === undefined
   ) {
