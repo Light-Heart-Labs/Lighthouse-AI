@@ -7524,6 +7524,10 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   const verification = guard.verificationForRun("run-1");
   assert.equal(verification.status, "passed");
   assert.match(verification.text, new RegExp(WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX));
+  assert.match(
+    verification.text,
+    /this static receipt does not claim that controls were clicked or exercised/
+  );
   assert.match(verification.text, /http:\/\/localhost:9437\/site-0123456789abcdef01234567\//);
   assert.equal(
     guard.beforeAgentFinalize(

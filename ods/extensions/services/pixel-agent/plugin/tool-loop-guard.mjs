@@ -150,7 +150,7 @@ export const WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX =
   "Pixel did not create or verify the requested website files, so ODS did not publish a browser preview. No localhost URL is live or claimed; ask Pixel to retry the build.";
 
 export const WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX =
-  "Pixel published and independently read back the static website:";
+  "Pixel published and independently read back the static website bytes:";
 
 export const CLIENT_CANCELLED_REASON =
   "The owner cancelled this Pixel response. Do not call another tool or continue the task in this turn.";
@@ -6654,7 +6654,8 @@ export function createToolLoopGuard({
           `- Snapshot: ${state.workspacePreview.files} files, ` +
           `${state.workspacePreview.bytes} bytes, SHA-256 ` +
           `\`${state.workspacePreview.sha256}\`.\n` +
-          "- Browser readback: HTTP 200 from the dedicated loopback preview origin.",
+          "- Browser readback: HTTP 200 from the dedicated loopback preview origin.\n" +
+          "- Interaction evidence: this static receipt does not claim that controls were clicked or exercised.",
         preview: {
           schemaVersion: 1,
           kind: "ods-pixel-workspace-preview",
