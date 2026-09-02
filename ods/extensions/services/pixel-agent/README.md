@@ -124,6 +124,15 @@ AF_INET6`, an explicit read-only bind for the gateway token file, and a `UMask=0
 It creates `/run/ods-pixel` (`RuntimeDirectory` mode `0710`) and restarts on
 failure. It contains no credential.
 
+The separate Operations Broker remains unprivileged with an empty capability
+set. Its ODS drop-in uses a closed device cgroup allowlist for only the NVIDIA
+compute nodes needed by the fixed, read-only GPU observer; disks, input
+devices, cameras, and microphones stay unavailable. On WSL, `AF_VSOCK` is
+available only so the fixed Tailscale observer can try root-owned interop
+sockets and return installed/running state. The policy exposes no model-chosen
+PowerShell command or parameter. It never projects addresses, peers, accounts,
+routes, device identifiers, or arbitrary PowerShell output.
+
 ## Rollback
 
 This ingress and the isolated preview origin are additive host services.

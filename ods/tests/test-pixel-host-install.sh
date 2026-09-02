@@ -1767,7 +1767,11 @@ check bash -n "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh
 check python3 -c '
 import pathlib,sys
 lines=[line for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line and not line.startswith("#")]
-assert lines == ["[Service]","RestrictAddressFamilies=","RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"]
+assert lines[:5] == ["[Service]","RestrictAddressFamilies=","RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_VSOCK","PrivateDevices=false","DevicePolicy=closed"]
+assert "DeviceAllow=/dev/dxg rw" in lines
+assert "DeviceAllow=/dev/nvidiactl rw" in lines
+assert "DeviceAllow=/dev/nvidia0 rw" in lines
+assert all(line.startswith("DeviceAllow=/dev/") for line in lines[5:])
 ' "$ROOT/extensions/services/pixel-agent/host/pixel-ops-broker-ods.conf"
 check python3 -c '
 import pathlib,sys
@@ -1828,7 +1832,7 @@ assert "owner-private ODS Pixel artifact promoter service" in text
 assert "ods-pixel-contract-v9" in text
 assert "ods-pixel-system-observe.py" in text
 assert "pixel-ops-broker-ods.conf" in text
-for family in ("AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"):
+for family in ("AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK", "AF_VSOCK"):
     assert family in text
 assert "CapabilityBoundingSet --value" in text
 assert "bin/ods-pixel-approve" in text

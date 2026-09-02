@@ -1,5 +1,7 @@
 import importlib.util
 import pathlib
+import stat
+import tempfile
 import unittest
 from unittest import mock
 
@@ -72,6 +74,40 @@ class SystemObserveTests(unittest.TestCase):
         self.assertNotIn("peer", rendered)
         self.assertNotIn("address", rendered)
         self.assertNotIn("account", rendered)
+
+    def test_windows_tailscale_uses_only_a_sanitized_service_state(self):
+        result = mock.Mock(returncode=0, stdout="Running\n", stderr="#< CLIXML\n")
+        with mock.patch.object(system_observe, "_native_tailscale_state", return_value=None), \
+             mock.patch.object(system_observe, "_windows_powershell_result", return_value=result) as run:
+            value = system_observe.observe_tailscale()
+        command = run.call_args.args[0]
+        self.assertIn("Get-Service -Name Tailscale", command)
+        self.assertNotIn("status --json", command)
+        self.assertEqual(value["state"], "service-running")
+        self.assertTrue(value["serviceRunning"])
+
+    def test_windows_interop_retries_only_root_owned_socket_candidates(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="failed")
+        succeeded = mock.Mock(returncode=0, stdout="Running\n", stderr="")
+        candidates = [pathlib.Path("/run/WSL/101_interop"), pathlib.Path("/run/WSL/99_interop")]
+        with tempfile.TemporaryDirectory() as directory:
+            executable = pathlib.Path(directory) / "powershell.exe"
+            executable.write_text("fixture", encoding="utf-8")
+            executable.chmod(0o555)
+            with mock.patch.object(system_observe, "WINDOWS_POWERSHELL", executable), \
+                 mock.patch.object(system_observe, "_trusted_interop_sockets", return_value=candidates), \
+                 mock.patch.object(system_observe, "_run", side_effect=[failed, succeeded]) as run:
+                result = system_observe._windows_powershell_result("'safe'")
+        self.assertIs(result, succeeded)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].kwargs["extra_env"], {"WSL_INTEROP": str(candidates[0])})
+        self.assertEqual(run.call_args_list[1].kwargs["extra_env"], {"WSL_INTEROP": str(candidates[1])})
+
+    def test_interop_directory_must_be_root_owned_and_not_writable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            with mock.patch.object(pathlib.Path, "lstat", return_value=mock.Mock(st_mode=stat.S_IFDIR | 0o777, st_uid=0)):
+                self.assertEqual(system_observe._trusted_interop_sockets(root), [])
 
 
 if __name__ == "__main__":

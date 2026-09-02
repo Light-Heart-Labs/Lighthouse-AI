@@ -3530,18 +3530,26 @@ EOF
     rmdir -- "$stage"
     ods_sudo systemctl daemon-reload || return 1
     ods_sudo systemctl restart pixel-ops-broker.service || return 1
-    local operations_address_families operations_capabilities
+    local operations_address_families operations_capabilities operations_device_policy
+    local operations_private_devices
     operations_address_families="$(ods_sudo systemctl show pixel-ops-broker.service \
         --property=RestrictAddressFamilies --value)" || return 1
     operations_capabilities="$(ods_sudo systemctl show pixel-ops-broker.service \
         --property=CapabilityBoundingSet --value)" || return 1
-    python3 - "$operations_address_families" "$operations_capabilities" <<'PY'
+    operations_private_devices="$(ods_sudo systemctl show pixel-ops-broker.service \
+        --property=PrivateDevices --value)" || return 1
+    operations_device_policy="$(ods_sudo systemctl show pixel-ops-broker.service \
+        --property=DevicePolicy --value)" || return 1
+    python3 - "$operations_address_families" "$operations_capabilities" \
+        "$operations_private_devices" "$operations_device_policy" <<'PY'
 import sys
 
-if set(sys.argv[1].split()) != {"AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"}:
+if set(sys.argv[1].split()) != {"AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK", "AF_VSOCK"}:
     raise SystemExit("unexpected Pixel Operations address-family boundary")
 if sys.argv[2]:
     raise SystemExit("Pixel Operations capability boundary is not empty")
+if sys.argv[3] != "no" or sys.argv[4] != "closed":
+    raise SystemExit("Pixel Operations device boundary is not closed")
 PY
     ods_sudo systemctl enable openclaw-gateway.service pixel-ingress.service \
         pixel-extension-manager.service pixel-artifact-promoter.service \
