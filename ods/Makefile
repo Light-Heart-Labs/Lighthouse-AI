@@ -56,6 +56,7 @@ test: ## Run unit and contract tests
 	@bash tests/contracts/test-windows-llm-model-readiness.sh
 	@bash tests/contracts/test-windows-lemonade-swap-wait.sh
 	@bash tests/contracts/test-windows-hermes-config-patching.sh
+	@powershell -NoProfile -File tests/test-windows-llama-memory-budget.ps1
 	@bash tests/contracts/test-llama-metrics-flag.sh
 	@bash tests/contracts/test-llama-reasoning-format.sh
 	@echo ""
