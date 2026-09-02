@@ -338,11 +338,11 @@ def test_windows_8gb_revalidation_models_have_64k_compressed_kv_profiles():
         assert profile["env"]["LLAMA_ARG_CACHE_TYPE_V"] == cache_type
 
 
-def test_default_qwen_9b_has_an_interactive_8gb_runtime_profile():
+def test_default_qwen_9b_has_live_proven_64k_and_compatible_32k_runtime_profiles():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     model = next(model for model in catalog["models"] if model["id"] == "qwen3.5-9b-q4")
     profiles = {profile["id"]: profile for profile in model["runtime_profiles"]}
-    profile = profiles["nvidia-8gb-32k-q8-kv"]
+    profile = profiles["nvidia-8gb-64k-q8-kv"]
 
     assert profile["backend"] == "nvidia"
     assert profile["host_arch"] == ["amd64"]
@@ -350,8 +350,8 @@ def test_default_qwen_9b_has_an_interactive_8gb_runtime_profile():
     assert profile["vram_min_gb"] == 7.5
     assert profile["vram_max_gb"] == 8.5
     assert profile["system_ram_min_gb"] == 15
-    assert profile["context_length"] == 32768
-    assert profile["estimated_required_gb"] == 6.8
+    assert profile["context_length"] == HERMES_CONTEXT_FLOOR
+    assert profile["estimated_required_gb"] == 7.2
     assert profile["env"] == {
         "LLAMA_PARALLEL": "1",
         "LLAMA_ARG_FLASH_ATTN": "on",
@@ -359,6 +359,10 @@ def test_default_qwen_9b_has_an_interactive_8gb_runtime_profile():
         "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
         "LLAMA_SERVER_MEMORY_LIMIT": "12G",
     }
+
+    fallback = profiles["nvidia-8gb-32k-q8-kv"]
+    assert fallback["context_length"] == 32768
+    assert fallback["estimated_required_gb"] == 6.8
 
 
 def test_ministral_has_a_constrained_wsl_8gb_runtime_profile():
@@ -1066,4 +1070,5 @@ def test_real_pixel_failures_are_separate_from_generic_agent_evidence():
 
     qwen_9b_reason = by_id["qwen3.5-9b-q4"]["app_compatibility"]["pixel_agent"]["reason"]
     assert "32K" in qwen_9b_reason
-    assert "context precheck" in qwen_9b_reason
+    assert "64K revalidation" in qwen_9b_reason
+    assert "bounded six-failure repair budget" in qwen_9b_reason

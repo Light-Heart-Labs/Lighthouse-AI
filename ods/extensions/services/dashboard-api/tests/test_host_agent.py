@@ -7061,6 +7061,45 @@ class TestModelDownloadFileIntegrity:
         assert valid is False
         assert "size mismatch" in reason
 
+    def test_verified_model_artifact_reuses_unchanged_integrity_proof(
+        self, tmp_path, monkeypatch,
+    ):
+        payload = b"catalog verified model"
+        model_path = tmp_path / "cached-model.gguf"
+        model_path.write_bytes(payload)
+        artifact = {
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+        assert _mod._verify_model_artifact(model_path, artifact) == (True, "")
+
+        def unexpected_hash():
+            raise AssertionError("unchanged artifact should reuse its integrity proof")
+
+        monkeypatch.setattr(_mod.hashlib, "sha256", unexpected_hash)
+        assert _mod._verify_model_artifact(model_path, artifact) == (True, "")
+
+    def test_verified_model_artifact_cache_rejects_same_size_tampering(
+        self, tmp_path,
+    ):
+        payload = b"catalog model A"
+        replacement = b"catalog model B"
+        assert len(payload) == len(replacement)
+        model_path = tmp_path / "tampered-model.gguf"
+        model_path.write_bytes(payload)
+        artifact = {
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+        assert _mod._verify_model_artifact(model_path, artifact) == (True, "")
+        model_path.write_bytes(replacement)
+
+        valid, reason = _mod._verify_model_artifact(model_path, artifact)
+        assert valid is False
+        assert "SHA256 mismatch" in reason
+
     def test_stale_split_status_rejects_missing_second_part(self, tmp_path, monkeypatch):
         first_payload = b"verified first part"
         second_payload = b"verified second part"

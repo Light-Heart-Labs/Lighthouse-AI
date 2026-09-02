@@ -1000,7 +1000,7 @@ def test_agent_activation_preserves_preflight_validation_detail(monkeypatch):
     import routers.models as models_router
 
     payload = {
-        "error": "ODS-managed Pixel requires a model context of at least 16384 tokens",
+        "error": "ODS-managed Pixel requires a model context of at least 4096 tokens",
         "code": "pixel_context_too_small",
     }
 

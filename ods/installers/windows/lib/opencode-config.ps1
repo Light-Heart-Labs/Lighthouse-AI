@@ -216,7 +216,9 @@ function Sync-WindowsOpenCodeConfigFromEnv {
     $_modelName = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LLM_MODEL") -Default $DefaultModelName
     $_apiKey = "no-key"
     $_providerName = "llama-server (local)"
-    $_switchboardMode = (Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("ODS_MODEL_SWITCHBOARD") -Default "enabled").ToLowerInvariant()
+    # New installers write "enabled" explicitly. Preserve the legacy direct
+    # route when this key is absent from an existing installation.
+    $_switchboardMode = (Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("ODS_MODEL_SWITCHBOARD") -Default "observe").ToLowerInvariant()
     if ($_switchboardMode -eq "enabled") {
         $_litellmPort = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LITELLM_PORT") -Default "4000"
         $_litellmKey = Get-WindowsODSEnvValue -EnvMap $_envMap -Keys @("LITELLM_KEY") -Default ""

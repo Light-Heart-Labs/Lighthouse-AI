@@ -543,6 +543,161 @@ if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0]
 PY
 }
 
+_ods_pixel_stable_alias_matches_promoted_model() {
+    local owner="$1" home="$2" answers="$3" promoted_model="$4"
+    local promoted_context="${5:-}" promoted_max_tokens="${6:-}" promoted_reasoning="${7:-}" config
+    config="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - \
+        "$answers" "$config" "$promoted_model" "$promoted_context" \
+        "$promoted_max_tokens" "$promoted_reasoning" <<'PY'
+import json, os, pathlib, re, stat, sys
+
+answers_path, config_path = map(pathlib.Path, sys.argv[1:3])
+promoted_model, context_raw, max_tokens_raw, reasoning_raw = sys.argv[3:7]
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}", promoted_model):
+    raise SystemExit(1)
+documents = []
+for path in (answers_path, config_path):
+    info = path.lstat()
+    parent = path.parent.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024
+            or not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode)
+            or parent.st_uid != os.getuid() or parent.st_mode & 0o022):
+        raise SystemExit(1)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit(1)
+    documents.append(value)
+
+answers, config = documents
+if answers.get("modelProvider") != "ods-gateway" or answers.get("modelId") != "ods/current":
+    raise SystemExit(1)
+expected_name = f"ODS Current ({promoted_model})"
+context = answers.get("modelContextWindow")
+max_tokens = answers.get("modelMaxTokens")
+reasoning = answers.get("modelReasoning")
+if context_raw:
+    if not context_raw.isdigit():
+        raise SystemExit(1)
+    context = int(context_raw)
+if max_tokens_raw:
+    if not max_tokens_raw.isdigit():
+        raise SystemExit(1)
+    max_tokens = int(max_tokens_raw)
+if reasoning_raw:
+    if reasoning_raw not in {"true", "false"}:
+        raise SystemExit(1)
+    reasoning = reasoning_raw == "true"
+if (answers.get("modelName") != expected_name
+        or type(context) is not int or not 4096 <= context <= 10_000_000
+        or type(max_tokens) is not int or not 1 <= max_tokens <= context
+        or type(reasoning) is not bool
+        or answers.get("modelContextWindow") != context
+        or answers.get("modelMaxTokens") != max_tokens
+        or answers.get("modelReasoning") is not reasoning):
+    raise SystemExit(1)
+
+providers = config.get("models", {}).get("providers", {})
+if not isinstance(providers, dict) or set(providers) != {"ods-gateway"}:
+    raise SystemExit(1)
+provider = providers["ods-gateway"]
+models = provider.get("models") if isinstance(provider, dict) else None
+if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
+    raise SystemExit(1)
+model = models[0]
+if (model.get("id") != "ods/current" or model.get("name") != expected_name
+        or model.get("contextWindow") != context or model.get("maxTokens") != max_tokens
+        or model.get("reasoning") is not reasoning):
+    raise SystemExit(1)
+PY
+}
+
+_ods_pixel_stage_stable_alias_candidate() {
+    local owner="$1" home="$2" answers="$3" live
+    live="$home/.openclaw/openclaw.json"
+    ods_pixel_run_as_owner "$owner" "$home" python3 - "$live" "$answers" <<'PY'
+import copy, json, os, pathlib, re, stat, sys, tempfile
+
+live_path, answers_path = map(pathlib.Path, sys.argv[1:])
+documents = []
+for path in (live_path, answers_path):
+    info = path.lstat()
+    parent = path.parent.lstat()
+    if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or info.st_mode & 0o077 or info.st_size > 2 * 1024 * 1024
+            or not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode)
+            or parent.st_uid != os.getuid() or parent.st_mode & 0o022):
+        raise SystemExit("unsafe stable-alias reconciliation input")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit("invalid stable-alias reconciliation input")
+    documents.append(value)
+
+live, contract = documents
+if contract.get("modelProvider") != "ods-gateway" or contract.get("modelId") != "ods/current":
+    raise SystemExit("stable-alias onboarding contract is invalid")
+name = contract.get("modelName")
+context = contract.get("modelContextWindow")
+max_tokens = contract.get("modelMaxTokens")
+reasoning = contract.get("modelReasoning")
+if (not isinstance(name, str)
+        or not re.fullmatch(r"ODS Current \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}\)", name)
+        or type(context) is not int or not 4096 <= context <= 10_000_000
+        or type(max_tokens) is not int or not 1 <= max_tokens <= context
+        or type(reasoning) is not bool):
+    raise SystemExit("stable-alias model limits are invalid")
+providers = live.get("models", {}).get("providers", {})
+agents = live.get("agents", {}).get("list", [])
+selected = [item for item in agents if isinstance(item, dict) and item.get("id") == "pixel"]
+if not isinstance(providers, dict) or set(providers) != {"ods-gateway"} or len(selected) != 1:
+    raise SystemExit("live stable-alias route is invalid")
+provider = providers["ods-gateway"]
+models = provider.get("models") if isinstance(provider, dict) else None
+if (not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict)
+        or models[0].get("id") != "ods/current"
+        or selected[0].get("model") != "ods-gateway/ods/current"):
+    raise SystemExit("live stable-alias model binding is invalid")
+candidate = copy.deepcopy(live)
+model = candidate["models"]["providers"]["ods-gateway"]["models"][0]
+model["name"] = name
+model["contextWindow"] = context
+model["maxTokens"] = max_tokens
+model["reasoning"] = reasoning
+agent = next(
+    item for item in candidate["agents"]["list"]
+    if isinstance(item, dict) and item.get("id") == "pixel"
+)
+context_limits = agent.setdefault("contextLimits", {})
+if not isinstance(context_limits, dict):
+    raise SystemExit("live stable-alias context limits are invalid")
+context_limits["toolResultMaxChars"] = max(4000, min(16000, context // 4))
+defaults = candidate.get("agents", {}).get("defaults", {})
+compaction = defaults.setdefault("compaction", {}) if isinstance(defaults, dict) else None
+if not isinstance(compaction, dict):
+    raise SystemExit("live stable-alias compaction policy is invalid")
+compaction["reserveTokens"] = (context + 4 * max_tokens + 4) // 5
+compaction["reserveTokensFloor"] = 0
+descriptor, temporary = tempfile.mkstemp(prefix=".ods-model-reconcile-", dir=live_path.parent)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(candidate, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    print(temporary)
+except BaseException:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
 _ods_pixel_managed_source_ref() {
     local owner="$1" home="$2" marker config
     marker="$home/.config/ods/pixel-managed.json"
@@ -670,7 +825,7 @@ else:
             or not re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}/v1", gateway_url)
             or int(gateway_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535
             or not re.fullmatch(
-                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}}\)",
                 model_name,
             )):
         raise SystemExit("live Pixel gateway route is outside the ODS model-only contract")
@@ -710,7 +865,7 @@ import json, os, pathlib, re, stat, sys, tempfile
 path = pathlib.Path(sys.argv[1])
 model = sys.argv[2]
 context_raw, max_tokens_raw, reasoning_raw = sys.argv[3:6]
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", model):
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}", model):
     raise SystemExit("invalid promoted Pixel model id")
 info = path.lstat()
 if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
@@ -740,7 +895,7 @@ elif provider == "ods-gateway":
     if (model_id not in {"default", "ods/current"}
             or not isinstance(model_name, str)
             or not re.fullmatch(
-                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/+-]{{0,255}}\)",
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}}\)",
                 model_name,
             )
             or not isinstance(api_key, str) or not api_key or len(api_key) > 4096
@@ -832,7 +987,7 @@ else:
     if (model_id not in {"default", "ods/current"}
             or not isinstance(model_name, str)
             or not re.fullmatch(
-                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}}\)",
                 model_name,
             )
             or not isinstance(gateway_key, str) or not gateway_key or len(gateway_key) > 4096
@@ -876,7 +1031,7 @@ def validate_live_route(provider_id, provider_value, model, agent):
     if (live_id not in {"default", "ods/current"}
             or not isinstance(live_name, str)
             or not re.fullmatch(
-                rf"ODS {live_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                rf"ODS {live_label} \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}}\)",
                 live_name,
             )
             or not isinstance(live_key, str) or not live_key or len(live_key) > 4096
@@ -923,6 +1078,7 @@ normalized_selected = [item for item in normalized_agent_list if isinstance(item
 if len(normalized_selected) != 1:
     raise SystemExit("live Pixel agent is outside the ODS model contract")
 normalized_agent = normalized_selected[0]
+normalized_agent_experimental = normalized_agent.setdefault("experimental", {})
 normalized_model["id"] = model_id
 normalized_model["name"] = model_name
 normalized_model["contextWindow"] = contract.get("modelContextWindow")
@@ -945,6 +1101,28 @@ normalized_defaults["timeoutSeconds"] = 1800
 normalized_defaults["bootstrapMaxChars"] = 32000
 normalized_defaults["bootstrapTotalMaxChars"] = 96000
 normalized_defaults["contextInjection"] = "continuation-skip"
+# Full upstream bootstrap documents remain available at 32K and above. Below
+# that capability floor they cannot fit beside OpenClaw's core prompt and even
+# its compact Tool Search surface, so the ODS plugin supplies a compact safety
+# core plus request-specific contracts instead. This changes prompt shape only:
+# tools, sandboxing, approvals, and broker authority remain identical.
+normalized_context_window = contract.get("modelContextWindow")
+normalized_compact_context = normalized_context_window < 32768
+model_label = f"{model_id} {model_name}".casefold()
+normalized_parameter_markers = re.findall(
+    r"(?<![a-z0-9.])(\d+(?:\.\d+)?)\s*b(?![a-z0-9])",
+    model_label,
+)
+normalized_small_model = any(float(marker) <= 4 for marker in normalized_parameter_markers)
+normalized_lean_prompt = normalized_compact_context or normalized_small_model
+normalized_agent["bootstrapMaxChars"] = 2000 if normalized_lean_prompt else 14000
+normalized_agent["bootstrapTotalMaxChars"] = 6000 if normalized_lean_prompt else 36000
+normalized_agent["contextInjection"] = "never" if normalized_lean_prompt else "continuation-skip"
+normalized_agent_context_limits = normalized_agent.setdefault("contextLimits", {})
+normalized_agent_context_limits["toolResultMaxChars"] = max(
+    4000,
+    min(16000, contract.get("modelContextWindow") // 4),
+)
 normalized_compaction = normalized_defaults.setdefault("compaction", {})
 normalized_diagnostics = normalized.setdefault("diagnostics", {})
 normalized_write_lock = normalized_session.setdefault("writeLock", {})
@@ -952,6 +1130,10 @@ normalized_tools = normalized.setdefault("tools", {})
 normalized_also_allow = normalized_tools.setdefault("alsoAllow", [])
 normalized_web = normalized_tools.setdefault("web", {})
 normalized_fetch = normalized_web.setdefault("fetch", {})
+normalized_plugins = normalized.setdefault("plugins", {})
+normalized_plugin_entries = normalized_plugins.setdefault("entries", {}) if isinstance(normalized_plugins, dict) else None
+normalized_pixel_plugin = normalized_plugin_entries.setdefault("pixel-ods", {}) if isinstance(normalized_plugin_entries, dict) else None
+normalized_pixel_config = normalized_pixel_plugin.setdefault("config", {}) if isinstance(normalized_pixel_plugin, dict) else None
 normalized_agent_tools = normalized_agent.setdefault("tools", {})
 normalized_agent_deny = normalized_agent_tools.setdefault("deny", [])
 normalized_sandbox_tools = normalized_tools.setdefault("sandbox", {}).setdefault("tools", {})
@@ -966,7 +1148,12 @@ if (not isinstance(normalized_compaction, dict)
         or not all(isinstance(item, str) for item in normalized_also_allow)
         or not isinstance(normalized_web, dict)
         or not isinstance(normalized_fetch, dict)
+        or not isinstance(normalized_plugins, dict)
+        or not isinstance(normalized_plugin_entries, dict)
+        or not isinstance(normalized_pixel_plugin, dict)
+        or not isinstance(normalized_pixel_config, dict)
         or not isinstance(normalized_agent_tools, dict)
+        or not isinstance(normalized_agent_experimental, dict)
         or not isinstance(normalized_agent_deny, list)
         or not all(isinstance(item, str) for item in normalized_agent_deny)
         or not isinstance(normalized_sandbox_tools, dict)
@@ -975,6 +1162,18 @@ if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_agent_sandbox, dict)
         or not isinstance(normalized_sandbox_docker, dict)):
     raise SystemExit("live Pixel runtime policy is outside the ODS contract")
+normalized_agent_experimental["localModelLean"] = True
+normalized_pixel_config["modelContextWindow"] = normalized_context_window
+normalized_pixel_config["leanPrompt"] = normalized_lean_prompt
+# Structured Tool Search keeps the catalog compact for every model. Exact ODS
+# routes are injected by the guard when required; otherwise models can search,
+# describe, and call the same complete authorized catalog without an allowlist.
+normalized_tools["toolSearch"] = {
+    "enabled": True,
+    "mode": "tools",
+    "searchDefaultLimit": 5,
+    "maxSearchLimit": 10,
+}
 exec_control_bind = "{}:/run/pixel-ods-control:ro".format(
     pathlib.Path.home() / ".openclaw" / ".ods-exec-control"
 )
@@ -983,7 +1182,14 @@ if existing_binds not in ([], [exec_control_bind]):
     raise SystemExit("live Pixel sandbox binds are outside the ODS contract")
 normalized_sandbox_docker["binds"] = [exec_control_bind]
 normalized_sandbox_docker["dangerouslyAllowExternalBindSources"] = True
-normalized_compaction["reserveTokens"] = contract.get("modelMaxTokens")
+# OpenClaw's OpenAI-compatible transport adds a 1.25 character-based input
+# safety margin after its independent pre-prompt compaction estimate. Reserve
+# enough headroom that the precheck runs before that transport can silently
+# clamp a useful model continuation down to one token. Algebraically this is
+# context - ((context - output) / 1.25), rounded up.
+normalized_compaction["reserveTokens"] = (
+    contract.get("modelContextWindow") + 4 * contract.get("modelMaxTokens") + 4
+) // 5
 normalized_compaction["reserveTokensFloor"] = 0
 normalized_diagnostics["stuckSessionAbortMs"] = 1860000
 normalized_write_lock["maxHoldMs"] = 1920000
@@ -1019,29 +1225,65 @@ normalized_fetch.update({
 normalized_agent_tools["deny"] = [
     item for item in normalized_agent_deny
     if item not in {
-        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list",
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+        "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
         "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_web_extract"
     }
 ]
 normalized_also_allow = [item for item in normalized_also_allow if item != "pixel_web_extract"]
 normalized_sandbox_allow = [item for item in normalized_sandbox_allow if item != "pixel_web_extract"]
-for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"):
+for extension_tool in (
+    "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+    "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
+    "pixel_ods_web_extract", "pixel_ods_download_promote"
+):
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
 for permitted_tool in (
-    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+    "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
+    "pixel_ods_web_extract", "pixel_ods_download_promote"
 ):
     if permitted_tool not in normalized_sandbox_allow:
         normalized_sandbox_allow.append(permitted_tool)
 normalized_tools["alsoAllow"] = sorted(set(normalized_also_allow))
 normalized_sandbox_tools["allow"] = sorted(set(normalized_sandbox_allow))
-model_label = f"{model_id} {model_name}".casefold()
 if "qwen" in model_label and contract.get("modelReasoning") is True:
     normalized_model["compat"] = {"thinkingFormat": "qwen-chat-template"}
     normalized_agent["thinkingDefault"] = "low"
 else:
     normalized_model.pop("compat", None)
     normalized_agent.pop("thinkingDefault", None)
+normalized_agent_params = normalized_agent.setdefault("params", {})
+if not isinstance(normalized_agent_params, dict):
+    raise SystemExit("live Pixel agent parameters are outside the ODS contract")
+if "qwen" in model_label:
+    template_kwargs = normalized_agent_params.setdefault("chat_template_kwargs", {})
+    if not isinstance(template_kwargs, dict):
+        raise SystemExit("live Pixel chat-template parameters are outside the ODS contract")
+    template_kwargs["enable_thinking"] = contract.get("modelReasoning") is True
+else:
+    template_kwargs = normalized_agent_params.get("chat_template_kwargs")
+    if isinstance(template_kwargs, dict):
+        template_kwargs.pop("enable_thinking", None)
+        if not template_kwargs:
+            normalized_agent_params.pop("chat_template_kwargs", None)
+    if not normalized_agent_params:
+        normalized_agent.pop("params", None)
+normalized_compact_sampling = {
+    "temperature": 0.7,
+    "topP": 0.8,
+    "frequencyPenalty": 0.6,
+    "presencePenalty": 0.2,
+}
+if normalized_lean_prompt:
+    normalized_agent["params"] = normalized_agent_params
+    normalized_agent_params.update(normalized_compact_sampling)
+else:
+    for key in normalized_compact_sampling:
+        normalized_agent_params.pop(key, None)
+if not normalized_agent_params:
+    normalized_agent.pop("params", None)
 if normalized != candidate:
     raise SystemExit("candidate changes more than the ODS managed model/runtime fields")
 PY
@@ -1131,7 +1373,7 @@ _ods_pixel_refresh_plugin_registry() {
     registry="$(ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
         plugins registry --refresh --json 2>/dev/null)" || return 1
     jq -e --arg root "$plugin_root" '
-        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_status", "pixel_ods_web_extract"] | sort) as $tools
+        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_web_extract"] | sort) as $tools
         | .refreshed == true
         and .registry.version == 1
         and .registry.refreshReason == "manual"
@@ -1151,7 +1393,7 @@ _ods_pixel_verify_plugin_loaded() {
     local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4"
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
         | jq -e --arg root "$plugin_root" '
-            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_status", "pixel_ods_web_extract"] as $tools
+            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_web_extract"] as $tools
             | [
                 .plugins[]?
                 | select(
@@ -1285,7 +1527,7 @@ else:
             or int(gateway_url.rsplit(":", 1)[1].split("/", 1)[0]) > 65535
             or not isinstance(models[0].get("name"), str)
             or not re.fullmatch(
-                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._:/-]{{0,255}}\)",
+                rf"ODS {alias_label} \([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}}\)",
                 models[0]["name"],
             )):
         raise SystemExit("OpenClaw gateway route is outside the ODS Pixel runtime contract")
@@ -1294,6 +1536,7 @@ updated = copy.deepcopy(value)
 updated_provider = updated["models"]["providers"][provider_id]
 updated_defaults = updated["agents"]["defaults"]
 updated_agent = next(item for item in updated["agents"]["list"] if isinstance(item, dict) and item.get("id") == "pixel")
+updated_agent_experimental = updated_agent.setdefault("experimental", {})
 updated_model = updated_provider["models"][0]
 updated_session = updated["session"]
 updated_agent_sandbox = updated_defaults.setdefault("sandbox", {})
@@ -1310,6 +1553,11 @@ updated_agent_deny = updated_agent_tools.setdefault("deny", [])
 updated_sandbox = updated_tools.setdefault("sandbox", {})
 updated_sandbox_tools = updated_sandbox.setdefault("tools", {})
 updated_sandbox_allow = updated_sandbox_tools.setdefault("allow", [])
+updated_plugins = updated.setdefault("plugins", {})
+updated_plugin_entries = updated_plugins.setdefault("entries", {}) if isinstance(updated_plugins, dict) else None
+updated_pixel_plugin = updated_plugin_entries.setdefault("pixel-ods", {}) if isinstance(updated_plugin_entries, dict) else None
+updated_pixel_hooks = updated_pixel_plugin.setdefault("hooks", {}) if isinstance(updated_pixel_plugin, dict) else None
+updated_pixel_config = updated_pixel_plugin.setdefault("config", {}) if isinstance(updated_pixel_plugin, dict) else None
 if not isinstance(updated_compaction, dict):
     raise SystemExit("OpenClaw compaction configuration must be an object")
 if not isinstance(write_lock, dict):
@@ -1322,12 +1570,18 @@ if (not isinstance(updated_tools, dict)
         or not isinstance(updated_also_allow, list)
         or not all(isinstance(item, str) for item in updated_also_allow)
         or not isinstance(updated_agent_tools, dict)
+        or not isinstance(updated_agent_experimental, dict)
         or not isinstance(updated_agent_deny, list)
         or not all(isinstance(item, str) for item in updated_agent_deny)
         or not isinstance(updated_sandbox, dict)
         or not isinstance(updated_sandbox_tools, dict)
         or not isinstance(updated_sandbox_allow, list)
-        or not all(isinstance(item, str) for item in updated_sandbox_allow)):
+        or not all(isinstance(item, str) for item in updated_sandbox_allow)
+        or not isinstance(updated_plugins, dict)
+        or not isinstance(updated_plugin_entries, dict)
+        or not isinstance(updated_pixel_plugin, dict)
+        or not isinstance(updated_pixel_hooks, dict)
+        or not isinstance(updated_pixel_config, dict)):
     raise SystemExit("OpenClaw tool policy is outside the ODS Pixel runtime contract")
 if not isinstance(updated_web, dict) or not isinstance(updated_fetch, dict):
     raise SystemExit("OpenClaw web tool policy is outside the ODS Pixel runtime contract")
@@ -1356,15 +1610,63 @@ updated_defaults["timeoutSeconds"] = 1800
 updated_defaults["bootstrapMaxChars"] = 32000
 updated_defaults["bootstrapTotalMaxChars"] = 96000
 updated_defaults["contextInjection"] = "continuation-skip"
+updated_agent_context_limits = updated_agent.setdefault("contextLimits", {})
+# ODS always presents Pixel through a private local gateway, including when the
+# gateway's current route terminates at an owner-configured remote provider.
+# OpenClaw cannot infer that fact from the stable ``ods/current`` alias. Enable
+# its model-agnostic lean tool surface explicitly so small local models do not
+# receive every direct tool schema at once. Capabilities remain available
+# through structured Tool Search; this changes prompt shape, not authority.
+updated_agent_experimental["localModelLean"] = True
+updated_tools["toolSearch"] = {
+    "enabled": True,
+    "mode": "tools",
+    "searchDefaultLimit": 5,
+    "maxSearchLimit": 10,
+}
+# The finalization hook consumes only the guard's per-run structured state and
+# does not inspect or persist conversation text. OpenClaw nevertheless requires
+# this explicit trust bit before any installed plugin may register the hook.
+updated_pixel_hooks["allowConversationAccess"] = True
 context_window = updated_model.get("contextWindow")
 model_max_tokens = updated_model.get("maxTokens")
 if (type(context_window) is not int or type(model_max_tokens) is not int
         or context_window < 4096 or not 1 <= model_max_tokens <= context_window):
     raise SystemExit("OpenClaw model limits are outside the ODS Pixel runtime contract")
-# OpenClaw otherwise reserves 16K tokens even for a small local context. Bind
-# compaction headroom to the real model output ceiling so the fixed Pixel
-# system/tool prompt remains usable, and disable the larger embedded-run floor.
-updated_compaction["reserveTokens"] = model_max_tokens
+# Preserve complete upstream workspace contracts when the selected route can
+# carry and follow them. Small checkpoints and compact contexts receive the
+# plugin's equivalent concise core and on-demand capability contracts. This
+# generic size/context profile never rejects a model or hides a callable tool.
+compact_context = context_window < 32768
+model_label = "{} {}".format(updated_model.get("id", ""), updated_model.get("name", "")).casefold()
+parameter_markers = re.findall(
+    r"(?<![a-z0-9.])(\d+(?:\.\d+)?)\s*b(?![a-z0-9])",
+    model_label,
+)
+small_model = any(float(marker) <= 4 for marker in parameter_markers)
+lean_prompt = compact_context or small_model
+updated_pixel_config["modelContextWindow"] = context_window
+updated_pixel_config["leanPrompt"] = lean_prompt
+updated_agent["bootstrapMaxChars"] = 2000 if lean_prompt else 14000
+updated_agent["bootstrapTotalMaxChars"] = 6000 if lean_prompt else 36000
+updated_agent["contextInjection"] = "never" if lean_prompt else "continuation-skip"
+# Bound each live tool result by the selected model's real context capacity.
+# This is capability-based prompt shaping, never a model allowlist: failures
+# retain OpenClaw's diagnostic head/tail projection and every tool remains
+# callable, while one large read or verbose suite cannot crowd out the next
+# model continuation on compact local contexts.
+updated_agent_context_limits["toolResultMaxChars"] = max(
+    4000,
+    min(16000, context_window // 4),
+)
+# OpenClaw's OpenAI-compatible transport applies a 1.25 input estimate after
+# the pre-prompt compaction check. Leave enough precheck headroom for the real
+# model output ceiling before that later transport clamp can reduce a
+# continuation to one token. This remains context-derived for every model and
+# does not change its tools or authority.
+updated_compaction["reserveTokens"] = (
+    context_window + 4 * model_max_tokens + 4
+) // 5
 updated_compaction["reserveTokensFloor"] = 0
 # The legacy OpenAI-completions transport in OpenClaw 2026.6.33 coerces the literal
 # reasoning effort "off" with Boolean("off"), which wrongly sends
@@ -1379,7 +1681,6 @@ model_reasoning = updated_model.get("reasoning", False)
 if type(model_reasoning) is not bool:
     raise SystemExit("OpenClaw model reasoning configuration must be boolean")
 updated_model["reasoning"] = model_reasoning
-model_label = "{} {}".format(updated_model.get("id", ""), updated_model.get("name", "")).casefold()
 if "qwen" in model_label and model_reasoning:
     model_compat = updated_model.setdefault("compat", {})
     if not isinstance(model_compat, dict):
@@ -1389,6 +1690,42 @@ if "qwen" in model_label and model_reasoning:
 else:
     updated_model.pop("compat", None)
     updated_agent.pop("thinkingDefault", None)
+updated_agent_params = updated_agent.setdefault("params", {})
+if not isinstance(updated_agent_params, dict):
+    raise SystemExit("OpenClaw Pixel agent parameters must be an object")
+if "qwen" in model_label:
+    template_kwargs = updated_agent_params.setdefault("chat_template_kwargs", {})
+    if not isinstance(template_kwargs, dict):
+        raise SystemExit("OpenClaw Pixel chat-template parameters must be an object")
+    template_kwargs["enable_thinking"] = model_reasoning
+else:
+    template_kwargs = updated_agent_params.get("chat_template_kwargs")
+    if isinstance(template_kwargs, dict):
+        template_kwargs.pop("enable_thinking", None)
+        if not template_kwargs:
+            updated_agent_params.pop("chat_template_kwargs", None)
+    if not updated_agent_params:
+        updated_agent.pop("params", None)
+# Small or compact local checkpoints can get trapped repeating a valid prefix inside a
+# JSON tool argument even though their plain-text generation is healthy. The
+# standard OpenAI sampling controls below made the same 2B route terminate its
+# minimal write call in 81 tokens instead of exhausting 1024. Apply the profile
+# by generic size/context capability rather than an allowlist or readiness
+# gate, and remove it transactionally when a larger route is promoted.
+compact_sampling = {
+    "temperature": 0.7,
+    "topP": 0.8,
+    "frequencyPenalty": 0.6,
+    "presencePenalty": 0.2,
+}
+if lean_prompt:
+    updated_agent["params"] = updated_agent_params
+    updated_agent_params.update(compact_sampling)
+else:
+    for key in compact_sampling:
+        updated_agent_params.pop(key, None)
+if not updated_agent_params:
+    updated_agent.pop("params", None)
 # A CPU-only model call can emit no progress while evaluating a long prompt.
 # Let the 30-minute provider own its terminal timeout, then retain one minute
 # for the OpenClaw stalled-session recovery before the 32-minute host ingress.
@@ -1429,17 +1766,24 @@ updated_fetch.update({
 updated_agent_tools["deny"] = [
     item for item in updated_agent_deny
     if item not in {
-        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list",
+        "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+        "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
         "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_web_extract"
     }
 ]
 updated_also_allow = [item for item in updated_also_allow if item != "pixel_web_extract"]
 updated_sandbox_allow = [item for item in updated_sandbox_allow if item != "pixel_web_extract"]
-for extension_tool in ("pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"):
+for extension_tool in (
+    "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+    "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
+    "pixel_ods_web_extract", "pixel_ods_download_promote"
+):
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
 for permitted_tool in (
-    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"
+    "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe",
+    "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
+    "pixel_ods_web_extract", "pixel_ods_download_promote"
 ):
     if permitted_tool not in updated_sandbox_allow:
         updated_sandbox_allow.append(permitted_tool)
@@ -1566,6 +1910,7 @@ ods_pixel_reconcile_promoted_model() {
     local owner="$1" home="$2" promoted_model="$3" final_state="${4:-ready}"
     local promoted_context="${5:-}" promoted_max_tokens="${6:-}" promoted_reasoning="${7:-}"
     local source_ref source_root pixel_root answers candidate backup contract_sha256 openclaw_bin failed=false
+    local stable_alias=false staged_alias_candidate=""
     local failure_phase="unknown"
     [[ "$final_state" == ready || "$final_state" == installing ]] || return 1
     source_ref="$(_ods_pixel_managed_source_ref "$owner" "$home")" || return 1
@@ -1578,25 +1923,31 @@ ods_pixel_reconcile_promoted_model() {
     openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")" || return 1
     [[ "$openclaw_bin" == /* && -x "$openclaw_bin" ]] || return 1
 
-    # A stable ODS gateway alias deliberately separates Pixel from the concrete
-    # local model. Model-router owns promotion beneath ods/current, so rewriting
-    # OpenClaw's otherwise healthy configuration here is both unnecessary and
-    # harmful: OpenClaw supervises config changes with a gateway restart, which
-    # aborts a user turn already admitted to Pixel but queued at model-router's
-    # swap gate. Verify and re-attest the existing alias contract without
-    # touching the gateway, ingress, or sandbox. Legacy direct-model contracts
-    # still use the transactional migration path below.
+    # A stable ODS gateway alias separates Pixel from the concrete endpoint but
+    # not from the active model limits. Reuse the live gateway only when its
+    # concrete display identity, context, output budget, and reasoning contract
+    # already match the promoted route. A model or context change must continue
+    # through the transactional path below so OpenClaw compacts against the
+    # model that LiteLLM actually serves. Model activation already refuses new
+    # work and waits for Pixel streams to drain before reaching this boundary.
     if _ods_pixel_uses_stable_model_alias "$owner" "$home" "$answers"; then
-        contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1
-        _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256" || return 1
-        ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify || return 1
-        if [[ "$final_state" == ready ]]; then
-            _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
-        else
-            _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+        if _ods_pixel_stable_alias_matches_promoted_model "$owner" "$home" "$answers" \
+            "$promoted_model" "$promoted_context" "$promoted_max_tokens" \
+            "$promoted_reasoning"; then
+            contract_sha256="$(_ods_pixel_contract_sha256 "$owner" "$home" "$answers")" || return 1
+            _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256" || return 1
+            _ods_pixel_wait_ingress "$owner" "$home" 6 1 || return 1
+            _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" \
+                "${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin" || return 1
+            if [[ "$final_state" == ready ]]; then
+                _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+            else
+                _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+            fi
+            printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
+            return 0
         fi
-        printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
-        return 0
+        stable_alias=true
     fi
 
     backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$home" "$answers")" || return 1
@@ -1606,15 +1957,25 @@ ods_pixel_reconcile_promoted_model() {
         failed=true
         failure_phase="onboarding-update"
     fi
-    if [[ "$failed" == false ]] \
-        && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force; then
-        failed=true
-        failure_phase="pixel-configure"
-    fi
-    if [[ "$failed" == false ]] \
-        && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan; then
-        failed=true
-        failure_phase="pixel-plan"
+    if [[ "$failed" == false && "$stable_alias" == true ]]; then
+        if ! staged_alias_candidate="$(_ods_pixel_stage_stable_alias_candidate \
+            "$owner" "$home" "$answers")"; then
+            failed=true
+            failure_phase="stable-alias-candidate"
+        else
+            candidate="$staged_alias_candidate"
+        fi
+    else
+        if [[ "$failed" == false ]] \
+            && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force; then
+            failed=true
+            failure_phase="pixel-configure"
+        fi
+        if [[ "$failed" == false ]] \
+            && ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan; then
+            failed=true
+            failure_phase="pixel-plan"
+        fi
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_apply_runtime_budget "$owner" "$home" "$candidate" "$openclaw_bin" >/dev/null; then
@@ -1667,10 +2028,16 @@ ods_pixel_reconcile_promoted_model() {
         fi
     fi
     if [[ "$failed" == false ]]; then
+        if [[ -n "$staged_alias_candidate" ]]; then
+            ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$staged_alias_candidate" || true
+        fi
         printf '%s\n' "Pixel model route reconciled to $promoted_model"
         return 0
     fi
 
+    if [[ -n "$staged_alias_candidate" ]]; then
+        ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$staged_alias_candidate" || true
+    fi
     printf 'warning: Pixel model reconciliation failed during phase=%s; restoring the previous verified route\n' \
         "$failure_phase" >&2
     if _ods_pixel_restore_model_reconciliation "$owner" "$home" "$pixel_root" "$answers" "$backup"; then
@@ -1812,6 +2179,20 @@ _ods_pixel_gateway_model_alias() {
         legacy|observe|enabled|"") printf '%s\n' 'ods/current' ;;
         *) return 1 ;;
     esac
+}
+
+_ods_pixel_runtime_model_identity() {
+    # Pixel must bind to the concrete identity served behind ods/current, not
+    # the friendlier catalog alias. Otherwise ingress truth and the OpenClaw
+    # contract diverge as soon as a model has a distinct GGUF/runtime name.
+    local model=""
+    if [[ "${GPU_BACKEND:-}" == amd \
+        && "${LLM_BACKEND:-}" == lemonade \
+        && "${AMD_INFERENCE_RUNTIME:-}" == lemonade ]]; then
+        model="${LEMONADE_MODEL:-}"
+    fi
+    [[ -n "$model" ]] || model="${GGUF_FILE:-${LLM_MODEL:-default}}"
+    printf '%s\n' "$model"
 }
 
 _ods_pixel_wait_model_gateway() {
@@ -2632,15 +3013,20 @@ PY
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
     local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
-    local gateway_alias gateway_label gateway_port="${LITELLM_PORT:-4000}" gateway_key="${LITELLM_KEY:-}"
+    local gateway_alias gateway_label runtime_model gateway_port="${LITELLM_PORT:-4000}" gateway_key="${LITELLM_KEY:-}"
     local gateway_key_file write_status=0
-    if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 16384 ]]; then
+    if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 4096 ]]; then
         :
     else
-        ai_bad "Pixel requires a model context of at least 16384 tokens."
+        ai_bad "Pixel requires a model context of at least 4096 tokens."
         return 1
     fi
-    (( context < 32768 )) && max_tokens="$((context / 8))"
+    # Compact models still need enough output room to emit a complete
+    # structured tool call with useful file content. One eighth of an 8K
+    # context capped real Qwen calls at 1024 tokens and repeatedly truncated
+    # them before the first write. Keep the ceiling capability-derived for
+    # every model while reserving three quarters of compact context for input.
+    (( context < 32768 )) && max_tokens="$((context / 4))"
     # This field controls the active OpenClaw reasoning path, not merely the
     # model family's theoretical capability. Keep the default no-think setting
     # false even for reasoning-capable models; an explicit operator setting
@@ -2654,6 +3040,7 @@ _ods_pixel_write_onboarding() {
     }
     gateway_label="Default"
     [[ "$gateway_alias" == "ods/current" ]] && gateway_label="Current"
+    runtime_model="$(_ods_pixel_runtime_model_identity)" || return 1
     if [[ ! "$gateway_port" =~ ^[0-9]+$ ]] || (( gateway_port < 1 || gateway_port > 65535 )); then
         ai_bad "Pixel requires a valid loopback LiteLLM port."
         return 1
@@ -2673,7 +3060,7 @@ _ods_pixel_write_onboarding() {
         return 1
     fi
     ods_pixel_run_as_owner "$owner" "$home" python3 - "$answers" \
-        "$openclaw_bin" "$home" "${LLM_MODEL:-default}" "$context" "$max_tokens" "$reasoning" \
+        "$openclaw_bin" "$home" "$runtime_model" "$context" "$max_tokens" "$reasoning" \
         "$gateway_alias" "$gateway_label" "$gateway_port" "$gateway_key_file" \
         "${SEARXNG_PORT:-8888}" "$plugin_path" "$plugin_digest" <<'PY' || write_status=$?
 import json, os, pathlib, re, stat, sys, tempfile
@@ -2692,7 +3079,7 @@ if gateway_alias not in {"default", "ods/current"}:
     raise SystemExit("invalid ODS Pixel gateway alias")
 if gateway_label not in {"Default", "Current"}:
     raise SystemExit("invalid ODS Pixel gateway label")
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", model):
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}", model):
     raise SystemExit("invalid ODS Pixel model id")
 if (not gateway_port.isdigit() or not 1 <= int(gateway_port) <= 65535
         or not gateway_key or len(gateway_key) > 4096
@@ -2732,7 +3119,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_web_extract", "pixel_ods_download_promote"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],
@@ -3073,7 +3460,7 @@ if provider == "ods-local" and model_name == f"ODS Local {model_id}":
 elif provider == "ods-gateway" and model_id in {"default", "ods/current"}:
     label = "Current" if model_id == "ods/current" else "Default"
     match = re.fullmatch(
-        rf"ODS {label} \(([A-Za-z0-9][A-Za-z0-9._+:/ -]{{0,255}})\)",
+        rf"ODS {label} \(([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}})\)",
         model_name if isinstance(model_name, str) else "",
     )
     concrete = match.group(1) if match else None
@@ -3301,7 +3688,8 @@ ods_pixel_install_default_agent() {
                 fi
             else
                 ai "The exact Pixel release is active with an older ODS route; reconciling the reviewed model/runtime policy..."
-                if ! ods_pixel_reconcile_promoted_model "$owner" "$home" "${LLM_MODEL:-default}" installing >>"$LOG_FILE" 2>&1; then
+                if ! ods_pixel_reconcile_promoted_model "$owner" "$home" \
+                    "$(_ods_pixel_runtime_model_identity)" installing >>"$LOG_FILE" 2>&1; then
                     ai_bad "The ODS-managed Pixel model route could not be reconciled safely. See $LOG_FILE."
                     return 1
                 fi

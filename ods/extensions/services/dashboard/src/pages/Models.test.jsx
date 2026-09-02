@@ -720,7 +720,7 @@ test('distinguishes verified and adaptive Pixel capability without excluding mod
 
   expect(screen.getAllByText('Pixel adaptive')).toHaveLength(2)
   expect(screen.getAllByText('Available to use')).toHaveLength(2)
-  expect(screen.getByText('Pixel ready', { selector: 'span' })).toBeInTheDocument()
+  expect(screen.getByText('Pixel verified', { selector: 'span' })).toBeInTheDocument()
 })
 
 test('shows adaptive Pixel capability in the activation dialog without blocking Run', () => {

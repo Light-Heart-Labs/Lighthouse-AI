@@ -505,6 +505,216 @@ class TestModelAllowlist(BaseEdgeTest):
             json=["not", "an", "object"]) as resp:
             self.assertEqual(resp.status, 400)
 
+    async def test_owner_message_gets_first_turn_delivery_contract(self):
+        original = "Reply with exactly: READY"
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": original}],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        forwarded = self.up_runner.app["chat_requests"][-1]
+        content = forwarded["messages"][-1]["content"]
+        self.assertTrue(content.startswith(original))
+        self.assertIn(self.pe._INTERACTIVE_DELIVERY_CONTRACT, content)
+
+    async def test_multimodal_owner_message_keeps_parts_and_appends_contract(self):
+        parts = [
+            {"type": "text", "text": "Describe this image."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+        ]
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": parts}],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertEqual(content[:2], parts)
+        self.assertEqual(content[-1]["type"], "text")
+        self.assertIn("Answer the owner's complete message", content[-1]["text"])
+
+    async def test_owner_chat_defaults_to_deterministic_sampling(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "Check status."}],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(self.up_runner.app["chat_requests"][-1]["temperature"], 0)
+
+    async def test_explicit_sampling_temperature_is_preserved(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{"role": "user", "content": "Write creatively."}],
+                "temperature": 0.4,
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(self.up_runner.app["chat_requests"][-1]["temperature"], 0.4)
+
+    async def test_host_inspection_gets_exact_replay_safe_observation_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": "Inspect this laptop OS, kernel, memory, disks, and processes.",
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("Use the visible tool_call Tool Search control", content)
+        self.assertEqual(content.count("id pixel_ods_host_observe"), 1)
+        self.assertIn(
+            'args {"actions":["host.os-release","host.kernel","host.memory",'
+            '"host.storage","host.processes"]}',
+            content,
+        )
+        for action in (
+            "host.os-release",
+            "host.kernel",
+            "host.memory",
+            "host.storage",
+            "host.processes",
+        ):
+            self.assertIn(action, content)
+        self.assertIn("This one read-only tool returns the terminal Operations receipt", content)
+        self.assertIn("Generic sandbox commands and status projections", content)
+        self.assertNotIn("pixel_ods_status", content)
+        self.assertNotIn("pixel_ops_workflow_submit", content)
+        self.assertNotIn("pixel_ops_job_wait", content)
+
+    async def test_code_about_a_machine_does_not_get_host_execution_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": "Write a test fixture describing a machine memory report.",
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertNotIn("pixel_ops_workflow_submit", content)
+
+    async def test_workspace_mutation_gets_mutate_before_verify_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": "Create /workspace/demo/hello.txt, read it, and hash it.",
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("use it with id write", content)
+        self.assertIn("edit cannot create a file", content)
+        self.assertIn("Perform the requested workspace mutation before verification", content)
+        self.assertIn("Do not repeatedly list directories", content)
+
+    async def test_run_and_wait_gets_one_exec_then_exact_process_poll_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Run this exact cancellable workspace command and wait for its real "
+                        "result: python3 -c 'import time; time.sleep(30); print(\"done\")'."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("ODS Pixel command completion route", content)
+        self.assertIn("Call exec exactly once", content)
+        self.assertIn("tool_call control with id process", content)
+        self.assertIn("action poll", content)
+        self.assertIn("do not call exec again", content)
+
+    async def test_exact_single_line_file_route_preserves_the_trailing_newline(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Create the file /workspace/demo/hello.txt with exactly this single line "
+                        "followed by a newline: exact bytes. Then read it and hash it."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("ODS Pixel exact workspace route", content)
+        self.assertIn("tool_call exactly once with id write", content)
+        self.assertIn("tool_call once with id read", content)
+        self.assertIn("tool_call once with id exec", content)
+        self.assertIn(
+            r'{"path":"/workspace/demo/hello.txt","content":"exact bytes.\n"}',
+            content,
+        )
+        self.assertIn(
+            r'{"command":"sha256sum -- /workspace/demo/hello.txt","workdir":"/workspace"}',
+            content,
+        )
+
+    async def test_exact_single_line_relative_file_gets_the_write_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Create the file pixel-qualification/model-flex-9b.txt in your "
+                        "writable workspace with exactly "
+                        "this single line followed by one newline: Pixel 9B model flexibility "
+                        "passed. Then read it back and hash it."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("ODS Pixel exact workspace route", content)
+        self.assertIn("tool_call exactly once with id write", content)
+        self.assertIn(
+            r'{"path":"pixel-qualification/model-flex-9b.txt","content":"Pixel 9B model flexibility passed.\n"}',
+            content,
+        )
+        self.assertNotIn("edit cannot create a file", content)
+
 
 # ---------------------------------------------------------------------------
 # Header stripping

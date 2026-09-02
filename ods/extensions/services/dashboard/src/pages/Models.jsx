@@ -1112,7 +1112,7 @@ function ModelActivationDialog({
       : !pixelContextReady
         ? { label: `Pixel compact · ${formatContext(selectedContext)}`, tone: 'text-amber-300' }
         : isPixelAgentVerified(pixelAgent)
-          ? { label: 'Pixel ready', tone: 'text-emerald-400' }
+          ? { label: 'Pixel verified', tone: 'text-emerald-400' }
           : { label: 'Pixel adaptive', tone: 'text-theme-accent-light' }
   const memoryCapacity = Number(gpu?.vramTotal || 0)
   const exceedsMemory = selected?.fitsVram === false
@@ -1736,7 +1736,7 @@ function getCompatibilityMeta(model, memory, pixelMinimumContext = 0) {
   }
   const talkCompatibility = getHermesTalkCompatibility(model)
   if (isHermesTalkVerified(talkCompatibility)) {
-    return { label: 'Pixel ready', detail: model.recommended || model.status === 'loaded' ? 'Best' : 'Verified', tone: 'green' }
+    return { label: 'Pixel verified', detail: model.recommended || model.status === 'loaded' ? 'Best' : 'Verified', tone: 'green' }
   }
   if (model.recommended || model.status === 'loaded') {
     return { label: model.fitLabel || 'Fits GPU', detail: 'Best', tone: 'green' }

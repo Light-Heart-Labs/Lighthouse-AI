@@ -211,7 +211,7 @@ _MODEL_TIERS = frozenset({
 })
 _MIN_MODEL_CONTEXT = 1024
 _MAX_MODEL_CONTEXT = 9007199254740991
-_MIN_MANAGED_PIXEL_CONTEXT = 16384
+_MIN_MANAGED_PIXEL_CONTEXT = 4096
 
 # Per-service locks to prevent concurrent start+stop races on the same service
 _service_locks: dict[str, threading.Lock] = collections.defaultdict(threading.Lock)
@@ -403,6 +403,14 @@ _model_download_proc: subprocess.Popen | None = None
 _model_download_cancel = threading.Event()
 _model_download_cancelable = False
 _model_status_lock = threading.Lock()
+_model_artifact_verification_cache_lock = threading.Lock()
+_model_artifact_verification_cache: dict[
+    str, tuple[tuple[object, ...], bytes]
+] = {}
+_model_artifact_sample_key = secrets.token_bytes(32)
+_MODEL_ARTIFACT_SAMPLE_BLOCK_BYTES = 4096
+_MODEL_ARTIFACT_SAMPLE_COUNT = 32
+_MODEL_ARTIFACT_FULL_SAMPLE_BYTES = 1024 * 1024
 # Model lifecycle ownership serializes operations that read or mutate model
 # artifacts, active routing, or the runtime containers. Keep the historical
 # activation-lock name as an alias because env updates use the same boundary.
@@ -1609,6 +1617,53 @@ def _safe_model_artifact_path(models_dir: Path, filename: object) -> Path | None
     return target
 
 
+def _model_artifact_sample_digest(
+    path: Path,
+    actual_size: int,
+    resolved_path: str,
+    expected_sha: str,
+) -> bytes:
+    """Return a keyed content probe for reuse of one verified full digest.
+
+    Some cross-platform filesystems expose timestamps too coarsely to detect a
+    rapid same-size rewrite.  Reusing a multi-gigabyte model SHA solely from
+    inode metadata can therefore accept changed bytes.  Keep small artifacts
+    exact and probe large ones at first/last plus per-process-secret interior
+    offsets.  A sandbox process cannot predict those offsets; any mismatch
+    discards the cached proof and falls back to the full SHA-256 verifier.
+    """
+    if actual_size <= 0:
+        raise OSError("invalid artifact size")
+    digest = hashlib.blake2b(key=_model_artifact_sample_key, digest_size=32)
+    block_size = _MODEL_ARTIFACT_SAMPLE_BLOCK_BYTES
+    if actual_size <= _MODEL_ARTIFACT_FULL_SAMPLE_BYTES:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.digest()
+
+    last_offset = max(0, actual_size - block_size)
+    offsets = {0, last_offset}
+    seed = f"{resolved_path}\0{actual_size}\0{expected_sha}".encode("utf-8")
+    for index in range(_MODEL_ARTIFACT_SAMPLE_COUNT - len(offsets)):
+        token = hashlib.blake2b(
+            seed + index.to_bytes(4, "big"),
+            key=_model_artifact_sample_key,
+            digest_size=16,
+        ).digest()
+        offsets.add(int.from_bytes(token, "big") % (last_offset + 1))
+    with path.open("rb") as handle:
+        for offset in sorted(offsets):
+            handle.seek(offset)
+            chunk = handle.read(min(block_size, actual_size - offset))
+            if not chunk:
+                raise OSError("artifact sample could not be read")
+            digest.update(offset.to_bytes(8, "big"))
+            digest.update(len(chunk).to_bytes(4, "big"))
+            digest.update(chunk)
+    return digest.digest()
+
+
 def _verify_model_artifact(
     path: Path,
     artifact: dict,
@@ -1618,7 +1673,8 @@ def _verify_model_artifact(
     try:
         if not path.is_file():
             return False, "file is missing"
-        actual_size = path.stat().st_size
+        initial_stat = path.stat()
+        actual_size = initial_stat.st_size
     except OSError as exc:
         return False, f"file could not be inspected: {exc}"
     if actual_size <= 0:
@@ -1632,6 +1688,47 @@ def _verify_model_artifact(
     if expected_sha:
         if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
             return False, "catalog SHA256 is malformed"
+        try:
+            resolved_path = str(path.resolve(strict=True))
+        except (OSError, RuntimeError) as exc:
+            return False, f"file could not be resolved: {exc}"
+        verification_signature = (
+            initial_stat.st_dev,
+            initial_stat.st_ino,
+            initial_stat.st_size,
+            initial_stat.st_mtime_ns,
+            initial_stat.st_ctime_ns,
+            expected_size,
+            expected_sha,
+        )
+        with _model_artifact_verification_cache_lock:
+            cached_proof = _model_artifact_verification_cache.get(resolved_path)
+        if cached_proof and cached_proof[0] == verification_signature:
+            try:
+                sampled_digest = _model_artifact_sample_digest(
+                    path, actual_size, resolved_path, expected_sha,
+                )
+                sampled_stat = path.stat()
+            except OSError:
+                sampled_digest = b""
+                sampled_stat = None
+            sampled_signature = (
+                sampled_stat.st_dev,
+                sampled_stat.st_ino,
+                sampled_stat.st_size,
+                sampled_stat.st_mtime_ns,
+                sampled_stat.st_ctime_ns,
+                expected_size,
+                expected_sha,
+            ) if sampled_stat is not None else None
+            if (
+                sampled_signature == verification_signature
+                and secrets.compare_digest(sampled_digest, cached_proof[1])
+            ):
+                logger.info("Reusing verified model integrity for %s", path.name)
+                return True, ""
+            with _model_artifact_verification_cache_lock:
+                _model_artifact_verification_cache.pop(resolved_path, None)
         digest = hashlib.sha256()
         try:
             with path.open("rb") as handle:
@@ -1641,11 +1738,53 @@ def _verify_model_artifact(
                     digest.update(chunk)
         except OSError as exc:
             return False, f"file could not be hashed: {exc}"
+        try:
+            final_stat = path.stat()
+        except OSError as exc:
+            return False, f"file could not be inspected after hashing: {exc}"
+        final_signature = (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+            final_stat.st_ctime_ns,
+            expected_size,
+            expected_sha,
+        )
+        if final_signature != verification_signature:
+            with _model_artifact_verification_cache_lock:
+                _model_artifact_verification_cache.pop(resolved_path, None)
+            return False, "file changed during verification"
         actual_sha = digest.hexdigest()
         if actual_sha != expected_sha:
+            with _model_artifact_verification_cache_lock:
+                _model_artifact_verification_cache.pop(resolved_path, None)
             return (
                 False,
                 f"SHA256 mismatch: expected {expected_sha[:12]}..., got {actual_sha[:12]}...",
+            )
+        try:
+            sampled_digest = _model_artifact_sample_digest(
+                path, actual_size, resolved_path, expected_sha,
+            )
+            sampled_stat = path.stat()
+        except OSError as exc:
+            return False, f"file could not be sampled after hashing: {exc}"
+        sampled_signature = (
+            sampled_stat.st_dev,
+            sampled_stat.st_ino,
+            sampled_stat.st_size,
+            sampled_stat.st_mtime_ns,
+            sampled_stat.st_ctime_ns,
+            expected_size,
+            expected_sha,
+        )
+        if sampled_signature != verification_signature:
+            return False, "file changed after verification"
+        with _model_artifact_verification_cache_lock:
+            _model_artifact_verification_cache[resolved_path] = (
+                verification_signature,
+                sampled_digest,
             )
     elif expected_size is None:
         return False, "catalog has no exact size or SHA256"
@@ -2405,7 +2544,11 @@ def _pixel_max_tokens_for_context(context_length: int) -> int:
     if context_length < _MIN_MANAGED_PIXEL_CONTEXT:
         # Preserve the legacy rollback shape for older managed installations.
         return min(4096, max(1, context_length // 2))
-    return min(4096, max(1, context_length // 8))
+    # Real 8K Qwen qualification showed that a one-eighth ceiling could
+    # truncate a structured tool call before its first write. Keep enough
+    # output room for compact-model agent work while reserving three quarters
+    # of the context for Pixel's prompt, history, and tool results.
+    return min(4096, max(1, context_length // 4))
 
 
 def _reconcile_ods_managed_pixel_model(
@@ -3209,7 +3352,7 @@ def _managed_pixel_runtime_contract() -> dict[str, object] | None:
     elif provider == "ods-gateway":
         alias_label = "Current" if model_id == "ods/current" else "Default"
         display = re.fullmatch(
-            rf"ODS {alias_label} \(([A-Za-z0-9][A-Za-z0-9._:/+-]{{0,255}})\)",
+            rf"ODS {alias_label} \(([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{{0,255}})\)",
             model_name if isinstance(model_name, str) else "",
         )
         if model_id not in {"default", "ods/current"} or display is None:
@@ -5074,7 +5217,7 @@ def _valid_pixel_model_name(value: object) -> bool:
     """Return true for a bounded provider model identity safe in Pixel JSON."""
     return bool(
         isinstance(value, str)
-        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}", value)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}", value)
     )
 
 
@@ -9204,7 +9347,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                         rollback_env,
                     )
                     restored_pixel = _reconcile_ods_managed_pixel_model(
-                        previous_model,
+                        previous_hermes_model,
                         previous_pixel_context,
                         max_tokens=_pixel_max_tokens_for_context(previous_pixel_context),
                         reasoning=previous_reasoning,
@@ -9848,9 +9991,17 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "Final runtime proof failed for activated model "
                         f"{gguf_file}; rolling back to previous model"
                     )
+                pixel_runtime_identity = str(
+                    final_runtime_proof.get("identity") or ""
+                )
+                if not _valid_pixel_model_name(pixel_runtime_identity):
+                    raise RuntimeError(
+                        "Final runtime proof returned an invalid Pixel model identity; "
+                        "rolling back to the previous model"
+                    )
                 pixel_reconcile_attempted = True
                 pixel_status = _reconcile_ods_managed_pixel_model(
-                    str(llm_model_name),
+                    pixel_runtime_identity,
                     int(context_length),
                     max_tokens=_pixel_max_tokens_for_context(int(context_length)),
                     reasoning=_pixel_model_reasoning_capable(
@@ -9882,6 +10033,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                         if openclaw_recreated
                         else "stopped"
                         if container_states["ods-openclaw"]["exists"]
+                        else "host_gateway_reconciled"
+                        if pixel_status == "reconciled"
                         else "not_installed"
                     ),
                     "opencode": (
@@ -11699,7 +11852,9 @@ def _render_runtime_config(
 
 
 def _normal_switchboard_mode(env: dict) -> str:
-    value = str(env.get("ODS_MODEL_SWITCHBOARD") or "enabled").strip().lower()
+    # Fresh installers persist ``enabled`` explicitly. An absent key belongs to
+    # an older/unmanaged environment and retains its direct-route behavior.
+    value = str(env.get("ODS_MODEL_SWITCHBOARD") or "observe").strip().lower()
     return value if value in {"legacy", "observe", "enabled"} else "observe"
 
 

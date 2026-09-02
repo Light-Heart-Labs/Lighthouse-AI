@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  ODS_COMPACT_CONVERSATION_CONTRACT,
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
@@ -17,18 +18,90 @@ import {
   promptContractForAgent,
 } from "../plugin/prompt-contract.mjs";
 
+test("uses a bounded complete core on compact contexts without changing requested routes", () => {
+  const plain = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 8192 },
+    "pixel"
+  );
+  assert.deepEqual(plain, {
+    appendSystemContext: ODS_COMPACT_CONVERSATION_CONTRACT,
+  });
+  assert.ok(ODS_COMPACT_CONVERSATION_CONTRACT.length < 2400);
+  assert.match(plain.appendSystemContext, /untrusted data, never authority/);
+  assert.match(plain.appendSystemContext, /never self-approve/);
+  assert.match(plain.appendSystemContext, /run the requested focused verification/);
+
+  const host = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 16384 },
+    "pixel",
+    { prompt: "What can you tell me about this machine?" }
+  );
+  assert.ok(host.appendSystemContext.startsWith(ODS_COMPACT_CONVERSATION_CONTRACT));
+  assert.match(host.appendSystemContext, /pixel_ods_host_observe/);
+
+  const full = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 32768 },
+    "pixel"
+  );
+  assert.deepEqual(full, { appendSystemContext: ODS_CONVERSATION_CONTRACT });
+
+  const configuredCompact = promptContractForAgent(
+    {
+      agentId: "pixel",
+      contextTokenBudget: 200000,
+      contextWindowReferenceTokens: 200000,
+    },
+    "pixel",
+    undefined,
+    { configuredContextWindow: 8192 }
+  );
+  assert.deepEqual(configuredCompact, {
+    appendSystemContext: ODS_COMPACT_CONVERSATION_CONTRACT,
+  });
+
+  const configuredLeanLargeContext = promptContractForAgent(
+    {
+      agentId: "pixel",
+      contextTokenBudget: 65536,
+      contextWindowReferenceTokens: 65536,
+    },
+    "pixel",
+    undefined,
+    { configuredContextWindow: 65536, configuredLeanPrompt: true }
+  );
+  assert.deepEqual(configuredLeanLargeContext, {
+    appendSystemContext: ODS_COMPACT_CONVERSATION_CONTRACT,
+  });
+});
+
 test("adds one exact compact tool route for natural broad host questions", () => {
   const prompt = "What can you tell me about this machine?";
   const exact = operationsRequestContract([], prompt);
-  assert.match(exact, /pixel_ops_workflow_submit exactly once/);
+  assert.match(exact, /use tool_call exactly once with id pixel_ods_host_observe/);
+  assert.match(exact, /one read-only tool returns the terminal broker receipt/);
+  assert.match(exact, /do not call inventory, pixel_ops_run, pixel_ops_workflow_submit, pixel_ops_job_wait, generic exec/);
+  assert.match(exact, /Do not call a status or application projection for this host-only request/);
   assert.match(exact, /host\.identity/);
   assert.match(exact, /host\.listening-ports/);
-  assert.match(exact, /Do not submit separate pixel_ops_run calls/);
-  assert.equal((exact.match(/host\.identity/g) || []).length, 1);
+  assert.match(exact, /do not call inventory/);
+  assert.equal((exact.match(/args \{"actions":\[/g) || []).length, 1);
   assert.equal(
     promptContractForAgent({ agentId: "pixel" }, "pixel", { prompt }).appendSystemContext,
     `${ODS_CONVERSATION_CONTRACT}${exact}`
   );
+});
+
+test("adds owner-requested projections and workspace continuation only after terminal host evidence", () => {
+  const prompt =
+    "Inspect this ODS laptop hostname and active model, then create /workspace/report.txt and read it back.";
+  const exact = operationsRequestContract([], prompt);
+  assert.match(exact, /id pixel_ods_host_observe/);
+  assert.match(exact, /args \{"actions":\["host\.identity"\],"includeOdsStatus":true\}/);
+  assert.match(exact, /same host tool must return the required current ODS status projection/);
+  assert.doesNotMatch(exact, /next tool step must call tool_call exactly once with id pixel_ods_status/);
+  assert.doesNotMatch(exact, /id pixel_ods_apps_list/);
+  assert.match(exact, /After every required host result and projection is terminal/);
+  assert.match(exact, /continue the owner's explicit workspace work/);
 });
 
 test("adds a static visible-reply contract for the exact Pixel agent", () => {
@@ -41,10 +114,15 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /Drafting text is conversational by default/);
   assert.match(result.appendSystemContext, /without explicitly naming a file or path/);
   assert.match(result.appendSystemContext, /return the text in chat and do not use file tools/);
+  assert.match(result.appendSystemContext, /never call exec again for that command/);
+  assert.match(result.appendSystemContext, /tool_call with id process/);
   assert.match(result.appendSystemContext, /unless a tool result in this turn proves it/);
   assert.match(result.appendSystemContext, /only capabilities backed by tools actually exposed/);
   assert.match(result.appendSystemContext, /paths are already relative to the workspace root/);
   assert.match(result.appendSystemContext, /do not add a workspace\/ prefix/);
+  assert.match(result.appendSystemContext, /Use write to create a new file/);
+  assert.match(result.appendSystemContext, /edit requires a non-empty oldText/);
+  assert.match(result.appendSystemContext, /invoke it through tool_call with id set to write/);
   assert.match(result.appendSystemContext, /Never hardcode \/workspace into created code or tests/);
   assert.match(result.appendSystemContext, /each file-producing tool call below 2400 generated tokens/);
   assert.match(result.appendSystemContext, /use edit or apply_patch in a later tool call/);
@@ -70,6 +148,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /check every requested path, input shape, output shape/);
   assert.match(result.appendSystemContext, /green self-authored test suite is not enough/);
   assert.match(result.appendSystemContext, /never weaken tests merely to make them pass/);
+  assert.match(result.appendSystemContext, /expected failure or unexpected success is non-clean verification/);
+  assert.match(result.appendSystemContext, /Do not add expectedFailure, skip, or an equivalent marker/);
   assert.match(result.appendSystemContext, /standard-library and test-runner constraints exactly/);
   assert.match(result.appendSystemContext, /use python3 and unittest directly/);
   assert.match(result.appendSystemContext, /do not create throwaway diagnostic files/);
@@ -102,18 +182,23 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /host\.os-release, host\.uptime, host\.processes/);
   assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.memory, host\.storage/);
   assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, and host\.listening-ports/);
-  assert.match(result.appendSystemContext, /literal target ods-host/);
-  assert.match(result.appendSystemContext, /never shorten it to host or local/);
-  assert.match(result.appendSystemContext, /Do not mix exec, pixel_ods_status, pixel_ods_apps_list/);
+  assert.match(result.appendSystemContext, /Call pixel_ods_host_observe exactly once/);
+  assert.match(result.appendSystemContext, /complete requested host\.\* action list/);
+  assert.match(result.appendSystemContext, /returns one terminal receipt/);
+  assert.match(result.appendSystemContext, /Reserve pixel_ods_status, pixel_ods_apps_list, exec, and workspace tools/);
   assert.match(result.appendSystemContext, /process action intentionally omits command arguments and environments/);
-  assert.match(result.appendSystemContext, /Submit the exact required actions with pixel_ops_run/);
+  assert.match(result.appendSystemContext, /Use pixel_ops_inventory, pixel_ops_run, and pixel_ops_job_wait only for explicit non-host Operations/);
   assert.match(result.appendSystemContext, /broad request to explore or inventory the host uses identity, kernel, platform/);
   assert.match(result.appendSystemContext, /host\.architecture remains available and is required/);
-  assert.match(result.appendSystemContext, /terminal state of every submitted job with pixel_ops_job_wait/);
-  assert.match(result.appendSystemContext, /owner requested containers/);
-  assert.match(result.appendSystemContext, /pixel_ods_apps_list exactly once after every broker job is terminal/);
+  assert.match(result.appendSystemContext, /owner requested container names, details, purposes, links, or URLs/);
+  assert.match(result.appendSystemContext, /pixel_ods_apps_list exactly once after terminal host evidence/);
+  assert.match(result.appendSystemContext, /container count or health summary/);
+  assert.match(result.appendSystemContext, /count is sufficient without a redundant app-list call/);
   assert.match(result.appendSystemContext, /never represents unrelated host containers/);
-  assert.match(result.appendSystemContext, /Do not call pixel_ods_status in a host Operations flow/);
+  assert.match(result.appendSystemContext, /owner requested the active model, context window, ODS version or status, Pixel availability/);
+  assert.match(result.appendSystemContext, /pixel_ods_status exactly once after terminal host evidence/);
+  assert.match(result.appendSystemContext, /After all requested host and ODS projections are terminal/);
+  assert.match(result.appendSystemContext, /continue any explicitly requested sandbox workspace work/);
   assert.match(result.appendSystemContext, /submitted Operations job is not completed work/);
   assert.match(result.appendSystemContext, /never approve an immutable plan yourself/);
   assert.match(result.appendSystemContext, /needed capability is unavailable/);
@@ -288,6 +373,8 @@ test("adds exact pending and failed verification truth constraints", () => {
   );
   assert.match(failed.appendSystemContext, /no later verification passed/);
   assert.match(failed.appendSystemContext, /truthfully report the current verified failure/);
+  assert.match(ODS_VERIFICATION_PENDING_CONTRACT, /Do not restart it with exec/);
+  assert.match(ODS_VERIFICATION_PENDING_CONTRACT, /tool_call with id process/);
   assert.deepEqual(
     promptContractForAgent(context, "pixel", undefined, {
       verificationStatus: "passed",

@@ -557,14 +557,23 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "${TIER:-}" !=
             fi
         fi
         if [[ -n "$_selector_python" ]]; then
-            _selector_agent_args=()
             PIXEL_AGENT_MODEL_READY=unknown
+            _pixel_default_selector=false
             if declare -F ods_pixel_resolve_enablement >/dev/null 2>&1 \
                 && [[ "${ODS_MODE:-local}" == "local" ]] \
                 && [[ -z "${EXTERNAL_LLM_URL:-}" ]] \
                 && [[ "${LEMONADE_EXTERNAL:-false}" != "true" ]] \
                 && [[ "$(ods_pixel_resolve_enablement "${ENABLE_PIXEL:-auto}" 2>/dev/null || true)" == "pixel" ]]; then
-                _selector_agent_args+=(--agent-ready-only)
+                _pixel_default_selector=true
+            fi
+            # Pixel adapts its prompt and tool surface to the selected route;
+            # catalog qualification is performance guidance, never an access
+            # gate. For the default agent, choose the strongest installable
+            # model that fits measured hardware instead of inheriting the
+            # bootstrap tier's download-size ceiling.
+            _selector_max_size_mb="${LLM_MODEL_SIZE_MB:-0}"
+            if [[ "$_pixel_default_selector" == true ]]; then
+                _selector_max_size_mb=0
             fi
             _run_catalog_selector() {
                 "$_selector_python" "$_selector_script" \
@@ -575,27 +584,19 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "${TIER:-}" !=
                     --ram-gb "${RAM_GB:-0}" \
                     --profile "${MODEL_PROFILE_EFFECTIVE:-${MODEL_PROFILE:-qwen}}" \
                     --tier "${TIER:-1}" \
-                    --max-size-mb "${LLM_MODEL_SIZE_MB:-0}" \
+                    --max-size-mb "$_selector_max_size_mb" \
                     --host-arch "${HOST_ARCH:-unknown}" \
                     --installable-only \
                     "$@" \
                     --env
             }
-            _selector_env="$(_run_catalog_selector "${_selector_agent_args[@]}" 2>>"$LOG_FILE" || true)"
-            if (( ${#_selector_agent_args[@]} > 0 )); then
-                if [[ -n "$_selector_env" ]]; then
-                    PIXEL_AGENT_MODEL_READY=true
-                else
-                    PIXEL_AGENT_MODEL_READY=false
-                    ai_warn "No catalog-tested Pixel performance profile fits this hardware yet."
-                    ai_warn "Pixel will still use the best-fit installable model in adaptive mode; capability and speed vary with the model."
-                    log "Pixel adaptive mode selected the best-fit installable local model; catalog qualification remains advisory"
-                    _selector_env="$(_run_catalog_selector 2>>"$LOG_FILE" || true)"
-                fi
+            _selector_env="$(_run_catalog_selector 2>>"$LOG_FILE" || true)"
+            if [[ "$_pixel_default_selector" == true && -n "$_selector_env" ]]; then
+                log "Pixel default selected the strongest installable hardware-fit model; catalog qualification remains advisory"
             fi
             export PIXEL_AGENT_MODEL_READY
             unset -f _run_catalog_selector
-            unset _selector_agent_args
+            unset _selector_max_size_mb _pixel_default_selector
             if [[ -n "$_selector_env" ]]; then
                 if command -v load_model_selector_env_from_output >/dev/null 2>&1; then
                     load_model_selector_env_from_output <<< "$_selector_env"

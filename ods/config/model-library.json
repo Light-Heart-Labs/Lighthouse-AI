@@ -15,7 +15,7 @@
       "max_context_length": 262144,
       "quantization": "Q4_K_M",
       "specialty": "Low-VRAM Chat",
-      "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target. It remains available for manual testing, but is not agent-ready after required app probes failed on four of six fleet hosts.",
+      "description": "Qwen's compact hybrid model with a native 256K context limit, tool-use support, broad multilingual coverage, and a 64K operating target. Pixel supports it in adaptive mode; historical cross-app probes show lower reliability on four of six fleet hosts, so complex work may need more guidance or a stronger model.",
       "tokens_per_sec_estimate": 120,
       "llm_model_name": "qwen3.5-2b",
       "llama_server_image": null,
@@ -50,7 +50,7 @@
         },
         "agent_viability": {
           "status": "not_agent_viable",
-          "label": "Not agent-ready",
+          "label": "Adaptive; reliability varies",
           "reason": "Only tower2 and strix-halo completed the full rotation. Four hosts failed required candidate-phase app probes, although every failure recovery restored the original model and deleted the test artifact cleanly.",
           "evidence": "fleet-test/runs/2026-07-27T08-54-24Z-model-ui-product-b5da3792c281-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
           "recordedAt": "2026-07-27T09:13:58Z",
@@ -73,7 +73,7 @@
       "max_context_length": 262144,
       "quantization": "Q4_K_M",
       "specialty": "Efficient Reasoning",
-      "description": "AI21's compact hybrid reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work. It remains available for manual testing, but is not agent-ready after required OpenCode probes failed on two independent fleet backends.",
+      "description": "AI21's compact hybrid reasoning model combines 26 Mamba layers with 2 attention layers for low-memory long-context work. Pixel supports it in adaptive mode; historical OpenCode probes show lower reliability on two independent fleet backends, so complex work may need more guidance or a stronger model.",
       "tokens_per_sec_estimate": 90,
       "llm_model_name": "jamba-reasoning-3b",
       "llama_server_image": null,
@@ -111,7 +111,7 @@
         },
         "agent_viability": {
           "status": "not_agent_viable",
-          "label": "Not agent-ready",
+          "label": "Adaptive; reliability varies",
           "reason": "Four hosts completed the full rotation, but two independent backends failed the required OpenCode candidate probe after successful load and Talk inference. Every host restored its original model and deleted the test artifact cleanly.",
           "evidence": "fleet-test/runs/2026-07-27T10-47-19Z-model-ui-product-ca730791caca-harness-19d43e6f9f25-hosts-tower2-strix-halo-spark-m5-mbp-windows-laptop-strixy/cycle-001/{tower2,strix-halo,spark,m5-mbp,windows-laptop,strixy}",
           "recordedAt": "2026-07-27T11:12:30Z",
@@ -1804,6 +1804,26 @@
         }
       },
       "runtime_profiles": [
+        {
+          "id": "nvidia-8gb-64k-q8-kv",
+          "label": "NVIDIA 8GB 64K context with Q8 KV cache",
+          "backend": "nvidia",
+          "host_arch": ["amd64"],
+          "memory_type": "discrete",
+          "vram_min_gb": 7.5,
+          "vram_max_gb": 8.5,
+          "system_ram_min_gb": 15,
+          "context_length": 65536,
+          "estimated_required_gb": 7.2,
+          "fit_label": "64K 8GB Q8 KV interactive-agent profile",
+          "env": {
+            "LLAMA_PARALLEL": "1",
+            "LLAMA_ARG_FLASH_ATTN": "on",
+            "LLAMA_ARG_CACHE_TYPE_K": "q8_0",
+            "LLAMA_ARG_CACHE_TYPE_V": "q8_0",
+            "LLAMA_SERVER_MEMORY_LIMIT": "12G"
+          }
+        },
         {
           "id": "nvidia-8gb-32k-q8-kv",
           "label": "NVIDIA 8GB 32K context with Q8 KV cache",

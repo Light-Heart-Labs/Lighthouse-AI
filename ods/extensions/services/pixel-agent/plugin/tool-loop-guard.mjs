@@ -59,8 +59,50 @@ export const PRIVATE_URL_REQUEST_REASON =
 export const CODING_RETRY_EXHAUSTED_REASON =
   "Pixel stopped a no-progress coding repair loop after its bounded failed-verification limit. Do not call another tool in this turn. Give the user a visible summary of the verified failure, the changes attempted, and the most useful next step.";
 
+export const CODING_REPEAT_NO_PROGRESS_REASON =
+  "That exact command already succeeded twice without a workspace mutation. Do not run it again. Perform the requested change with write, edit, or apply_patch, choose a materially different command, or give the owner a visible blocker.";
+
 export const CODING_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another coding tool after the repeated-command limit was reached. Start a fresh message to continue from the preserved workspace with a different approach.";
+
+export const VISIBLE_REPLY_REQUIRES_FINAL_REASON =
+  "Do not use a tool to deliver the reply and do not send a message to this same session. End the turn now with the requested text as the normal assistant response.";
+
+export const EDIT_CREATE_REQUIRES_WRITE_REASON =
+  "edit cannot create a new file because every edit replacement requires a non-empty oldText copied from existing content. Use the visible tool_call control now with id write and args containing the same path plus the exact newText as content. Do not retry edit.";
+
+export const EDIT_CREATE_RETRY_EXHAUSTED_REASON =
+  "Pixel blocked a repeated invalid attempt to create a file with edit. Do not call another tool in this turn. Tell the owner the file was not created and that a fresh retry must use write.";
+
+export const EDIT_CREATE_LOOP_ABORT_REASON =
+  "Pixel stopped this response because it kept retrying edit after the new-file write correction. The workspace is preserved; start a fresh message to retry with write.";
+
+export const REPEATED_WRITE_REQUIRES_PATCH_REASON =
+  "That file was already written successfully in this turn. Preserve it and use edit or apply_patch for the smallest relevant correction; do not rewrite the whole file.";
+
+export const REPEATED_WRITE_RETRY_EXHAUSTED_REASON =
+  "Pixel blocked a repeated full-file rewrite after directing a focused edit. Do not call another tool in this turn. The existing file is preserved; start a fresh message and continue with edit or apply_patch.";
+
+export const FOCUSED_EDIT_REQUIRED_REASON =
+  "This edit repeats a large existing file in oldText and newText. Preserve context and make only the smallest unique replacements with edit, or use a focused apply_patch; do not resend the whole file.";
+
+export const FOCUSED_EDIT_RETRY_EXHAUSTED_REASON =
+  "Pixel blocked a second oversized whole-file edit after directing focused replacements. Do not call another tool in this turn. The existing file is preserved; start a fresh message and continue with small edit blocks or apply_patch.";
+
+export const NOOP_EDIT_REQUIRES_CHANGE_REASON =
+  "This edit makes no change because every oldText and newText pair is identical. Re-read the exact verification error already present in this turn and make one meaningful focused replacement. If the test asserts behavior the owner did not request, correct that test expectation; otherwise repair the implementation. Do not rerun verification until a real edit succeeds.";
+
+export const NOOP_EDIT_RETRY_EXHAUSTED_REASON =
+  "Pixel blocked a repeated no-op edit after explaining that identical replacement text cannot repair the failure. Do not call another tool in this turn. The workspace is preserved; start a fresh message and make one evidence-based focused change.";
+
+export const PENDING_EXEC_REQUIRES_POLL_REASON =
+  "That exact command is already running. Do not call exec again or start a replacement process. Use the visible tool_call control now with id process and args containing action poll plus the exact sessionId returned by the running command; continue polling that same session until it reaches a terminal result.";
+
+export const PENDING_EXEC_RETRY_EXHAUSTED_REASON =
+  "Pixel blocked another attempt to restart a command that is still running. Do not call exec again in this turn. Poll only the exact existing process session to a terminal result, then report its real output.";
+
+export const PENDING_EXEC_LOOP_ABORT_REASON =
+  "Pixel stopped this response because it kept restarting an already-running command instead of polling its process session. The original process was preserved for cancellation cleanup; start a fresh message to continue safely.";
 
 export const VERIFICATION_PENDING_DELIVERY_PREFIX =
   "Pixel stopped before the verification process reached a terminal result, so success is unverified. The workspace is preserved; ask Pixel to continue the run or inspect the process.";
@@ -126,7 +168,19 @@ export const EXACT_DOWNLOAD_APPROVAL_DELIVERY_PREFIX =
   "Pixel staged the requested download as an immutable plan, but external approval is required. No artifact was created, and Pixel did not self-approve it.";
 
 export const OPERATIONS_REQUIRES_BROKER_REASON =
-  "The owner requested host or Operations evidence. Generic exec runs inside Pixel's sandbox and cannot establish host facts. Use pixel_ops_inventory when action names are needed, submit the matching named action with pixel_ops_run or pixel_ops_workflow_submit, and obtain its terminal result with pixel_ops_job_wait.";
+  "The owner requested host or Operations evidence. Generic exec runs inside Pixel's sandbox and cannot establish host facts. For requested host.* observations, use the visible tool_call Tool Search control once with id pixel_ods_host_observe and args containing the exact requested actions; it returns the terminal broker receipt. Use pixel_ops_inventory, pixel_ops_run, and pixel_ops_job_wait only for other named Operations work. A status projection cannot substitute for required host work; use it only for an owner-requested ODS runtime facet after terminal host evidence.";
+
+export const OPERATIONS_NOT_REQUESTED_REASON =
+  "Pixel blocked this Operations tool because the owner's current request did not ask for host or ODS Operations work. For sandbox workspace work, use read, write, edit, apply_patch, exec, or process only; do not submit an Operations job.";
+
+export const WORKSPACE_TOOL_SEARCH_COMPLETE_REASON =
+  "Pixel already resolved the deferred workspace tools. Do not search again. Call tool_call now with the returned exact id, such as openclaw:core:exec, openclaw:core:write, openclaw:core:read, openclaw:core:edit, openclaw:core:apply_patch, or openclaw:core:process, and put that tool's normal arguments in args.";
+
+export const WORKSPACE_UNREQUESTED_PROJECTION_REASON =
+  "This is a sandbox workspace task, not an ODS status or application-list request. Do not call pixel_ods_status or pixel_ods_apps_list. Call tool_search once for write read edit apply_patch exec process, then use the returned exact workspace tool id to inspect or change only the owner-requested workspace path.";
+
+export const OPERATIONS_REQUIRES_PROJECTIONS_REASON =
+  "Pixel completed the requested host Operations jobs, but the owner also requested ODS status evidence that is still missing. Call each requested pixel_ods_status or pixel_ods_apps_list projection exactly once now. After every requested projection is verified, continue any explicitly requested workspace work.";
 
 export const OPERATIONS_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another non-Operations tool after the host Operations boundary was enforced. Start a fresh message to retry the named broker action.";
@@ -166,6 +220,12 @@ export const OPERATIONS_HOST_EVIDENCE_PREFIX =
 export const OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT =
   "ODS containers: a current sanitized ODS application projection was not obtained. Host Operations facts above remain verified, but Pixel cannot claim a container inventory from them.";
 
+export const OPERATIONS_ODS_STATUS_UNAVAILABLE_TEXT =
+  "ODS runtime status: a current sanitized ODS status projection was not obtained. Host Operations facts above remain verified, but Pixel cannot claim the active model, context, version, or Pixel availability from them.";
+
+export const OPERATIONS_TRUSTED_CONTINUATION_PREFIX =
+  "[ODS Pixel trusted continuation]";
+
 export const OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension catalog result through a structurally matched terminal Operations Broker receipt:";
 
@@ -176,6 +236,15 @@ const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);
+const WORKSPACE_CONTINUATION_TOOLS = new Set([
+  "read", "write", "edit", "apply_patch", "exec", "process",
+  "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
+]);
+const WORKSPACE_TOOL_SEARCH_QUERY = "write read edit apply_patch exec process";
+const WORKSPACE_INSPECTION_COMPLETE_REASON =
+  "The workspace inspection already completed and returned the directory, kernel, and listing; do not search, list, read the directory, or poll again. Continue the owner's requested task now. If the owner requested new files, call tool_call with id openclaw:core:write and args containing the first workspace-relative path and its full content. Do not call exec or process before that write.";
+const FAILED_TEST_READ_REPAIR_REASON =
+  "The verification command failed. Do not reread a file you just authored; its code and the failure output are already available. Apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If the failure cannot be repaired from that evidence, give the owner a visible blocker instead of repeating reads or tests.";
 const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ops_download_stage",
   "pixel_ops_job_get",
@@ -183,6 +252,7 @@ const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ods_download_promote",
 ]);
 const OPERATIONS_TOOLS = new Set([
+  "pixel_ods_host_observe",
   "pixel_ops_inventory",
   "pixel_ops_run",
   "pixel_ops_workflow_submit",
@@ -201,6 +271,9 @@ const OPERATIONS_SUBMISSION_TOOLS = new Set([
   "pixel_ops_artifact_transfer",
   "pixel_ops_shell_propose",
 ]);
+const SYNCHRONOUS_HOST_OBSERVE_TOOL = "pixel_ods_host_observe";
+const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
+const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -325,23 +398,257 @@ function normalizeWorkspaceFilePath(value) {
   return value;
 }
 
+function stripTrailingToolEnvelopeLeak(value) {
+  if (typeof value !== "string") return value;
+  const sanitized = value.replace(
+    /\r?\n?(?:<\/parameter>[ \t]*)+<\/function>(?:[ \t]+[A-Za-z0-9][A-Za-z0-9._-]{0,127})?[ \t]*$/,
+    ""
+  );
+  return sanitized.trim().length > 0 ? sanitized : value;
+}
+
+function completeRequestedUnittestImports(value, state, requestedPath) {
+  if (
+    typeof value !== "string" ||
+    typeof requestedPath !== "string" ||
+    !/(?:^|\/)test[^/]*\.py$/i.test(requestedPath) ||
+    !state?.workspaceRequestedFiles?.some((file) =>
+      requestedPath === `${state.workspaceTaskDirectory}/${file}` &&
+      /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file)
+    )
+  ) {
+    return value;
+  }
+  const imports = [];
+  if (
+    /\bunittest\s*\./.test(value) &&
+    !/^\s*(?:import\s+unittest\b|from\s+unittest\s+import\b)/m.test(value)
+  ) {
+    imports.push("import unittest");
+  }
+  for (const file of state.workspaceRequestedFiles) {
+    if (
+      /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file) ||
+      !file.endsWith(".py")
+    ) continue;
+    const stem = file.slice(0, -3);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(stem)) continue;
+    const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (
+      new RegExp(`\\b${escaped}\\s*\\(`).test(value) &&
+      !new RegExp(
+        `^\\s*(?:import\\s+${escaped}\\b|from\\s+${escaped}\\s+import\\b)`,
+        "m"
+      ).test(value)
+    ) {
+      imports.push(`from ${stem} import ${stem}`);
+    }
+  }
+  if (imports.length === 0) return value;
+  const prefix = `${imports.join("\n")}\n\n`;
+  const shebang = value.match(/^(#![^\r\n]+\r?\n)/);
+  return shebang
+    ? `${shebang[1]}${prefix}${value.slice(shebang[1].length)}`
+    : `${prefix}${value}`;
+}
+
 function normalizeExecWorkdir(value) {
   if (value === "/workspace" || value === "workspace" || value === ".") return ".";
   if (typeof value === "string" && value.startsWith("workspace/")) {
     return `/${value}`;
   }
+  if (
+    typeof value === "string" &&
+    /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(value) &&
+    !value.split("/").includes("..")
+  ) {
+    return `/workspace/${value}`;
+  }
   return value;
+}
+
+function normalizeApplyPatchInput(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
+  if (typeof params.input === "string") return undefined;
+  if (typeof params.path !== "string" || typeof params.patch !== "string") return undefined;
+  if (!Object.keys(params).every((key) => key === "path" || key === "patch")) {
+    return undefined;
+  }
+  const relativePath = normalizeWorkspaceFilePath(params.path);
+  if (
+    typeof relativePath !== "string" ||
+    !relativePath ||
+    relativePath === "." ||
+    relativePath.startsWith("/") ||
+    relativePath.includes("\\") ||
+    relativePath.split("/").some(
+      (component) =>
+        !component ||
+        component === "." ||
+        component === ".." ||
+        !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/.test(component)
+    )
+  ) {
+    return undefined;
+  }
+  let hunks = params.patch.replace(/\r\n?/g, "\n").trim();
+  if (hunks.startsWith("*** Begin Patch\n") && hunks.endsWith("\n*** End Patch")) {
+    return { input: hunks };
+  }
+  const unifiedHeader = hunks.match(/^--- [^\n]+\n\+\+\+ [^\n]+\n([\s\S]+)$/);
+  if (unifiedHeader) hunks = unifiedHeader[1].trim();
+  if (!/^@@(?: |\n)/.test(hunks)) return undefined;
+  return {
+    input:
+      `*** Begin Patch\n*** Update File: ${relativePath}\n` +
+      `${hunks}\n*** End Patch`,
+  };
 }
 
 function normalizeWorkspaceParams(toolName, params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
   const updated = { ...params };
   let changed = false;
+  // Tool Search is the model-facing transport for core workspace tools. Some
+  // smaller models occasionally append a single XML-like closing character to
+  // an otherwise exact catalog id (for example `exec>`). Letting that typo hit
+  // Tool Search is worse than one failed call: its missing-tool fuse can then
+  // reject the corrected id for the rest of the turn, leaving a half-written
+  // workspace and encouraging an unbounded retry loop. Repair only this narrow,
+  // unambiguous suffix on the five owner-workspace tools; never fuzzy-match an
+  // Operations, network, or third-party capability name.
+  if (
+    toolName === "tool_call" &&
+    typeof params.id === "string" &&
+    /^(?:read|write|edit|exec|process)>$/.test(params.id)
+  ) {
+    updated.id = params.id.slice(0, -1);
+    changed = true;
+  }
+  const nestedCoreToolName =
+    toolName === "tool_call" && typeof updated.id === "string"
+      ? updated.id.startsWith("openclaw:core:")
+        ? updated.id.slice("openclaw:core:".length)
+        : updated.id
+      : undefined;
+  if (
+    nestedCoreToolName &&
+    ["read", "write", "edit", "apply_patch", "exec", "process"].includes(nestedCoreToolName) &&
+    params.args &&
+    typeof params.args === "object" &&
+    !Array.isArray(params.args)
+  ) {
+    const nestedArgs = normalizeWorkspaceParams(nestedCoreToolName, params.args);
+    if (nestedArgs) {
+      updated.args = nestedArgs;
+      changed = true;
+    }
+  }
+  // Tool Search exposes the OpenClaw exec catalog to heterogeneous models.
+  // Some otherwise capable models use the common `cmd` spelling learned from
+  // other agent harnesses. Normalize that unambiguous alias before the
+  // cancellation wrapper and retry fingerprints inspect `command`; otherwise
+  // execution fails closed before it can run and a model can churn forever by
+  // varying only yieldMs.
+  if (
+    toolName === "exec" &&
+    typeof params.command !== "string" &&
+    typeof params.cmd === "string"
+  ) {
+    updated.command = params.cmd;
+    delete updated.cmd;
+    changed = true;
+  }
+  if (
+    toolName === "exec" &&
+    typeof updated.command !== "string" &&
+    typeof params.shell === "string" &&
+    Object.keys(params).every((key) =>
+      ["shell", "workdir", "yieldMs", "timeout", "pty", "background"].includes(key)
+    )
+  ) {
+    // `shell` is another common command-value spelling emitted by compact
+    // OpenAI-compatible models. It is not an OpenClaw exec field, so adapt it
+    // only when the rest of the envelope is already an exec control field.
+    // The recovered command still traverses cancellation and safety policy.
+    updated.command = params.shell;
+    delete updated.shell;
+    changed = true;
+  }
+  if (
+    toolName === "exec" &&
+    typeof updated.command === "string" &&
+    updated.workdir === undefined
+  ) {
+    const leakedWorkdir = updated.command.match(
+      /^([\s\S]+),\s*workdir=(["'])(\/workspace\/[A-Za-z0-9._/-]+)\2\s*$/
+    );
+    const path = leakedWorkdir?.[3];
+    const components = typeof path === "string"
+      ? path.slice("/workspace/".length).split("/")
+      : [];
+    if (
+      leakedWorkdir &&
+      components.length > 0 &&
+      components.length <= 16 &&
+      components.every(
+        (component) =>
+          !["", ".", ".."].includes(component) &&
+          WORKSPACE_PATH_COMPONENT.test(component)
+      )
+    ) {
+      // Some compact models serialize the separately documented workdir field
+      // into the command string. Recover only one trailing, quoted, absolute
+      // /workspace path; shell syntax and every other suffix remain untouched.
+      updated.command = leakedWorkdir[1];
+      updated.workdir = path;
+      changed = true;
+    }
+  }
   if (FILE_PATH_TOOLS.has(toolName) && typeof params.path === "string") {
     const path = normalizeWorkspaceFilePath(params.path);
     if (path !== params.path) {
       updated.path = path;
       changed = true;
+    }
+  }
+  if (
+    toolName === "write" &&
+    Object.keys(params).sort().join("\u0000") === ["path", "text"].sort().join("\u0000") &&
+    typeof params.text === "string"
+  ) {
+    updated.content = params.text;
+    delete updated.text;
+    changed = true;
+  }
+  if (
+    toolName === "edit" &&
+    typeof params.path === "string" &&
+    typeof params.oldText === "string" &&
+    typeof params.newText === "string"
+  ) {
+    updated.edits = [{ oldText: params.oldText, newText: params.newText }];
+    delete updated.oldText;
+    delete updated.newText;
+    changed = true;
+  } else if (
+    toolName === "edit" &&
+    params.edits &&
+    typeof params.edits === "object" &&
+    !Array.isArray(params.edits) &&
+    typeof params.edits.oldText === "string" &&
+    typeof params.edits.newText === "string"
+  ) {
+    updated.edits = [{
+      oldText: params.edits.oldText,
+      newText: params.edits.newText,
+    }];
+    changed = true;
+  }
+  if (toolName === "apply_patch") {
+    const patchInput = normalizeApplyPatchInput(params);
+    if (patchInput) {
+      return patchInput;
     }
   }
   if (toolName === "exec" && typeof params.workdir === "string") {
@@ -355,6 +662,55 @@ function normalizeWorkspaceParams(toolName, params) {
     }
   }
   return changed ? updated : undefined;
+}
+
+function editReplacementPairs(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) return [];
+  if (Array.isArray(params.edits)) {
+    return params.edits.flatMap((entry) =>
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      typeof entry.oldText === "string" &&
+      typeof entry.newText === "string"
+        ? [{ oldText: entry.oldText, newText: entry.newText }]
+        : []
+    );
+  }
+  return typeof params.oldText === "string" && typeof params.newText === "string"
+    ? [{ oldText: params.oldText, newText: params.newText }]
+    : [];
+}
+
+function sharedLineRatio(left, right) {
+  const leftLines = left.split(/\r?\n/);
+  const rightLines = right.split(/\r?\n/);
+  const counts = new Map();
+  for (const line of leftLines) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let shared = 0;
+  for (const line of rightLines) {
+    const remaining = counts.get(line) ?? 0;
+    if (remaining <= 0) continue;
+    shared += 1;
+    counts.set(line, remaining - 1);
+  }
+  return {
+    ratio: shared / Math.max(leftLines.length, rightLines.length, 1),
+    minimumLines: Math.min(leftLines.length, rightLines.length),
+  };
+}
+
+function oversizedWholeFileEdit(params) {
+  return editReplacementPairs(params).some(({ oldText, newText }) => {
+    if (Math.min(oldText.length, newText.length) < 6000) return false;
+    const overlap = sharedLineRatio(oldText, newText);
+    return overlap.minimumLines >= 80 && overlap.ratio >= 0.45;
+  });
+}
+
+function noOpEdit(params) {
+  const pairs = editReplacementPairs(params);
+  return pairs.length > 0 && pairs.every(({ oldText, newText }) => oldText === newText);
 }
 
 function execFingerprint(params) {
@@ -402,6 +758,84 @@ function verificationExecFingerprint(params) {
   const normalizedWorkdir = normalizeExecWorkdir(params.workdir ?? parsed.commandWorkdir);
   const workdir = normalizedWorkdir === "." ? "" : normalizedWorkdir;
   return JSON.stringify([command, typeof workdir === "string" ? workdir : ""]);
+}
+
+function canonicalRequestedUnittestParams(params, state) {
+  const parsed = verificationCommand(params);
+  if (
+    !parsed ||
+    !verificationCommandIsAuditable(params) ||
+    !/^python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b/i.test(parsed.command) ||
+    typeof state?.workspaceTaskDirectory !== "string" ||
+    !/^[A-Za-z0-9._/-]+$/.test(state.workspaceTaskDirectory)
+  ) {
+    return undefined;
+  }
+  const requestedTests = state.workspaceRequestedFiles.filter((file) =>
+    /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(file)
+  );
+  if (requestedTests.length !== 1) return undefined;
+  const testFile = requestedTests[0];
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let command = parsed.command;
+  for (const path of [
+    `/workspace/${state.workspaceTaskDirectory}/${testFile}`,
+    `${state.workspaceTaskDirectory}/${testFile}`,
+  ]) {
+    command = command.replace(
+      new RegExp(`(^|\\s)(["']?)${escapeRegExp(path)}\\2(?=\\s|$)`, "g"),
+      `$1${testFile}`
+    );
+  }
+  const canonical = {
+    ...params,
+    command,
+    workdir: `/workspace/${state.workspaceTaskDirectory}`,
+  };
+  if (!verificationCommand(canonical) || !verificationCommandIsAuditable(canonical)) {
+    return undefined;
+  }
+  if (canonical.command === params.command && canonical.workdir === params.workdir) {
+    return undefined;
+  }
+  return canonical;
+}
+
+function verificationFingerprintIsPythonUnittest(fingerprint) {
+  if (typeof fingerprint !== "string" || !fingerprint) return false;
+  try {
+    const parsed = JSON.parse(fingerprint);
+    return (
+      Array.isArray(parsed) &&
+      typeof parsed[0] === "string" &&
+      /^python(?:3(?:\.\d+)?)?\s+-m\s+unittest\b/i.test(parsed[0])
+    );
+  } catch {
+    return false;
+  }
+}
+
+function execResultHasNonCleanUnittestOutcome(event) {
+  const result = event?.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  const values = [
+    result?.details?.aggregated,
+    result?.details?.stdout,
+    result?.details?.stderr,
+    ...(Array.isArray(result.content)
+      ? result.content.map((item) => item?.type === "text" ? item.text : undefined)
+      : []),
+  ];
+  return values.some(
+    (value) =>
+      typeof value === "string" &&
+      (
+        /\bexpected failures?\s*=\s*[1-9][0-9]*\b/i.test(value) ||
+        /\bunexpected successes?\s*=\s*[1-9][0-9]*\b/i.test(value) ||
+        /\.\.\.\s+expected failure\b/i.test(value) ||
+        /\.\.\.\s+unexpected success\b/i.test(value)
+      )
+  );
 }
 
 function execFailed(event) {
@@ -818,6 +1252,59 @@ function operationsTerminalOutcome(event, submittedJobs) {
   };
 }
 
+function exactRequiredHostActions(state) {
+  if (
+    !state?.operationsRequired ||
+    state.operationsRequiredActions.size < 1 ||
+    ![...state.operationsRequiredActions].every((action) => action.startsWith("host."))
+  ) {
+    return undefined;
+  }
+  return [...state.operationsRequiredActions];
+}
+
+function synchronousHostObservationOutcome(event, state) {
+  if (toolCallFailed(event)) return undefined;
+  const expectedActions = exactRequiredHostActions(state);
+  const observedActions = event?.params?.actions;
+  const details = event?.result?.details;
+  if (
+    !expectedActions ||
+    !Array.isArray(observedActions) ||
+    observedActions.length !== expectedActions.length ||
+    !expectedActions.every((action) => observedActions.includes(action)) ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    typeof details.jobId !== "string" ||
+    !OPS_JOB_ID.test(details.jobId)
+  ) {
+    return undefined;
+  }
+  const submission = {
+    jobId: details.jobId,
+    actions: expectedActions.map((action) => ({ target: "ods-host", action })),
+  };
+  const outcome = operationsTerminalOutcome(
+    { params: { jobId: details.jobId }, result: event.result },
+    new Map([[details.jobId, submission]])
+  );
+  return outcome ? { submission, outcome } : undefined;
+}
+
+function synchronousHostOdsStatusProjection(event) {
+  const value = event?.result?.details?.odsStatusProjection;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return operationsOdsStatusProjection({
+    result: {
+      details: {
+        projection: value,
+        runtime: value.runtime,
+      },
+    },
+  });
+}
+
 function cleanSingleLine(value, pattern, maximum) {
   if (typeof value !== "string") return undefined;
   const text = value.trim();
@@ -880,10 +1367,18 @@ function processEvidence(step) {
     return { pid: match[1], user: match[3], cpu, memory, command: match[7] };
   });
   if (entries.some((entry) => !entry)) return undefined;
-  const top = entries.slice(0, 8).map(
-    (entry) => `${entry.command} (pid ${entry.pid}, ${entry.cpu}% CPU, ${entry.memory}% memory)`
-  );
-  return `Processes: ${entries.length} visible; top CPU entries: ${top.join("; ")}.`;
+  const renderProcess = (entry) =>
+    `${entry.command} (pid ${entry.pid}, ${entry.cpu}% CPU, ${entry.memory}% memory)`;
+  const topCpu = [...entries]
+    .sort((left, right) => right.cpu - left.cpu || right.memory - left.memory)
+    .slice(0, 3)
+    .map(renderProcess);
+  const topMemory = [...entries]
+    .sort((left, right) => right.memory - left.memory || right.cpu - left.cpu)
+    .slice(0, 3)
+    .map(renderProcess);
+  return `Processes: ${entries.length} visible; top 3 by CPU: ${topCpu.join("; ")}; ` +
+    `top 3 by memory: ${topMemory.join("; ")}.`;
 }
 
 function serviceEvidence(step) {
@@ -895,7 +1390,10 @@ function serviceEvidence(step) {
   });
   if (entries.some((entry) => !entry)) return undefined;
   const failed = entries.filter((entry) => entry.active === "failed" || entry.sub === "failed");
-  const sample = entries.slice(0, 12).map((entry) => `${entry.unit}=${entry.active}/${entry.sub}`);
+  const important = entries.filter((entry) => /^(?:ods-|openclaw-|pixel-)/.test(entry.unit));
+  const sample = [...new Set([...failed, ...important, ...entries])]
+    .slice(0, 10)
+    .map((entry) => `${entry.unit}=${entry.active}/${entry.sub}`);
   return `System services: ${entries.length} running or failed; failed: ${failed.length ? failed.map((entry) => entry.unit).join(", ") : "none"}; sample: ${sample.join(", ")}.`;
 }
 
@@ -997,9 +1495,19 @@ function storageEvidence(step) {
     const size = formatHostBytes(Number(match[2]));
     const available = formatHostBytes(Number(match[4]));
     if (!type || !mount || !size || !available) return undefined;
-    mounts.push(`${mount} (${type}, ${match[5]} used, ${available} free of ${size})`);
+    mounts.push({
+      mount,
+      text: `${mount} (${type}, ${match[5]} used, ${available} free of ${size})`,
+    });
   }
-  return mounts.length ? `Storage mounts: ${mounts.slice(0, 12).join("; ")}.` : undefined;
+  if (!mounts.length) return undefined;
+  const useful = mounts.filter(({ mount }) =>
+    mount === "/" ||
+    /^\/mnt\/[A-Za-z]$/.test(mount) ||
+    !/^\/(?:dev(?:\/|$)|init(?:\/|$)|run(?:\/|$)|usr\/lib\/wsl(?:\/|$)|mnt\/wslg?(?:\/|$))/.test(mount)
+  );
+  const selected = useful.slice(0, 6);
+  return `Storage mounts: ${selected.map(({ text }) => text).join("; ")}.`;
 }
 
 function networkAddressEvidence(step) {
@@ -1066,10 +1574,19 @@ function listeningPortEvidence(step) {
     return local ? `${match[1]} ${match[2]} ${local}` : undefined;
   });
   if (endpoints.some((entry) => !entry)) return undefined;
-  return `Listening TCP/UDP endpoints: ${endpoints.length}; sample: ${endpoints.slice(0, 24).join("; ")}.`;
+  const prioritized = [
+    ...endpoints.filter((entry) => entry.startsWith("tcp ")),
+    ...endpoints.filter((entry) => entry.startsWith("udp ")),
+  ];
+  return `Listening TCP/UDP endpoints: ${endpoints.length}; sample: ${prioritized.slice(0, 12).join("; ")}.`;
 }
 
-function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjection = undefined) {
+function operationsHostEvidenceText(
+  requiredActions,
+  terminalJobs,
+  odsAppsProjection = undefined,
+  odsStatusProjection = undefined
+) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   if (!(terminalJobs instanceof Map)) return undefined;
   const steps = new Map();
@@ -1191,6 +1708,26 @@ function operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjec
       "- Container boundary: this host-produced status projection covers allowlisted ODS application containers only; it does not enumerate unrelated or non-ODS containers."
     );
   }
+  if (odsStatusProjection) {
+    const availability =
+      odsStatusProjection.ingress_ready && odsStatusProjection.gateway_reachable
+        ? "available"
+        : "unavailable";
+    const runtime = odsStatusProjection.runtime
+      ? `model \`${odsStatusProjection.runtime.model}\`; context ${odsStatusProjection.runtime.context_length} tokens`
+      : "model unavailable; context unavailable";
+    lines.push(
+      `- ODS runtime projection: ${runtime}; Pixel ${availability}; ODS version \`${odsStatusProjection.ods_version}\`.`
+    );
+    if (!odsAppsProjection) {
+      lines.push(
+        `- ODS container count projection: ${odsStatusProjection.online_app_count} of ${odsStatusProjection.app_count} allowlisted ODS application containers online.`
+      );
+    }
+    lines.push(
+      "- Runtime boundary: this current host-produced status projection is untrusted status evidence only and grants no authority for an action."
+    );
+  }
   return lines.join("\n");
 }
 
@@ -1203,9 +1740,28 @@ function exactKeys(value, keys) {
   );
 }
 
+function boundedJsonSnapshot(value, maxBytes = 262_144) {
+  try {
+    const serialized = JSON.stringify(value);
+    if (
+      typeof serialized !== "string" ||
+      Buffer.byteLength(serialized, "utf8") > maxBytes
+    ) {
+      return undefined;
+    }
+    return JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
+}
+
 function operationsOdsAppsProjection(event) {
   if (toolCallFailed(event)) return undefined;
-  const value = event?.result?.details?.projection;
+  // Plugin hooks may receive framework-owned objects with ephemeral undefined
+  // properties that cannot exist in the persisted JSON tool result. Validate
+  // the bounded wire representation so live and replayed results obey exactly
+  // the same contract.
+  const value = boundedJsonSnapshot(event?.result?.details?.projection);
   if (
     !exactKeys(value, [
       "app_count", "online_app_count", "apps", "timestamp", "stale", "boundary",
@@ -1269,6 +1825,345 @@ function operationsOdsAppsProjection(event) {
     online_app_count: value.online_app_count,
     apps,
     timestamp: value.timestamp,
+  };
+}
+
+function operationsOdsStatusProjection(event) {
+  if (toolCallFailed(event)) return undefined;
+  const details = event?.result?.details;
+  const value = boundedJsonSnapshot(details?.projection);
+  const compactKeys = [
+    "status", "ingress_ready", "gateway_reachable", "docker", "ods_version",
+    "online_app_count", "runtime", "app_count", "timestamp", "stale", "boundary",
+  ];
+  const legacyKeys = [...compactKeys, "apps"];
+  if (
+    (!exactKeys(value, compactKeys) && !exactKeys(value, legacyKeys)) ||
+    value.status !== "ok" ||
+    typeof value.ingress_ready !== "boolean" ||
+    typeof value.gateway_reachable !== "boolean" ||
+    !["ok", "unavailable"].includes(value.docker) ||
+    typeof value.ods_version !== "string" ||
+    !/^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/.test(value.ods_version) ||
+    value.boundary !== "status-only" ||
+    value.stale !== false ||
+    typeof value.timestamp !== "string" ||
+    value.timestamp.length > 64 ||
+    !Number.isFinite(Date.parse(value.timestamp))
+  ) {
+    return undefined;
+  }
+  let appCount = value.app_count;
+  let onlineAppCount = value.online_app_count;
+  if (Object.hasOwn(value, "apps")) {
+    const appsProjection = operationsOdsAppsProjection({
+      result: {
+        details: {
+          projection: {
+            app_count: value.app_count,
+            online_app_count: value.online_app_count,
+            apps: value.apps,
+            timestamp: value.timestamp,
+            stale: value.stale,
+            boundary: value.boundary,
+          },
+        },
+      },
+    });
+    if (!appsProjection) return undefined;
+    appCount = appsProjection.app_count;
+    onlineAppCount = appsProjection.online_app_count;
+  } else if (
+    !Number.isInteger(appCount) ||
+    !Number.isInteger(onlineAppCount) ||
+    appCount < 0 ||
+    appCount > 256 ||
+    onlineAppCount < 0 ||
+    onlineAppCount > appCount
+  ) {
+    return undefined;
+  }
+  let runtimeValue = value.runtime;
+  if (
+    runtimeValue !== null &&
+    !exactKeys(runtimeValue, ["model", "context_length"])
+  ) {
+    // OpenClaw can transiently replace projection.runtime with its own runtime
+    // marker while leaving the status tool's dedicated, sanitized runtime field
+    // intact. Bind only to that same-result duplicate and validate it below.
+    runtimeValue = boundedJsonSnapshot(details?.runtime);
+  }
+  let runtime = null;
+  if (runtimeValue !== null) {
+    if (
+      !exactKeys(runtimeValue, ["model", "context_length"]) ||
+      typeof runtimeValue.model !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255}$/.test(runtimeValue.model) ||
+      !Number.isInteger(runtimeValue.context_length) ||
+      runtimeValue.context_length < 4096 ||
+      runtimeValue.context_length > 10_000_000
+    ) {
+      return undefined;
+    }
+    runtime = {
+      model: runtimeValue.model,
+      context_length: runtimeValue.context_length,
+    };
+  }
+  return {
+    runtime,
+    ingress_ready: value.ingress_ready,
+    gateway_reachable: value.gateway_reachable,
+    ods_version: value.ods_version,
+    app_count: appCount,
+    online_app_count: onlineAppCount,
+    timestamp: value.timestamp,
+  };
+}
+
+function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName) {
+  if (toolCallFailed(event)) return undefined;
+  const params = event?.params;
+  const details = event?.result?.details;
+  const tool = details?.tool;
+  const result = details?.result;
+  if (
+    !params ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    params.id !== expectedToolName ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    !tool ||
+    typeof tool !== "object" ||
+    Array.isArray(tool) ||
+    tool.id !== `openclaw:${expectedSourceName}:${expectedToolName}` ||
+    tool.source !== "openclaw" ||
+    tool.sourceName !== expectedSourceName ||
+    tool.name !== expectedToolName ||
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result)
+  ) {
+    return undefined;
+  }
+  return {
+    params:
+      params.args && typeof params.args === "object" && !Array.isArray(params.args)
+        ? params.args
+        : {},
+    result,
+  };
+}
+
+function persistedToolSearchEnvelope(message, expectedToolName, expectedSourceName) {
+  if (!Array.isArray(message?.content)) return false;
+  for (const block of message.content) {
+    if (block?.type !== "text" || typeof block.text !== "string") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(block.text);
+    } catch {
+      continue;
+    }
+    const value = boundedJsonSnapshot(parsed);
+    const tool = value?.tool;
+    if (
+      tool &&
+      typeof tool === "object" &&
+      !Array.isArray(tool) &&
+      tool.id === `openclaw:${expectedSourceName}:${expectedToolName}` &&
+      tool.source === "openclaw" &&
+      tool.sourceName === expectedSourceName &&
+      tool.name === expectedToolName &&
+      value.result &&
+      typeof value.result === "object" &&
+      !Array.isArray(value.result)
+    ) {
+      return { tool, result: value.result };
+    }
+  }
+  return undefined;
+}
+
+function persistedToolSearchResult(message, expectedToolName, expectedSourceName) {
+  return Boolean(
+    persistedToolSearchEnvelope(message, expectedToolName, expectedSourceName)
+  );
+}
+
+function cleanUnittestSummary(result) {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    result.isError === true ||
+    result?.details?.status !== "completed" ||
+    result?.details?.exitCode !== 0 ||
+    execResultHasNonCleanUnittestOutcome({ result })
+  ) {
+    return undefined;
+  }
+  const values = [
+    result?.details?.aggregated,
+    ...(Array.isArray(result.content)
+      ? result.content.map((item) => item?.type === "text" ? item.text : undefined)
+      : []),
+  ].filter((value) => typeof value === "string");
+  for (const value of values) {
+    const match = value.match(/(?:^|\n)(Ran\s+[1-9][0-9]*\s+tests?\s+in\s+[^\r\n]+\r?\n\r?\nOK)\s*$/i);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function compactCleanVerificationResult(message, pending) {
+  if (!verificationFingerprintIsPythonUnittest(pending?.verificationFingerprint)) {
+    return undefined;
+  }
+  const envelope = persistedToolSearchEnvelope(message, "exec", "core");
+  const summary = cleanUnittestSummary(envelope?.result);
+  if (!summary) return undefined;
+  const details = envelope.result.details;
+  const compactDetails = {
+    status: "completed",
+    exitCode: 0,
+    ...(Number.isInteger(details?.durationMs) && details.durationMs >= 0
+      ? { durationMs: details.durationMs }
+      : {}),
+    ...(typeof details?.cwd === "string" && details.cwd
+      ? { cwd: details.cwd }
+      : {}),
+  };
+  return {
+    ...message,
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        result: {
+          content: [{
+            type: "text",
+            text:
+              "[Per-test success lines compacted after guard validation.]\n" +
+              summary,
+          }],
+          details: compactDetails,
+        },
+      }),
+    }],
+    details: {
+      result: {
+        content: [{ type: "text", text: summary }],
+        details: compactDetails,
+      },
+      tool: envelope.tool,
+    },
+  };
+}
+
+function compactFailedUnittestText(result) {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    result?.details?.exitCode === 0
+  ) {
+    return undefined;
+  }
+  const values = Array.isArray(result.content)
+    ? result.content
+      .filter((item) => item?.type === "text" && typeof item.text === "string")
+      .map((item) => item.text)
+    : [];
+  const source = values.sort((left, right) => right.length - left.length)[0];
+  if (typeof source !== "string" || source.length < 600) return undefined;
+  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const failureIndex = lines.findLastIndex((line) => /^(?:FAIL|ERROR):\s+/.test(line));
+  const ranIndex = lines.findLastIndex((line) => /^Ran\s+[1-9][0-9]*\s+tests?\s+in\s+/.test(line));
+  const diagnosticEnd = ranIndex > failureIndex ? ranIndex : lines.length;
+  const errorIndex = lines.findLastIndex(
+    (line, index) =>
+      index > failureIndex &&
+      index < diagnosticEnd &&
+      /^(?:AssertionError|[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))(?::|$)/.test(line)
+  );
+  let frameIndex = -1;
+  for (let index = errorIndex - 1; index > failureIndex; index -= 1) {
+    if (/^\s*File\s+"/.test(lines[index])) {
+      frameIndex = index;
+      if (lines[index].includes("/workspace/")) break;
+    }
+  }
+  const detailStart = frameIndex >= 0
+    ? frameIndex
+    : Math.max(failureIndex + 1, errorIndex - 3, 0);
+  const detailEnd = errorIndex >= detailStart
+    ? Math.min(diagnosticEnd, errorIndex + 12)
+    : Math.min(diagnosticEnd, detailStart + 20);
+  const summaryLines = [];
+  if (failureIndex >= 0) summaryLines.push(lines[failureIndex]);
+  summaryLines.push(...lines.slice(detailStart, detailEnd));
+  if (ranIndex >= 0) summaryLines.push(...lines.slice(ranIndex));
+  let summary = summaryLines.join("\n").trim();
+  if (summary.length > 1400) {
+    summary = `${summaryLines[0]}\n${summary.slice(-1320)}`;
+  }
+  return `[Earlier unittest framework frames compacted.]\n${summary}`;
+}
+
+function compactWorkspaceCoreResult(message, pending, state) {
+  const toolName = pending?.selectedToolName;
+  if (
+    !state?.workspaceTaskRequested ||
+    !["read", "write", "edit", "apply_patch", "exec", "process"].includes(toolName)
+  ) {
+    return undefined;
+  }
+  const envelope = persistedToolSearchEnvelope(message, toolName, "core");
+  if (!envelope) return undefined;
+  const result = envelope.result;
+  let content = Array.isArray(result.content)
+    ? result.content.filter(
+        (item) => item && typeof item === "object" && typeof item.type === "string"
+      )
+    : [];
+  if (verificationFingerprintIsPythonUnittest(pending?.verificationFingerprint)) {
+    const failedSummary = compactFailedUnittestText(result);
+    if (failedSummary) content = [{ type: "text", text: failedSummary }];
+  }
+  const details = result?.details;
+  const compactDetails = {
+    ...(typeof details?.status === "string" ? { status: details.status } : {}),
+    ...(Number.isInteger(details?.exitCode) ? { exitCode: details.exitCode } : {}),
+    ...(typeof details?.sessionId === "string" && details.sessionId
+      ? { sessionId: details.sessionId }
+      : {}),
+    ...(Number.isInteger(details?.durationMs) && details.durationMs >= 0
+      ? { durationMs: details.durationMs }
+      : {}),
+    ...(typeof details?.cwd === "string" && details.cwd ? { cwd: details.cwd } : {}),
+  };
+  if (content.length === 0) {
+    const status = compactDetails.status ?? (result.isError === true ? "error" : "completed");
+    content = [{
+      type: "text",
+      text:
+        `[core ${toolName}: ${status}` +
+        `${compactDetails.sessionId ? `; session ${compactDetails.sessionId}` : ""}]`,
+    }];
+  }
+  return {
+    ...message,
+    content,
+    details: {
+      tool: envelope.tool,
+      result: {
+        ...(result.isError === true ? { isError: true } : {}),
+        content,
+        ...(Object.keys(compactDetails).length > 0 ? { details: compactDetails } : {}),
+      },
+    },
   };
 }
 
@@ -1359,7 +2254,18 @@ function extensionCatalogResult(step, submittedParameters) {
       return undefined;
     }
     identifiers.add(id);
-    matches.push({ id, name, dependsOn, requiredConfiguration, optionalConfiguration });
+    matches.push({
+      id,
+      name,
+      description,
+      category,
+      gpuBackends,
+      dependsOn,
+      requiredConfiguration,
+      optionalConfiguration,
+      tags,
+      featureNames,
+    });
   }
   return { ...value, query, matches };
 }
@@ -1692,7 +2598,12 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   return lines.join("\n");
 }
 
-function operationsEvidenceText(requiredActions, terminalJobs, odsAppsProjection = undefined) {
+function operationsEvidenceText(
+  requiredActions,
+  terminalJobs,
+  odsAppsProjection = undefined,
+  odsStatusProjection = undefined
+) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
   const hostActions = new Set([
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release", "host.uptime",
@@ -1700,7 +2611,12 @@ function operationsEvidenceText(requiredActions, terminalJobs, odsAppsProjection
     "host.network-addresses", "host.network-routes", "host.listening-ports",
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
-    return operationsHostEvidenceText(requiredActions, terminalJobs, odsAppsProjection);
+    return operationsHostEvidenceText(
+      requiredActions,
+      terminalJobs,
+      odsAppsProjection,
+      odsStatusProjection
+    );
   }
   if (requiredActions.has("ods.extensions.inspect")) {
     return extensionLifecycleEvidenceText(requiredActions, terminalJobs);
@@ -1727,15 +2643,26 @@ function operationsEvidenceText(requiredActions, terminalJobs, odsAppsProjection
     `- Query: \`${result.query}\``,
     `- Catalog: ${result.totalMatches} match(es) among ${result.totalCatalog}; results truncated: ${result.truncated ? "yes" : "no"}.`,
   ];
-  const first = result.matches[0];
-  if (first) {
-    lines.push(`- Top match: \`${first.name}\` (\`${first.id}\`).`);
-    lines.push(`- Dependencies: ${first.dependsOn.length ? first.dependsOn.map((item) => `\`${item}\``).join(", ") : "none"}.`);
-    lines.push(`- Required configuration keys: ${first.requiredConfiguration.length ? first.requiredConfiguration.map((item) => `\`${item}\``).join(", ") : "none"}.`);
-    lines.push(`- Optional configuration keys: ${first.optionalConfiguration.length ? first.optionalConfiguration.map((item) => `\`${item}\``).join(", ") : "none"}.`);
+  const compactList = (items, maximum = 8) => {
+    const visible = items.slice(0, maximum).map((item) => `\`${item}\``).join(", ");
+    return `${visible || "none"}${items.length > maximum ? `, plus ${items.length - maximum} more` : ""}`;
+  };
+  if (result.matches.length) {
+    for (const [index, match] of result.matches.entries()) {
+      const description = match.description.length > 320
+        ? `${match.description.slice(0, 317)}...`
+        : match.description;
+      lines.push(`- Match ${index + 1}: \`${match.name}\` (\`${match.id}\`).`);
+      lines.push(`  - What it does: ${JSON.stringify(description)}.`);
+      lines.push(`  - Category: \`${match.category}\`; GPU backends: ${compactList(match.gpuBackends)}.`);
+      lines.push(`  - Dependencies: ${compactList(match.dependsOn)}.`);
+      lines.push(`  - Required configuration keys: ${compactList(match.requiredConfiguration)}.`);
+      lines.push(`  - Optional configuration keys: ${compactList(match.optionalConfiguration)}.`);
+    }
   } else {
-    lines.push("- Top match: none.");
+    lines.push("- Matches: none.");
   }
+  lines.push("- Installed/enabled state: not included in this read-only catalog receipt; Pixel will inspect one exact extension ID before any lifecycle action.");
   lines.push("- Authority: read-only catalog projection; no installation or configuration authority.");
   lines.push(`- Broker job: \`${outcome.jobId}\`.`);
   return lines.join("\n");
@@ -1880,6 +2807,16 @@ function currentUserText(messages, prompt = undefined) {
   return unwrapCurrentUserText(messageContentText(userMessage?.content));
 }
 
+function currentOwnerIntentText(messages, prompt = undefined) {
+  const currentText = currentUserText(messages, prompt);
+  const deliveryContractIndex = currentText.lastIndexOf(
+    "\n\n[ODS Pixel delivery requirement:"
+  );
+  return deliveryContractIndex >= 0
+    ? currentText.slice(0, deliveryContractIndex)
+    : currentText;
+}
+
 function explicitlyRejectsOdsTool(text, toolPattern) {
   const actionNegation = new RegExp(
     `\\b(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
@@ -1905,7 +2842,7 @@ function explicitlyExcludesHostObservation(text, facetPattern) {
   const exclusion = new RegExp(
     `\\b(?:` +
       `(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
-        `(?:repeat|restate|include|report|show|list|add)|` +
+        `(?:repeat|restate|include|report|show|list|add|substitute)|` +
       `(?:avoid|skip|omit|exclude)|` +
       `without(?:\\s+(?:repeating|restating|including|reporting|showing|listing|adding))?` +
     `)\\b[^.!?;\\n]{0,120}\\b(?:${facetPattern})\\b`,
@@ -2010,7 +2947,7 @@ export function userMessageExtensionLifecycleIntent(messages, prompt = undefined
   const text = currentUserText(messages, prompt);
   if (!text) return undefined;
   const match = text.match(
-    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:(?:installed|existing|enabled|disabled)\s+)?(?:ODS\s+)?extension\s+[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
+    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:(?:installed|existing|enabled|disabled)\s+)?(?:ODS\s+)?extension\s+(?:(?:with\s+)?(?:the\s+)?(?:exact\s+)?id\s+)?[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
   );
   if (!match) return undefined;
   const requested = match[1].toLowerCase();
@@ -2042,19 +2979,23 @@ export function userMessageOperationsContinuation(messages, prompt = undefined) 
 }
 
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
-  const text = currentUserText(messages, prompt);
+  // Pixel Edge appends trusted delivery/routing guidance beside the owner
+  // message for small local models. That guidance is not owner intent: words
+  // such as "route" must not silently expand a bounded host request into
+  // network-route/listener work.
+  const text = currentOwnerIntentText(messages, prompt);
   if (!text) return { required: false, actions: [] };
   const explicitOperations =
     /\b(?:use|using|via|through|with)\b.{0,48}\b(?:Pixel\s+)?Operations(?:\s+(?:Broker|capabilit(?:y|ies)|tools?))?\b/i.test(
       text
     );
   const hostEvidence =
-    /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|os (?:signature|release))\b/i.test(
+    /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i.test(
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
   const hostContext = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i.test(text);
   const hostFacetCount = [
-    /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro|uptime|load averages?|system load)\b/i,
+    /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro|uptime|load averages?|system load)\b/i,
     /\b(?:process|processes|process inventory)\b/i,
     /\b(?:systemd|system services?|service inventory)\b/i,
     /\b(?:cpu|processor|hardware)\b/i,
@@ -2063,24 +3004,35 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i,
   ].filter((pattern) => pattern.test(text)).length;
   const hostExplorationIntent =
-    /\b(?:explore|inspect|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
+    /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
   const naturalHostOverview = hostContext && (
     /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(text) ||
     /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(text) ||
     /\b(?:describe|summari[sz]e|profile)\b.{0,24}\b(?:this|the|my|our|ODS)\b/i.test(text)
   );
+  const broadScopeIntent =
+    /\b(?:everything|anything)\b.{0,24}\b(?:about|here|on|regarding)\b/i.test(text) ||
+    /\ball\s+(?:the\s+)?(?:host\s+|machine\s+|computer\s+|system\s+)?(?:details|facts|information)\b/i.test(text) ||
+    /\b(?:full|complete|comprehensive|broad|thorough)\s+(?:host|machine|computer|system|inspection|inventory|survey|overview|profile)\b/i.test(
+      text
+    );
   const broadHostExploration = hostContext && (hostExplorationIntent || naturalHostOverview) &&
-    (hostFacetCount === 0 || hostFacetCount >= 3);
+    (hostFacetCount === 0 || broadScopeIntent);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const actions = [];
-  if (/\b(?:hostname|host identity)\b/i.test(text)) actions.push("host.identity");
+  if (
+    /\b(?:hostname|host identity)\b/i.test(text) ||
+    (hostContext && /\b(?:machine|system)?\s*identity\b/i.test(text))
+  ) {
+    actions.push("host.identity");
+  }
   if (/\bkernel\b/i.test(text)) actions.push("host.kernel");
   if (/\b(?:machine architecture|architecture|cpu architecture)\b/i.test(text)) {
     actions.push("host.architecture");
   }
   if (/\bhost platform\b/i.test(text)) actions.push("host.platform");
-  if (/\b(?:operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro)\b/i.test(text)) {
+  if (/\b(?:operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro)\b/i.test(text)) {
     actions.push("host.os-release");
   }
   if (broadHostExploration || (hostContext && /\b(?:uptime|load averages?|system load)\b/i.test(text))) {
@@ -2089,7 +3041,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (broadHostExploration || (hostContext && /\b(?:process|processes|process inventory)\b/i.test(text))) {
     actions.push("host.processes");
   }
-  if (broadHostExploration || (hostContext && /\b(?:systemd|system services?|service inventory)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:systemd|(?:system\s+)?services?|service inventory)\b/i.test(text))) {
     actions.push("host.services");
   }
   if (broadHostExploration || (hostContext && /\b(?:cpu|processor|hardware)\b/i.test(text))) {
@@ -2117,7 +3069,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ["host.kernel", "kernel"],
     ["host.architecture", "machine architecture|architecture|cpu architecture"],
     ["host.platform", "host platform"],
-    ["host.os-release", "operating[- ]system(?: signature)?|os (?:signature|release)|linux distribution|distro"],
+    ["host.os-release", "operating[- ]system(?: signature)?|(?:host\\s+)?os(?:\\s+(?:signature|release))?|linux distribution|distro"],
     ["host.uptime", "uptime|load averages?|system load"],
     ["host.processes", "process|processes|process inventory"],
     ["host.services", "systemd|system services?|service inventory"],
@@ -2142,9 +3094,150 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
 }
 
 export function userMessageRequiresOdsAppsProjection(messages, prompt = undefined) {
-  const text = currentUserText(messages, prompt);
+  const text = currentOwnerIntentText(messages, prompt);
   if (!text || !/\b(?:Docker\s+)?containers?\b/i.test(text)) return false;
-  return userMessageOperationsRequirements(messages, prompt).required;
+  if (
+    /\bnot\s+just\s+(?:the\s+)?(?:agent\s+)?(?:containers?|sandbox)\b/i.test(text) ||
+    /\bdistinguish\b[^.!?;\n]{0,96}\bhost\b[^.!?;\n]{0,96}\bfrom\b[^.!?;\n]{0,96}\bcontainers?\b/i.test(text) ||
+    explicitlyExcludesHostObservation(
+      text,
+      "(?:Docker\\s+)?containers?(?:\\s+information)?"
+    )
+  ) {
+    return false;
+  }
+  if (!userMessageOperationsRequirements(messages, prompt).required) return false;
+  const asksContainerDetails =
+    /(?:\b(?:list|name|identify|which|details?|statuses?|purposes?|links?|URLs?)\b[^.!?;\n]{0,96}\bcontainers?\b|\bcontainers?\b[^.!?;\n]{0,96}\b(?:list|names?|details?|statuses?|purposes?|links?|URLs?)\b)/i.test(
+      text
+    );
+  const statusAlreadyRequired = userMessageOdsToolRequirements([], text).includes(
+    "pixel_ods_status"
+  );
+  return asksContainerDetails || !statusAlreadyRequired;
+}
+
+export function userMessageRequiresOdsStatusProjection(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageOperationsRequirements([], text).required) return false;
+  return userMessageOdsToolRequirements([], text).includes("pixel_ods_status");
+}
+
+export function userMessageRequestsWorkspaceContinuation(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return false;
+  const namesWorkspace = /(?:\/workspace(?:\/[A-Za-z0-9._/-]+)?|\bworkspace\b)/i;
+  const requestsAction =
+    /\b(?:continue|work|inspect|create|write|edit|update|build|implement|run|test|verify|read|save|generate)\b/i;
+  const rejectsAction =
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:continue|work|inspect|create|write|edit|update|build|implement|run|test|verify|read|save|generate)\b/i;
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some(
+      (clause) =>
+        namesWorkspace.test(clause) &&
+        requestsAction.test(clause) &&
+        !rejectsAction.test(clause)
+    );
+}
+
+export function userMessageRequestsWorkspaceTools(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return false;
+  if (userMessageRequestsWorkspaceContinuation(messages, prompt)) return true;
+  return (
+    /(?:\/workspace(?:\/[A-Za-z0-9._/-]+)?|\bworkspace\b)/i.test(text) &&
+    /\b(?:work|inspect|create|write|edit|update|build|implement|run|test|verify|read|save|generate)\b/i.test(text) &&
+    !/\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:use|touch|change|create|write|edit|update|run|read)\b[^.!?;\n]{0,48}\b(?:\/workspace|workspace)\b/i.test(text)
+  );
+}
+
+export function userMessageRequestsWorkspaceMutation(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageRequestsWorkspaceTools([], text)) return false;
+  const mutation =
+    /\b(?:create|write|edit|update|build|implement|save|generate|modify|overwrite|patch)\b/i;
+  const rejection =
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:create|write|edit|update|build|implement|save|generate|modify|overwrite|patch)\b/i;
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some((clause) => mutation.test(clause) && !rejection.test(clause));
+}
+
+export function userMessageWorkspaceContinuationPath(messages, prompt = undefined) {
+  if (!userMessageRequestsWorkspaceContinuation(messages, prompt)) return undefined;
+  const text = currentOwnerIntentText(messages, prompt);
+  const paths = new Set();
+  for (const match of text.matchAll(/\/workspace\/([A-Za-z0-9._/-]{1,512})/gi)) {
+    const value = match[1].replace(/[.,;!?]+$/g, "");
+    const parts = value.split("/");
+    if (
+      parts.length < 1 ||
+      parts.length > 16 ||
+      parts.some(
+        (part) =>
+          ["", ".", ".."].includes(part) || !WORKSPACE_PATH_COMPONENT.test(part)
+      )
+    ) {
+      continue;
+    }
+    paths.add(value);
+  }
+  return paths.size === 1 ? [...paths][0] : undefined;
+}
+
+export function userMessageWorkspaceDirectoryPath(messages, prompt = undefined) {
+  const path = userMessageWorkspaceContinuationPath(messages, prompt);
+  if (!path) return undefined;
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return undefined;
+  const normalized = text.toLowerCase();
+  const lowerPath = path.toLowerCase();
+  for (const prefix of [
+    "in ", "inside ", "within ", "under ",
+    "in the directory ", "inside the directory ",
+    "within the directory ", "under the directory ",
+    "workdir ", "working directory ", "as the working directory ",
+  ]) {
+    const needle = `${prefix}/workspace/${lowerPath}`;
+    let offset = normalized.indexOf(needle);
+    while (offset >= 0) {
+      const before = offset === 0 ? "" : normalized[offset - 1];
+      const after = normalized[offset + needle.length] ?? "";
+      if (
+        (!before || !/[A-Za-z0-9_]/.test(before)) &&
+        (!after || /[\s.,;!?`"']/.test(after))
+      ) {
+        return path;
+      }
+      offset = normalized.indexOf(needle, offset + needle.length);
+    }
+  }
+  return undefined;
+}
+
+function userMessageWorkspaceRequestedFiles(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return [];
+  const files = new Set();
+  for (const match of text.matchAll(
+    /(?:^|[\s/`"'])([A-Za-z0-9][A-Za-z0-9._-]{0,126}\.[A-Za-z][A-Za-z0-9]{0,11})(?=$|[\s,;:!?`"')])/g
+  )) {
+    if (WORKSPACE_PATH_COMPONENT.test(match[1])) files.add(match[1]);
+  }
+  return [...files];
+}
+
+export function userMessageRequestsOperationsEvidenceArtifact(messages, prompt = undefined) {
+  if (!userMessageRequestsWorkspaceContinuation(messages, prompt)) return false;
+  const text = currentOwnerIntentText(messages, prompt);
+  const path = userMessageWorkspaceContinuationPath(messages, prompt) ?? "";
+  const namesEvidenceArtifact =
+    /\b(?:report|evidence|findings|inspection|inventory|snapshot|summary)\b/i.test(text) ||
+    /(?:^|\/)(?:[^/]*[-_.])?(?:report|evidence|findings|inspection|inventory|snapshot|summary)(?:[-_.][^/]*)?$/i.test(path);
+  const bindsObservedFacts =
+    /\b(?:exact|observed|verified|actual|real|host|machine|system|status|facts?|evidence)\b/i.test(text);
+  return namesEvidenceArtifact && bindsObservedFacts;
 }
 
 export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
@@ -2386,6 +3479,7 @@ export function createToolLoopGuard({
   abortRun,
   abortRunAndDrain,
   execControl,
+  evidenceArtifactWriter,
   execMarkerCleanupDelayMs = 5000,
   limits,
   warn = () => {},
@@ -2396,6 +3490,7 @@ export function createToolLoopGuard({
   // requesting conversation access merely for cleanup.
   const runs = new Map();
   const activeUsers = new Map();
+  const pendingToolRuns = new Map();
 
   function pruneRuns() {
     while (runs.size >= MAX_TRACKED_RUNS) {
@@ -2407,6 +3502,26 @@ export function createToolLoopGuard({
     while (activeUsers.size >= MAX_TRACKED_RUNS) {
       activeUsers.delete(activeUsers.keys().next().value);
     }
+  }
+
+  function rememberToolRun(
+    toolCallId,
+    runId,
+    selectedToolName,
+    selectedParams,
+    verificationFingerprint
+  ) {
+    if (typeof toolCallId !== "string" || !toolCallId) return;
+    if (pendingToolRuns.has(toolCallId)) pendingToolRuns.delete(toolCallId);
+    while (pendingToolRuns.size >= MAX_TRACKED_RUNS * 4) {
+      pendingToolRuns.delete(pendingToolRuns.keys().next().value);
+    }
+    pendingToolRuns.set(toolCallId, {
+      runId,
+      selectedToolName,
+      selectedParams,
+      verificationFingerprint,
+    });
   }
 
   function stateFor(runId) {
@@ -2421,6 +3536,11 @@ export function createToolLoopGuard({
         webTerminalBlocks: 0,
         codingExhausted: false,
         codingTerminalBlocks: 0,
+        invalidEditCreateBlocks: 0,
+        oversizedEditBlocks: 0,
+        successfulWritePaths: new Set(),
+        successfulReadPaths: new Set(),
+        repeatedWriteBlocks: new Map(),
         privateNetworkExhausted: false,
         privateNetworkPrompt: false,
         clientCancelled: false,
@@ -2456,25 +3576,108 @@ export function createToolLoopGuard({
         operationsContinuationOutcome: undefined,
         operationsSubmittedJobs: new Map(),
         operationsTerminalJobs: new Map(),
+        operationsHostResultCompactionsRemaining: 0,
         operationsTerminalBlocks: 0,
         operationsTerminalAborted: false,
         operationsRequiresOdsAppsProjection: false,
         operationsOdsAppsProjectionAttempted: false,
+        operationsOdsAppsProjectionToolSearchPending: false,
         operationsOdsAppsProjection: undefined,
+        operationsRequiresOdsStatusProjection: false,
+        operationsOdsStatusProjectionAttempted: false,
+        operationsOdsStatusProjectionToolSearchPending: false,
+        operationsOdsStatusProjection: undefined,
+        operationsWorkspaceContinuationRequested: false,
+        operationsWorkspaceEvidenceArtifactRequested: false,
+        operationsWorkspaceExpectedPath: undefined,
+        operationsWorkspaceWriteVerified: false,
+        operationsWorkspaceReadVerified: false,
+        ownerIntentObserved: false,
+        workspaceTaskRequested: false,
+        workspaceMutationRequested: false,
+        workspaceTaskPath: undefined,
+        workspaceTaskDirectory: undefined,
+        workspaceRequestedFiles: [],
+        workspaceToolSearchRouted: false,
+        workspaceInspectionRouted: false,
+        workspaceInspectionPollCorrections: 0,
+        failedTestReadCorrections: 0,
+        noOpEditBlocks: 0,
         operationsPromptRound: 0,
         operationsCorrectionPromptRound: undefined,
+        operationsRoutingBlocks: 0,
         failedExec: new Map(),
+        successfulExec: new Map(),
+        successfulExecBlocks: new Map(),
         failedVerificationAttempts: 0,
         latestVerificationStatus: undefined,
         latestVerificationFingerprint: undefined,
+        wrappedExecFailurePending: false,
+        suppressStaleExecWarning: false,
         recursiveDeleteAuthorized: false,
         pendingExecSessions: new Map(),
+        pendingExecBlocks: new Map(),
         execOriginalByWrapped: new Map(),
         verificationOriginalByWrapped: new Map(),
+        currentSessionId: undefined,
+        currentSessionKey: undefined,
+        visibleReplyText: undefined,
+        visibleReplyTerminalAborted: false,
       };
       runs.set(runId, state);
     }
     return state;
+  }
+
+  function completeVerifiedEvidenceArtifact(state) {
+    if (
+      typeof evidenceArtifactWriter !== "function" ||
+      !state?.operationsWorkspaceEvidenceArtifactRequested ||
+      !state.operationsWorkspaceExpectedPath ||
+      state.operationsWorkspaceWriteVerified ||
+      state.operationsWorkspaceReadVerified ||
+      (state.operationsRequiresOdsStatusProjection && !state.operationsOdsStatusProjection) ||
+      (state.operationsRequiresOdsAppsProjection && !state.operationsOdsAppsProjection)
+    ) {
+      return;
+    }
+    const everySubmittedJobIsTerminal =
+      state.operationsSubmittedJobs.size > 0 &&
+      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+        state.operationsTerminalJobs.has(jobId)
+      );
+    if (!everySubmittedJobIsTerminal) return;
+    const content = operationsEvidenceText(
+      state.operationsRequiredActions,
+      state.operationsTerminalJobs,
+      state.operationsOdsAppsProjection,
+      state.operationsOdsStatusProjection
+    );
+    if (
+      typeof content !== "string" ||
+      ![
+        OPERATIONS_HOST_EVIDENCE_PREFIX,
+        OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
+        OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+      ].some((prefix) => content.startsWith(prefix))
+    ) {
+      return;
+    }
+    try {
+      const result = evidenceArtifactWriter({
+        relativePath: state.operationsWorkspaceExpectedPath,
+        content: `${content}\n`,
+      });
+      if (
+        result?.relativePath === state.operationsWorkspaceExpectedPath &&
+        result?.readbackVerified === true
+      ) {
+        state.operationsWorkspaceWriteVerified = true;
+        state.operationsWorkspaceReadVerified = true;
+      }
+    } catch (error) {
+      warn(`Pixel deterministic evidence artifact failed closed: ${String(error)}`);
+    }
   }
 
   function beforeToolCall(event, context, agentId = "pixel") {
@@ -2489,7 +3692,469 @@ export function createToolLoopGuard({
     let normalizedParams = normalizeWorkspaceParams(toolName, event?.params);
 
     const { runId, sessionId } = runIdentity(event, context);
-    const state = runId && sessionId ? stateFor(runId) : undefined;
+    // OpenClaw's before_tool_call context may omit sessionId even though the
+    // earlier before_prompt_build hook supplied the exact run identity. Keep
+    // policy and deterministic routing active from runId alone; operations
+    // that truly need a session still fail closed on the optional sessionId.
+    const state = runId ? stateFor(runId) : undefined;
+    let pendingParams = normalizedParams ?? event?.params;
+    const effectiveReplyTool = toolName === "tool_call"
+      ? pendingParams?.id?.split(":").at(-1)
+      : toolName;
+    const effectiveReplyArgs = toolName === "tool_call"
+      ? pendingParams?.args
+      : pendingParams;
+    const exactReplyText =
+      effectiveReplyArgs &&
+      typeof effectiveReplyArgs === "object" &&
+      !Array.isArray(effectiveReplyArgs) &&
+      typeof effectiveReplyArgs.text === "string" &&
+      Object.keys(effectiveReplyArgs).length === 1
+        ? effectiveReplyArgs.text
+        : effectiveReplyArgs &&
+            typeof effectiveReplyArgs === "object" &&
+            !Array.isArray(effectiveReplyArgs) &&
+            typeof effectiveReplyArgs.message === "string" &&
+            Object.keys(effectiveReplyArgs).every((key) =>
+              ["sessionKey", "message"].includes(key)
+            )
+          ? effectiveReplyArgs.message
+          : undefined;
+    const safeReplyText =
+      typeof exactReplyText === "string" &&
+      exactReplyText.length > 0 &&
+      exactReplyText.length <= 4096 &&
+      !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(exactReplyText)
+        ? exactReplyText
+        : undefined;
+    const selfSessionSend =
+      effectiveReplyTool === "sessions_send" &&
+      typeof state?.currentSessionKey === "string" &&
+      effectiveReplyArgs?.sessionKey === state.currentSessionKey;
+    if (effectiveReplyTool === "reply_to_current" || selfSessionSend) {
+      if (state?.latestVerificationStatus === "passed" && safeReplyText) {
+        state.visibleReplyText = safeReplyText;
+        if (
+          !state.visibleReplyTerminalAborted &&
+          typeof (sessionId ?? state.currentSessionId) === "string" &&
+          (sessionId ?? state.currentSessionId)
+        ) {
+          try {
+            state.visibleReplyTerminalAborted = Boolean(
+              abortRun?.(sessionId ?? state.currentSessionId)
+            );
+          } catch (error) {
+            warn(`Pixel verified-reply fast-path abort failed: ${String(error)}`);
+          }
+        }
+      }
+      return { block: true, blockReason: VISIBLE_REPLY_REQUIRES_FINAL_REASON };
+    }
+    if (
+      state?.workspaceTaskDirectory &&
+      toolName === "tool_call" &&
+      pendingParams &&
+      typeof pendingParams === "object" &&
+      !Array.isArray(pendingParams) &&
+      typeof pendingParams.id === "string" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args)
+    ) {
+      let nestedName = pendingParams.id.split(":").at(-1);
+      const requestedPath = normalizeWorkspaceFilePath(pendingParams.args.path);
+      const directoryBasename = state.workspaceTaskDirectory.split("/").at(-1);
+      const basenamePrefix = `${directoryBasename}/`;
+      const basenameRelativePath =
+        typeof requestedPath === "string" &&
+        requestedPath.startsWith(basenamePrefix) &&
+        requestedPath
+          .slice(basenamePrefix.length)
+          .split("/")
+          .every((part) => WORKSPACE_PATH_COMPONENT.test(part));
+      const exactRequestedPaths = new Set(
+        state.workspaceRequestedFiles.map(
+          (file) => `${state.workspaceTaskDirectory}/${file}`
+        )
+      );
+      if (state.workspaceTaskPath) {
+        exactRequestedPaths.add(state.workspaceTaskPath);
+      }
+      const readbackCandidate = (() => {
+        if (typeof requestedPath !== "string") return undefined;
+        if (exactRequestedPaths.has(requestedPath)) return requestedPath;
+        if (basenameRelativePath) {
+          const candidate =
+            `${state.workspaceTaskDirectory}/${requestedPath.slice(basenamePrefix.length)}`;
+          return exactRequestedPaths.has(candidate) ? candidate : undefined;
+        }
+        if (WORKSPACE_PATH_COMPONENT.test(requestedPath)) {
+          const candidate = `${state.workspaceTaskDirectory}/${requestedPath}`;
+          return exactRequestedPaths.has(candidate) ? candidate : undefined;
+        }
+        return undefined;
+      })();
+      // Compact models sometimes invent a bare `readback` id after a successful
+      // write. Adapt only the exact owner-requested path, with only a path
+      // argument, to the native read tool. Namespaced or unrelated readback
+      // tools remain untouched, so this adds no filesystem authority.
+      if (
+        pendingParams.id === "readback" &&
+        Object.keys(pendingParams.args).length === 1 &&
+        Object.keys(pendingParams.args)[0] === "path" &&
+        readbackCandidate
+      ) {
+        pendingParams = {
+          ...pendingParams,
+          id: "read",
+          args: { path: readbackCandidate },
+        };
+        nestedName = "read";
+      }
+      if (
+        FILE_PATH_TOOLS.has(nestedName) &&
+        typeof requestedPath === "string" &&
+        (WORKSPACE_PATH_COMPONENT.test(requestedPath) || basenameRelativePath) &&
+        requestedPath !== directoryBasename
+      ) {
+        const relativePath = basenameRelativePath
+          ? requestedPath.slice(basenamePrefix.length)
+          : requestedPath;
+        pendingParams = {
+          ...pendingParams,
+          args: {
+            ...pendingParams.args,
+            path: `${state.workspaceTaskDirectory}/${relativePath}`,
+          },
+        };
+      }
+      if (
+        nestedName === "write" &&
+        typeof pendingParams.args.content === "string"
+      ) {
+        const content = completeRequestedUnittestImports(
+          stripTrailingToolEnvelopeLeak(pendingParams.args.content),
+          state,
+          normalizeWorkspaceFilePath(pendingParams.args.path)
+        );
+        if (content !== pendingParams.args.content) {
+          pendingParams = {
+            ...pendingParams,
+            args: { ...pendingParams.args, content },
+          };
+        }
+      }
+    }
+    let workspaceInspectionShape = false;
+    let workspaceInspectionAdapted = false;
+    if (
+      state?.workspaceTaskDirectory &&
+      state.workspaceTaskPath &&
+      toolName === "tool_call" &&
+      pendingParams &&
+      typeof pendingParams === "object" &&
+      !Array.isArray(pendingParams) &&
+      typeof pendingParams.id === "string" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args)
+    ) {
+      const nestedName = pendingParams.id.split(":").at(-1);
+      const keys = Object.keys(pendingParams.args);
+      const requestedPath = normalizeWorkspaceFilePath(pendingParams.args.path);
+      const basename = state.workspaceTaskPath.split("/").at(-1);
+      const matchesAuthorizedPath =
+        requestedPath === state.workspaceTaskPath || requestedPath === basename;
+      // Small models commonly call an invented `ls` catalog id, or call the
+      // exact exec id with only a path. Adapt only that read-first shape, only
+      // for the one workspace path explicitly authorized in this live owner
+      // request. Creating the named directory is already required by the
+      // requested workspace task; no host or Operations authority is added.
+      const exactAuthorizedPathShape =
+        keys.length === 1 &&
+        keys[0] === "path" &&
+        matchesAuthorizedPath &&
+        (pendingParams.id === "ls" || nestedName === "exec");
+      const readDirectoryShape =
+        keys.length === 1 &&
+        keys[0] === "path" &&
+        matchesAuthorizedPath &&
+        nestedName === "read";
+      const emptyProcessListShape =
+        keys.length === 1 &&
+        keys[0] === "action" &&
+        pendingParams.args.action === "list" &&
+        (nestedName === "process" || nestedName === "exec") &&
+        state.pendingExecSessions.size === 0;
+      const normalizedInspectionCommand =
+        typeof pendingParams.args.command === "string"
+          ? pendingParams.args.command.trim().replace(/\s+/g, " ")
+          : undefined;
+      const execDirectoryShape =
+        nestedName === "exec" &&
+        // PTY/background/yield controls do not change the semantics of this
+        // exact read-only listing. Compact models frequently copy them from
+        // the catalog description, so include them without accepting any
+        // additional command, cwd, environment, or input surface.
+        keys.every((key) =>
+          ["command", "yieldMs", "timeout", "pty", "background"].includes(key)
+        ) &&
+        new Set([
+          `ls -la /workspace/${state.workspaceTaskPath}`,
+          `ls -la /workspace/${state.workspaceTaskPath}/`,
+          `ls -la ${state.workspaceTaskPath}`,
+          `ls -la ${state.workspaceTaskPath}/`,
+        ]).has(normalizedInspectionCommand);
+      const unrelatedProjectionShape =
+        state.workspaceTaskRequested &&
+        !state.operationsRequired &&
+        state.odsRequiredTools.size === 0 &&
+        (nestedName === "pixel_ods_status" || nestedName === "pixel_ods_apps_list");
+      // Once the exact owner-named artifact has been written, a read of that
+      // path is verification, not a confused directory-inspection attempt.
+      // Preserve it byte-for-byte instead of routing it back through exec.
+      workspaceInspectionShape =
+        !state.successfulWritePaths.has(state.workspaceTaskPath) &&
+        (
+          exactAuthorizedPathShape ||
+          readDirectoryShape ||
+          emptyProcessListShape ||
+          execDirectoryShape ||
+          unrelatedProjectionShape
+        );
+      if (!state.workspaceInspectionRouted && workspaceInspectionShape) {
+        const inspectionPath = state.workspaceTaskPath;
+        const command =
+          `mkdir -p -- ${inspectionPath} && pwd && uname -sr && ls -la -- ${inspectionPath}`;
+        pendingParams = {
+          id: "openclaw:core:exec",
+          args: { command },
+        };
+        state.workspaceInspectionRouted = true;
+        workspaceInspectionAdapted = true;
+      }
+    }
+    const workspaceDirectoryReady = Boolean(
+      state?.workspaceTaskDirectory &&
+      (
+        state.workspaceInspectionRouted ||
+        state.workspaceRequestedFiles.some((file) =>
+          state.successfulWritePaths.has(`${state.workspaceTaskDirectory}/${file}`) ||
+          state.successfulReadPaths.has(`${state.workspaceTaskDirectory}/${file}`)
+        )
+      )
+    );
+    if (
+      state?.workspaceTaskDirectory &&
+      workspaceDirectoryReady &&
+      !workspaceInspectionAdapted &&
+      !workspaceInspectionShape &&
+      toolName === "tool_call" &&
+      pendingParams &&
+      typeof pendingParams === "object" &&
+      !Array.isArray(pendingParams) &&
+      pendingParams.id?.split(":").at(-1) === "exec" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args) &&
+      typeof pendingParams.args.command === "string" &&
+      pendingParams.args.workdir === undefined
+    ) {
+      pendingParams = {
+        ...pendingParams,
+        args: {
+          ...pendingParams.args,
+          workdir: `/workspace/${state.workspaceTaskDirectory}`,
+        },
+      };
+    }
+    if (
+      state?.workspaceTaskDirectory &&
+      toolName === "tool_call" &&
+      pendingParams?.id?.split(":").at(-1) === "exec" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args)
+    ) {
+      const canonicalUnittest = canonicalRequestedUnittestParams(
+        pendingParams.args,
+        state
+      );
+      if (canonicalUnittest) {
+        pendingParams = { ...pendingParams, args: canonicalUnittest };
+      }
+    }
+    if (
+      state?.workspaceTaskDirectory &&
+      toolName === "tool_call" &&
+      pendingParams?.id?.split(":").at(-1) === "exec" &&
+      pendingParams.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args) &&
+      verificationExecFingerprint(pendingParams.args)
+    ) {
+      pendingParams = {
+        ...pendingParams,
+        args: {
+          ...pendingParams.args,
+          pty: false,
+          background: false,
+          yieldMs: Math.max(30_000, Number(pendingParams.args.yieldMs) || 0),
+        },
+      };
+    }
+    const selectedToolTarget =
+      toolName === "tool_call" &&
+      pendingParams &&
+      typeof pendingParams === "object" &&
+      !Array.isArray(pendingParams) &&
+      typeof pendingParams.id === "string"
+        ? pendingParams.id
+        : toolName;
+    const selectedToolName =
+      toolName === "tool_call" && typeof selectedToolTarget === "string"
+        ? selectedToolTarget.split(":").at(-1)
+        : selectedToolTarget;
+    const selectedParams =
+      toolName === "tool_call" &&
+      pendingParams?.args &&
+      typeof pendingParams.args === "object" &&
+      !Array.isArray(pendingParams.args)
+        ? pendingParams.args
+        : pendingParams;
+    const selectedEvent = selectedToolName === toolName
+      ? { ...event, params: selectedParams }
+      : { ...event, toolName: selectedToolName, params: selectedParams };
+    const inspectionCompleteReason = () => {
+      const nextFile = state?.workspaceRequestedFiles?.find((file) => {
+        const path = state.workspaceTaskDirectory
+          ? `${state.workspaceTaskDirectory}/${file}`
+          : file;
+        return !state.successfulWritePaths.has(path);
+      });
+      if (!nextFile) return WORKSPACE_INSPECTION_COMPLETE_REASON;
+      const nextPath = state.workspaceTaskDirectory
+        ? `${state.workspaceTaskDirectory}/${nextFile}`
+        : nextFile;
+      const testFileHint = /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile)
+        ? " For a Python test file, include every required test-framework and implementation import."
+        : "";
+      return (
+        "Inspection complete. Make exactly one tool call next: call tool_call with " +
+        `id openclaw:core:write and args path ${JSON.stringify(nextPath)} plus content ` +
+        "containing the complete requested file you compose. Keep it concise (under 1000 " +
+        `characters when the requirements fit) and omit unrequested demos or CLI wrappers.${testFileHint} ` +
+        "Do not call tool_search, read, exec, or process before this write."
+      );
+    };
+    if (state?.workspaceTaskRequested && toolName === "tool_search") {
+      if (!state.workspaceToolSearchRouted) {
+        state.workspaceToolSearchRouted = true;
+        return {
+          params: { query: WORKSPACE_TOOL_SEARCH_QUERY, limit: 6 },
+        };
+      }
+      if (state.workspaceInspectionRouted) {
+        if (state.workspaceInspectionPollCorrections === 0) {
+          state.workspaceInspectionPollCorrections = 1;
+          return { block: true, blockReason: inspectionCompleteReason() };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+      }
+      return { block: true, blockReason: WORKSPACE_TOOL_SEARCH_COMPLETE_REASON };
+    }
+    if (
+      state?.workspaceInspectionRouted &&
+      toolName === "tool_call" &&
+      !workspaceInspectionAdapted &&
+      (
+        workspaceInspectionShape ||
+        (
+          (selectedToolName === "exec" || selectedToolName === "process") &&
+          selectedParams?.action === "poll" &&
+          typeof selectedParams.sessionId !== "string" &&
+          state.pendingExecSessions.size === 0
+        )
+      )
+    ) {
+      if (state.workspaceInspectionPollCorrections === 0) {
+        state.workspaceInspectionPollCorrections = 1;
+        return {
+          block: true,
+          blockReason: inspectionCompleteReason(),
+        };
+      }
+      state.codingExhausted = true;
+      state.codingTerminalBlocks = 1;
+      return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+    }
+    if (state) {
+      const selectedReadPath = selectedToolName === "read"
+        ? normalizeWorkspaceFilePath(selectedParams?.path)
+        : undefined;
+      if (
+        state.latestVerificationStatus === "failed" &&
+        selectedReadPath &&
+        state.successfulWritePaths.has(selectedReadPath) &&
+        /(?:^|\/)test[^/]*\.[A-Za-z0-9]+$/i.test(selectedReadPath)
+      ) {
+        if (state.failedTestReadCorrections === 0) {
+          state.failedTestReadCorrections = 1;
+          return { block: true, blockReason: FAILED_TEST_READ_REPAIR_REASON };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+      }
+      const writePath = selectedToolName === "write"
+        ? normalizeWorkspaceFilePath(selectedParams?.path)
+        : undefined;
+      if (writePath && state.successfulWritePaths.has(writePath)) {
+        const blocks = state.repeatedWriteBlocks.get(writePath) ?? 0;
+        state.repeatedWriteBlocks.set(writePath, blocks + 1);
+        if (blocks === 0) {
+          return { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON };
+      }
+      if (selectedToolName === "edit" && noOpEdit(selectedParams)) {
+        if (state.noOpEditBlocks === 0) {
+          state.noOpEditBlocks = 1;
+          return { block: true, blockReason: NOOP_EDIT_REQUIRES_CHANGE_REASON };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: NOOP_EDIT_RETRY_EXHAUSTED_REASON };
+      }
+      if (selectedToolName === "edit" && oversizedWholeFileEdit(selectedParams)) {
+        if (state.oversizedEditBlocks === 0) {
+          state.oversizedEditBlocks = 1;
+          return { block: true, blockReason: FOCUSED_EDIT_REQUIRED_REASON };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: FOCUSED_EDIT_RETRY_EXHAUSTED_REASON };
+      }
+      rememberToolRun(
+        context?.toolCallId ?? event?.toolCallId,
+        runId,
+        selectedToolName,
+        selectedParams,
+        selectedToolName === "exec"
+          ? verificationExecFingerprint(selectedParams)
+          : undefined
+      );
+      if (
+        selectedToolName !== SYNCHRONOUS_HOST_OBSERVE_TOOL &&
+        state.operationsHostResultCompactionsRemaining > 0
+      ) {
+        state.operationsHostResultCompactionsRemaining = 0;
+      }
+    }
     if (toolName === "process" && state) {
       const params = normalizedParams ?? event?.params;
       const canonicalSessionId = canonicalPendingProcessSessionId(
@@ -2505,11 +4170,217 @@ export function createToolLoopGuard({
       return { block: true, blockReason: CLIENT_CANCELLED_REASON };
     }
 
+    const invalidNewFileEdit =
+      selectedToolName === "edit" &&
+      Array.isArray(selectedParams?.edits) &&
+      selectedParams.edits.length > 0 &&
+      selectedParams.edits.every(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          typeof entry.oldText === "string" &&
+          entry.oldText.length === 0 &&
+          typeof entry.newText === "string"
+      );
+    if (invalidNewFileEdit) {
+      if (!state || state.invalidEditCreateBlocks === 0) {
+        if (state) state.invalidEditCreateBlocks = 1;
+        return { block: true, blockReason: EDIT_CREATE_REQUIRES_WRITE_REASON };
+      }
+      if (state.invalidEditCreateBlocks === 1) {
+        state.invalidEditCreateBlocks = 2;
+        return { block: true, blockReason: EDIT_CREATE_RETRY_EXHAUSTED_REASON };
+      }
+      let aborted = false;
+      try {
+        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+      } catch (error) {
+        warn(`Pixel invalid-edit abort failed for run ${runId}: ${String(error)}`);
+      }
+      warn(
+        `Pixel stopped a repeated invalid new-file edit for run ${runId}; active run aborted=${aborted}`
+      );
+      return { block: true, blockReason: EDIT_CREATE_LOOP_ABORT_REASON };
+    }
+
+    // Tool Search transports a selected catalog entry through `tool_call`.
+    // Permit only an exact Operations target while host work is required; the
+    // nested real tool call re-enters OpenClaw's normal policy and hooks, where
+    // this guard still canonicalizes and validates every target, action, and
+    // parameter before the broker sees it. Non-Operations catalog targets stay
+    // blocked by the host boundary below.
+    let wrappedToolParams = toolName === "tool_call"
+      ? pendingParams
+      : normalizedParams ?? event?.params;
+    const wrappedToolTarget =
+      toolName === "tool_call" &&
+      wrappedToolParams &&
+      typeof wrappedToolParams === "object" &&
+      !Array.isArray(wrappedToolParams) &&
+      typeof wrappedToolParams.id === "string"
+        ? wrappedToolParams.id
+        : undefined;
+    const wrappedToolName = typeof wrappedToolTarget === "string"
+      ? wrappedToolTarget.split(":").at(-1)
+      : undefined;
+    const effectiveToolName = wrappedToolName ?? toolName;
+    if (
+      state?.workspaceTaskRequested &&
+      !state.operationsRequired &&
+      state.odsRequiredTools.size === 0 &&
+      (effectiveToolName === "pixel_ods_status" ||
+        effectiveToolName === "pixel_ods_apps_list")
+    ) {
+      return {
+        block: true,
+        blockReason: state.workspaceInspectionRouted
+          ? inspectionCompleteReason()
+          : WORKSPACE_UNREQUESTED_PROJECTION_REASON,
+      };
+    }
+    const workspaceOperation =
+      effectiveToolName === EVIDENCE_REPORT_TOOL
+        ? "write"
+        : effectiveToolName === EVIDENCE_READBACK_TOOL
+          ? "read"
+          : effectiveToolName;
+    if (
+      state?.operationsWorkspaceContinuationRequested &&
+      state.operationsWorkspaceExpectedPath &&
+      (workspaceOperation === "write" || workspaceOperation === "read")
+    ) {
+      const sourceArgs = toolName === "tool_call"
+        ? wrappedToolParams?.args
+        : normalizedParams ?? event?.params;
+      const verifiedEvidence = state.operationsWorkspaceEvidenceArtifactRequested
+        ? operationsEvidenceText(
+          state.operationsRequiredActions,
+          state.operationsTerminalJobs,
+          state.operationsOdsAppsProjection,
+          state.operationsOdsStatusProjection
+        )
+        : undefined;
+      if (workspaceOperation === "read") {
+        normalizedParams = toolName === "tool_call"
+          ? { id: "read", args: { path: state.operationsWorkspaceExpectedPath } }
+          : { path: state.operationsWorkspaceExpectedPath };
+      } else {
+        const suppliedContent = sourceArgs && typeof sourceArgs === "object" && !Array.isArray(sourceArgs)
+          ? typeof sourceArgs.content === "string"
+            ? sourceArgs.content
+            : typeof sourceArgs.text === "string"
+              ? sourceArgs.text
+              : undefined
+          : undefined;
+        const content = verifiedEvidence ? `${verifiedEvidence}\n` : suppliedContent;
+        if (typeof content === "string") {
+          normalizedParams = toolName === "tool_call"
+            ? {
+              id: "write",
+              args: { path: state.operationsWorkspaceExpectedPath, content },
+            }
+            : { path: state.operationsWorkspaceExpectedPath, content };
+        }
+      }
+      wrappedToolParams = normalizedParams;
+    }
+    if (
+      state?.operationsRequired &&
+      effectiveToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL
+    ) {
+      const actions = exactRequiredHostActions(state);
+      if (!actions || state.operationsSubmittedJobs.size > 0) {
+        return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
+      }
+      const params = {
+        actions,
+        ...(state.operationsRequiresOdsStatusProjection
+          ? { includeOdsStatus: true }
+          : {}),
+      };
+      return toolName === "tool_call"
+        ? { params: { id: SYNCHRONOUS_HOST_OBSERVE_TOOL, args: params } }
+        : { params };
+    }
+    if (
+      state?.operationsRequired &&
+      (effectiveToolName === "pixel_ops_job_get" || effectiveToolName === "pixel_ops_job_wait")
+    ) {
+      const requestedArgs = toolName === "tool_call"
+        ? wrappedToolParams?.args
+        : normalizedParams ?? event?.params;
+      const pendingJobIds = [...state.operationsSubmittedJobs.keys()].filter(
+        (jobId) => !state.operationsTerminalJobs.has(jobId)
+      );
+      const requestedJobId = requestedArgs && typeof requestedArgs === "object"
+        ? requestedArgs.jobId ?? requestedArgs.sessionId
+        : undefined;
+      const jobId = state.operationsContinuation?.jobId ??
+        (pendingJobIds.includes(requestedJobId)
+          ? requestedJobId
+          : pendingJobIds.length === 1
+            ? pendingJobIds[0]
+            : undefined);
+      if (jobId) {
+        return toolName === "tool_call"
+          ? { params: { id: effectiveToolName, args: { jobId } } }
+          : { params: { jobId } };
+      }
+    }
+    if (
+      state?.operationsRequired &&
+      toolName === "tool_call" &&
+      OPERATIONS_TOOLS.has(effectiveToolName)
+    ) {
+      return undefined;
+    }
+    const operationsJobsAreTerminal =
+      state?.operationsRequired === true &&
+      state.operationsSubmittedJobs.size > 0 &&
+      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+        state.operationsTerminalJobs.has(jobId)
+      );
+    if (
+      toolName === "tool_call" &&
+      operationsJobsAreTerminal &&
+      (
+        (effectiveToolName === "pixel_ods_status" &&
+          state.operationsRequiresOdsStatusProjection &&
+          !state.operationsOdsStatusProjectionAttempted &&
+          !state.operationsOdsStatusProjectionToolSearchPending) ||
+        (effectiveToolName === "pixel_ods_apps_list" &&
+          state.operationsRequiresOdsAppsProjection &&
+          !state.operationsOdsAppsProjectionAttempted &&
+          !state.operationsOdsAppsProjectionToolSearchPending)
+      )
+    ) {
+      // The nested projection call re-enters this guard and consumes the exact
+      // one-call allowance when the runtime exposes nested hooks. The outer
+      // result is also validated below because same-plugin Tool Search calls
+      // are intentionally not re-hooked by every OpenClaw runtime.
+      if (effectiveToolName === "pixel_ods_status") {
+        state.operationsOdsStatusProjectionToolSearchPending = true;
+      } else {
+        state.operationsOdsAppsProjectionToolSearchPending = true;
+      }
+      return undefined;
+    }
+
+    if (
+      state?.ownerIntentObserved &&
+      !state.operationsRequired &&
+      !state.exactDownloadRequested &&
+      OPERATIONS_TOOLS.has(effectiveToolName)
+    ) {
+      return { block: true, blockReason: OPERATIONS_NOT_REQUESTED_REASON };
+    }
+
     if (state?.exactDownloadRequested && state.exactDownloadPromotion) {
       return { block: true, blockReason: EXACT_DOWNLOAD_COMPLETE_REASON };
     }
 
-    if (state?.exactDownloadRequested && !EXACT_DOWNLOAD_BROKER_TOOLS.has(toolName)) {
+    if (state?.exactDownloadRequested && !EXACT_DOWNLOAD_BROKER_TOOLS.has(effectiveToolName)) {
       if (state.exactDownloadTerminalBlocks === 0) {
         state.exactDownloadTerminalBlocks = 1;
         return {
@@ -2535,10 +4406,14 @@ export function createToolLoopGuard({
 
     if (state?.exactDownloadRequested) {
       const request = state.exactDownloadRequest;
+      const exactDownloadParams = (selectedToolName, params) =>
+        toolName === "tool_call"
+          ? { params: { id: selectedToolName, args: params } }
+          : { params };
       if (!request?.url || !request?.filename || !request?.relativePath) {
         return { block: true, blockReason: EXACT_DOWNLOAD_REQUEST_UNBOUND_REASON };
       }
-      if (toolName === "pixel_ops_download_stage") {
+      if (effectiveToolName === "pixel_ops_download_stage") {
         if (state.exactDownloadArtifact) {
           return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON };
         }
@@ -2547,9 +4422,9 @@ export function createToolLoopGuard({
         }
         const params = { url: request.url, filename: request.filename };
         if (request.expectedSha256) params.expectedSha256 = request.expectedSha256;
-        return { params };
+        return exactDownloadParams("pixel_ops_download_stage", params);
       }
-      if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+      if (effectiveToolName === "pixel_ops_job_get" || effectiveToolName === "pixel_ops_job_wait") {
         const submission = [...state.exactDownloadSubmissions.values()].at(-1);
         if (!submission) {
           return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_BROKER_REASON };
@@ -2557,9 +4432,9 @@ export function createToolLoopGuard({
         if (state.exactDownloadArtifact) {
           return { block: true, blockReason: EXACT_DOWNLOAD_REQUIRES_PROMOTION_REASON };
         }
-        return { params: { jobId: submission.jobId } };
+        return exactDownloadParams(effectiveToolName, { jobId: submission.jobId });
       }
-      if (toolName === "pixel_ods_download_promote") {
+      if (effectiveToolName === "pixel_ods_download_promote") {
         const artifact = state.exactDownloadArtifact;
         if (!artifact) {
           return {
@@ -2570,15 +4445,13 @@ export function createToolLoopGuard({
                 : EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
           };
         }
-        return {
-          params: {
-            jobId: artifact.jobId,
-            filename: artifact.filename,
-            relativePath: artifact.relativePath,
-            sha256: artifact.sha256,
-            sourceUrl: artifact.requestedSource,
-          },
-        };
+        return exactDownloadParams("pixel_ods_download_promote", {
+          jobId: artifact.jobId,
+          filename: artifact.filename,
+          relativePath: artifact.relativePath,
+          sha256: artifact.sha256,
+          sourceUrl: artifact.requestedSource,
+        });
       }
     }
 
@@ -2617,19 +4490,54 @@ export function createToolLoopGuard({
       [...state.operationsSubmittedJobs.keys()].every((jobId) =>
         state.operationsTerminalJobs.has(jobId)
       );
+    const operationsMayReadOdsStatus =
+      state?.operationsRequired === true &&
+      state.operationsRequiresOdsStatusProjection === true &&
+      toolName === "pixel_ods_status" &&
+      state.operationsOdsStatusProjectionAttempted === false &&
+      state.operationsSubmittedJobs.size > 0 &&
+      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+        state.operationsTerminalJobs.has(jobId)
+      );
+    const operationsMayContinueInWorkspace =
+      state?.operationsRequired === true &&
+      state.operationsWorkspaceContinuationRequested === true &&
+      WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName) &&
+      verificationForRun(runId).status === "passed";
     if (operationsMayReadOdsApps) {
       state.operationsOdsAppsProjectionAttempted = true;
-    } else if (state?.operationsRequired && !OPERATIONS_TOOLS.has(toolName)) {
+    } else if (operationsMayReadOdsStatus) {
+      state.operationsOdsStatusProjectionAttempted = true;
+    } else if (
+      state?.operationsRequired &&
+      !OPERATIONS_TOOLS.has(toolName) &&
+      !operationsMayContinueInWorkspace
+    ) {
       // One model response may contain several parallel tool calls. Return the
       // same correction to every disallowed call in that response instead of
       // treating the second sibling call as a second ignored correction. A
       // later model continuation that still ignores the boundary is aborted.
+      state.operationsRoutingBlocks += 1;
       if (
-        state.operationsCorrectionPromptRound === undefined ||
-        state.operationsCorrectionPromptRound === state.operationsPromptRound
+        state.operationsRoutingBlocks < 4 &&
+        (state.operationsCorrectionPromptRound === undefined ||
+          state.operationsCorrectionPromptRound === state.operationsPromptRound)
       ) {
         state.operationsCorrectionPromptRound = state.operationsPromptRound;
-        return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
+        const missingProjection =
+          operationsJobsAreTerminal &&
+          (
+            (state.operationsRequiresOdsStatusProjection &&
+              !state.operationsOdsStatusProjectionAttempted) ||
+            (state.operationsRequiresOdsAppsProjection &&
+              !state.operationsOdsAppsProjectionAttempted)
+          );
+        return {
+          block: true,
+          blockReason: missingProjection
+            ? OPERATIONS_REQUIRES_PROJECTIONS_REASON
+            : OPERATIONS_REQUIRES_BROKER_REASON,
+        };
       }
       let aborted = false;
       try {
@@ -2810,16 +4718,16 @@ export function createToolLoopGuard({
     }
 
     if (
-      toolName === "exec" &&
-      requestsRecursiveForcedDelete(normalizedParams ?? event?.params) &&
+      selectedToolName === "exec" &&
+      requestsRecursiveForcedDelete(selectedParams) &&
       !state?.recursiveDeleteAuthorized
     ) {
       return { block: true, blockReason: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
     }
 
     if (
-      toolName === "exec" &&
-      !verificationCommandIsAuditable(normalizedParams ?? event?.params)
+      selectedToolName === "exec" &&
+      !verificationCommandIsAuditable(selectedParams)
     ) {
       if (state) state.latestVerificationStatus = "failed";
       return { block: true, blockReason: VERIFICATION_COMMAND_NOT_AUDITABLE_REASON };
@@ -2862,8 +4770,8 @@ export function createToolLoopGuard({
     }
 
     if (state?.odsRequiredTools.size > 0) {
-      if (state.odsRequiredTools.has(toolName)) {
-        state.odsRequiredTools.delete(toolName);
+      if (state.odsRequiredTools.has(effectiveToolName)) {
+        state.odsRequiredTools.delete(effectiveToolName);
         state.odsRoutingBlocks = 0;
       } else if (state.odsRoutingBlocks === 0) {
         state.odsRoutingBlocks = 1;
@@ -2888,7 +4796,7 @@ export function createToolLoopGuard({
       warn("Pixel blocked a non-public web_fetch destination before execution");
       return { block: true, blockReason: WEB_FETCH_PUBLIC_ONLY_REASON };
     }
-    if (toolName === "exec" && execTargetsNonPublicAddress(event)) {
+    if (selectedToolName === "exec" && execTargetsNonPublicAddress(selectedEvent)) {
       if (state) state.privateNetworkExhausted = true;
       warn("Pixel blocked an exec-based private HTTP(S) destination before execution");
       return { block: true, blockReason: EXEC_PRIVATE_NETWORK_REASON };
@@ -2961,11 +4869,21 @@ export function createToolLoopGuard({
       };
     }
 
-    if (!runId || !sessionId) {
-      if (toolName === "exec" && execControl) {
+    // Non-web tool hooks in OpenClaw can omit sessionId even though the exact
+    // runId was established by before_prompt_build. The run-bound execution
+    // wrapper, policy state, and retry fuses all key on runId, so keep them
+    // active. Web access still requires both identities above, and a missing
+    // runId remains fail-closed for cancellable execution.
+    if (!runId) {
+      if (selectedToolName === "exec" && execControl) {
         return { block: true, blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON };
       }
-      return normalizedParams ? { params: normalizedParams } : undefined;
+      const effectiveParams = toolName === "tool_call"
+        ? wrappedToolParams
+        : normalizedParams;
+      return effectiveParams && effectiveParams !== event?.params
+        ? { params: effectiveParams }
+        : undefined;
     }
 
     if (state.webExhausted) {
@@ -3002,11 +4920,47 @@ export function createToolLoopGuard({
       return { block: true, blockReason: CODING_LOOP_ABORT_REASON };
     }
 
-    if (toolName === "exec") {
-      const fingerprint = execFingerprint(normalizedParams ?? event?.params);
+    if (selectedToolName === "exec") {
+      const fingerprint = execFingerprint(selectedParams);
       const verificationFingerprint = verificationExecFingerprint(
-        normalizedParams ?? event?.params
+        selectedParams
       );
+      const pendingSessionId = fingerprint
+        ? [...state.pendingExecSessions.entries()].find(
+            ([, pending]) => pending?.fingerprint === fingerprint
+          )?.[0]
+        : undefined;
+      if (pendingSessionId) {
+        const blocks = state.pendingExecBlocks.get(pendingSessionId) ?? 0;
+        if (blocks === 0) {
+          state.pendingExecBlocks.set(pendingSessionId, 1);
+          return { block: true, blockReason: PENDING_EXEC_REQUIRES_POLL_REASON };
+        }
+        if (blocks === 1) {
+          state.pendingExecBlocks.set(pendingSessionId, 2);
+          return { block: true, blockReason: PENDING_EXEC_RETRY_EXHAUSTED_REASON };
+        }
+        let aborted = false;
+        try {
+          aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
+        } catch (error) {
+          warn(`Pixel pending-exec abort failed for run ${runId}: ${String(error)}`);
+        }
+        warn(
+          `Pixel stopped repeated restarts of pending process ${pendingSessionId} for run ${runId}; active run aborted=${aborted}`
+        );
+        return { block: true, blockReason: PENDING_EXEC_LOOP_ABORT_REASON };
+      }
+      if (fingerprint && (state.successfulExec.get(fingerprint) ?? 0) >= 2) {
+        const blocks = state.successfulExecBlocks.get(fingerprint) ?? 0;
+        if (blocks === 0) {
+          state.successfulExecBlocks.set(fingerprint, 1);
+          return { block: true, blockReason: CODING_REPEAT_NO_PROGRESS_REASON };
+        }
+        state.codingExhausted = true;
+        state.codingTerminalBlocks = 1;
+        return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+      }
       if (
         (fingerprint &&
           (state.failedExec.get(fingerprint) ?? 0) >= effective.failedExecRetries) ||
@@ -3019,14 +4973,21 @@ export function createToolLoopGuard({
     }
 
     if (!WEB_TOOLS.has(toolName)) {
-      if (toolName === "exec" && execControl) {
-        const params = { ...(normalizedParams ?? event?.params) };
+      if (selectedToolName === "exec" && execControl) {
+        const params = { ...selectedParams };
         const originalFingerprint = execFingerprint(params);
         const originalVerificationFingerprint = verificationExecFingerprint(params);
         try {
           params.command = execControl.prepare(runId, params.command);
         } catch (error) {
           warn(`Pixel cancellable exec preparation failed for run ${runId}: ${String(error)}`);
+          // The correction text is explicitly terminal. If the model ignores
+          // it and asks for another tool, abort this run instead of allowing
+          // parameter-shape or timeout variations to create an unbounded loop.
+          if (state) {
+            state.codingExhausted = true;
+            state.codingTerminalBlocks = 1;
+          }
           return { block: true, blockReason: CANCELLABLE_EXEC_UNAVAILABLE_REASON };
         }
         const wrappedFingerprint = execFingerprint(params);
@@ -3039,9 +5000,18 @@ export function createToolLoopGuard({
             originalVerificationFingerprint
           );
         }
-        return { params };
+        return {
+          params: toolName === "tool_call"
+            ? { ...pendingParams, id: pendingParams.id, args: params }
+            : params,
+        };
       }
-      return normalizedParams ? { params: normalizedParams } : undefined;
+      const effectiveParams = toolName === "tool_call"
+        ? wrappedToolParams
+        : normalizedParams;
+      return effectiveParams && effectiveParams !== event?.params
+        ? { params: effectiveParams }
+        : undefined;
     }
 
     if (toolName === "web_fetch") {
@@ -3086,7 +5056,35 @@ export function createToolLoopGuard({
     }
     if (typeof runId === "string" && runId) {
       const state = stateFor(runId);
+      if (typeof sessionId === "string" && sessionId) {
+        state.currentSessionId = sessionId;
+      }
+      if (typeof context?.sessionKey === "string" && context.sessionKey) {
+        state.currentSessionKey = context.sessionKey;
+      }
       if (currentUserText(event?.messages, event?.prompt)) {
+        state.ownerIntentObserved = true;
+        state.workspaceTaskRequested = userMessageRequestsWorkspaceTools(
+          event?.messages,
+          event?.prompt
+        );
+        state.workspaceMutationRequested = userMessageRequestsWorkspaceMutation(
+          event?.messages,
+          event?.prompt
+        );
+        state.workspaceTaskPath = userMessageWorkspaceContinuationPath(
+          event?.messages,
+          event?.prompt
+        );
+        state.workspaceTaskDirectory = userMessageWorkspaceDirectoryPath(
+          event?.messages,
+          event?.prompt
+        );
+        state.workspaceRequestedFiles = userMessageWorkspaceRequestedFiles(
+          event?.messages,
+          event?.prompt
+        );
+        state.workspaceToolSearchRouted = false;
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
           event?.prompt
@@ -3121,6 +5119,21 @@ export function createToolLoopGuard({
           state.operationsRequired &&
           !operationsContinuation &&
           userMessageRequiresOdsAppsProjection(event?.messages, event?.prompt);
+        state.operationsRequiresOdsStatusProjection =
+          state.operationsRequired &&
+          !operationsContinuation &&
+          userMessageRequiresOdsStatusProjection(event?.messages, event?.prompt);
+        state.operationsWorkspaceContinuationRequested =
+          state.operationsRequired &&
+          !operationsContinuation &&
+          userMessageRequestsWorkspaceContinuation(event?.messages, event?.prompt);
+        state.operationsWorkspaceEvidenceArtifactRequested =
+          state.operationsWorkspaceContinuationRequested &&
+          userMessageRequestsOperationsEvidenceArtifact(event?.messages, event?.prompt);
+        state.operationsWorkspaceExpectedPath =
+          state.operationsWorkspaceContinuationRequested
+            ? userMessageWorkspaceContinuationPath(event?.messages, event?.prompt)
+            : undefined;
       }
       if (!state.operationsRequired && !state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
@@ -3213,7 +5226,88 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
     const state = stateFor(runId);
+    const directMutation =
+      WORKSPACE_MUTATION_TOOLS.has(toolName) &&
+      event?.result &&
+      typeof event.result === "object" &&
+      !Array.isArray(event.result)
+        ? { name: toolName, event }
+        : undefined;
+    const wrappedMutation = toolName === "tool_call"
+      ? [...WORKSPACE_MUTATION_TOOLS].flatMap((name) => {
+          const selected = toolSearchSelectedToolEvent(event, name, "core");
+          return selected ? [{ name, event: selected }] : [];
+        })[0]
+      : undefined;
+    const completedMutation = directMutation ?? wrappedMutation;
+    const successfulMutation =
+      completedMutation && !toolCallFailed(completedMutation.event)
+        ? completedMutation
+        : undefined;
+    if (successfulMutation) {
+      state.invalidEditCreateBlocks = 0;
+      state.oversizedEditBlocks = 0;
+      state.noOpEditBlocks = 0;
+      state.failedExec.clear();
+      state.successfulExec.clear();
+      state.successfulExecBlocks.clear();
+    }
+    const completedWritePath = successfulMutation?.name === "write"
+      ? normalizeWorkspaceFilePath(successfulMutation.event?.params?.path)
+      : undefined;
+    if (completedWritePath) {
+      state.successfulWritePaths.add(completedWritePath);
+      state.repeatedWriteBlocks.delete(completedWritePath);
+    }
+    const completedRead =
+      toolName === "read" && event?.result && typeof event.result === "object"
+        ? event
+        : toolName === "tool_call"
+          ? toolSearchSelectedToolEvent(event, "read", "core")
+          : undefined;
+    const completedReadPath = completedRead && !toolCallFailed(completedRead)
+      ? normalizeWorkspaceFilePath(completedRead.params?.path)
+      : undefined;
+    if (completedReadPath) {
+      state.successfulReadPaths.add(completedReadPath);
+    }
     if (state.operationsRequired) {
+      const wrappedHostObservation =
+        toolName === "tool_call"
+          ? toolSearchSelectedToolEvent(
+            event,
+            SYNCHRONOUS_HOST_OBSERVE_TOOL,
+            "pixel-ods"
+          )
+          : undefined;
+      const hostObservation =
+        toolName === SYNCHRONOUS_HOST_OBSERVE_TOOL
+          ? synchronousHostObservationOutcome(event, state)
+          : wrappedHostObservation
+            ? synchronousHostObservationOutcome(wrappedHostObservation, state)
+            : undefined;
+      if (hostObservation) {
+        state.operationsSubmittedJobs.set(
+          hostObservation.submission.jobId,
+          hostObservation.submission
+        );
+        state.operationsTerminalJobs.set(
+          hostObservation.outcome.jobId,
+          hostObservation.outcome
+        );
+        // A Tool Search call can persist both the selected plugin result and
+        // its outer wrapper. Compact at most those two messages, and clear the
+        // allowance as soon as any different tool starts.
+        state.operationsHostResultCompactionsRemaining = 2;
+        const combinedStatus = synchronousHostOdsStatusProjection(
+          wrappedHostObservation ?? event
+        );
+        if (state.operationsRequiresOdsStatusProjection && combinedStatus) {
+          state.operationsOdsStatusProjectionAttempted = true;
+          state.operationsOdsStatusProjectionToolSearchPending = false;
+          state.operationsOdsStatusProjection = combinedStatus;
+        }
+      }
       const submission = operationsSubmission(event, toolName);
       if (submission) {
         state.operationsSubmittedJobs.set(submission.jobId, submission);
@@ -3233,9 +5327,80 @@ export function createToolLoopGuard({
         );
         if (outcome) state.operationsTerminalJobs.set(outcome.jobId, outcome);
       }
-      if (toolName === "pixel_ods_apps_list" && state.operationsRequiresOdsAppsProjection) {
-        state.operationsOdsAppsProjection = operationsOdsAppsProjection(event);
+      const wrappedStatusEvent =
+        toolName === "tool_call"
+          ? toolSearchSelectedToolEvent(event, "pixel_ods_status", "pixel-ods")
+          : undefined;
+      const wrappedAppsEvent =
+        toolName === "tool_call"
+          ? toolSearchSelectedToolEvent(event, "pixel_ods_apps_list", "pixel-ods")
+          : undefined;
+      const wrappedAppsAttempt =
+        toolName === "tool_call" &&
+        event?.params?.id === "pixel_ods_apps_list" &&
+        state.operationsOdsAppsProjectionToolSearchPending;
+      const wrappedStatusAttempt =
+        toolName === "tool_call" &&
+        event?.params?.id === "pixel_ods_status" &&
+        state.operationsOdsStatusProjectionToolSearchPending;
+      if (
+        state.operationsRequiresOdsAppsProjection &&
+        (toolName === "pixel_ods_apps_list" || wrappedAppsAttempt || wrappedAppsEvent)
+      ) {
+        state.operationsOdsAppsProjectionAttempted = true;
+        state.operationsOdsAppsProjectionToolSearchPending = false;
+        state.operationsOdsAppsProjection = operationsOdsAppsProjection(
+          wrappedAppsEvent ?? event
+        );
       }
+      if (
+        state.operationsRequiresOdsStatusProjection &&
+        (toolName === "pixel_ods_status" || wrappedStatusAttempt || wrappedStatusEvent)
+      ) {
+        state.operationsOdsStatusProjectionAttempted = true;
+        state.operationsOdsStatusProjectionToolSearchPending = false;
+        state.operationsOdsStatusProjection = operationsOdsStatusProjection(
+          wrappedStatusEvent ?? event
+        );
+      }
+      let workspaceToolName;
+      let workspaceToolEvent;
+      if (toolName === "write" || toolName === "read") {
+        workspaceToolName = toolName;
+        workspaceToolEvent = event;
+      } else if (
+        toolName === "tool_call" &&
+        (event?.params?.id === "write" || event?.params?.id === "read")
+      ) {
+        workspaceToolName = event.params.id;
+        workspaceToolEvent = toolSearchSelectedToolEvent(
+          event,
+          workspaceToolName,
+          "core"
+        );
+      }
+      if (
+        state.operationsWorkspaceContinuationRequested &&
+        state.operationsWorkspaceExpectedPath &&
+        workspaceToolEvent &&
+        !toolCallFailed(workspaceToolEvent) &&
+        Array.isArray(workspaceToolEvent?.result?.content) &&
+        workspaceToolEvent.result.content.some(
+          (item) => item && item.type === "text" && typeof item.text === "string"
+        )
+      ) {
+        const observedPath = normalizeWorkspaceFilePath(
+          workspaceToolEvent?.params?.path
+        );
+        if (observedPath === state.operationsWorkspaceExpectedPath) {
+          if (workspaceToolName === "write") {
+            state.operationsWorkspaceWriteVerified = true;
+          } else if (workspaceToolName === "read") {
+            state.operationsWorkspaceReadVerified = true;
+          }
+        }
+      }
+      completeVerifiedEvidenceArtifact(state);
       const hostOnly =
         state.operationsRequiredActions.size > 0 &&
         [...state.operationsRequiredActions].every((action) => action.startsWith("host."));
@@ -3244,9 +5409,16 @@ export function createToolLoopGuard({
         [...state.operationsSubmittedJobs.keys()].every((jobId) =>
           state.operationsTerminalJobs.has(jobId)
         );
+      const everyRequiredProjectionIsPresent =
+        (!state.operationsRequiresOdsAppsProjection || state.operationsOdsAppsProjection) &&
+        (!state.operationsRequiresOdsStatusProjection || state.operationsOdsStatusProjection);
+      const workspaceContinuationIsComplete =
+        !state.operationsWorkspaceContinuationRequested ||
+        (state.operationsWorkspaceWriteVerified && state.operationsWorkspaceReadVerified);
       if (
         hostOnly &&
-        !state.operationsRequiresOdsAppsProjection &&
+        everyRequiredProjectionIsPresent &&
+        workspaceContinuationIsComplete &&
         everySubmittedJobIsTerminal &&
         !state.operationsTerminalAborted &&
         typeof context?.sessionId === "string" &&
@@ -3263,16 +5435,34 @@ export function createToolLoopGuard({
         }
       }
     }
-    if (toolName === "pixel_ops_download_stage") {
-      const submission = exactDownloadSubmission(event, state.exactDownloadRequest);
+    const wrappedExactDownloadToolName =
+      toolName === "tool_call" && typeof event?.params?.id === "string"
+        ? event.params.id.split(":").at(-1)
+        : undefined;
+    const wrappedExactDownloadEvent =
+      wrappedExactDownloadToolName && EXACT_DOWNLOAD_BROKER_TOOLS.has(wrappedExactDownloadToolName)
+        ? toolSearchSelectedToolEvent(
+          event,
+          wrappedExactDownloadToolName,
+          wrappedExactDownloadToolName === "pixel_ods_download_promote"
+            ? "pixel-ods"
+            : "pixel-operations-broker"
+        )
+        : undefined;
+    const exactDownloadToolName = wrappedExactDownloadEvent
+      ? wrappedExactDownloadToolName
+      : toolName;
+    const exactDownloadEvent = wrappedExactDownloadEvent ?? event;
+    if (exactDownloadToolName === "pixel_ops_download_stage") {
+      const submission = exactDownloadSubmission(exactDownloadEvent, state.exactDownloadRequest);
       if (submission) {
         state.exactDownloadSubmissions.set(submission.jobId, submission);
         state.exactDownloadTerminalBlocks = 0;
       }
     }
-    if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+    if (exactDownloadToolName === "pixel_ops_job_get" || exactDownloadToolName === "pixel_ops_job_wait") {
       const artifact = exactDownloadTerminalArtifact(
-        event,
+        exactDownloadEvent,
         state.exactDownloadSubmissions
       );
       if (artifact) {
@@ -3282,7 +5472,7 @@ export function createToolLoopGuard({
         state.exactDownloadTerminalBlocks = 0;
       } else {
         const outcome = exactDownloadTerminalOutcome(
-          event,
+          exactDownloadEvent,
           state.exactDownloadSubmissions
         );
         if (outcome) {
@@ -3291,9 +5481,9 @@ export function createToolLoopGuard({
         }
       }
     }
-    if (toolName === "pixel_ods_download_promote") {
+    if (exactDownloadToolName === "pixel_ods_download_promote") {
       state.exactDownloadPromotionAttempted = true;
-      const promotion = exactDownloadPromotion(event, state.exactDownloadArtifact);
+      const promotion = exactDownloadPromotion(exactDownloadEvent, state.exactDownloadArtifact);
       if (promotion) {
         state.exactDownloadPromotion = promotion;
         state.exactDownloadTerminalBlocks = 0;
@@ -3313,19 +5503,35 @@ export function createToolLoopGuard({
       const pending = state.pendingExecSessions.get(completion.sessionId);
       if (!pending) return;
       state.pendingExecSessions.delete(completion.sessionId);
-      if (completion.failed) {
+      state.pendingExecBlocks.delete(completion.sessionId);
+      const verificationFailed =
+        completion.failed ||
+        (
+          pending.verificationFingerprint &&
+          verificationFingerprintIsPythonUnittest(pending.verificationFingerprint) &&
+          execResultHasNonCleanUnittestOutcome(event)
+        );
+      if (verificationFailed) {
         if (pending.fingerprint) {
           state.failedExec.set(
             pending.fingerprint,
             (state.failedExec.get(pending.fingerprint) ?? 0) + 1
           );
+          state.successfulExec.delete(pending.fingerprint);
+          state.successfulExecBlocks.delete(pending.fingerprint);
         }
         if (pending.verificationFingerprint) {
           state.failedVerificationAttempts += 1;
           state.latestVerificationStatus = "failed";
         }
       } else {
-        if (pending.fingerprint) state.failedExec.delete(pending.fingerprint);
+        if (pending.fingerprint) {
+          state.failedExec.delete(pending.fingerprint);
+          state.successfulExec.set(
+            pending.fingerprint,
+            (state.successfulExec.get(pending.fingerprint) ?? 0) + 1
+          );
+        }
         if (pending.verificationFingerprint) {
           state.failedVerificationAttempts = 0;
           state.latestVerificationStatus = "passed";
@@ -3336,9 +5542,6 @@ export function createToolLoopGuard({
     // A successful file mutation permits another identical command, but does
     // not erase the run-wide failed-verification count. This distinguishes a
     // useful repair cycle from unbounded edit/test churn.
-    if (WORKSPACE_MUTATION_TOOLS.has(toolName) && !toolCallFailed(event)) {
-      state.failedExec.clear();
-    }
     if (toolName === "web_fetch" && webFetchWasTruncated(event)) {
       const fetchUrl = canonicalFetchUrl(event);
       if (fetchUrl) {
@@ -3347,12 +5550,28 @@ export function createToolLoopGuard({
       }
       return;
     }
-    if (toolName !== "exec") return;
-    const observedFingerprint = execFingerprint(event?.params);
+    const wrappedExecEvent = toolName === "tool_call"
+      ? toolSearchSelectedToolEvent(event, "exec", "core") ??
+        (event?.params?.id === "exec"
+          ? {
+            params:
+              event.params.args &&
+              typeof event.params.args === "object" &&
+              !Array.isArray(event.params.args)
+                ? event.params.args
+                : {},
+            result: event?.result,
+            error: event?.error,
+          }
+          : undefined)
+      : undefined;
+    const execEvent = toolName === "exec" ? event : wrappedExecEvent;
+    if (!execEvent) return;
+    const observedFingerprint = execFingerprint(execEvent?.params);
     const fingerprint = state.execOriginalByWrapped.get(observedFingerprint) ?? observedFingerprint;
     const verificationFingerprint =
       state.verificationOriginalByWrapped.get(observedFingerprint) ??
-      verificationExecFingerprint(event?.params);
+      verificationExecFingerprint(execEvent?.params);
     if (observedFingerprint) state.execOriginalByWrapped.delete(observedFingerprint);
     if (observedFingerprint) {
       state.verificationOriginalByWrapped.delete(observedFingerprint);
@@ -3361,7 +5580,7 @@ export function createToolLoopGuard({
     if (verificationFingerprint) {
       state.latestVerificationFingerprint = verificationFingerprint;
     }
-    const pendingSessionId = runningExecSessionId(event);
+    const pendingSessionId = runningExecSessionId(execEvent);
     if (pendingSessionId) {
       if (state.pendingExecSessions.size >= MAX_PENDING_EXEC_SESSIONS) {
         state.codingExhausted = true;
@@ -3374,21 +5593,267 @@ export function createToolLoopGuard({
       if (verificationFingerprint) state.latestVerificationStatus = "pending";
       return;
     }
-    if (execFailed(event)) {
+    const verificationFailed =
+      execFailed(execEvent) ||
+      (
+        verificationFingerprint &&
+        verificationFingerprintIsPythonUnittest(verificationFingerprint) &&
+        execResultHasNonCleanUnittestOutcome(execEvent)
+      );
+    // OpenClaw conservatively classifies its deferred `tool_call` wrapper as a
+    // mutation. A failed wrapped exec therefore remains its last tool error
+    // even after a later wrapped exec succeeds, unlike a native exec. Preserve
+    // the failed receipt in the session, but tell the private ingress when that
+    // exact generated warning is stale. A new wrapped exec failure always
+    // revokes the signal.
+    if (toolName === "tool_call") {
+      if (verificationFailed) {
+        state.wrappedExecFailurePending = true;
+        state.suppressStaleExecWarning = false;
+      } else if (state.wrappedExecFailurePending) {
+        state.wrappedExecFailurePending = false;
+        state.suppressStaleExecWarning = true;
+      }
+    }
+    if (verificationFailed) {
       if (fingerprint) {
         state.failedExec.set(fingerprint, (state.failedExec.get(fingerprint) ?? 0) + 1);
+        state.successfulExec.delete(fingerprint);
+        state.successfulExecBlocks.delete(fingerprint);
       }
       if (verificationFingerprint) {
         state.failedVerificationAttempts += 1;
         state.latestVerificationStatus = "failed";
       }
     } else {
-      if (fingerprint) state.failedExec.delete(fingerprint);
+      if (fingerprint) {
+        state.failedExec.delete(fingerprint);
+        state.successfulExec.set(
+          fingerprint,
+          (state.successfulExec.get(fingerprint) ?? 0) + 1
+        );
+      }
       if (verificationFingerprint) {
         state.failedVerificationAttempts = 0;
         state.latestVerificationStatus = "passed";
       }
     }
+  }
+
+  function trustedOperationsContinuation(state, runId) {
+    if (!state?.operationsRequired) return undefined;
+    const requiredHostActions = exactRequiredHostActions(state);
+    if (state.operationsSubmittedJobs.size === 0) {
+      if (!requiredHostActions) return undefined;
+      return {
+        stage: "host-observe",
+        instruction:
+          `Do not reply yet. Call tool_call now with id ${SYNCHRONOUS_HOST_OBSERVE_TOOL} ` +
+          `and args ${JSON.stringify({
+            actions: requiredHostActions,
+            ...(state.operationsRequiresOdsStatusProjection
+              ? { includeOdsStatus: true }
+              : {}),
+          })}.`,
+      };
+    }
+    const everySubmittedJobIsTerminal =
+      state.operationsSubmittedJobs.size > 0 &&
+      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
+        state.operationsTerminalJobs.has(jobId)
+      );
+    if (!everySubmittedJobIsTerminal) return undefined;
+    if (
+      state.operationsRequiresOdsStatusProjection &&
+      !state.operationsOdsStatusProjection &&
+      !state.operationsOdsStatusProjectionAttempted
+    ) {
+      return {
+        stage: "ods-status",
+        instruction:
+          "Do not reply yet. Call tool_call now with id pixel_ods_status and args {}. " +
+          "This required read-only projection must finish before any workspace step.",
+      };
+    }
+    if (
+      state.operationsRequiresOdsAppsProjection &&
+      !state.operationsOdsAppsProjection &&
+      !state.operationsOdsAppsProjectionAttempted
+    ) {
+      return {
+        stage: "ods-apps",
+        instruction:
+          "Do not reply yet. Call tool_call now with id pixel_ods_apps_list and args {}. " +
+          "This required read-only projection must finish before any workspace step.",
+      };
+    }
+    if (
+      !state.operationsWorkspaceContinuationRequested ||
+      verificationForRun(runId).status !== "passed"
+    ) {
+      return undefined;
+    }
+    const relativePath = state.operationsWorkspaceExpectedPath;
+    if (!relativePath) return undefined;
+    if (!state.operationsWorkspaceWriteVerified) {
+      if (state.operationsWorkspaceEvidenceArtifactRequested) {
+        return {
+          stage: "workspace-write",
+          instruction:
+            `Do not reply yet. Call tool_call now with id ${EVIDENCE_REPORT_TOOL} ` +
+            "and args {}. This narrow adapter writes the exact receipt-bound report " +
+            `to the owner-requested path \"${relativePath}\" without asking you to reproduce it.`,
+        };
+      }
+      return {
+        stage: "workspace-write",
+        instruction:
+          `Do not reply yet. Call tool_call now with id write and args containing path ` +
+          `\"${relativePath}\" plus content built only from the verified evidence requested by the owner.`,
+      };
+    }
+    if (!state.operationsWorkspaceReadVerified) {
+      if (state.operationsWorkspaceEvidenceArtifactRequested) {
+        return {
+          stage: "workspace-read",
+          instruction:
+            `Do not reply yet. Call tool_call now with id ${EVIDENCE_READBACK_TOOL} ` +
+            "and args {}. This narrow adapter reads back only the exact owner-requested report. " +
+            "Reply only after the real readback succeeds.",
+        };
+      }
+      return {
+        stage: "workspace-read",
+        instruction:
+          `Do not reply yet. Call tool_call now with id read and args {\"path\":\"${relativePath}\"}. ` +
+          "Reply only after the real readback succeeds.",
+      };
+    }
+    return undefined;
+  }
+
+  function toolResultPersist(event, context, agentId = "pixel") {
+    if (context?.agentId !== agentId) return undefined;
+    const toolCallId = context?.toolCallId ?? event?.toolCallId;
+    const pending = pendingToolRuns.get(toolCallId);
+    pendingToolRuns.delete(toolCallId);
+    const runId = pending?.runId ?? context?.runId ?? event?.runId;
+    const state = runs.get(runId);
+    const continuation = trustedOperationsContinuation(state, runId);
+    if (!event?.message || typeof event.message !== "object") {
+      return undefined;
+    }
+    const message = event?.message;
+    const compactVerification = compactCleanVerificationResult(message, pending);
+    const compactCoreResult = compactVerification
+      ? undefined
+      : compactWorkspaceCoreResult(message, pending, state);
+    const workspaceStageInstruction = (() => {
+      if (!compactCoreResult || !state?.workspaceTaskDirectory) return undefined;
+      const nextFile = state.workspaceMutationRequested
+        ? state.workspaceRequestedFiles.find((file) =>
+          !state.successfulWritePaths.has(`${state.workspaceTaskDirectory}/${file}`)
+        )
+        : undefined;
+      if (nextFile) {
+        const nextPath = `${state.workspaceTaskDirectory}/${nextFile}`;
+        const testFileHint = /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile)
+          ? " For a Python test file, include every required test-framework and implementation import."
+          : "";
+        return (
+          "[ODS Pixel next step] Call tool_call next with id openclaw:core:write and " +
+          `args path ${JSON.stringify(nextPath)} plus the complete requested content. ` +
+          "Keep it concise (under 1000 characters when the requirements fit); do not " +
+          `inspect or narrate first.${testFileHint}`
+        );
+      }
+      if (state.latestVerificationStatus === "failed") {
+        return `[ODS Pixel next step] ${FAILED_TEST_READ_REPAIR_REASON}`;
+      }
+      if (state.latestVerificationStatus === "passed") {
+        return (
+          "[ODS Pixel next step] Verification passed. Give the owner the concise final " +
+          "result now; do not call another tool."
+        );
+      }
+      if (state.workspaceMutationRequested && state.workspaceRequestedFiles.length > 0) {
+        return (
+          "[ODS Pixel next step] All explicitly requested files are written. Run the " +
+          "owner-requested verification command now; the project workdir is applied automatically."
+        );
+      }
+      return undefined;
+    })();
+    const hostToolResult =
+      pending?.selectedToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL ||
+      state?.operationsHostResultCompactionsRemaining > 0 ||
+      persistedToolSearchResult(
+        message,
+        SYNCHRONOUS_HOST_OBSERVE_TOOL,
+        "pixel-ods"
+      );
+    const hostEvidence =
+      hostToolResult
+        ? operationsHostEvidenceText(
+          state?.operationsRequiredActions,
+          state?.operationsTerminalJobs,
+          state?.operationsOdsAppsProjection,
+          state?.operationsOdsStatusProjection
+        )
+        : undefined;
+    // The external broker keeps the complete terminal receipt. Once the guard
+    // has structurally validated that receipt in afterToolCall, persist only a
+    // compact, receipt-bound projection into the model conversation. Tool
+    // Search otherwise duplicates the multi-kilobyte broker object in content
+    // and details, which can exhaust small local models before the required
+    // continuation tool call closes.
+    if (!continuation && !hostEvidence && !compactVerification && !compactCoreResult) {
+      return undefined;
+    }
+    const compactMessage = compactVerification ?? compactCoreResult ?? message;
+    const content = hostEvidence
+      ? [{
+        type: "text",
+        text:
+          `${hostEvidence}\n- Receipt custody: full terminal evidence remains ` +
+          "bound to the cited job ID in the external Operations Broker; this compact projection grants no authority.",
+      }]
+      : Array.isArray(compactMessage.content) ? [...compactMessage.content] : [];
+    if (workspaceStageInstruction) {
+      content.push({ type: "text", text: workspaceStageInstruction });
+    }
+    if (hostEvidence && state.operationsHostResultCompactionsRemaining > 0) {
+      state.operationsHostResultCompactionsRemaining -= 1;
+    }
+    if (continuation) {
+      content.push({
+        type: "text",
+        text: `${OPERATIONS_TRUSTED_CONTINUATION_PREFIX} ${continuation.instruction}`,
+      });
+    }
+    return {
+      message: {
+        ...compactMessage,
+        content,
+      },
+    };
+  }
+
+  function beforeAgentFinalize(event, context, agentId = "pixel") {
+    if (context?.agentId !== agentId) return undefined;
+    const runId = context?.runId ?? event?.runId;
+    if (typeof runId !== "string" || !runId) return undefined;
+    const continuation = trustedOperationsContinuation(runs.get(runId), runId);
+    if (!continuation) return undefined;
+    return {
+      action: "revise",
+      reason: "Pixel has not completed every owner-requested verified step.",
+      retry: {
+        instruction: continuation.instruction,
+        idempotencyKey: `pixel-ods-${continuation.stage}`,
+        maxAttempts: 1,
+      },
+    };
   }
 
   function verificationForRun(runId) {
@@ -3452,7 +5917,8 @@ export function createToolLoopGuard({
       const evidenceText = operationsEvidenceText(
         state.operationsRequiredActions,
         state.operationsTerminalJobs,
-        state.operationsOdsAppsProjection
+        state.operationsOdsAppsProjection,
+        state.operationsOdsStatusProjection
       );
       if (state.operationsRequiredActions.size > 0) {
         const hostOnly = [...state.operationsRequiredActions].every(
@@ -3482,16 +5948,42 @@ export function createToolLoopGuard({
         if (hostOnly && state.operationsRequiresOdsAppsProjection && !state.operationsOdsAppsProjection) {
           const partialText = operationsEvidenceText(
             state.operationsRequiredActions,
-            state.operationsTerminalJobs
+            state.operationsTerminalJobs,
+            undefined,
+            state.operationsOdsStatusProjection
           );
           return {
             status: "failed",
             text: `${partialText ?? OPERATIONS_UNVERIFIED_DELIVERY_PREFIX}\n- ${OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT}`,
           };
         }
+        if (
+          hostOnly &&
+          state.operationsRequiresOdsStatusProjection &&
+          !state.operationsOdsStatusProjection
+        ) {
+          const partialText = operationsEvidenceText(
+            state.operationsRequiredActions,
+            state.operationsTerminalJobs,
+            state.operationsOdsAppsProjection
+          );
+          return {
+            status: "failed",
+            text: `${partialText ?? OPERATIONS_UNVERIFIED_DELIVERY_PREFIX}\n- ${OPERATIONS_ODS_STATUS_UNAVAILABLE_TEXT}`,
+          };
+        }
         if (!evidenceText) {
           return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
         }
+        const verifiedText = state.operationsWorkspaceContinuationRequested
+          ? `${evidenceText}\n${
+            state.operationsWorkspaceExpectedPath &&
+            state.operationsWorkspaceWriteVerified &&
+            state.operationsWorkspaceReadVerified
+              ? `- Workspace artifact: Pixel wrote and read back \`/workspace/${state.operationsWorkspaceExpectedPath}\` in this response.`
+              : "- Workspace continuation: the requested workspace artifact was not both written and read back successfully in this response."
+          }`
+          : evidenceText;
         return {
           status:
             evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
@@ -3499,7 +5991,7 @@ export function createToolLoopGuard({
             evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX)
             ? "passed"
             : "failed",
-          text: evidenceText,
+          text: verifiedText,
         };
       }
     }
@@ -3512,8 +6004,20 @@ export function createToolLoopGuard({
     if (state.githubCanonicalUrl && !state.githubCanonicalSatisfied) {
       return { status: "failed", text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX };
     }
-    if (state.latestVerificationStatus === "passed") return { status: "passed" };
-    return { status: "none" };
+    const staleExecWarningSuppression = state.suppressStaleExecWarning
+      ? { suppressStaleExecWarning: true }
+      : {};
+    if (state.latestVerificationStatus === "passed") {
+      if (state.visibleReplyText) {
+        return {
+          status: "passed",
+          text: state.visibleReplyText,
+          ...staleExecWarningSuppression,
+        };
+      }
+      return { status: "passed", ...staleExecWarningSuppression };
+    }
+    return { status: "none", ...staleExecWarningSuppression };
   }
 
   function replyPayloadSending(event) {
@@ -3546,6 +6050,8 @@ export function createToolLoopGuard({
   return {
     beforeToolCall,
     afterToolCall,
+    toolResultPersist,
+    beforeAgentFinalize,
     replyPayloadSending,
     observeRun,
     observeModelCall,

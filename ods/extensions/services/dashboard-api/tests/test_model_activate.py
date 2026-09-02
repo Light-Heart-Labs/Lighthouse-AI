@@ -3515,7 +3515,7 @@ def test_managed_pixel_reconcile_rejects_context_below_pixel_contract(monkeypatc
 
 @pytest.mark.parametrize(
     ("context_length", "expected"),
-    [(4096, 2048), (8192, 4096), (16384, 2048), (24576, 3072), (32768, 4096)],
+    [(4096, 1024), (8192, 2048), (16384, 4096), (24576, 4096), (32768, 4096)],
 )
 def test_managed_pixel_output_budget_preserves_agent_prompt_room(
     context_length,
@@ -3612,18 +3612,20 @@ class TestModelActivateRollback:
 
         assert handler.response_code == 200
         assert reconciliations == [(
-            "new-model",
+            "new-model.gguf",
             65536,
             {"max_tokens": 4096, "reasoning": False},
         )]
         response = handler.parse_response()
         assert response["consumers"]["pixel"] == "reconciled"
+        assert response["consumers"]["openclaw"] == "host_gateway_reconciled"
         receipt = json.loads(
             (install_dir / "data" / "model-activation-receipt.json").read_text(
                 encoding="utf-8"
             )
         )
         assert receipt["consumers"]["pixel"] == "reconciled"
+        assert receipt["consumers"]["openclaw"] == "host_gateway_reconciled"
 
     def test_managed_pixel_requires_valid_previous_context_before_mutation(
         self,
@@ -3673,7 +3675,7 @@ class TestModelActivateRollback:
 
         def reconcile(model, context, **options):
             reconciliations.append((model, context, options))
-            if model == "new-model":
+            if model == "new-model.gguf":
                 raise RuntimeError("simulated Pixel reconciliation failure")
             return "reconciled"
 
@@ -3691,8 +3693,8 @@ class TestModelActivateRollback:
         assert "simulated Pixel reconciliation failure" in response["error"]
         assert runtime_restarts == ["new-model", "old-model"]
         assert reconciliations == [
-            ("new-model", 4096, {"max_tokens": 2048, "reasoning": False}),
-            ("old-model", 4096, {"max_tokens": 2048, "reasoning": False}),
+            ("new-model.gguf", 4096, {"max_tokens": 1024, "reasoning": False}),
+            ("old-model.gguf", 4096, {"max_tokens": 1024, "reasoning": False}),
         ]
         assert _mod.load_env(env_path)["LLM_MODEL"] == "old-model"
 
@@ -3746,7 +3748,7 @@ class TestModelActivateRollback:
 
         def reconcile(model, context, **_options):
             reconciliations.append((model, context))
-            if model == "new-model":
+            if model == "new-model.gguf":
                 raise RuntimeError("simulated Pixel reconciliation failure")
             return "reconciled"
 
@@ -3780,7 +3782,10 @@ class TestModelActivateRollback:
         assert handler.response_code == 500
         response = handler.parse_response()
         assert response["rolled_back"] is True
-        assert reconciliations == [("new-model", 4096), ("old-model", 4096)]
+        assert reconciliations == [
+            ("new-model.gguf", 4096),
+            ("old-model.gguf", 4096),
+        ]
         assert events.index("health:ods-hermes") < events.index("verify:new-model.gguf:4096")
         rollback_health = len(events) - 1 - events[::-1].index("health:ods-hermes")
         rollback_verify = events.index("verify:old-model.gguf:4096")
@@ -6968,7 +6973,7 @@ class TestModelActivateRollback:
         assert env_path.read_text(encoding="utf-8") == env_text
         assert restarts == []
 
-    def test_managed_pixel_rejects_unusable_context_before_mutation(
+    def test_managed_pixel_rejects_context_below_openclaw_minimum_before_mutation(
         self, tmp_path, monkeypatch,
     ):
         install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
@@ -6991,12 +6996,12 @@ class TestModelActivateRollback:
         _mod.AgentHandler._do_model_activate(
             handler,
             "target-model",
-            requested_context_length=8192,
+            requested_context_length=2048,
         )
 
         assert handler.response_code == 400
         response = handler.parse_response()
-        assert "at least 16384" in response["error"]
+        assert "at least 4096" in response["error"]
         assert response["code"] == "pixel_context_too_small"
         assert "rolled_back" not in response
         assert env_path.read_text(encoding="utf-8") == env_text

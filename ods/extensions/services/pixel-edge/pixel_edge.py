@@ -108,6 +108,73 @@ _EMPTY_REPLY = (
     "I couldn't produce a useful response to that request. Please try again or "
     "tell me what you'd like me to do differently."
 )
+_INTERACTIVE_DELIVERY_CONTRACT = (
+    "\n\n[ODS Pixel delivery requirement: Answer the owner's complete message above. "
+    "If it asks for exact text, copy that full exact text. Do not answer with a "
+    "generic acknowledgement. Do not output NO_REPLY.]"
+)
+_HOST_INSPECTION_SCOPE = re.compile(
+    r"\b(?:computer|host|laptop|machine|system)\b",
+    re.IGNORECASE,
+)
+_HOST_INSPECTION_INTENT = re.compile(
+    r"\b(?:check|describe|inspect|list|report|show|tell|verify)\b",
+    re.IGNORECASE,
+)
+_WORKSPACE_MUTATION_SCOPE = re.compile(
+    r"(?:/workspace(?:/[A-Za-z0-9._/-]+)?|\b(?:directory|directories|file|files)\b)",
+    re.IGNORECASE,
+)
+_WORKSPACE_MUTATION_INTENT = re.compile(
+    r"\b(?:add|change|create|edit|modify|patch|save|update|write)\b",
+    re.IGNORECASE,
+)
+_RUN_COMMAND_AND_WAIT = re.compile(
+    r"\b(?:run|execute)\b[\s\S]{0,512}\bcommand\b[\s\S]{0,4096}"
+    r"\b(?:wait|finish|complete|terminal|real\s+result)\b",
+    re.IGNORECASE,
+)
+_EXACT_SINGLE_LINE_FILE = re.compile(
+    r"\bcreate\s+(?:the\s+)?file\s+"
+    r"(?P<path>(?:/workspace/)?[A-Za-z0-9_-][A-Za-z0-9._-]*"
+    r"(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*)"
+    r"(?:\s+in\s+(?:the|your)\s+writable\s+workspace)?"
+    r"\s+with\s+exactly\s+this\s+"
+    r"single\s+line\s+followed\s+by\s+(?:a|one)\s+newline:\s*"
+    r"(?P<content>[^\r\n]{1,4096}?)(?=\s+Then\b)",
+    re.IGNORECASE,
+)
+_WORKSPACE_MUTATION_ROUTE = (
+    "\n[ODS Pixel workspace task route: Perform the requested workspace mutation "
+    "before verification. When tool_call is visible, use it with id write and normal "
+    "write args for every new file. edit cannot create a file and requires a non-empty "
+    "oldText copied from an existing file. Use edit or apply_patch only after reading "
+    "an existing file. Then use exec only for "
+    "readback, tests, or the requested digest. Do not repeatedly list directories "
+    "or hash proposed text instead of the created file.]"
+)
+_RUN_COMMAND_AND_WAIT_ROUTE = (
+    "\n[ODS Pixel command completion route: Call exec exactly once for the owner's "
+    "command. If exec returns a running process session, do not call exec again. "
+    "Use the visible tool_call control with id process and args containing action "
+    "poll plus that exact returned sessionId, and keep polling only that session "
+    "until its terminal output is available. Report the real terminal output; do "
+    "not simulate, shorten, or restart the command.]"
+)
+_HOST_ACTION_RULES = (
+    (re.compile(r"\b(?:operating\s+system|os|platform)\b", re.IGNORECASE), "host.os-release"),
+    (re.compile(r"\bkernel\b", re.IGNORECASE), "host.kernel"),
+    (re.compile(r"\b(?:memory|ram)\b", re.IGNORECASE), "host.memory"),
+    (re.compile(r"\b(?:disks?|filesystem|mount(?:ed|s)?|storage)\b", re.IGNORECASE), "host.storage"),
+    (re.compile(r"\bprocess(?:es)?\b", re.IGNORECASE), "host.processes"),
+    (re.compile(r"\b(?:cpu|processor|architecture)\b", re.IGNORECASE), "host.cpu"),
+    (re.compile(r"\b(?:hostname|identity)\b", re.IGNORECASE), "host.identity"),
+    (re.compile(r"\buptime\b", re.IGNORECASE), "host.uptime"),
+    (re.compile(r"\bservices?\b", re.IGNORECASE), "host.services"),
+    (re.compile(r"\b(?:listening\s+ports?|open\s+ports?)\b", re.IGNORECASE), "host.listening-ports"),
+    (re.compile(r"\b(?:network\s+addresses?|ip\s+addresses?)\b", re.IGNORECASE), "host.network-addresses"),
+    (re.compile(r"\b(?:network\s+routes?|routing\s+table)\b", re.IGNORECASE), "host.network-routes"),
+)
 _CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
 _ACTIVE_REQUESTS_KEY = web.AppKey("pixel_active_requests", set)
 
@@ -195,6 +262,115 @@ def _empty_reply_fallback(data: dict) -> str:
     if len(text) <= 160 and _SHORT_TEST_MESSAGE.fullmatch(text):
         return _SHORT_TEST_REPLY
     return _EMPTY_REPLY
+
+
+def _with_interactive_delivery_contract(data: dict) -> dict:
+    """Append the ODS delivery contract to the latest user content.
+
+    OpenClaw's generic system prompt documents ``NO_REPLY`` for asynchronous
+    channel turns. Small local models can over-select that sentinel even though
+    Pixel's later system overlay forbids it for owner-authored webchat. Keeping
+    the correction adjacent to the current user instruction gives every model
+    the same first-turn contract without retrying (and potentially repeating)
+    a tool-using operation.
+    """
+    owner_text = _latest_user_text(data)
+    contract = _INTERACTIVE_DELIVERY_CONTRACT
+    if (
+        _HOST_INSPECTION_SCOPE.search(owner_text)
+        and _HOST_INSPECTION_INTENT.search(owner_text)
+        and not (_ARTIFACT_DRAFT_PREFIX.search(owner_text) and _ARTIFACT_NOUN.search(owner_text))
+    ):
+        actions = [action for pattern, action in _HOST_ACTION_RULES if pattern.search(owner_text)]
+        route = (
+            "\n[ODS Pixel host inspection route: Generic sandbox commands and "
+            "status projections cannot establish host facts. Use the visible "
+            "tool_call Tool Search control for the deferred Operations tools. "
+        )
+        if actions:
+            observe_args = json.dumps({"actions": actions}, separators=(",", ":"))
+            route += (
+                "Call tool_call exactly once with id pixel_ods_host_observe "
+                f"and args {observe_args}. This one read-only tool returns the "
+                "terminal Operations receipt. "
+            )
+        else:
+            route += (
+                "Call tool_call with id pixel_ops_inventory and args {} to select "
+                "the matching read-only ods-host actions. "
+            )
+        route += (
+            "After terminal host evidence, continue any separately required ODS "
+            "projection or workspace step before answering. Do not use generic "
+            "sandbox commands as host evidence.]"
+        )
+        contract += route
+    if (
+        _WORKSPACE_MUTATION_SCOPE.search(owner_text)
+        and _WORKSPACE_MUTATION_INTENT.search(owner_text)
+    ):
+        exact_file = _EXACT_SINGLE_LINE_FILE.search(owner_text)
+        if exact_file:
+            path = exact_file.group("path")
+            content = exact_file.group("content") + "\n"
+            write_args = json.dumps(
+                {"path": path, "content": content}, separators=(",", ":")
+            )
+            read_args = json.dumps({"path": path}, separators=(",", ":"))
+            digest_args = json.dumps(
+                {
+                    "command": f"sha256sum -- {path}",
+                    "workdir": "/workspace",
+                },
+                separators=(",", ":"),
+            )
+            contract += (
+                "\n[ODS Pixel exact workspace route: Use the visible tool_call control. "
+                "Call tool_call exactly once with id write and args "
+                f"{write_args}. After it succeeds, call tool_call once with id read and "
+                f"args {read_args}, then call tool_call once with id exec and args "
+                f"{digest_args}. Report only the verified created file; do not hash "
+                "proposed text or omit the encoded trailing newline.]"
+            )
+        else:
+            contract += _WORKSPACE_MUTATION_ROUTE
+    if _RUN_COMMAND_AND_WAIT.search(owner_text):
+        contract += _RUN_COMMAND_AND_WAIT_ROUTE
+
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return data
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            if contract in content:
+                return data
+            updated_content = content + contract
+        elif isinstance(content, list):
+            if any(
+                isinstance(part, dict)
+                and part.get("type") == "text"
+                and contract in str(part.get("text", ""))
+                for part in content
+            ):
+                return data
+            updated_content = [
+                *content,
+                {"type": "text", "text": contract.lstrip()},
+            ]
+        else:
+            return data
+        updated_messages = list(messages)
+        updated_message = dict(message)
+        updated_message["content"] = updated_content
+        updated_messages[index] = updated_message
+        updated = dict(data)
+        updated["messages"] = updated_messages
+        return updated
+    return data
 
 
 def _reserved_reply(value) -> bool:
@@ -460,6 +636,15 @@ async def handle_chat_completions(request: web.Request):
     if _private_url_access_requested(data):
         return await _private_url_response(request, data.get("stream") is True)
     empty_reply_fallback = _empty_reply_fallback(data)
+    upstream_data = _with_interactive_delivery_contract(data)
+    if "temperature" not in upstream_data:
+        # Deterministic sampling is the most reliable shared default for an
+        # agent harness.  In particular, small local models can otherwise
+        # wander into protocol-marker loops even when the same prompt and tool
+        # surface are sound.  Preserve an explicit client value so advanced
+        # callers retain control without making the dashboard model-specific.
+        upstream_data = dict(upstream_data)
+        upstream_data["temperature"] = 0
     request_token = object()
     request.app[_ACTIVE_REQUESTS_KEY].add(request_token)
     chat_id = data.get("user")
@@ -467,7 +652,7 @@ async def handle_chat_completions(request: web.Request):
     if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
         cancel_event = asyncio.Event()
         request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
-    data["model"] = _UPSTREAM_REWRITE
+    upstream_data["model"] = _UPSTREAM_REWRITE
 
     fwd_headers = _sanitize_headers(dict(request.headers))
     fwd_headers["Content-Type"] = "application/json"
@@ -480,7 +665,7 @@ async def handle_chat_completions(request: web.Request):
     try:
         async with ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post("http://pixel-upstream/v1/chat/completions",
-                                    json=data, headers=fwd_headers) as resp:
+                                    json=upstream_data, headers=fwd_headers) as resp:
                 ctype = resp.headers.get("Content-Type", "").lower()
 
                 if resp.status >= 400:

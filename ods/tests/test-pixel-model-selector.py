@@ -15,7 +15,12 @@ SELECTOR = ROOT / "scripts" / "select-model.py"
 CATALOG = ROOT / "config" / "model-library.json"
 
 
-def run_selector(catalog: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def run_selector(
+    catalog: Path,
+    *extra: str,
+    max_size_mb: int = 1221,
+    agent_ready_only: bool = True,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
@@ -35,11 +40,11 @@ def run_selector(catalog: Path, *extra: str) -> subprocess.CompletedProcess[str]
             "--tier",
             "0",
             "--max-size-mb",
-            "1221",
+            str(max_size_mb),
             "--host-arch",
             "amd64",
             "--installable-only",
-            "--agent-ready-only",
+            *(["--agent-ready-only"] if agent_ready_only else []),
             *extra,
         ],
         check=False,
@@ -83,6 +88,14 @@ def main() -> int:
     assert not result.stdout.strip()
     assert "no explicitly verified Pixel agent model fits" in result.stderr
 
+    result = run_selector(CATALOG, max_size_mb=0, agent_ready_only=False)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["selected"]["id"] == "qwen3.5-9b-q4"
+    assert payload["selected"]["pixel_agent_status"] == "not-agent-viable"
+    assert payload["source"] == "catalog_runtime_profile_pre_download"
+    assert payload["alternatives"][0]["context_length"] == 65536
+
     with tempfile.TemporaryDirectory() as directory:
         catalog = Path(directory) / "catalog.json"
         catalog.write_text(
@@ -119,6 +132,12 @@ def main() -> int:
         assert not result.stdout.strip()
         assert "no explicitly verified Pixel agent model fits" in result.stderr
 
+        result = run_selector(catalog, max_size_mb=0, agent_ready_only=False)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["selected"]["id"] == "failed-only"
+        assert payload["selected"]["pixel_agent_status"] == "not-agent-viable"
+
         catalog.write_text(
             json.dumps(
                 {
@@ -144,11 +163,10 @@ def main() -> int:
     features = (ROOT / "installers" / "phases" / "03-features.sh").read_text(
         encoding="utf-8"
     )
-    assert "--agent-ready-only" in detection
-    assert "PIXEL_AGENT_MODEL_READY=false" in detection
-    assert "No catalog-tested Pixel performance profile fits" in detection
-    assert "Pixel adaptive mode selected the best-fit installable local model" in detection
-    assert '_selector_env="$(_run_catalog_selector' in detection
+    assert "--agent-ready-only" not in detection
+    assert '_selector_max_size_mb=0' in detection
+    assert "strongest installable hardware-fit model" in detection
+    assert '_selector_env="$(_run_catalog_selector 2>>' in detection
     assert 'PIXEL_AGENT_MODEL_READY:-unknown' in features
     assert "Pixel adaptive mode will use this best-fit local model" in features
     assert "catalog testing is performance guidance, not an access gate" in features
@@ -162,7 +180,7 @@ def main() -> int:
     assert '_sync_extension_compose "$_pixel_support_services" litellm' in features
     assert '_sync_extension_compose "$_pixel_support_services" searxng' in features
 
-    print("Pixel model selector tests passed: 5")
+    print("Pixel model selector tests passed: 7")
     return 0
 
 

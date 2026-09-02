@@ -48,7 +48,7 @@ const MAX_CANCEL_BODY = 256;
 const MAX_STATUS_INTERVAL_MS = 86400000; // 1 day
 const STATUS_MODE = 0o640; // group-readable, service-owner-writable projection
 const ODS_VERSION_RE = /^(?:unknown|[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/;
-const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255}$/;
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255}$/;
 
 // Only nonsecret, user-facing ODS ports are projected. Values are captured by
 // the installer after port resolution so Pixel does not guess default ports
@@ -357,7 +357,7 @@ export function gatewayRuntimeFromConfig(config) {
     const label = modelId === "ods/current" ? "Current" : "Default";
     if (!["default", "ods/current"].includes(modelId) || typeof model.name !== "string") return null;
     const display = model.name.match(
-      new RegExp(`^ODS ${label} \\(([A-Za-z0-9][A-Za-z0-9._+:/ -]{0,255})\\)$`)
+      new RegExp(`^ODS ${label} \\(([A-Za-z0-9][A-Za-z0-9._+:/ @(),=-]{0,255})\\)$`)
     );
     if (!display) return null;
     concreteModel = display[1];
@@ -683,11 +683,15 @@ function parseVerificationResponse(value) {
   const hasRecoveryCode =
     status === "failed" &&
     value.code === OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE;
+  const suppressStaleExecWarning =
+    value.suppressStaleExecWarning === true &&
+    (status === "none" || status === "passed");
   const expectedKeys = carriesAuthoritativeText
     ? hasRecoveryCode
       ? ["status", "text", "code"]
       : ["status", "text"]
     : ["status"];
+  if (suppressStaleExecWarning) expectedKeys.push("suppressStaleExecWarning");
   if (
     Object.keys(value).sort().join("\n") !== expectedKeys.sort().join("\n") ||
     (carriesAuthoritativeText &&
@@ -738,7 +742,32 @@ async function verificationForRun(runId, token, gatewayPort, signal, deps) {
 }
 
 function applyVerificationToCompletion(completion, verification) {
-  if (!verification.text) return completion;
+  if (!verification.text) {
+    const content = completion?.choices?.[0]?.message?.content;
+    if (!verification.suppressStaleExecWarning || typeof content !== "string") {
+      return completion;
+    }
+    // OpenClaw 2026.6.33 can retain a failed deferred `tool_call` exec after a
+    // later wrapped exec succeeds. Strip only its exact generated ODS control
+    // suffix, and only when the in-process guard observed that recovery. Near
+    // matches and current failures pass through unchanged.
+    const cleaned = content.replace(
+      /(?:\r?\n){2}⚠️ 🛠️ `\/run\/pixel-ods-control\/cancellable-exec\.sh (?:[0-9a-f]{64}|[0-9a-f]{16}…[0-9a-f]{3,16}) [A-Za-z0-9+/]+={0,2}` failed$/u,
+      ""
+    );
+    if (cleaned === content) return completion;
+    const choice = completion.choices[0];
+    return {
+      ...completion,
+      choices: [
+        {
+          ...choice,
+          message: { ...choice.message, content: cleaned },
+        },
+        ...completion.choices.slice(1),
+      ],
+    };
+  }
   return {
     ...completion,
     choices: [
@@ -891,9 +920,10 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
       controller.signal,
       deps
     );
-    const responseBody = verification.text
-      ? Buffer.from(JSON.stringify(applyVerificationToCompletion(completion, verification)), "utf8")
-      : body;
+    const verifiedCompletion = applyVerificationToCompletion(completion, verification);
+    const responseBody = verifiedCompletion === completion
+      ? body
+      : Buffer.from(JSON.stringify(verifiedCompletion), "utf8");
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
@@ -1061,6 +1091,40 @@ export async function dockerRuntime(deps = defaultDeps) {
   return { model, context_length: contextLength };
 }
 
+export async function dockerRouterRuntime(deps = defaultDeps) {
+  const { stdout } = await execFilePromise(
+    deps.execFile,
+    "docker",
+    ["exec", "ods-model-router", "cat", "/state/model-state.json"],
+    { timeout: DOCKER_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true }
+  );
+  let state;
+  try {
+    state = JSON.parse(String(stdout || ""));
+  } catch {
+    return null;
+  }
+  const active = state?.active;
+  const model = active?.runtimeModelId;
+  const contextLength = active?.contextLength;
+  if (
+    state?.schema !== "ods.model-state.v1" ||
+    !active ||
+    typeof active !== "object" ||
+    Array.isArray(active) ||
+    active.publicModel !== "ods/current" ||
+    !Number.isInteger(active.routeSeq) ||
+    typeof model !== "string" ||
+    !MODEL_NAME_RE.test(model) ||
+    !Number.isInteger(contextLength) ||
+    contextLength < 4096 ||
+    contextLength > 10_000_000
+  ) {
+    return null;
+  }
+  return { model, context_length: contextLength };
+}
+
 export function atomicWriteJson(file, value, fsImpl = fs) {
   const directory = path.dirname(file);
   const directoryStat = fsImpl.lstatSync(directory);
@@ -1104,9 +1168,23 @@ export async function writeStatus(
   } catch {
     apps = [];
   }
+  // The secured OpenClaw configuration is the runtime Pixel is actually
+  // bound to. During a transactional model activation the live inference
+  // process and OpenClaw are updated before model-state.json is committed, so
+  // the router projection can legitimately describe the previous route for a
+  // short window. Prefer the owner-validated configured runtime whenever it
+  // is available; Docker inspection remains the fallback for legacy token
+  // files that cannot carry an authoritative runtime binding.
   if (configuredRuntime !== undefined) {
     runtime = configuredRuntime;
   } else if (docker === "ok") {
+    try {
+      runtime = await dockerRouterRuntime(deps);
+    } catch {
+      runtime = null;
+    }
+  }
+  if (runtime === null && docker === "ok") {
     try {
       runtime = await dockerRuntime(deps);
     } catch {

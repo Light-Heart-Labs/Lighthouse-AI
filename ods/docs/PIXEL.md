@@ -7,19 +7,25 @@ Hermes remains installed by default as the portable fallback and rollback
 agent. Deprecated OpenClaw and the OpenCode coding UI remain separately
 selectable; this integration does not delete either one.
 
-On a fresh local-model Pixel install, ODS selects only a pinned catalog model
-with an explicit verified agent-viability verdict. If a lightweight tier's
-model size preference would otherwise choose a model that failed agent or
-application probes, agent readiness takes precedence while hardware memory-fit
-checks remain enforced. Automatic enablement falls back to Hermes when no
-verified agent model fits. An explicit local `--pixel` request may continue
-with the best installable model, but ODS preserves and displays that model's
-unqualified readiness verdict rather than silently calling it agent-ready.
-Qualified hosts using ODS-managed cloud, hybrid, or external Lemonade routes
-bind Pixel through the same authenticated LiteLLM gateway as other ODS
-consumers. Gateway readiness does not itself qualify an upstream model's agent
-quality, so broad provider support and model capability evidence remain
-separate claims.
+Pixel does not maintain a model allowlist and ODS does not block chat or tool
+use behind a "Pixel-ready" verdict. Every model or remote provider that is
+callable through the active ODS Switchboard route is callable through Pixel.
+ODS still applies its ordinary hardware-fit and inference-readiness checks when
+it chooses a fresh install's default model; any agent-quality measurements are
+advisory capability evidence, not an access gate. Hermes is the rollback agent
+when the Pixel runtime, host, license, or authenticated gateway is unavailable,
+not a substitute selected merely because a callable model scored poorly on an
+agent probe.
+
+The harness adapts its prompt and Tool Search budget to the active model while
+retaining the same mechanical authority boundaries, cancellation, receipts,
+verification, and rollback. A small model may need shorter tasks, more focused
+recovery turns, or produce less capable results than a larger model, but the UI
+must remain usable and honest about those limits. ODS-managed cloud, hybrid,
+local, and external Lemonade routes all bind Pixel through the same
+authenticated LiteLLM gateway used by other ODS consumers. Gateway readiness
+proves that the route is callable; it does not claim that every underlying
+model has equal intelligence or tool-use skill.
 
 ## Legal and release boundary
 
@@ -92,7 +98,7 @@ Browser
             |                    |                      |                    |
             v                    v                      v                    v
  exact-digest ODS plugin   Operations plugin     sandbox coding      ods-gateway/
- four bounded tools       typed request spool    and public web      ods/current
+ seven typed tools        typed request spool    and public web      ods/current
             |                    |                                           |
             v                    v                                           v
  /run/ods-pixel/         isolated root-owned                         authenticated
@@ -351,11 +357,13 @@ family changes are supported: an explicitly reasoning-enabled Qwen route gets
 the Qwen chat-template compatibility policy and a real non-off effort; that
 policy is removed for no-think Qwen routes and when a non-Qwen model is
 activated. Pixel's
-managed agent and tool prompt requires a context of at least 16384 tokens; all
-bundled ODS catalog models are at or above that floor. An advanced custom
-activation below it is rejected before any model state changes. At 16K and 24K,
-ODS lowers Pixel's output ceiling to one eighth of the context; at 32K and
-above it allows up to 4096 output tokens. The same value is applied as
+managed agent route supports OpenClaw's 4096-token minimum, including the
+bundled 8K T0 profile. Models below 16K run in a deliberately constrained
+adaptive mode, where task complexity and reliability vary with the available
+prompt budget; they are not excluded. An advanced custom activation below 4K
+is rejected before any model state changes. Below 32K, ODS lowers Pixel's
+output ceiling to one quarter of the context; at 32K and above it allows up to
+4096 output tokens. The same value is applied as
 OpenClaw's compaction reserve, with its larger embedded reserve floor disabled,
 so a smaller qualified context still leaves room for Pixel's fixed prompt and
 tool results.
@@ -366,8 +374,10 @@ case, and explicit `--pixel` fails visibly instead of implying provider parity.
 
 ## Bounded ODS tools
 
-The default ODS integration exposes three read-only tools and one narrow
-create-only artifact tool to Pixel:
+The default ODS integration exposes seven narrowly scoped tools to Pixel. They
+remain available to every callable model through the same policy-filtered Tool
+Search catalog; model qualification labels describe observed quality and never
+act as a capability gate:
 
 - `pixel_ods_status` returns the sanitized overall ODS state, an explicit
   application count, and allowlisted application states.
@@ -376,6 +386,17 @@ create-only artifact tool to Pixel:
   an allowlisted purpose and the configured localhost URL, so Pixel can name
   and link ODS applications without guessing default ports. The count avoids
   asking small local models to infer it from the array.
+- `pixel_ods_host_observe` runs one exact, read-only host observation through
+  the external Operations Broker and returns its terminal receipt. It has no
+  command, target, mutation, approval, or raw-shell input.
+- `pixel_ods_evidence_report` and `pixel_ods_evidence_readback` are guard-only
+  controls for an owner-requested report tied to verified Operations evidence.
+  On compact models the guard may complete that exact report atomically after
+  receipt validation: it accepts one owner-named workspace-relative path,
+  generates the body mechanically from the validated receipt, rejects unsafe
+  parents and multiply-linked destinations, writes mode `0600`, and verifies
+  readback through the same file descriptor. It cannot write model-authored
+  content or provide a generic host-filesystem capability.
 - `pixel_ods_web_extract` uses OpenClaw's strict public-web network guard to find a
   distinctive literal method or section name anywhere in a long public page.
   A bounded fallback accepts two or three keywords only when they co-occur in
@@ -441,18 +462,32 @@ same-release apply transaction, verifies the exact source, and reinstalls the
 ODS ingress. If only the ODS extension contract changed while the exact
 verified Pixel source and newly planned canonical runtime configuration still
 match the live configuration, ODS refreshes OpenClaw's persisted plugin
-registry, verifies the exact plugin root and three-tool descriptor in both the
+registry, verifies the exact plugin root and seven-tool descriptor in both the
 persisted and current registry views, then restarts and verifies the gateway.
 Pixel source drift or runtime-configuration drift takes the ordinary
 configure/plan/apply path and remains fail closed.
 
-The managed runtime preserves Pixel's upstream workspace-bootstrap ceilings
-(`bootstrapMaxChars=32000` and `bootstrapTotalMaxChars=96000`). These are
-ceilings, not forced prompt sizes. They prevent the shipped `AGENTS.md` and
-`TOOLS.md` operating contracts from being silently truncated while still
-letting OpenClaw inject only the files that are present. A gateway warning that
-either file was truncated is a qualification failure for the default ODS
-workspace.
+The managed runtime preserves the upstream default workspace-bootstrap ceilings
+(`bootstrapMaxChars=32000` and `bootstrapTotalMaxChars=96000`). At 32K context
+and above, Pixel uses a `14000`-character per-file and `36000`-character total
+ceiling so the shipped `AGENTS.md` and `TOOLS.md` contracts remain available in
+full while unrelated workspace material stays bounded. Below 32K, injecting
+those verbose files would overflow a fresh turn before the model could call a
+tool. ODS therefore uses OpenClaw's supported `contextInjection=never` mode for
+that agent route and supplies a concise safety/execution core plus only the
+route-specific contract needed by the owner's current request. Tool availability,
+sandboxing, approvals, and broker authority do not change with context size.
+
+ODS explicitly enables OpenClaw's local-model lean surface for Pixel. The
+stable `ods/current` alias prevents OpenClaw from inferring that the provider is
+local, so without this setting even a lightweight laptop model receives every
+direct tool schema. Lean mode retains the same capabilities behind the
+`tool_search`, `tool_describe`, and `tool_call` structured controls while
+reducing the first-turn schema burden. Pixel Edge also adds a
+short, trusted delivery instruction next to each current owner message. This
+prevents small models from selecting OpenClaw's asynchronous `NO_REPLY`
+sentinel in interactive chat; it does not fabricate an answer or retry a
+possibly side-effecting tool request.
 
 ODS will not adopt or overwrite an ambient Pixel/OpenClaw deployment. If it
 finds an existing OpenClaw configuration, Pixel gateway environment, Pixel
@@ -585,7 +620,8 @@ head:
   plus live rejection of overwrite, traversal, and symlink-parent attempts;
 - a cross-family model swap and a context-only change, with Pixel using the
   newly active identity and invoking both bounded ODS tools after each change;
-- rejection of a managed-Pixel activation below 16K with the previous runtime,
+- live adaptive use at the bundled 8K T0 profile, plus rejection of a
+  managed-Pixel activation below OpenClaw's 4K minimum with the previous runtime,
   persisted configuration, and gateway process unchanged;
 - `--no-pixel --hermes` rollback with ordinary chat and Hermes verified;
 - reinstallation/reactivation from the same clean, exact source; and

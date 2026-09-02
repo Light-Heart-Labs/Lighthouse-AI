@@ -34,6 +34,7 @@ import {
   validateConfig,
   dockerApps,
   dockerRuntime,
+  dockerRouterRuntime,
   writeStatus,
   start,
   gatewayFetch,
@@ -57,6 +58,7 @@ function fakeGateway({
   onVerificationRequest,
   verification = { status: "none" },
   abortReplies = [true],
+  completionText = "ok",
 } = {}) {
   let abortIndex = 0;
   const server = http.createServer((req, res) => {
@@ -90,7 +92,7 @@ function fakeGateway({
         return;
       }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ id: TEST_RUN_ID, choices: [{ message: { content: "ok" } }] }));
+      res.end(JSON.stringify({ id: TEST_RUN_ID, choices: [{ message: { content: completionText } }] }));
     });
   });
   return new Promise((resolve) => {
@@ -639,6 +641,93 @@ test("non-stream response releases authoritative text from passed Operations ver
   }
 });
 
+test("non-stream response removes only a guard-confirmed superseded wrapped exec warning", async () => {
+  const staleWarning =
+    "recovery_probe=passed\n\n⚠️ 🛠️ `/run/pixel-ods-control/cancellable-exec.sh " +
+    "7a77c125fe1a5a4d…c26f647f11a8df9 " +
+    "cHl0aG9uMyAtYyAncmFpc2UgU3lzdGVtRXhpdCg3KSc=` failed";
+  const gw = await fakeGateway({
+    verification: { status: "none", suppressStaleExecWarning: true },
+    completionText: staleWarning,
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "recover" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(
+        JSON.parse(response.body).choices[0].message.content,
+        "recovery_probe=passed"
+      );
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
+test("superseded warning cleanup leaves near matches and unsignalled warnings intact", async () => {
+  const warning =
+    "still visible\n\n⚠️ 🛠️ `/run/pixel-ods-control/cancellable-exec.sh " +
+    "7a77c125fe1a5a4d…c26f647f11a8df9 dHJ1ZQ==` failed";
+  for (const variant of [
+    { verification: { status: "none" }, completionText: warning },
+    {
+      verification: { status: "none", suppressStaleExecWarning: true },
+      completionText: warning.replace("cancellable-exec.sh", "other-exec.sh"),
+    },
+  ]) {
+    const gw = await fakeGateway(variant);
+    try {
+      const srv = await startIngress({ gatewayPort: gw.port });
+      try {
+        const response = await request(srv, "POST", "/v1/chat/completions", {
+          body: JSON.stringify({ messages: [{ role: "user", content: "report" }] }),
+          headers: { "Content-Type": "application/json" },
+        });
+        assert.equal(response.status, 200);
+        assert.equal(
+          JSON.parse(response.body).choices[0].message.content,
+          variant.completionText
+        );
+      } finally {
+        await new Promise((resolve) => srv.close(resolve));
+      }
+    } finally {
+      await new Promise((resolve) => gw.server.close(resolve));
+    }
+  }
+});
+
+test("rejects stale exec warning suppression on a failed verification response", async () => {
+  const gw = await fakeGateway({
+    verification: {
+      status: "failed",
+      text: "Pixel could not verify the final command.",
+      suppressStaleExecWarning: true,
+    },
+  });
+  try {
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "claim success" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 502);
+      assert.equal(JSON.parse(response.body).error.message, "verification state unavailable");
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+    }
+  } finally {
+    await new Promise((resolve) => gw.server.close(resolve));
+  }
+});
+
 test("streaming response releases a bounded broad Operations report above the legacy 2 KiB cap", async () => {
   const verifiedText = [
     "Pixel verified these ODS host facts through structurally matched terminal Operations Broker receipts.",
@@ -1122,6 +1211,44 @@ test("runtime projection rejects paths, malformed contexts, and non-JSON output"
   }
 });
 
+test("router runtime projection returns the exact active stable-alias target", async () => {
+  const fakeDocker = (cmd, args, opts, callback) => {
+    assert.equal(cmd, "docker");
+    assert.deepEqual(args, [
+      "exec", "ods-model-router", "cat", "/state/model-state.json",
+    ]);
+    assert.ok(opts.timeout > 0, "must have explicit timeout");
+    callback(null, JSON.stringify({
+      schema: "ods.model-state.v1",
+      active: {
+        routeSeq: 4,
+        runtimeModelId: "Qwen3.5-2B-Q4_K_M.gguf",
+        publicModel: "ods/current",
+        contextLength: 65536,
+      },
+    }), "");
+  };
+  assert.deepEqual(await dockerRouterRuntime({ execFile: fakeDocker }), {
+    model: "Qwen3.5-2B-Q4_K_M.gguf",
+    context_length: 65536,
+  });
+});
+
+test("router runtime projection rejects malformed or inactive state", async () => {
+  for (const state of [
+    { schema: "wrong", active: {} },
+    { schema: "ods.model-state.v1", active: null },
+    { schema: "ods.model-state.v1", active: { routeSeq: 1, runtimeModelId: "../secret", publicModel: "ods/current", contextLength: 65536 } },
+    { schema: "ods.model-state.v1", active: { routeSeq: 1, runtimeModelId: "model", publicModel: "other", contextLength: 65536 } },
+    "not-json",
+  ]) {
+    const fakeDocker = (_cmd, _args, _opts, callback) => {
+      callback(null, state === "not-json" ? state : JSON.stringify(state), "");
+    };
+    assert.equal(await dockerRouterRuntime({ execFile: fakeDocker }), null);
+  }
+});
+
 test("status keeps app health when optional runtime inspection is unavailable", async () => {
   const statusFile = path.join(DIR, "runtime-unavailable-status.json");
   const fakeDocker = (_cmd, args, _opts, callback) => {
@@ -1182,6 +1309,87 @@ test("status prefers the selected Pixel runtime over the local Docker model", as
   assert.deepEqual(projection.runtime, {
     model: "org/model:variant",
     context_length: 2_000_000,
+  });
+});
+
+test("status uses the active model-router target when authoritative Pixel metadata is unavailable", async () => {
+  const statusFile = path.join(DIR, "router-runtime-status.json");
+  const fakeDocker = (_cmd, args, _opts, callback) => {
+    if (args[0] === "ps") {
+      callback(null, `${JSON.stringify({ Names: "ods-dashboard", Status: "Up (healthy)" })}\n`, "");
+      return;
+    }
+    if (args[0] === "exec") {
+      callback(null, JSON.stringify({
+        schema: "ods.model-state.v1",
+        active: {
+          routeSeq: 4,
+          runtimeModelId: "Qwen3.5-2B-Q4_K_M.gguf",
+          publicModel: "ods/current",
+          contextLength: 65536,
+        },
+      }), "");
+      return;
+    }
+    callback(new Error("unexpected fallback inspection"));
+  };
+  const projection = await writeStatus(
+    true,
+    18999,
+    statusFile,
+    "2.6.0",
+    {
+      fetch: async () => ({ status: 200, body: { cancel: async () => {} } }),
+      execFile: fakeDocker,
+      setTimeout,
+      clearTimeout,
+    },
+    configFromEnv({}).appPorts
+  );
+  assert.deepEqual(projection.runtime, {
+    model: "Qwen3.5-2B-Q4_K_M.gguf",
+    context_length: 65536,
+  });
+});
+
+test("status keeps the authoritative Pixel runtime during a transactional router-state lag", async () => {
+  const statusFile = path.join(DIR, "transactional-runtime-status.json");
+  const fakeDocker = (_cmd, args, _opts, callback) => {
+    if (args[0] === "ps") {
+      callback(null, `${JSON.stringify({ Names: "ods-dashboard", Status: "Up (healthy)" })}\n`, "");
+      return;
+    }
+    if (args[0] === "exec") {
+      callback(null, JSON.stringify({
+        schema: "ods.model-state.v1",
+        active: {
+          routeSeq: 15,
+          runtimeModelId: "Qwen3.5-9B-Q4_K_M.gguf",
+          publicModel: "ods/current",
+          contextLength: 32768,
+        },
+      }), "");
+      return;
+    }
+    callback(new Error("authoritative Pixel metadata must avoid stale router inspection"));
+  };
+  const projection = await writeStatus(
+    true,
+    18999,
+    statusFile,
+    "2.6.0",
+    {
+      fetch: async () => ({ status: 200, body: { cancel: async () => {} } }),
+      execFile: fakeDocker,
+      setTimeout,
+      clearTimeout,
+    },
+    configFromEnv({}).appPorts,
+    { model: "Qwen3.5-2B-Q4_K_M.gguf", context_length: 8192 }
+  );
+  assert.deepEqual(projection.runtime, {
+    model: "Qwen3.5-2B-Q4_K_M.gguf",
+    context_length: 8192,
   });
 });
 

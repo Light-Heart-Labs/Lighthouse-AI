@@ -33,12 +33,15 @@ import {
 } from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
+import { createHostObserveTool } from "./host-observe.mjs";
+import { createEvidenceArtifactWriter } from "./evidence-artifact.mjs";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
 const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const toolLoopGuardRegistry = createToolLoopGuardRegistry();
 const execCancellationControl = createExecCancellationControl();
+const evidenceArtifactWriter = createEvidenceArtifactWriter();
 
 // Restrict tool registration to the Pixel agent. Tools are only offered to the
 // agent id declared by this plugin (see openclaw.plugin.json); this guards the
@@ -100,6 +103,17 @@ function errorResult() {
       },
     ],
     details: { boundary: "status-only", evidence: "untrusted status projection" },
+  };
+}
+
+function guardedEvidenceAdapterResult() {
+  return {
+    content: [{
+      type: "text",
+      text: "This evidence adapter is available only inside a guard-verified host report continuation.",
+    }],
+    details: { boundary: "guard-only evidence adapter" },
+    isError: true,
   };
 }
 
@@ -175,6 +189,8 @@ export default definePluginEntry({
   description: "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
   register(api) {
     const statusFile = statusFileFromEnv();
+    const configuredContextWindow = api.pluginConfig?.modelContextWindow;
+    const configuredLeanPrompt = api.pluginConfig?.leanPrompt === true;
     // OpenClaw registers gateway HTTP routes and per-agent runtime hooks in
     // separate passes. Keep one process-local guard so the route can see the
     // opaque user -> active session mapping observed by the runtime hook.
@@ -189,6 +205,7 @@ export default definePluginEntry({
           reason: "ods_client_disconnect",
         }),
       execControl: execCancellationControl,
+      evidenceArtifactWriter,
       warn: (message) => api.logger.warn(message),
     });
 
@@ -199,6 +216,8 @@ export default definePluginEntry({
       toolLoopGuard.observeRun(context, AGENT_ID, event);
       return promptContractForAgent(context, AGENT_ID, event, {
         verificationStatus: toolLoopGuard.verificationStatus(context?.runId),
+        configuredContextWindow,
+        configuredLeanPrompt,
       });
     });
     api.on("model_call_started", (event, context) =>
@@ -209,6 +228,12 @@ export default definePluginEntry({
     );
     api.on("after_tool_call", (event, context) =>
       toolLoopGuard.afterToolCall(event, context, AGENT_ID)
+    );
+    api.on("tool_result_persist", (event, context) =>
+      toolLoopGuard.toolResultPersist(event, context, AGENT_ID)
+    );
+    api.on("before_agent_finalize", (event, context) =>
+      toolLoopGuard.beforeAgentFinalize(event, context, AGENT_ID)
     );
     // Delivery rewriting is limited to host-authoritative failed or pending
     // verification state. It neither requests nor receives conversation data.
@@ -267,6 +292,34 @@ export default definePluginEntry({
       },
       { names: ["pixel_ods_status"] }
     );
+
+    registerTool(api, createHostObserveTool({
+      readOdsStatus: async () => statusPayload(await readProjection(statusFile)),
+    }), {
+      names: ["pixel_ods_host_observe"],
+    });
+
+    for (const [name, description] of [
+      [
+        "pixel_ods_evidence_report",
+        "Guard-only host-report adapter. Takes no arguments. During an owner-requested verified host evidence workflow, the Pixel guard rewrites this control to one exact core workspace write at the owner-named path with receipt-bound content.",
+      ],
+      [
+        "pixel_ods_evidence_readback",
+        "Guard-only host-report readback adapter. Takes no arguments. During an owner-requested verified host evidence workflow, the Pixel guard rewrites this control to one exact core workspace read at the owner-named path.",
+      ],
+    ]) {
+      registerTool(
+        api,
+        {
+          name,
+          description,
+          parameters: { type: "object", additionalProperties: false, properties: {} },
+          execute: async () => guardedEvidenceAdapterResult(),
+        },
+        { names: [name] }
+      );
+    }
 
     registerTool(
       api,

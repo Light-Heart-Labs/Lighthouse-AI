@@ -378,6 +378,17 @@ def test_active_runtime_projection_rejects_untrusted_or_malformed_state(runtime)
     )
 
 
+def test_active_runtime_projection_accepts_a_constrained_adaptive_context():
+    runtime = {
+        "source": "remote-provider",
+        "model": "small-owner-model",
+        "contextLength": 8192,
+        "maxTokens": 1024,
+        "reasoning": False,
+    }
+    assert pixel._active_runtime_projection({"activeRuntime": runtime}) == runtime
+
+
 @pytest.mark.asyncio
 async def test_status_projects_active_model_switch_without_touching_edge(monkeypatch):
     async def active_model_lifecycle(*_args, **_kwargs):

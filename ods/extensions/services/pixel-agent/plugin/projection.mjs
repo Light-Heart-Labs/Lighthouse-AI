@@ -427,6 +427,9 @@ export async function readProjection(file, deps = defaultFs, nowMs = Date.now())
 // Keeping these builders beside the validator makes the model-visible schema
 // directly unit-testable without loading the OpenClaw plugin runtime.
 export function statusPayload(projection) {
+  // Keep the common status tool small enough for constrained local models.
+  // Detailed per-application rows remain available through appsPayload and
+  // pixel_ods_apps_list; this surface needs only the validated aggregate.
   return {
     status: "ok",
     ingress_ready: projection.ingress_ready,
@@ -436,7 +439,6 @@ export function statusPayload(projection) {
     online_app_count: projection.online_app_count,
     runtime: projection.runtime,
     app_count: projection.app_count,
-    apps: projection.apps,
     timestamp: projection.timestamp,
     stale: projection.stale,
     boundary: projection.boundary,

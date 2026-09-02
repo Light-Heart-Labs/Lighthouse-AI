@@ -161,8 +161,9 @@ test("tool payloads expose the validated application count explicitly", async ()
   assert.equal(status.online_app_count, 2);
   assert.equal(status.ods_version, "2.6.0");
   assert.equal(status.runtime.context_length, 32768);
-  assert.equal(status.apps.length, status.app_count);
+  assert.equal(Object.hasOwn(status, "apps"), false);
   assert.equal(apps.app_count, 2);
+  assert.equal(apps.apps.length, apps.app_count);
   assert.equal(apps.online_app_count, 2);
   assert.equal(apps.apps.length, apps.app_count);
 });

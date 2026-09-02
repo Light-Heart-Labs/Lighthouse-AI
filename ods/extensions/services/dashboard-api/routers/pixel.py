@@ -195,7 +195,7 @@ def _active_runtime_projection(status: object) -> dict[str, object] | None:
         or not isinstance(runtime.get("model"), str)
         or not 1 <= len(runtime["model"]) <= 256
         or type(runtime.get("contextLength")) is not int
-        or not 16384 <= runtime["contextLength"] <= 10_000_000
+        or not 4096 <= runtime["contextLength"] <= 10_000_000
         or type(runtime.get("maxTokens")) is not int
         or not 1 <= runtime["maxTokens"] <= runtime["contextLength"]
         or type(runtime.get("reasoning")) is not bool
