@@ -110,6 +110,9 @@ export const VERIFICATION_PENDING_DELIVERY_PREFIX =
 export const VERIFICATION_FAILED_DELIVERY_PREFIX =
   "Pixel could not complete this task successfully because the latest verification check failed. The workspace is preserved; ask Pixel to continue with a focused repair.";
 
+export const VERIFICATION_NOT_RUN_DELIVERY_PREFIX =
+  "Pixel could not complete this task successfully because the owner-requested verification was not executed. The workspace is preserved; ask Pixel to continue and run the requested checks.";
+
 export const VERIFICATION_COMMAND_NOT_AUDITABLE_REASON =
   "Pixel blocked this verification because a shell pipeline, redirect, or chained command can hide the test runner's exit status or truncate its evidence. Rerun the same test command directly, with no pipeline, redirection, chaining, or output filter, and inspect its complete output.";
 
@@ -3698,6 +3701,7 @@ export function createToolLoopGuard({
         workspaceTaskDirectory: undefined,
         workspaceRequestedFiles: [],
         workspacePythonUnittestRequested: false,
+        workspaceVerificationRequested: false,
         workspaceToolSearchRouted: false,
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
@@ -3904,6 +3908,7 @@ export function createToolLoopGuard({
         return undefined;
       })();
       const compactPythonArgs = pendingParams.args.args ?? [];
+      const compactPythonContext = pendingParams.args.context;
       const compactUnittestRunner =
         pendingParams.id === "python3" &&
         Object.keys(pendingParams.args).sort().join("\u0000") ===
@@ -3914,7 +3919,10 @@ export function createToolLoopGuard({
           compactUnittestRunner ||
           (
             (pendingParams.id === "python3" || nestedName === "exec") &&
-            Object.keys(pendingParams.args).every((key) => key === "path" || key === "args") &&
+            Object.keys(pendingParams.args).every(
+              (key) => key === "path" || key === "args" || key === "context"
+            ) &&
+            (compactPythonContext === undefined || compactPythonContext === "fork") &&
             Array.isArray(compactPythonArgs) &&
             (compactPythonArgs.length === 0 ||
               (compactPythonArgs.length === 1 && compactPythonArgs[0] === "-v"))
@@ -5261,6 +5269,10 @@ export function createToolLoopGuard({
         state.workspacePythonUnittestRequested = /\bunittest\b/i.test(
           currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
         );
+        state.workspaceVerificationRequested = state.workspaceTaskRequested &&
+          /\b(?:(?:run|execute)\s+(?:the\s+)?(?:unit\s*)?tests?|verification|verify|test\s+suite)\b/i.test(
+            currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
+          );
         state.workspaceToolSearchRouted = false;
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
@@ -6207,6 +6219,12 @@ export function createToolLoopGuard({
     }
     if (state.latestVerificationStatus === "failed") {
       return { status: "failed", text: VERIFICATION_FAILED_DELIVERY_PREFIX };
+    }
+    if (
+      state.workspaceVerificationRequested &&
+      state.latestVerificationStatus === undefined
+    ) {
+      return { status: "failed", text: VERIFICATION_NOT_RUN_DELIVERY_PREFIX };
     }
     if (state.githubCanonicalUrl && !state.githubCanonicalSatisfied) {
       return { status: "failed", text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX };

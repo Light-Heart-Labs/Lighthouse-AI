@@ -64,6 +64,7 @@ import {
   REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
   REQUESTED_UNITTEST_REQUIRED_REASON,
   VERIFICATION_FAILED_DELIVERY_PREFIX,
+  VERIFICATION_NOT_RUN_DELIVERY_PREFIX,
   VERIFICATION_COMMAND_NOT_AUDITABLE_REASON,
   VERIFICATION_PENDING_DELIVERY_PREFIX,
   WEB_BUDGET_EXHAUSTED_REASON,
@@ -1209,6 +1210,30 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     background: false,
     yieldMs: 30_000,
   });
+  const compactPythonForkRunner = call(guard, "tool_call", {
+    event: {
+      toolCallId: "compact-python-fork-runner",
+      params: {
+        id: "python3",
+        args: { path: "test_normalize_name.py", context: "fork" },
+      },
+    },
+    context: { toolCallId: "compact-python-fork-runner" },
+  });
+  assert.deepEqual(compactPythonForkRunner.params, compactPythonRunner.params);
+  assert.equal(
+    call(guard, "tool_call", {
+      event: {
+        toolCallId: "compact-python-host-runner",
+        params: {
+          id: "python3",
+          args: { path: "test_normalize_name.py", context: "host" },
+        },
+      },
+      context: { toolCallId: "compact-python-host-runner" },
+    }),
+    undefined
+  );
   const compactExecRunner = call(guard, "tool_call", {
     event: {
       toolCallId: "compact-exec-runner",
@@ -6097,6 +6122,32 @@ test("final delivery replaces a model claim after failed verification", () => {
     text: VERIFICATION_FAILED_DELIVERY_PREFIX,
   });
   assert.doesNotMatch(terminal.payload.text, /claimed success/i);
+});
+
+test("final delivery rejects a model claim when requested verification never ran", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    {
+      prompt:
+        "Work in /workspace/project. Create probe.py and test_probe.py, then run the tests.",
+    }
+  );
+  const terminal = reply(guard);
+  assert.equal(terminal.payload.text, VERIFICATION_NOT_RUN_DELIVERY_PREFIX);
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: VERIFICATION_NOT_RUN_DELIVERY_PREFIX,
+  });
+
+  const noVerification = createToolLoopGuard();
+  noVerification.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Work in /workspace/project. Create probe.py." }
+  );
+  assert.equal(reply(noVerification), undefined);
 });
 
 test("a passing direct unittest script clears an earlier runner failure", () => {
