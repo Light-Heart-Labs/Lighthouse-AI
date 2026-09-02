@@ -262,7 +262,7 @@ const WORKSPACE_TOOL_SEARCH_QUERY = "write read edit apply_patch exec process";
 const WORKSPACE_INSPECTION_COMPLETE_REASON =
   "The workspace inspection already completed and returned the directory, kernel, and listing; do not search, list, read the directory, or poll again. Continue the owner's requested task now. If the owner requested new files, call tool_call with id openclaw:core:write and args containing the first workspace-relative path and its full content. Do not call exec or process before that write.";
 const FAILED_TEST_READ_REPAIR_REASON =
-  "The verification command failed. Do not reread a file you just authored; its code and the failure output are already available. Apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If the failure cannot be repaired from that evidence, give the owner a visible blocker instead of repeating reads or tests.";
+  "The verification command failed. Preserve the owner's explicit behavior contract: correct a test only when its expectation contradicts the owner; otherwise repair the implementation, and never weaken an assertion merely to match broken output. A blank label such as `Invalid integer:` is not a helpful empty-input message. Do not reread a file you just authored or run another diagnostic when the failure already contains actual and expected evidence. Apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If that evidence is insufficient, give the owner a visible blocker instead of repeating reads or tests.";
 const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ops_download_stage",
   "pixel_ops_job_get",

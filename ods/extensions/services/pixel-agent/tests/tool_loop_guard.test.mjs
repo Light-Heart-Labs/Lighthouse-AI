@@ -1458,6 +1458,14 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     persistedFailure.message.content.at(-1).text,
     /file implicated by the failure \(test or implementation\)/
   );
+  assert.match(
+    persistedFailure.message.content.at(-1).text,
+    /never weaken an assertion merely to match broken output/
+  );
+  assert.match(
+    persistedFailure.message.content.at(-1).text,
+    /Invalid integer:.*not a helpful empty-input message/
+  );
   assert.deepEqual(persistedFailure.message.details.result.details, {
     status: "completed",
     exitCode: 1,
