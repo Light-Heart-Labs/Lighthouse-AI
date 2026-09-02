@@ -1045,22 +1045,19 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         assert by_id[model_id].get("install_recommendation") is False, model_id
 
 
-def test_real_pixel_failures_are_separate_from_generic_agent_evidence():
+def test_real_pixel_verdicts_are_separate_from_generic_agent_evidence():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
-    expected_sessions = {
+    expected_failures = {
         "nvidia-nemotron3-nano-4b-q4": "nvidia-nemotron-3-nano-4b",
         "ministral3-8b-instruct-2512-q4": "ministral-3-8b-instruct-2512",
         "qwen2.5-coder-3b-128k-q4": "qwen-25-coder-3b-128k",
         "qwen3.5-4b-q4": "qwen-35-4b",
-        "qwen3.5-9b-q4": "qwen-35-9b",
     }
-    generic_agent_verified = set(expected_sessions) - {"qwen3.5-9b-q4"}
 
-    for model_id, evidence_anchor in expected_sessions.items():
+    for model_id, evidence_anchor in expected_failures.items():
         compatibility = by_id[model_id]["app_compatibility"]
-        if model_id in generic_agent_verified:
-            assert compatibility["agent_viability"]["status"] == "verified"
+        assert compatibility["agent_viability"]["status"] == "verified"
         pixel = compatibility["pixel_agent"]
         assert pixel["status"] == "not_agent_viable"
         assert pixel["hostScope"] == ["windows-laptop"]
@@ -1068,7 +1065,13 @@ def test_real_pixel_failures_are_separate_from_generic_agent_evidence():
         assert pixel["pixelSha"] == "f1f811d02bffd5a1589eb6feb34323f6dadf7832"
         assert pixel["evidence"].endswith(f"#{evidence_anchor}")
 
-    qwen_9b_reason = by_id["qwen3.5-9b-q4"]["app_compatibility"]["pixel_agent"]["reason"]
-    assert "32K" in qwen_9b_reason
-    assert "64K revalidation" in qwen_9b_reason
-    assert "bounded six-failure repair budget" in qwen_9b_reason
+    qwen_9b = by_id["qwen3.5-9b-q4"]["app_compatibility"]["pixel_agent"]
+    assert qwen_9b["status"] == "verified"
+    assert qwen_9b["hostScope"] == ["windows-laptop"]
+    assert qwen_9b["productSha"] == "d0808d08645841ffcbb3cf3919a9c81fe485937b"
+    assert qwen_9b["pixelSha"] == "d99923246e5ea22c0f1c8c8fc7b0927ac8b523fe"
+    assert qwen_9b["harnessSha"] == "d99923246e5ea22c0f1c8c8fc7b0927ac8b523fe"
+    assert qwen_9b["evidence"].endswith("#qwen-35-9b-revalidation-2026-09-02")
+    assert "background process" in qwen_9b["reason"]
+    assert "9/9" in qwen_9b["reason"]
+    assert "historical evidence" in qwen_9b["reason"]

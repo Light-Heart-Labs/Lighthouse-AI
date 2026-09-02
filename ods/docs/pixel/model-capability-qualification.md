@@ -191,3 +191,41 @@ and Pixel source revisions, host scope, model artifact, runtime profile, active
 context, Pixel session, terminal verification result, and independent replay.
 Changing a prompt, plugin, model artifact, runtime profile, or context can
 justify revalidation; it does not erase prior scoped failure evidence.
+
+### Qwen 3.5 9B revalidation (2026-09-02)
+
+Qwen 3.5 9B was revalidated through the installed ODS Pixel path on the same
+`windows-laptop` WSL2 Ubuntu 24.04 host and NVIDIA 8 GB GPU. The exact model
+artifact was `Qwen3.5-9B-Q4_K_M.gguf`
+(`03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`),
+using profile `nvidia-8gb-64k-q8-kv` at an active context of 65,536. The
+installed ODS source was `d0808d08645841ffcbb3cf3919a9c81fe485937b`; the
+installed Pixel 4.3.23 source and harness were
+`d99923246e5ea22c0f1c8c8fc7b0927ac8b523fe`.
+
+- Session `80901059-efd1-4df0-b5d9-d09b97164704` created a JSON task-board
+  CLI and subprocess-based unittest suite from scratch. It found and fixed its
+  own boolean-versus-integer validation defect and a contradictory expected
+  result, finished 9/9, and passed an independent exact parsed-output check.
+- Session `b8365ace-7fea-4c78-8a23-897f239676db` repaired two seeded log
+  rotation defects and finished 8/8, but those commands completed too quickly
+  to count as proof of background-process continuity.
+- Load-bearing session `0ce4de20-5faf-42b2-ba41-b609b2a5ad28` ran exactly
+  `python3 -m unittest -v`. The command yielded process `salty-falcon`; Pixel
+  polled it to a terminal four-failure result, diagnosed two root causes, and
+  changed only `rotation.py`. The exact rerun yielded process `lucky-crest`;
+  Pixel polled it to exit zero with 9/9 in 12.001 seconds, then produced the
+  exact `rotation_repair=passed` functional marker.
+- Independent replay again passed 9/9 in 12.001 seconds and produced the same
+  functional marker. The fixed README and test files remained unchanged at
+  SHA-256 `2037f5ef5ed30d30f9b175e0aadabb33037e3d9df76fccb9e2b9d8af975afd7e`
+  and `0c409358965594452726de17e62d1c8dadd41b06de1e1d04b56823870b25dd39`;
+  the repaired implementation was pinned at
+  `392135fb056cdfcf09e82f99f7755a2311975905e069ef3d263d16a4b4f4e309`.
+- The ingress returned to `active=false`, `streams=0` after the run.
+
+Verdict: `verified` for Pixel capability on this exact host, artifact, 64K
+profile, ODS source, and Pixel source. This is not a cross-profile throughput
+claim. The 2026-08-30 failures above remain authoritative historical evidence
+for their older ODS/Pixel pair; they are superseded only within this newly
+qualified scope and never made the model inaccessible to Pixel.

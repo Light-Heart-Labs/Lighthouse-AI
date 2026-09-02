@@ -1791,16 +1791,16 @@
       "llama_server_image": null,
       "app_compatibility": {
         "pixel_agent": {
-          "status": "not_agent_viable",
-          "label": "Pixel repair loop failed at 64K context on Windows",
-          "reason": "Real Pixel coding turns at 24K and 32K created and exercised a workspace but failed verification, and a fresh 64K revalidation also exhausted the bounded six-failure repair budget. At 64K the model repeatedly rewrote brittle mock call sequences instead of correcting cache semantics; independent replay still had two of seven authored tests failing, while hidden stable-clock tests exposed expired non-LRU retention, live-key eviction before expired reclamation, and update-at-capacity eviction. The ODS ingress correctly surfaced the host-observed failure instead of false success, so direct chat, structured tool support, and additional context do not establish Pixel-agent viability on this host.",
-          "evidence": "docs/pixel/model-capability-qualification.md#qwen-35-9b",
-          "recordedAt": "2026-08-30T09:00:00Z",
-          "productSha": "df05a732ed7aedac6c527e1f9e7eeeeccfed3a5b",
-          "pixelSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
-          "harnessSha": "f1f811d02bffd5a1589eb6feb34323f6dadf7832",
+          "status": "verified",
+          "label": "Pixel verified at 64K context on Windows laptop",
+          "reason": "Fresh Pixel sessions on the auto-paired 64K profile created and debugged a new CLI, then repaired two seeded implementation defects while preserving fixed tests. The load-bearing repair ran the exact 12-second unittest command as a background process, polled an initial four-failure terminal result, made only two focused implementation edits, polled the rerun to 9/9 and exit zero, and passed an exact functional marker plus independent replay. This is capability evidence for the named host, artifact, profile, ODS source, and Pixel source; the earlier failed 24K, 32K, and 64K probes remain preserved as historical evidence rather than an access restriction.",
+          "evidence": "docs/pixel/model-capability-qualification.md#qwen-35-9b-revalidation-2026-09-02",
+          "recordedAt": "2026-09-02T23:04:24Z",
+          "productSha": "d0808d08645841ffcbb3cf3919a9c81fe485937b",
+          "pixelSha": "d99923246e5ea22c0f1c8c8fc7b0927ac8b523fe",
+          "harnessSha": "d99923246e5ea22c0f1c8c8fc7b0927ac8b523fe",
           "hostScope": ["windows-laptop"],
-          "expiresAt": "2026-09-30T00:00:00Z"
+          "expiresAt": "2026-10-02T23:04:24Z"
         }
       },
       "runtime_profiles": [

@@ -192,6 +192,7 @@ def test_dashboard_csp_allows_ods_talk_tts_blob_audio() -> None:
 def test_dashboard_csp_allows_only_the_configured_loopback_pixel_preview() -> None:
     nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
     entrypoint = read(SERVICES / "dashboard" / "entrypoint.sh")
+    dockerfile = read(SERVICES / "dashboard" / "Dockerfile")
     compose = read(ROOT / "docker-compose.base.yml")
 
     assert_true(
@@ -210,6 +211,23 @@ def test_dashboard_csp_allows_only_the_configured_loopback_pixel_preview() -> No
     assert_true(
         's|__PIXEL_PREVIEW_PORT__|${PREVIEW_PORT}|g' in entrypoint,
         "dashboard must substitute only the validated preview port into its CSP",
+    )
+    assert_true(
+        "COPY nginx.conf /etc/nginx/conf.d/default.conf.template" in dockerfile,
+        "dashboard image must retain an immutable nginx template for restarts",
+    )
+    assert_true(
+        "pid /tmp/nginx.pid" in dockerfile,
+        "non-root dashboard nginx must keep its restartable PID file in a writable directory",
+    )
+    assert_true(
+        'grep -qF \'__PIXEL_PREVIEW_PORT__\' "$NGINX_TEMPLATE"' in entrypoint
+        and 'cp "$NGINX_TEMPLATE" "$NGINX_CONF"' in entrypoint,
+        "dashboard must render its active nginx config from the template on every start",
+    )
+    assert_true(
+        "^[A-Za-z0-9._~+/=-]+$" in entrypoint,
+        "dashboard must reject API keys containing sed or nginx control characters",
     )
 
 
