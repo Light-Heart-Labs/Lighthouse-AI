@@ -224,7 +224,7 @@ done
 
 if [ "$LLM_FOUND" = false ]; then
     # Check if container is running but model still loading
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qi "${LLM_CONTAINER_MATCH}"; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxi "${LLM_CONTAINER_MATCH}" >/dev/null; then
         warn "$LLM_SERVICE_NAME container running but not responding yet (model may still be loading)"
     else
         fail "No LLM endpoint found — checked: ${LLM_ENDPOINTS[*]}"
