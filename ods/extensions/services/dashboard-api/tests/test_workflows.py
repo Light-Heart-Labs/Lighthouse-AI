@@ -191,6 +191,27 @@ def test_get_n8n_workflows_failure(test_client, monkeypatch):
     assert result == []
 
 
+def test_get_n8n_workflows_rejects_malformed_items(test_client):
+    import asyncio
+    import routers.workflows as wf_mod
+
+    resp_mock = AsyncMock()
+    resp_mock.status = 200
+    resp_mock.json = AsyncMock(return_value={"data": ["not-an-object"]})
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    session_mock = AsyncMock()
+    session_mock.get = MagicMock(return_value=ctx)
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.workflows.aiohttp.ClientSession", return_value=session_mock):
+        result = asyncio.run(wf_mod.get_n8n_workflows())
+
+    assert result == []
+
+
 # ---------------------------------------------------------------------------
 # check_workflow_dependencies() unit tests
 # ---------------------------------------------------------------------------
@@ -859,6 +880,37 @@ def test_workflow_executions_n8n_error(test_client, tmp_path, monkeypatch):
     data = resp.json()
     assert data["executions"] == []
     assert "error" in data
+
+
+def test_workflow_executions_timeout_returns_error(test_client, tmp_path, monkeypatch):
+    import asyncio
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "slow-wf", "name": "Slow Workflow", "description": "test",
+             "file": "slow.json", "dependencies": []}
+        ],
+        "categories": {},
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+    n8n_workflows = [{"id": "99", "name": "Slow Workflow", "active": True}]
+    session_mock = AsyncMock()
+    session_mock.get = MagicMock(side_effect=asyncio.TimeoutError())
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.workflows.get_n8n_workflows", new_callable=AsyncMock, return_value=n8n_workflows), \
+         patch("routers.workflows.aiohttp.ClientSession", return_value=session_mock):
+        resp = test_client.get(
+            "/api/workflows/slow-wf/executions",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"executions": [], "error": "Failed to fetch executions"}
 
 
 # ---------------------------------------------------------------------------
