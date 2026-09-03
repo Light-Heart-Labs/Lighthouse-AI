@@ -53,6 +53,7 @@ phrases.
 | VIS-12 | Cancellation | Cancel a deliberately long custom-artifact turn | UI settles, model/exec descendants stop, partial workspace bytes are preserved, a fresh visual request succeeds |
 | VIS-13 | Privacy and containment | Ask for a self-contained artifact, then inject an external image/script URL into a fixture | CSP and preview policy prevent external execution; no unpublished port, arbitrary host path, or network destination appears |
 | VIS-14 | Concurrent isolation | Run a visual build beside an unrelated Pixel chat and cancel one | The other chat and its preview complete unchanged; receipts and side panels remain bound to the correct chat |
+| VIS-15 | Remote owner access | From a second client, open the Dashboard through its configured private LAN or Tailscale route and request a new interactive visual | The side panel and new-tab view load on that client, one control is exercised, the URL does not resolve to the client's loopback, unique preview origins remain isolated, and no listener is exposed beyond the configured private access boundary |
 
 ## Experience requirements
 
@@ -67,12 +68,14 @@ A qualifying result must meet all of these conditions:
    result, but it must not provide a website, game, app, SVG, voxel scene, or
    visualization template. Compact and capable models use this same path, and
    may choose a self-contained document or multiple model-authored local files
-   without an ODS-imposed creative-size ceiling.
+   without an arbitrary single-document ceiling; the documented static-snapshot
+   file-count and byte safety bounds still apply.
 4. The side panel opens only from a structurally verified preview receipt with
    independent HTTP 200 readback. Model-authored prose or an invented localhost
-   URL cannot open it. The receipt binds one content-addressed site ID to the
-   same `site-*.localhost` hostname and URL path; cross-site host/path pairs are
-   rejected.
+   URL cannot open it. The receipt binds one content-addressed site ID to its
+   canonical origin and URL path; local access uses the same `site-*.localhost`
+   hostname and path, while a supported remote-owner route must never send a
+   client to its own loopback. Cross-site host/path pairs are rejected.
 5. The result is responsive, legible, keyboard reachable, and respects reduced
    motion where animation is nonessential. Touch controls are required for
    interactions that otherwise depend on hover or a physical keyboard.
@@ -86,6 +89,10 @@ A qualifying result must meet all of these conditions:
 9. Stateful previews use their own browser origin. Reloading one preview keeps
    its local state, while another preview begins with separate storage and
    cannot read the first preview's values.
+10. A configured private remote Dashboard path must not silently degrade to a
+    client-local URL. Remote preview transport preserves the same receipt
+    binding, browser containment, origin isolation, and interaction behavior as
+    the on-host path without exposing it to the public internet.
 
 For the auto-paired model, a novel compact visual scenario should normally reach
 its first workspace tool action within 15 seconds and its verified side-panel
@@ -100,6 +107,8 @@ For each live row retain a sanitized packet containing:
 
 - exact ODS and Pixel source identities plus the installed runtime attestation;
 - model identity, artifact digest or remote route, context, and profile;
+- owner access path (`on-host`, private LAN, or Tailscale) and whether the
+  browser runs on the ODS host or a second client;
 - Pixel chat/session ID and UTC start/finish timestamps;
 - first-tool and terminal latency;
 - normalized tool sequence and terminal status, without secrets or prompt
@@ -122,9 +131,9 @@ fixture only and cannot count as a capability pass.
 ## Acceptance
 
 The visual slice is ready for user acceptance only when VIS-01 through VIS-10
-pass on the fresh-install auto-paired model, VIS-11 through VIS-14 pass against
+pass on the fresh-install auto-paired model, VIS-11 through VIS-15 pass against
 the same exact candidate, at least one cross-family local model completes the
-core creation-and-refinement path, and the remote route completes representative
-site, app, and visual-art rows when that route is configured. Every failure is
-kept in the record and repaired or explicitly carried as a known gap; rows are
-never marked green from authored tests alone.
+core creation-and-refinement path, and the remote model route completes
+representative site, app, and visual-art rows when that route is configured.
+Every failure is kept in the record and repaired or explicitly carried as a
+known gap; rows are never marked green from authored tests alone.
