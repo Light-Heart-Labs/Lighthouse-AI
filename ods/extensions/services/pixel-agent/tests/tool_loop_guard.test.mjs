@@ -2698,6 +2698,11 @@ test("binds an exact compound owner command across shell separators", () => {
   assert.match(retry, /pixel_ops_shell_propose/);
   assert.match(retry, /"target":"ods-host"/);
   assert.ok(retry.includes(JSON.stringify(exactCommand)));
+  const canonicalProposal = {
+    target: "ods-host",
+    command: exactCommand,
+    reason: "Owner requested one protected local ODS host command.",
+  };
   assert.deepEqual(
     call(guard, "pixel_ops_shell_propose", {
       event: {
@@ -2709,12 +2714,82 @@ test("binds an exact compound owner command across shell separators", () => {
       },
     }),
     {
-      params: {
-        target: "ods-host",
-        command: exactCommand,
-        reason: "Owner requested one protected local ODS host command.",
-      },
+      params: canonicalProposal,
     }
+  );
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "a".repeat(64);
+  afterCall(guard, "pixel_ops_shell_propose", {
+    event: {
+      params: canonicalProposal,
+      result: { details: { jobId, status: "submitted", kind: "shell" } },
+    },
+  });
+  assert.match(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "The command was submitted." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ).retry.instruction,
+    new RegExp(`pixel_ops_job_wait.*${jobId}`)
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_job_wait", {
+      event: { params: { jobId: "ops-1234567890124-fedcba654321" } },
+    }),
+    { params: { jobId } }
+  );
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId: "ops-1234567890124-fedcba654321",
+          planHash,
+          status: "awaiting-approval",
+          approvalRequired: true,
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(
+    reply(guard)?.payload?.text,
+    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
+  );
+  assert.match(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "Approval is pending." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ).retry.instruction,
+    new RegExp(`pixel_ops_job_wait.*${jobId}`)
+  );
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash,
+          status: "awaiting-approval",
+          approvalRequired: true,
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "Approval is pending." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ),
+    undefined
+  );
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
   );
 });
 

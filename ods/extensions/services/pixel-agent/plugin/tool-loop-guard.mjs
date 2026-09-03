@@ -7305,6 +7305,20 @@ export function createToolLoopGuard({
           "This submits an immutable approval proposal only; it does not execute or approve the command.",
       };
     }
+    if (state.operationsHostCommandRequested) {
+      const pendingJobIds = [...state.operationsSubmittedJobs.keys()].filter(
+        (jobId) => !state.operationsTerminalJobs.has(jobId)
+      );
+      if (pendingJobIds.length === 1) {
+        const jobId = pendingJobIds[0];
+        return {
+          stage: `host-command-wait-${jobId}`,
+          instruction:
+            `Do not reply yet. Call tool_call now with id pixel_ops_job_wait and args ${JSON.stringify({ jobId })}. ` +
+            "Accept only a structurally matching terminal broker receipt; never approve, resubmit, or execute the command yourself.",
+        };
+      }
+    }
     const requiredHostActions = exactRequiredHostActions(state);
     if (state.operationsSubmittedJobs.size === 0) {
       if (!requiredHostActions) return undefined;
