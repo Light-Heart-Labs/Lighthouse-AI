@@ -442,7 +442,7 @@ export default function Pixel({ systemStatus = null }) {
           && runtime.model.length > 0
           && runtime.model.length <= 256
           && Number.isInteger(runtime.contextLength)
-          && runtime.contextLength >= 16384
+          && runtime.contextLength >= 4096
           && Number.isInteger(runtime.maxTokens)
           && runtime.maxTokens >= 1
           && runtime.maxTokens <= runtime.contextLength

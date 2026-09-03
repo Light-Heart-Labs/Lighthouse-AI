@@ -569,6 +569,41 @@ describe('Pixel', () => {
     expect(screen.queryByText('Qwen3.5-9B-Q4_K_M.gguf')).not.toBeInTheDocument()
   })
 
+  it('shows a callable 8K remote model without imposing a larger context floor', async () => {
+    globalThis.fetch.mockResolvedValue(
+      response({
+        available: true,
+        model: 'pixel/default',
+        detail: 'Owner agent ready',
+        runtime: {
+          source: 'remote-provider',
+          model: 'small-owner-model',
+          contextLength: 8192,
+          maxTokens: 1024,
+          reasoning: false,
+        },
+        modelSupport: {
+          tier: 'adaptive',
+          detail: 'Pixel is ready and adapts its tool flow for this model.',
+        },
+      })
+    )
+
+    render(<Pixel systemStatus={{
+      inference: {
+        loadedModel: 'Qwen3.5-9B-Q4_K_M.gguf',
+        contextSize: 32768,
+      },
+    }} />)
+
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('small-owner-model')).toBeInTheDocument()
+    expect(screen.getByText('8K context')).toBeInTheDocument()
+    expect(screen.queryByText('Qwen3.5-9B-Q4_K_M.gguf')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
+  })
+
   it('ignores a non-remote runtime projection and keeps the live local identity', async () => {
     globalThis.fetch.mockResolvedValue(
       response({
