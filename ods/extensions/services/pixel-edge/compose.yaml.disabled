@@ -70,14 +70,10 @@ services:
       ENABLE_TITLE_GENERATION: "false"
       ENABLE_TAGS_GENERATION: "false"
       ENABLE_FOLLOW_UP_GENERATION: "false"
+  # Dashboard API is a prerequisite for the host-side Pixel installation.
+  # Do not health-order it (or the dashboard) behind Pixel Edge: on a clean
+  # install the edge cannot become healthy until the later host-ingress step.
   dashboard-api:
-    depends_on:
-      pixel-edge:
-        condition: service_healthy
     environment:
       PIXEL_EDGE_URL: "http://pixel-edge:9595"
       PIXEL_OPENWEBUI_KEY: "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env}"
-  dashboard:
-    depends_on:
-      pixel-edge:
-        condition: service_healthy

@@ -37,10 +37,16 @@ for required in (
     'PIXEL_EDGE_URL: "http://pixel-edge:9595"',
 ):
     assert required in text, required
-for service in ("open-webui", "dashboard-api"):
-    block = text.split(f"\n  {service}:", 1)[1]
+webui = text.split("\n  open-webui:", 1)[1]
+webui = re.split(r"\n  [a-zA-Z0-9_-]+:", webui, maxsplit=1)[0]
+assert re.search(r"depends_on:\s+pixel-edge:\s+condition: service_healthy", webui)
+for service in ("dashboard-api", "dashboard"):
+    marker = f"\n  {service}:"
+    if marker not in text:
+        continue
+    block = text.split(marker, 1)[1]
     block = re.split(r"\n  [a-zA-Z0-9_-]+:", block, maxsplit=1)[0]
-    assert re.search(r"depends_on:\s+pixel-edge:\s+condition: service_healthy", block)
+    assert "depends_on:" not in block
 PY
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -87,9 +93,9 @@ assert webui["environment"]["ENABLE_TITLE_GENERATION"] == "false"
 assert webui["environment"]["ENABLE_TAGS_GENERATION"] == "false"
 assert webui["environment"]["ENABLE_FOLLOW_UP_GENERATION"] == "false"
 dashboard = value["services"]["dashboard-api"]
-assert dashboard["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+assert "pixel-edge" not in dashboard.get("depends_on", {})
 ui = value["services"]["dashboard"]
-assert ui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+assert "pixel-edge" not in ui.get("depends_on", {})
 PY
     PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
     PIXEL_INGRESS_GID=1234 \
