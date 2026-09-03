@@ -1435,6 +1435,13 @@ _ods_pixel_install_exec_control() {
             && "$(stat -c '%h' -- "$candidate")" == 1 ]] || return 1
         (( (8#$(stat -c '%a' -- "$candidate") & 0022) == 0 )) || return 1
     done
+    # A clean Pixel install has not run OpenClaw bootstrap yet, so its private
+    # state directory legitimately does not exist. Create only that exact
+    # owner path, then apply the same ownership/symlink/mode checks used for an
+    # existing installation. Never follow or replace an ambient path.
+    if [[ ! -e "$parent" && ! -L "$parent" ]]; then
+        ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "$parent" || return 1
+    fi
     [[ -d "$parent" && ! -L "$parent" \
         && "$(stat -c '%U' -- "$parent")" == "$owner" ]] || return 1
     (( (8#$(stat -c '%a' -- "$parent") & 0022) == 0 )) || return 1

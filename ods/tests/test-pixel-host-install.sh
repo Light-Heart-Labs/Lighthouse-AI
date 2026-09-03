@@ -304,9 +304,11 @@ install -m 0644 "$ROOT/extensions/services/pixel-agent/host/cancellable-exec.sh"
     "$exec_control_source"
 install -m 0644 "$ROOT/extensions/services/pixel-agent/host/noninteractive-sudo.sh" \
     "$exec_control_sudo_source"
-mkdir -m 0700 -p "$exec_control_home/.openclaw"
+mkdir -m 0700 -p "$exec_control_home"
 check _ods_pixel_install_exec_control "$owner" "$exec_control_home" \
     "$exec_control_source" "$exec_control_sudo_source"
+check test -d "$exec_control_home/.openclaw"
+check test "$(stat -c '%a' "$exec_control_home/.openclaw")" = 700
 check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control")" = 700
 check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control/cancellable-exec.sh")" = 500
 check test "$(stat -c '%a' "$exec_control_home/.openclaw/.ods-exec-control/sudo")" = 500
@@ -1959,6 +1961,10 @@ handoff = (
 )
 assert handoff in phase
 assert phase.index(handoff) < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
+preflight = phase.index("_phase06_step \"preflight-pixel-source\"")
+checkout = phase.index("if ! _ods_pixel_source_checkout", preflight)
+assert phase.index(handoff) < preflight < checkout < phase.index("PIXEL_SOURCE_URL=$(dotenv_quote")
+assert "Pixel source is unavailable. Configure authorized Git access" in phase
 assert "PIXEL_SOURCE_REF \"70f44c90ac40b8409ebc965becc5b085a053e270\"" in phase
 ' "$ROOT/installers/phases/06-directories.sh"
 check python3 -c '

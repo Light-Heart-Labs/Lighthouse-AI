@@ -631,6 +631,23 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         ods_pixel_activate_source_contract \
             "$PIXEL_SOURCE_URL_VALUE" "$PIXEL_SOURCE_REF_VALUE" "$PIXEL_SOURCE_DIR_VALUE" || \
             error "Pixel source URL/ref failed the immutable-source policy"
+
+        # Prove the immutable source is obtainable before downloading images or
+        # building the ODS stack. A clean machine must not spend several minutes
+        # and gigabytes only to discover at the launch boundary that its Pixel
+        # source needs credentials or is otherwise unavailable. Phase 11
+        # independently revalidates this exact clean checkout before activation.
+        _phase06_step "preflight-pixel-source"
+        _phase06_pixel_owner="$(ods_pixel_install_owner)" || \
+            error "Could not identify the ODS owner for Pixel source preflight"
+        _phase06_pixel_home="$(ods_pixel_owner_home "$_phase06_pixel_owner")" || \
+            error "Could not resolve the ODS owner home for Pixel source preflight"
+        _phase06_pixel_source_root="$INSTALL_DIR/data/pixel/source-$PIXEL_SOURCE_REF_VALUE"
+        if ! _ods_pixel_source_checkout \
+            "$_phase06_pixel_owner" "$_phase06_pixel_home" "$_phase06_pixel_source_root" >/dev/null; then
+            error "Pixel source is unavailable. Configure authorized Git access or use a documented clean local checkout before retrying."
+        fi
+        unset _phase06_pixel_owner _phase06_pixel_home _phase06_pixel_source_root
     fi
 
     # Langfuse (LLM Observability). LANGFUSE_ENABLED mirrors the install-time
