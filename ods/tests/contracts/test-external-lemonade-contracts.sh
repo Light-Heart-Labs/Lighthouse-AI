@@ -36,11 +36,13 @@ echo "[contract] external Lemonade ODS Talk timeout is long enough for full mode
 grep -q 'ODS_TALK_HERMES_TIMEOUT=${ODS_TALK_HERMES_TIMEOUT:-900}' docker-compose.lemonade-external.yml \
   || { echo "[FAIL] external Lemonade overlay must set ODS_TALK_HERMES_TIMEOUT=900"; exit 1; }
 
-echo "[contract] installer discovers external Lemonade model and avoids stale fallbacks"
+echo "[contract] installer discovers the best available external Lemonade chat model"
 grep -q '_phase06_discover_lemonade_model' installers/phases/06-directories.sh \
   || { echo "[FAIL] phase 06 must discover the model served by external Lemonade"; exit 1; }
-grep -q 'IMAGE_MARKERS' installers/phases/06-directories.sh \
-  || { echo "[FAIL] phase 06 must avoid auto-selecting obvious image models for the chat route"; exit 1; }
+grep -q 'select-external-lemonade-model.py' installers/phases/06-directories.sh \
+  || { echo "[FAIL] phase 06 must use the behavioral external Lemonade model selector"; exit 1; }
+"$PYTHON_CMD" tests/test-external-lemonade-model-selector.py \
+  || { echo "[FAIL] external Lemonade model selector behavioral tests failed"; exit 1; }
 if grep -q 'LLM_MODEL_VALUE' installers/phases/06-directories.sh; then
   echo "[FAIL] phase 06 must not reference undefined LLM_MODEL_VALUE"
   exit 1

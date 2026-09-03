@@ -482,7 +482,7 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         return 1
     }
 
-    _phase06_first_model_id_from_json() {
+    _phase06_best_model_id_from_json() {
         local json="$1"
         local py="${ODS_PYTHON_CMD:-}"
         if [[ -z "$py" && -f "$SCRIPT_DIR/lib/python-cmd.sh" ]]; then
@@ -490,39 +490,14 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
             py="$(ods_detect_python_cmd 2>/dev/null || true)"
         fi
         [[ -n "$py" ]] || py="python3"
-        if command -v "$py" >/dev/null 2>&1; then
-            printf '%s' "$json" | "$py" -c 'import json,sys
-IMAGE_MARKERS = (
-    "flux", "stable-diffusion", "sdxl", "sd-", "diffusion",
-    "dall-e", "image", "img2img", "txt2img", "comfy", "kolors",
-)
-
-def looks_non_chat(model_id):
-    lowered = (model_id or "").lower()
-    return any(marker in lowered for marker in IMAGE_MARKERS)
-
-try:
-    data=json.load(sys.stdin).get("data", [])
-    fallback = ""
-    for item in data:
-        model_id=item.get("id") if isinstance(item, dict) else None
-        if model_id:
-            fallback = fallback or model_id
-            if looks_non_chat(model_id):
-                continue
-            print(model_id)
-            raise SystemExit(0)
-    if fallback:
-        print(fallback)
-        raise SystemExit(0)
-except Exception:
-    pass
-raise SystemExit(1)' 2>/dev/null && return 0
+        local selector="$SCRIPT_DIR/scripts/select-external-lemonade-model.py"
+        if command -v "$py" >/dev/null 2>&1 && [[ -f "$selector" ]]; then
+            printf '%s' "$json" | "$py" "$selector" 2>/dev/null && return 0
         fi
-        printf '%s' "$json" \
-            | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
-            | head -n 1 \
-            | sed 's/.*"id"[[:space:]]*:[[:space:]]*"//; s/".*//'
+        # A first-id fallback can silently route Pixel to an embedding, speech,
+        # or tiny catalog entry.  Fail closed and let the explicit override or
+        # phase-12 completion probe provide actionable recovery instead.
+        return 1
     }
 
     _phase06_discover_lemonade_model() {
@@ -531,7 +506,7 @@ raise SystemExit(1)' 2>/dev/null && return 0
         local models_json model_id
         models_json="$(curl -fsS --max-time 10 "${api_base%/}/models" 2>/dev/null || true)"
         [[ -n "$models_json" ]] || return 1
-        model_id="$(_phase06_first_model_id_from_json "$models_json" || true)"
+        model_id="$(_phase06_best_model_id_from_json "$models_json" || true)"
         [[ -n "$model_id" ]] || return 1
         printf '%s\n' "$model_id"
     }
