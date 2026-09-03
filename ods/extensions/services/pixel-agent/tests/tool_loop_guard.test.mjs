@@ -7425,6 +7425,18 @@ test("classifies a requested website demo as a verified workspace preview", () =
     ),
     false
   );
+  assert.equal(
+    userMessageRequestsWorkspacePreview([], "Now make a breakout style videogame."),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview([], "Implement a command-line game in Python."),
+    false
+  );
+  assert.equal(
+    userMessageRequestsWorkspacePreview([], "Build a website for Acme."),
+    true
+  );
 });
 
 test("permits an explicitly requested preview after inspecting an existing site", () => {

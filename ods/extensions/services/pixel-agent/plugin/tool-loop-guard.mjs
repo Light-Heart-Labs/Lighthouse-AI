@@ -3504,8 +3504,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:build|create|make|develop|generate|implement|write)\b/i.test(text);
   const revise =
     /\b(?:continue|edit|improve|modify|patch|refresh|republish|update|work)\b/i.test(text);
-  const view =
-    /\b(?:demo|preview|show|view|open|see|live|browser|localhost|host|serve|publish)\b/i.test(text);
+  const browserVisual =
+    /\b(?:browser[- ]?game|video\s*game|videogame|interactive\s+(?:demo|experience|visuali[sz]ation)|visuali[sz]ation)\b/i.test(text);
   const rejectsPreview =
     /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip)\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text) ||
     /\bwithout\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text);
@@ -3517,7 +3517,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const unreachableLocalPreview =
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
-  return directPreview || unreachableLocalPreview || (website && (build || revise) && view);
+  return directPreview || unreachableLocalPreview ||
+    (website && (build || revise)) || (browserVisual && build);
 }
 
 export function userMessageRequestsWorkspaceDemoScaffold(
@@ -4619,7 +4620,7 @@ export function createToolLoopGuard({
         return {
           block: true,
           blockReason:
-            "Pixel blocked an unsolicited workspace publication. Publish a preview only when the owner's current request asks to view, demo, serve, show, or preview that website.",
+            "Pixel blocked an unsolicited workspace publication. Publish a preview only when the owner's current request asks to build or display a website or browser-rendered visual.",
         };
       }
       const args =
