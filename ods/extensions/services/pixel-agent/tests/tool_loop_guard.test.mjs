@@ -89,6 +89,10 @@ import {
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
+  WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON,
+  WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON,
+  WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON,
+  WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON,
   createExecCancellationControl,
   createToolLoopGuard,
   createToolLoopGuardRegistry,
@@ -108,6 +112,7 @@ import {
   userMessageRequiresOdsAppsProjection,
   userMessageRequiresOdsStatusProjection,
   userMessageRequestsWorkspaceContinuation,
+  userMessageRequestsWorkspaceVisualContinuation,
   userMessageRequestsWorkspaceTools,
   userMessageRequestsWorkspaceMutation,
   userMessageRequestsWorkspaceDemoScaffold,
@@ -8009,6 +8014,277 @@ test("routes diverse compact-model visual starters through one selected template
     assert.equal(routed.params.args.relativeDirectory, visual.relativeDirectory);
     assert.equal(routed.params.args.scaffold.template, visual.template);
   }
+});
+
+test("recognizes only affirmative natural visual follow-ups", () => {
+  for (const prompt of [
+    "Keep that game and make it faster.",
+    "Change the previous website to a solar palette.",
+    "Polish it and improve the mobile layout.",
+    "Update this animated SVG with a calmer orbit.",
+  ]) {
+    assert.equal(
+      userMessageRequestsWorkspaceVisualContinuation([], prompt),
+      true,
+      prompt
+    );
+  }
+  for (const prompt of [
+    "Make a new Breakout game.",
+    "Create a voxel city under the ocean.",
+    "Do not change that game.",
+    "Explain how to improve a website.",
+  ]) {
+    assert.equal(
+      userMessageRequestsWorkspaceVisualContinuation([], prompt),
+      false,
+      prompt
+    );
+  }
+});
+
+test("binds a natural visual follow-up to the same session's verified artifact", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me an interactive website demo." }
+  );
+  const initialParams = {
+    relativeDirectory: "signal-garden",
+    scaffold: {
+      title: "Signal Garden",
+      tagline: "A responsive field of local light.",
+      theme: "aurora",
+    },
+  };
+  call(guard, "pixel_ods_workspace_preview", { event: { params: initialParams } });
+  const initialDetails = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    status: "succeeded",
+    relativeDirectory: "signal-garden-12345678",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 1,
+    bytes: 6200,
+    sha256: "a".repeat(64),
+    entryFile: "index.html",
+    entrySha256: "b".repeat(64),
+    httpStatus: 200,
+    readbackVerified: true,
+    executable: false,
+    overwritten: false,
+  };
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: { params: initialParams, result: { details: initialDetails } },
+  });
+
+  const run2 = {
+    event: { runId: "run-2" },
+    context: { runId: "run-2", sessionId: "session-1" },
+  };
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-2", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Keep that website and make it faster." }
+  );
+  const blindEdit = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      params: {
+        id: "edit",
+        args: {
+          path: "index.html",
+          edits: [{ oldText: "slow", newText: "fast" }],
+        },
+      },
+    },
+  });
+  assert.equal(blindEdit.block, true);
+  assert.equal(
+    blindEdit.blockReason,
+    WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON
+  );
+
+  const read = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      toolCallId: "continuation-read",
+      params: { id: "read", args: { path: "index.html" } },
+    },
+    context: { ...run2.context, toolCallId: "continuation-read" },
+  });
+  assert.deepEqual(read.params, {
+    id: "read",
+    args: { path: "signal-garden-12345678/index.html" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      runId: "run-2",
+      toolCallId: "continuation-read",
+      params: read.params,
+      result: wrappedCoreResult("read", {
+        details: { status: "completed" },
+        content: [{ type: "text", text: "<!doctype html>slow" }],
+      }),
+    },
+    context: {
+      runId: "run-2",
+      sessionId: "session-1",
+      toolCallId: "continuation-read",
+    },
+  });
+
+  const unchangedPreview = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      params: {
+        id: "pixel_ods_workspace_preview",
+        args: { relativeDirectory: "signal-garden-12345678" },
+      },
+    },
+  });
+  assert.equal(unchangedPreview.block, true);
+  assert.equal(
+    unchangedPreview.blockReason,
+    WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON
+  );
+
+  const escaped = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      params: { id: "read", args: { path: "other-site/index.html" } },
+    },
+  });
+  assert.equal(escaped.block, true);
+  assert.equal(escaped.blockReason, WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON);
+  const shell = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      params: { id: "exec", args: { command: "true" } },
+    },
+  });
+  assert.equal(shell.block, true);
+  assert.equal(shell.blockReason, WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON);
+
+  const edit = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      toolCallId: "continuation-edit",
+      params: {
+        id: "edit",
+        args: {
+          path: "index.html",
+          edits: [{ oldText: "slow", newText: "fast" }],
+        },
+      },
+    },
+    context: { ...run2.context, toolCallId: "continuation-edit" },
+  });
+  assert.deepEqual(edit.params, {
+    id: "edit",
+    args: {
+      path: "signal-garden-12345678/index.html",
+      edits: [{ oldText: "slow", newText: "fast" }],
+    },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      runId: "run-2",
+      toolCallId: "continuation-edit",
+      params: edit.params,
+      result: wrappedCoreResult("edit", { details: { status: "completed" } }),
+    },
+    context: {
+      runId: "run-2",
+      sessionId: "session-1",
+      toolCallId: "continuation-edit",
+    },
+  });
+
+  const preview = call(guard, "tool_call", {
+    ...run2,
+    event: {
+      ...run2.event,
+      toolCallId: "continuation-preview",
+      params: {
+        id: "pixel_ods_workspace_preview",
+        args: { relativeDirectory: "wrong-site" },
+      },
+    },
+    context: { ...run2.context, toolCallId: "continuation-preview" },
+  });
+  assert.deepEqual(preview.params, {
+    id: "pixel_ods_workspace_preview",
+    args: { relativeDirectory: "signal-garden-12345678" },
+  });
+  const revisedDetails = {
+    ...initialDetails,
+    siteId: "site-89abcdef0123456789abcdef",
+    url: "http://localhost:9437/site-89abcdef0123456789abcdef/",
+    sha256: "c".repeat(64),
+    entrySha256: "d".repeat(64),
+  };
+  afterCall(guard, "tool_call", {
+    event: {
+      runId: "run-2",
+      toolCallId: "continuation-preview",
+      params: preview.params,
+      result: wrappedPluginResult(
+        "pixel-ods",
+        "pixel_ods_workspace_preview",
+        { details: revisedDetails }
+      ),
+    },
+    context: {
+      runId: "run-2",
+      sessionId: "session-1",
+      toolCallId: "continuation-preview",
+    },
+  });
+  assert.equal(guard.verificationForRun("run-2").status, "passed");
+  assert.equal(
+    guard.verificationForRun("run-2").preview.siteId,
+    revisedDetails.siteId
+  );
+
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-3", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Change it to a warmer palette." }
+  );
+  assert.deepEqual(
+    call(guard, "read", {
+      event: { runId: "run-3", params: { path: "index.html" } },
+      context: { runId: "run-3", sessionId: "session-1" },
+    }),
+    { params: { path: "signal-garden-12345678/index.html" } }
+  );
+});
+
+test("never carries natural visual authority into another session", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Keep that game and make it faster." }
+  );
+  const blocked = call(guard, "tool_call", {
+    event: { params: { id: "read", args: { path: "index.html" } } },
+  });
+  assert.equal(blocked.block, true);
+  assert.equal(
+    blocked.blockReason,
+    WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON
+  );
 });
 
 test("keeps custom visual requests on the owner-specific workspace path", () => {

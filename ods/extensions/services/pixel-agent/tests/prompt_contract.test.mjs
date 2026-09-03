@@ -20,6 +20,7 @@ import {
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
   ODS_WORKSPACE_PREVIEW_CONTRACT,
+  ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT,
   githubSourceContract,
   needsLoopRecovery,
   operationsRequestContract,
@@ -146,6 +147,36 @@ test("adds a bounded first-write contract only for requested website previews", 
     { configuredLeanPrompt: true }
   );
   assert.equal(explanation.appendSystemContext, ODS_COMPACT_CONVERSATION_CONTRACT);
+});
+
+test("routes natural visual follow-ups to a read-edit-republish contract", () => {
+  for (const prompt of [
+    "Keep that game and make it faster.",
+    "Change the previous website to a solar palette.",
+    "Polish it and improve the mobile layout.",
+  ]) {
+    const result = promptContractForAgent(
+      { agentId: "pixel", contextTokenBudget: 16384 },
+      "pixel",
+      { prompt },
+      { configuredLeanPrompt: true }
+    );
+    assert.equal(
+      result.appendSystemContext,
+      `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT}`,
+      prompt
+    );
+  }
+  const fresh = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 16384 },
+    "pixel",
+    { prompt: "Make a new Breakout game." },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(
+    fresh.appendSystemContext,
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_GAME_CONTRACT}`
+  );
 });
 
 test("uses a bounded complete core on compact contexts without changing requested routes", () => {

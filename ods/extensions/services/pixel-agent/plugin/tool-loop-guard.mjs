@@ -149,6 +149,18 @@ export const WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON =
 export const WORKSPACE_PREVIEW_COMPLETE_REASON =
   "The workspace preview is already published and independently verified, and every owner-requested preview-file readback is complete. Do not call another tool or curl the preview URL; give the owner the concise final result now. ODS will attach the verified preview receipt and native side panel.";
 
+export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON =
+  "Pixel is updating the most recently verified visual artifact in this chat. Read the existing file inside that exact artifact directory before editing it; do not guess its contents, overwrite it with write, or create a replacement project.";
+
+export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON =
+  "Pixel has not yet completed the requested visual change. Make one focused edit to a file already read inside the bound artifact directory, then republish that same directory; do not publish an unchanged snapshot.";
+
+export const WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON =
+  "Pixel confined this visual follow-up to the most recently verified artifact in this chat. Use only read and focused edit calls inside that exact directory, then republish the same directory with pixel_ods_workspace_preview; do not use exec, process, apply_patch, write, another directory, or a generated starter.";
+
+export const WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON =
+  "Pixel could not find a readback-verified visual artifact bound to this chat, so it did not guess or modify unrelated workspace files. Ask the owner to build or republish the artifact first, or provide its exact workspace path explicitly.";
+
 export const WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel preserved the website files in its workspace, but ODS did not verify a browser-accessible preview. No localhost URL is live or claimed; ask Pixel to continue and publish the static site through the workspace preview capability.";
 
@@ -3957,6 +3969,31 @@ export function userMessageRequestsWorkspaceDemoScaffold(
   );
 }
 
+export function userMessageRequestsWorkspaceVisualContinuation(
+  messages,
+  prompt = undefined
+) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return false;
+  if (userMessageRequestsWorkspaceContinuation([], text)) return false;
+  const action =
+    /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
+  const visualReference =
+    /\b(?:existing|previous|prior|same|that|the|this)\s+(?:animated\s+)?(?:app|artifact|board|dashboard|demo|game|illustration|page|preview|scene|site|svg|task\s+board|visual|voxel(?:\s+world)?|web\s*page|web\s*site|website)\b/i;
+  const pronounReference =
+    /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\s+(?:it|that)\b/i;
+  const rejection =
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some(
+      (clause) =>
+        action.test(clause) &&
+        (visualReference.test(clause) || pronounReference.test(clause)) &&
+        !rejection.test(clause)
+    );
+}
+
 export function userMessageRequestsWorkspaceGameScaffold(
   messages,
   prompt = undefined
@@ -4462,6 +4499,7 @@ export function createToolLoopGuard({
   const runs = new Map();
   const activeUsers = new Map();
   const pendingToolRuns = new Map();
+  const sessionPreviews = new Map();
 
   function pruneRuns() {
     while (runs.size >= MAX_TRACKED_RUNS) {
@@ -4473,6 +4511,15 @@ export function createToolLoopGuard({
     while (activeUsers.size >= MAX_TRACKED_RUNS) {
       activeUsers.delete(activeUsers.keys().next().value);
     }
+  }
+
+  function rememberSessionPreview(sessionId, preview) {
+    if (typeof sessionId !== "string" || !sessionId || !preview) return;
+    if (sessionPreviews.has(sessionId)) sessionPreviews.delete(sessionId);
+    while (sessionPreviews.size >= MAX_TRACKED_RUNS) {
+      sessionPreviews.delete(sessionPreviews.keys().next().value);
+    }
+    sessionPreviews.set(sessionId, Object.freeze({ ...preview }));
   }
 
   function rememberToolRun(
@@ -4579,6 +4626,9 @@ export function createToolLoopGuard({
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspacePreviewRequested: false,
+        workspaceVisualContinuationRequested: false,
+        workspaceVisualContinuationUnavailable: false,
+        workspaceVisualContinuationEdited: false,
         workspaceDemoScaffoldRequested: false,
         workspaceGameScaffoldRequested: false,
         workspaceStarterScaffold: undefined,
@@ -4690,6 +4740,18 @@ export function createToolLoopGuard({
     // that truly need a session still fail closed on the optional sessionId.
     const state = runId ? stateFor(runId) : undefined;
     let pendingParams = normalizedParams ?? event?.params;
+    if (
+      state?.workspaceVisualContinuationRequested &&
+      FILE_PATH_TOOLS.has(toolName) &&
+      typeof pendingParams?.path === "string" &&
+      WORKSPACE_PATH_COMPONENT.test(pendingParams.path)
+    ) {
+      normalizedParams = {
+        ...pendingParams,
+        path: `${state.workspaceTaskDirectory}/${pendingParams.path}`,
+      };
+      pendingParams = normalizedParams;
+    }
     const effectiveReplyTool = toolName === "tool_call"
       ? pendingParams?.id?.split(":").at(-1)
       : toolName;
@@ -4947,6 +5009,7 @@ export function createToolLoopGuard({
     if (
       state?.workspaceTaskDirectory &&
       state.workspaceTaskPath &&
+      !state.workspaceVisualContinuationRequested &&
       toolName === "tool_call" &&
       pendingParams &&
       typeof pendingParams === "object" &&
@@ -5254,6 +5317,53 @@ export function createToolLoopGuard({
       !Array.isArray(pendingParams.args)
         ? pendingParams.args
         : pendingParams;
+    if (state?.workspaceVisualContinuationUnavailable) {
+      return {
+        block: true,
+        blockReason: WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON,
+      };
+    }
+    if (state?.workspaceVisualContinuationRequested) {
+      const continuationDirectory = state.workspaceTaskDirectory;
+      const selectedPath = FILE_PATH_TOOLS.has(selectedToolName)
+        ? normalizeWorkspaceFilePath(selectedParams?.path)
+        : undefined;
+      const insideContinuationDirectory =
+        typeof selectedPath === "string" &&
+        typeof continuationDirectory === "string" &&
+        selectedPath.startsWith(`${continuationDirectory}/`) &&
+        selectedPath
+          .slice(continuationDirectory.length + 1)
+          .split("/")
+          .every((part) => WORKSPACE_PATH_COMPONENT.test(part));
+      if (
+        !["read", "edit", WORKSPACE_PREVIEW_TOOL].includes(selectedToolName) ||
+        (FILE_PATH_TOOLS.has(selectedToolName) && !insideContinuationDirectory)
+      ) {
+        return {
+          block: true,
+          blockReason: WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON,
+        };
+      }
+      if (
+        selectedToolName === "edit" &&
+        !state.successfulReadPaths.has(selectedPath)
+      ) {
+        return {
+          block: true,
+          blockReason: WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON,
+        };
+      }
+      if (
+        selectedToolName === WORKSPACE_PREVIEW_TOOL &&
+        !state.workspaceVisualContinuationEdited
+      ) {
+        return {
+          block: true,
+          blockReason: WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON,
+        };
+      }
+    }
     const selectedEvent = selectedToolName === toolName
       ? { ...event, params: selectedParams }
       : { ...event, toolName: selectedToolName, params: selectedParams };
@@ -6403,10 +6513,24 @@ export function createToolLoopGuard({
       }
       if (currentUserText(event?.messages, event?.prompt)) {
         state.ownerIntentObserved = true;
-        state.workspacePreviewRequested = userMessageRequestsWorkspacePreview(
-          event?.messages,
-          event?.prompt
-        );
+        const visualContinuationRequested =
+          userMessageRequestsWorkspaceVisualContinuation(
+            event?.messages,
+            event?.prompt
+          );
+        const trustedSessionPreview =
+          visualContinuationRequested && typeof sessionId === "string" && sessionId
+            ? sessionPreviews.get(sessionId)
+            : undefined;
+        state.workspaceVisualContinuationRequested = Boolean(trustedSessionPreview);
+        state.workspaceVisualContinuationUnavailable =
+          visualContinuationRequested && !trustedSessionPreview;
+        state.workspacePreviewRequested = Boolean(trustedSessionPreview) ||
+          (!visualContinuationRequested &&
+            userMessageRequestsWorkspacePreview(
+              event?.messages,
+              event?.prompt
+            ));
         state.workspaceGameScaffoldRequested =
           userMessageRequestsWorkspaceGameScaffold(
             event?.messages,
@@ -6444,6 +6568,16 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        if (trustedSessionPreview) {
+          state.workspaceGameScaffoldRequested = false;
+          state.workspaceDemoScaffoldRequested = false;
+          state.workspaceStarterScaffold = undefined;
+          state.workspaceTaskPath =
+            `${trustedSessionPreview.relativeDirectory}/index.html`;
+          state.workspaceTaskDirectory = trustedSessionPreview.relativeDirectory;
+          state.workspaceRequestedFiles = ["index.html"];
+          state.workspacePreviewDirectory = trustedSessionPreview.relativeDirectory;
+        }
         state.workspacePythonUnittestRequested = /\bunittest\b/i.test(
           currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
         );
@@ -6684,6 +6818,13 @@ export function createToolLoopGuard({
       : [];
     if (
       completedEditPath &&
+      state.workspaceVisualContinuationRequested &&
+      completedEditPath.startsWith(`${state.workspaceTaskDirectory}/`)
+    ) {
+      state.workspaceVisualContinuationEdited = true;
+    }
+    if (
+      completedEditPath &&
       completedEditPairs.length === 1 &&
       state.successfulWriteContentByPath.get(completedEditPath) ===
         completedEditPairs[0].oldText &&
@@ -6729,6 +6870,7 @@ export function createToolLoopGuard({
         state.workspacePreviewDirectory = preview.relativeDirectory;
         state.workspacePreviewGeneratedScaffold = Boolean(previewEvent?.params?.scaffold);
         state.workspacePreview = preview;
+        rememberSessionPreview(state.currentSessionId, preview);
       }
     }
     if (state.operationsRequired) {

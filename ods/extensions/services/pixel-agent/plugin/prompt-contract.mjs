@@ -17,6 +17,7 @@ import {
   userMessageRequestsExtensionCatalog,
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
+  userMessageRequestsWorkspaceVisualContinuation,
   userMessageRequestsWorkspaceDemoScaffold,
   userMessageRequestsWorkspacePreview,
   userMessageWorkspaceStarterScaffold,
@@ -129,6 +130,9 @@ export const ODS_EXACT_DOWNLOAD_CONTRACT =
 
 export const ODS_WORKSPACE_PREVIEW_CONTRACT =
   "The owner's current request requires a live static website preview. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete self-contained HTML document under 2500 characters with inline CSS and JavaScript. Use semantic interactive elements such as button for requested controls. Parent directories are created by write. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply. That receipt proves publication and HTTP readback only: never claim a requested interaction was exercised unless an interaction-capable tool produced evidence for it.";
+
+export const ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT =
+  "The owner is naturally continuing the most recently readback-verified visual artifact in this same Pixel chat. In the first tool step call tool_call with id read and args path index.html; the ODS guard binds that basename to the exact verified artifact directory. Then use only a focused edit on the returned path to make the requested change, and call pixel_ods_workspace_preview with that same directory. Do not call write, apply_patch, exec, process, mkdir, start a server, create another directory, or use a generated scaffold. The new preview receipt proves publication and static readback only; never claim an interaction was exercised without interaction-capable evidence.";
 
 export const ODS_WORKSPACE_DEMO_CONTRACT =
   "The owner asked for an open-ended website demonstration. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory as one fresh short directory name plus scaffold with a creative title, a concise tagline, and theme set to exactly one of aurora, ember, ocean, orchid, or solar. This create-only ODS tool generates a polished responsive interactive site and publishes it through independent loopback readback. Do not generate HTML, call write, call exec, plan the design, or start a server. Reply only after the verified tool receipt.";
@@ -312,13 +316,21 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXACT_DOWNLOAD_CONTRACT}`
     : "";
+  const workspaceVisualContinuation =
+    userMessageRequestsWorkspaceVisualContinuation(
+      event?.messages,
+      event?.prompt
+    )
+      ? ` ${ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT}`
+      : "";
   const workspaceStarterTemplate = userMessageWorkspaceStarterScaffold(
     event?.messages,
     event?.prompt
   )?.scaffold?.template;
   const workspaceStarterContract =
     ODS_WORKSPACE_STARTER_CONTRACTS[workspaceStarterTemplate];
-  const workspacePreview = userMessageRequestsWorkspacePreview(
+  const workspacePreview = workspaceVisualContinuation ||
+    (userMessageRequestsWorkspacePreview(
     event?.messages,
     event?.prompt
   )
@@ -327,7 +339,7 @@ export function promptContractForAgent(
       : userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
         ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
         : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
-    : "";
+    : "");
   const verification =
     verificationStatus === "pending"
       ? ` ${ODS_VERIFICATION_PENDING_CONTRACT}`
