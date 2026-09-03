@@ -3,7 +3,14 @@ use crate::{docker, gpu, installer, platform};
 use serde::Serialize;
 use std::sync::Mutex;
 
-const ALLOWED_FEATURES: &[&str] = &["voice", "workflows", "rag", "image_gen", "all"];
+const ALLOWED_FEATURES: &[&str] = &[
+    "voice",
+    "workflows",
+    "rag",
+    "recommended",
+    "image_gen",
+    "all",
+];
 
 // ---- System Check ----
 
@@ -297,5 +304,39 @@ fn state_file_path() -> std::path::PathBuf {
         std::path::PathBuf::from(base)
             .join("ods")
             .join("installer-state.json")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_request_accepts_every_feature_exposed_by_the_gui() {
+        let features = vec![
+            "voice".to_string(),
+            "workflows".to_string(),
+            "rag".to_string(),
+            "recommended".to_string(),
+            "image_gen".to_string(),
+        ];
+
+        assert_eq!(validate_install_request(0, &features), Ok(()));
+        assert_eq!(validate_install_request(4, &features), Ok(()));
+    }
+
+    #[test]
+    fn install_request_rejects_presentation_only_and_unknown_features() {
+        let chat = vec!["chat".to_string()];
+        let unknown = vec!["unknown".to_string()];
+
+        assert_eq!(
+            validate_install_request(1, &chat),
+            Err("Unsupported feature: chat".to_string())
+        );
+        assert_eq!(
+            validate_install_request(1, &unknown),
+            Err("Unsupported feature: unknown".to_string())
+        );
     }
 }

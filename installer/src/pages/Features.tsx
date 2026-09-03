@@ -50,10 +50,9 @@ const FEATURES: FeatureOption[] = [
     vramNote: "Requires 8GB+ VRAM",
   },
   {
-    id: "search",
-    name: "Private Search",
-    description:
-      "Self-hosted search engine (SearXNG) with no tracking or ads.",
+    id: "recommended",
+    name: "Web & API Support",
+    description: "LiteLLM routing, private SearXNG search, and usage insights.",
     default: false,
   },
 ];
@@ -137,7 +136,13 @@ export default function Features({ onNext }: Props) {
         <Button variant="ghost" onClick={selectAll}>
           Select All
         </Button>
-        <Button onClick={() => onNext(Array.from(selected))}>
+        <Button
+          onClick={() =>
+            onNext(
+              Array.from(selected).filter((feature) => feature !== "chat"),
+            )
+          }
+        >
           Install
         </Button>
       </div>
