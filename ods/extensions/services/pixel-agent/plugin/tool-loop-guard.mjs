@@ -143,6 +143,12 @@ export const WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON =
 export const WORKSPACE_PREVIEW_REQUIRES_FILES_REASON =
   "Pixel cannot publish this website yet because this response has not created or inspected an index.html in the requested workspace directory. Create the static site files first, then call pixel_ods_workspace_preview with that one relative directory.";
 
+export const WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON =
+  "The workspace preview is already published and independently verified. The owner also asked to inspect every preview file, so use only read on the next unread file inside the verified preview directory. Do not curl the preview URL, start a server, run another check, or call an unrelated tool.";
+
+export const WORKSPACE_PREVIEW_COMPLETE_REASON =
+  "The workspace preview is already published and independently verified, and every owner-requested preview-file readback is complete. Do not call another tool or curl the preview URL; give the owner the concise final result now. ODS will attach the verified preview receipt and native side panel.";
+
 export const WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel preserved the website files in its workspace, but ODS did not verify a browser-accessible preview. No localhost URL is live or claimed; ask Pixel to continue and publish the static site through the workspace preview capability.";
 
@@ -3521,6 +3527,18 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     (website && (build || revise)) || (browserVisual && build);
 }
 
+export function userMessageRequestsWorkspacePreviewInspection(
+  messages,
+  prompt = undefined
+) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) return false;
+  return (
+    /\b(?:inspect|read|review|check)\s+(?:each|every|all)(?:\s+(?:of\s+the|the))?\s+(?:created|generated|preview|site|website)?\s*files?\b/i.test(text) ||
+    /\b(?:inspect|read|review|check)\s+(?:the\s+)?(?:created|generated|preview|site|website)\s+files?\b/i.test(text)
+  );
+}
+
 export function userMessageRequestsWorkspaceDemoScaffold(
   messages,
   prompt = undefined
@@ -3552,6 +3570,38 @@ function workspacePreviewDirectoryFromState(state) {
   );
   if (indexDirectories.size === 1) return [...indexDirectories][0];
   return state?.workspacePreviewDirectory;
+}
+
+function workspacePreviewReadPaths(state) {
+  const directory = state?.workspacePreview?.relativeDirectory;
+  if (typeof directory !== "string" || !directory) return [];
+  const prefix = `${directory}/`;
+  return [...(state?.successfulReadPaths ?? [])].filter((value) =>
+    typeof value === "string" &&
+    value.startsWith(prefix) &&
+    value.slice(prefix.length).split("/").every((part) => WORKSPACE_PATH_COMPONENT.test(part))
+  );
+}
+
+function workspacePreviewReadbackComplete(state) {
+  if (!state?.workspacePreview) return false;
+  if (!state.workspacePreviewInspectionRequested) return true;
+  return workspacePreviewReadPaths(state).length >= state.workspacePreview.files;
+}
+
+function workspacePreviewNextKnownReadPath(state) {
+  const preview = state?.workspacePreview;
+  if (!preview) return undefined;
+  const prefix = `${preview.relativeDirectory}/`;
+  const candidates = new Set(
+    [...(state?.successfulWritePaths ?? [])].filter((value) =>
+      typeof value === "string" &&
+      value.startsWith(prefix) &&
+      value.slice(prefix.length).split("/").every((part) => WORKSPACE_PATH_COMPONENT.test(part))
+    )
+  );
+  if (preview.files === 1) candidates.add(`${preview.relativeDirectory}/${preview.entryFile}`);
+  return [...candidates].find((value) => !state.successfulReadPaths.has(value));
 }
 
 function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = false) {
@@ -4053,6 +4103,7 @@ export function createToolLoopGuard({
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspacePreviewRequested: false,
+        workspacePreviewInspectionRequested: false,
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
         workspacePreview: undefined,
@@ -5068,6 +5119,34 @@ export function createToolLoopGuard({
       return { block: true, blockReason: EXACT_DOWNLOAD_COMPLETE_REASON };
     }
 
+    if (
+      state?.workspacePreview &&
+      !state.operationsRequired &&
+      !state.exactDownloadRequested
+    ) {
+      if (workspacePreviewReadbackComplete(state)) {
+        return { block: true, blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON };
+      }
+      const selectedReadPath = selectedToolName === "read"
+        ? normalizeWorkspaceFilePath(selectedParams?.path)
+        : undefined;
+      const previewPrefix = `${state.workspacePreview.relativeDirectory}/`;
+      const safeUnreadPreviewPath =
+        typeof selectedReadPath === "string" &&
+        selectedReadPath.startsWith(previewPrefix) &&
+        selectedReadPath
+          .slice(previewPrefix.length)
+          .split("/")
+          .every((part) => WORKSPACE_PATH_COMPONENT.test(part)) &&
+        !state.successfulReadPaths.has(selectedReadPath);
+      if (!safeUnreadPreviewPath) {
+        return {
+          block: true,
+          blockReason: WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
+        };
+      }
+    }
+
     if (state?.exactDownloadRequested && !EXACT_DOWNLOAD_BROKER_TOOLS.has(effectiveToolName)) {
       if (state.exactDownloadTerminalBlocks === 0) {
         state.exactDownloadTerminalBlocks = 1;
@@ -5756,6 +5835,11 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        state.workspacePreviewInspectionRequested =
+          userMessageRequestsWorkspacePreviewInspection(
+            event?.messages,
+            event?.prompt
+          );
         state.workspaceTaskRequested =
           state.workspacePreviewRequested ||
           userMessageRequestsWorkspaceTools(event?.messages, event?.prompt);
@@ -6514,10 +6598,20 @@ export function createToolLoopGuard({
     if (
       !state?.workspacePreviewRequested ||
       state.operationsRequired ||
-      state.exactDownloadRequested ||
-      state.workspacePreview
+      state.exactDownloadRequested
     ) {
       return undefined;
+    }
+    if (state.workspacePreview) {
+      if (workspacePreviewReadbackComplete(state)) return undefined;
+      const nextPath = workspacePreviewNextKnownReadPath(state);
+      const completed = workspacePreviewReadPaths(state).length;
+      return {
+        stage: `workspace-preview-read-${completed}`,
+        instruction: nextPath
+          ? `Do not reply yet. The preview is already independently verified; call tool_call now with id read and args ${JSON.stringify({ path: nextPath })}. Do not curl the preview URL or call another tool.`
+          : `Do not reply yet. The preview is already independently verified. Read the next unread static file inside ${state.workspacePreview.relativeDirectory} using only read; do not curl the preview URL or call another tool.`,
+      };
     }
     const directory = workspacePreviewDirectoryFromState(state);
     if (!directory) {
@@ -6595,6 +6689,26 @@ export function createToolLoopGuard({
       }
       return undefined;
     })();
+    const previewStageInstruction = (() => {
+      if (
+        !state?.workspacePreview ||
+        state.operationsRequired ||
+        state.exactDownloadRequested
+      ) {
+        return undefined;
+      }
+      if (workspacePreviewReadbackComplete(state)) {
+        return `[ODS Pixel next step] ${WORKSPACE_PREVIEW_COMPLETE_REASON}`;
+      }
+      const nextPath = workspacePreviewNextKnownReadPath(state);
+      return nextPath
+        ? (
+          "[ODS Pixel next step] The preview is already independently verified. " +
+          `Call tool_call next with id read and args ${JSON.stringify({ path: nextPath })}; ` +
+          "do not curl the preview URL or call another tool."
+        )
+        : `[ODS Pixel next step] ${WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON}`;
+    })();
     const hostToolResult =
       pending?.selectedToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL ||
       state?.operationsHostResultCompactionsRemaining > 0 ||
@@ -6618,7 +6732,13 @@ export function createToolLoopGuard({
     // Search otherwise duplicates the multi-kilobyte broker object in content
     // and details, which can exhaust small local models before the required
     // continuation tool call closes.
-    if (!continuation && !hostEvidence && !compactVerification && !compactCoreResult) {
+    if (
+      !continuation &&
+      !hostEvidence &&
+      !compactVerification &&
+      !compactCoreResult &&
+      !previewStageInstruction
+    ) {
       return undefined;
     }
     const compactMessage = compactVerification ?? compactCoreResult ?? message;
@@ -6632,6 +6752,9 @@ export function createToolLoopGuard({
       : Array.isArray(compactMessage.content) ? [...compactMessage.content] : [];
     if (workspaceStageInstruction) {
       content.push({ type: "text", text: workspaceStageInstruction });
+    }
+    if (previewStageInstruction) {
+      content.push({ type: "text", text: previewStageInstruction });
     }
     if (hostEvidence && state.operationsHostResultCompactionsRemaining > 0) {
       state.operationsHostResultCompactionsRemaining -= 1;

@@ -78,6 +78,8 @@ import {
   WORKSPACE_TOOL_SEARCH_COMPLETE_REASON,
   WORKSPACE_UNREQUESTED_PROJECTION_REASON,
   WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
+  WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
+  WORKSPACE_PREVIEW_COMPLETE_REASON,
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
@@ -102,6 +104,7 @@ import {
   userMessageRequestsWorkspaceMutation,
   userMessageRequestsWorkspaceDemoScaffold,
   userMessageRequestsWorkspacePreview,
+  userMessageRequestsWorkspacePreviewInspection,
   userMessageWorkspaceContinuationPath,
   userMessageWorkspaceDirectoryPath,
   userMessageRequestsOperationsEvidenceArtifact,
@@ -7658,6 +7661,153 @@ test("permits a bounded create-only demo scaffold before an index exists", () =>
   const verification = guard.verificationForRun("run-1");
   assert.equal(verification.status, "passed");
   assert.equal(verification.preview.relativeDirectory, "signal-garden-12345678");
+});
+
+test("ends a verified preview cleanly instead of curling its localhost URL", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build a polished interactive demo website." }
+  );
+  const params = {
+    id: "pixel_ods_workspace_preview",
+    args: {
+      relativeDirectory: "signal-garden",
+      scaffold: { title: "Signal Garden", tagline: "Local light", theme: "aurora" },
+    },
+  };
+  const normalized = call(guard, "tool_call", {
+    event: { toolCallId: "preview-call", params },
+    context: { toolCallId: "preview-call" },
+  });
+  const details = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    status: "succeeded",
+    relativeDirectory: "signal-garden-12345678",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 1,
+    bytes: 6200,
+    sha256: "a".repeat(64),
+    entryFile: "index.html",
+    entrySha256: "b".repeat(64),
+    httpStatus: 200,
+    readbackVerified: true,
+    executable: false,
+    overwritten: false,
+  };
+  const previewMessage = wrappedPluginResult(
+    "pixel-ods",
+    "pixel_ods_workspace_preview",
+    { details }
+  );
+  afterCall(guard, "tool_call", {
+    event: {
+      toolCallId: "preview-call",
+      params: normalized.params,
+      result: previewMessage,
+    },
+    context: { toolCallId: "preview-call" },
+  });
+  const persisted = persistToolResult(
+    guard,
+    "tool_call",
+    "preview-call",
+    previewMessage
+  );
+  assert.match(persisted.message.content.at(-1).text, /give the owner.*final/i);
+  const redundantCurl = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "exec",
+        args: { cmd: `curl ${details.url}`, workdir: "." },
+      },
+    },
+  });
+  assert.deepEqual(redundantCurl, {
+    block: true,
+    blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON,
+  });
+});
+
+test("allows only requested preview-file readback before ending the tool loop", () => {
+  const prompt =
+    "Build a polished website, inspect every file you create, and show it in the preview.";
+  assert.equal(userMessageRequestsWorkspacePreviewInspection([], prompt), true);
+  assert.equal(
+    userMessageRequestsWorkspacePreviewInspection(
+      [],
+      "Build a polished website and show it in the preview."
+    ),
+    false
+  );
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  const previewParams = {
+    relativeDirectory: "signal-garden",
+    scaffold: { title: "Signal Garden", tagline: "Local light", theme: "aurora" },
+  };
+  call(guard, "pixel_ods_workspace_preview", { event: { params: previewParams } });
+  const details = {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    status: "succeeded",
+    relativeDirectory: "signal-garden-12345678",
+    siteId: "site-0123456789abcdef01234567",
+    port: 9437,
+    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    files: 1,
+    bytes: 6200,
+    sha256: "a".repeat(64),
+    entryFile: "index.html",
+    entrySha256: "b".repeat(64),
+    httpStatus: 200,
+    readbackVerified: true,
+    executable: false,
+    overwritten: false,
+  };
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams, result: { details } },
+  });
+  const unrelated = call(guard, "tool_call", {
+    event: { params: { id: "exec", args: { cmd: "true" } } },
+  });
+  assert.deepEqual(unrelated, {
+    block: true,
+    blockReason: WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
+  });
+  const path = "signal-garden-12345678/index.html";
+  assert.notEqual(
+    call(guard, "read", { event: { params: { path } } })?.block,
+    true
+  );
+  afterCall(guard, "read", {
+    event: { params: { path }, result: { details: { status: "completed" } } },
+  });
+  const afterRead = call(guard, "tool_call", {
+    event: {
+      params: { id: "exec", args: { cmd: `curl ${details.url}`, workdir: "." } },
+    },
+  });
+  assert.deepEqual(afterRead, {
+    block: true,
+    blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON,
+  });
+  assert.equal(
+    guard.beforeAgentFinalize(
+      { runId: "run-1" },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ),
+    undefined
+  );
 });
 
 test("an abort failure is contained and remains a blocked tool result", () => {
