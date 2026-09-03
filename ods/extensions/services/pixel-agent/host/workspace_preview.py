@@ -339,6 +339,10 @@ class PreviewHandler(http.server.BaseHTTPRequestHandler):
         parts = decoded.lstrip("/").split("/")
         if len(parts) < 1 or SITE_ID.fullmatch(parts[0]) is None:
             return None
+        site_id = parts[0]
+        expected_host = f"{site_id}.localhost:{self.server.server_port}"  # type: ignore[attr-defined]
+        if self.headers.get("Host", "").lower() != expected_host:
+            return None
         if parts[-1] == "":
             parts[-1] = "index.html"
         if any(PATH_COMPONENT.fullmatch(part) is None for part in parts[1:]):
@@ -406,7 +410,11 @@ class PreviewHTTPServer(http.server.ThreadingHTTPServer):
 def _verify_http(port: int, site_id: str, entry_sha256: str) -> None:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        connection.request("GET", f"/{site_id}/")
+        connection.request(
+            "GET",
+            f"/{site_id}/",
+            headers={"Host": f"{site_id}.localhost:{port}"},
+        )
         response = connection.getresponse()
         body = response.read(MAX_FILE_BYTES + 1)
         if (
@@ -476,7 +484,10 @@ def _serve_connection(
             response.update(
                 {
                     "port": port,
-                    "url": f"http://localhost:{port}/{response['siteId']}/",
+                    "url": (
+                        f"http://{response['siteId']}.localhost:{port}/"
+                        f"{response['siteId']}/"
+                    ),
                     "httpStatus": 200,
                     "readbackVerified": True,
                 }

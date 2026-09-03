@@ -725,7 +725,8 @@ function parseVerificationResponse(value) {
       Number.isInteger(preview.port) &&
       preview.port >= 1 &&
       preview.port <= 65535 &&
-      preview.url === `http://localhost:${preview.port}/${preview.siteId}/` &&
+      preview.url ===
+        `http://${preview.siteId}.localhost:${preview.port}/${preview.siteId}/` &&
       Number.isInteger(preview.files) &&
       preview.files >= 1 &&
       preview.files <= 128 &&

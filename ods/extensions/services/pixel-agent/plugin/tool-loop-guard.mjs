@@ -4180,7 +4180,8 @@ function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = f
     !Number.isInteger(details.port) ||
     details.port < 1 ||
     details.port > 65535 ||
-    details.url !== `http://localhost:${details.port}/${details.siteId}/` ||
+    details.url !==
+      `http://${details.siteId}.localhost:${details.port}/${details.siteId}/` ||
     !Number.isInteger(details.files) ||
     details.files < 1 ||
     details.files > 128 ||

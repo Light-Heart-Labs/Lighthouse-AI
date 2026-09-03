@@ -121,7 +121,7 @@ describe('Pixel', () => {
       relativeDirectory: 'demo-website',
       siteId: 'site-0123456789abcdef01234567',
       port: 9437,
-      url: 'http://localhost:9437/site-0123456789abcdef01234567/',
+      url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
       files: 3,
       bytes: 4096,
       sha256: 'a'.repeat(64),
@@ -149,7 +149,7 @@ describe('Pixel', () => {
       relativeDirectory: 'demo-website',
       siteId: 'site-0123456789abcdef01234567',
       port: 9437,
-      url: 'http://localhost:9437/site-0123456789abcdef01234567/',
+      url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
       files: 3,
       bytes: 4096,
       sha256: 'a'.repeat(64),
@@ -176,7 +176,7 @@ describe('Pixel', () => {
 
     const frame = await screen.findByTitle('Interactive Pixel preview')
     expect(frame).toHaveAttribute('src', preview.url)
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin')
     expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
     expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', preview.url)
 

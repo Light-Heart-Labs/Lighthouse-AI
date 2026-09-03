@@ -170,7 +170,8 @@ export function parseVerifiedPreviewFrame(frame) {
     || !Number.isInteger(preview.port)
     || preview.port < 1
     || preview.port > 65535
-    || preview.url !== `http://localhost:${preview.port}/${preview.siteId}/`
+    || preview.url !==
+      `http://${preview.siteId}.localhost:${preview.port}/${preview.siteId}/`
     || !Number.isInteger(preview.files)
     || preview.files < 1
     || preview.files > 128
@@ -1119,7 +1120,7 @@ export default function Pixel({ systemStatus = null }) {
               key={`${preview.siteId}-${previewRefresh}`}
               src={preview.url}
               title="Interactive Pixel preview"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-same-origin"
               referrerPolicy="no-referrer"
               className="min-h-0 flex-1 border-0 bg-white"
             />

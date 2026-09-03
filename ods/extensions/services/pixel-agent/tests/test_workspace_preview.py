@@ -1,9 +1,9 @@
+import http.client
 import importlib.util
 import os
 import pathlib
 import tempfile
 import threading
-import urllib.request
 
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "host" / "workspace_preview.py"
@@ -119,15 +119,31 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
             thread.start()
             try:
                 port = server.server_address[1]
-                with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/{receipt['siteId']}/",
-                    timeout=5,
-                ) as response:
-                    assert response.status == 200
-                    assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
-                    assert "frame-ancestors http://localhost:* http://127.0.0.1:*" in (
-                        response.headers["Content-Security-Policy"]
-                    )
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "GET",
+                    f"/{receipt['siteId']}/",
+                    headers={"Host": f"{receipt['siteId']}.localhost:{port}"},
+                )
+                response = connection.getresponse()
+                response.read()
+                assert response.status == 200
+                assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+                assert "frame-ancestors http://localhost:* http://127.0.0.1:*" in (
+                    response.headers["Content-Security-Policy"]
+                )
+                connection.close()
+
+                cross_site = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                cross_site.request(
+                    "GET",
+                    f"/{receipt['siteId']}/",
+                    headers={"Host": f"site-{'0' * 24}.localhost:{port}"},
+                )
+                rejected = cross_site.getresponse()
+                rejected.read()
+                assert rejected.status == 404
+                cross_site.close()
             finally:
                 server.shutdown()
                 thread.join(timeout=5)

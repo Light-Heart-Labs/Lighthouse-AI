@@ -267,7 +267,8 @@ function validResponse(value, request) {
     value.relativeDirectory !== request.relativeDirectory ||
     !SITE_ID.test(value.siteId) ||
     typeof value.url !== "string" ||
-    value.url !== `http://localhost:${value.port}/${value.siteId}/` ||
+    value.url !==
+      `http://${value.siteId}.localhost:${value.port}/${value.siteId}/` ||
     !Number.isInteger(value.port) ||
     value.port < 1 ||
     value.port > 65535 ||

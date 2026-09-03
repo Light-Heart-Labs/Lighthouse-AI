@@ -8245,7 +8245,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     relativeDirectory: "signal-garden-12345678",
     siteId: "site-0123456789abcdef01234567",
     port: 9437,
-    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
     files: 1,
     bytes: 6200,
     sha256: "a".repeat(64),
@@ -8408,7 +8408,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   const revisedDetails = {
     ...initialDetails,
     siteId: "site-89abcdef0123456789abcdef",
-    url: "http://localhost:9437/site-89abcdef0123456789abcdef/",
+    url: "http://site-89abcdef0123456789abcdef.localhost:9437/site-89abcdef0123456789abcdef/",
     sha256: "c".repeat(64),
     entrySha256: "d".repeat(64),
   };
@@ -8618,7 +8618,7 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
     relativeDirectory: "demo-site",
     siteId: "site-0123456789abcdef01234567",
     port: 9437,
-    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
     files: 1,
     bytes: 43,
     sha256: "a".repeat(64),
@@ -8642,7 +8642,10 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
     verification.text,
     /this static receipt does not claim that controls were clicked or exercised/
   );
-  assert.match(verification.text, /http:\/\/localhost:9437\/site-0123456789abcdef01234567\//);
+  assert.match(
+    verification.text,
+    /http:\/\/site-0123456789abcdef01234567\.localhost:9437\/site-0123456789abcdef01234567\//
+  );
   assert.equal(
     guard.beforeAgentFinalize(
       { runId: "run-1" },
@@ -8696,7 +8699,7 @@ test("permits a bounded create-only demo scaffold before an index exists", () =>
               relativeDirectory: "signal-garden-12345678",
               siteId: "site-0123456789abcdef01234567",
               port: 9437,
-              url: "http://localhost:9437/site-0123456789abcdef01234567/",
+              url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
               files: 1,
               bytes: 6200,
               sha256: "a".repeat(64),
@@ -8744,7 +8747,7 @@ test("ends a verified preview cleanly instead of curling its localhost URL", () 
     relativeDirectory: "signal-garden-12345678",
     siteId: "site-0123456789abcdef01234567",
     port: 9437,
-    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
     files: 1,
     bytes: 6200,
     sha256: "a".repeat(64),
@@ -8818,7 +8821,7 @@ test("allows only requested preview-file readback before ending the tool loop", 
     relativeDirectory: "signal-garden-12345678",
     siteId: "site-0123456789abcdef01234567",
     port: 9437,
-    url: "http://localhost:9437/site-0123456789abcdef01234567/",
+    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
     files: 1,
     bytes: 6200,
     sha256: "a".repeat(64),
