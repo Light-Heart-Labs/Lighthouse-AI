@@ -113,7 +113,7 @@ Browser
                              |
                              v
                    create-only static snapshot
-                   -> localhost preview origin
+                   -> site-*.localhost origin
                    -> sandboxed Dashboard panel
 ```
 
@@ -426,11 +426,15 @@ act as a capability gate:
   performs an HTTP readback before returning a receipt. The private ingress
   carries that exact receipt in a structured terminal frame; the Dashboard
   never opens a URL parsed from model prose. The Pixel portal automatically
-  shows the snapshot in a side panel with a script-capable iframe that omits
-  same-origin privilege and blocks outbound connections, forms, camera,
-  microphone, and geolocation. Starting a development server inside Pixel's
-  disposable sandbox is explicitly rejected because that port is not the
-  owner's browser-facing host.
+  shows the snapshot in a side panel with a script-capable iframe. Each
+  content-addressed snapshot receives its own `site-*.localhost` origin, and
+  the host rejects a request whose origin hostname does not match the snapshot
+  path. That isolation lets ordinary browser apps use origin-scoped storage
+  without exposing another generated preview's state. The iframe and preview
+  CSP still block outbound connections, form submissions, popups, top-level
+  navigation, downloads, camera, microphone, and geolocation. Starting a
+  development server inside Pixel's disposable sandbox is explicitly rejected
+  because that port is not the owner's browser-facing host.
 
   Open-ended demos and common compact-model requests can take a one-call,
   create-only starter path. The bounded starters cover a showcase, Breakout,
@@ -540,7 +544,7 @@ untouched.
 | `PIXEL_OPENWEBUI_KEY` | generated; installer | Narrow Open WebUI/Dashboard-to-edge key; secret |
 | `PIXEL_INGRESS_RUNTIME_DIR` | `/run/ods-pixel` | Host directory containing only the socket/projection |
 | `PIXEL_INGRESS_GID` | generated; installer | Numeric `ods-pixel` group used by the edge container |
-| `PIXEL_PREVIEW_PORT` | `9437` | Dedicated loopback-only static preview origin; must not collide with an ODS application port |
+| `PIXEL_PREVIEW_PORT` | `9437` | Dedicated loopback-only static preview service; every snapshot uses an isolated `site-*.localhost` origin and the port must not collide with an ODS application port |
 
 Do not copy generated secrets into issues, logs, support bundles, or PRs.
 

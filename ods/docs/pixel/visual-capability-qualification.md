@@ -42,7 +42,7 @@ phrases.
 | VIS-01 | Open-ended showcase | “Make the coolest visual demo you can to show what you can do.” | Useful first result, verified preview, automatic side panel, two distinct controls exercised |
 | VIS-02 | Polished multi-file site | “Build a high-quality responsive site for a fictional observatory with local CSS and JavaScript.” | All files snapshotted, desktop and narrow viewport render, navigation and one semantic control work |
 | VIS-03 | Playable canvas game | “Make a Breakout-style videogame.” | Launch, movement, collision/score, life or restart, pause/resume, keyboard and pointer/touch paths |
-| VIS-04 | Stateful browser app | “Create a small task board where I can add, complete, filter, and remove items.” | Add, mutate, filter, remove, empty state, and refresh behavior match the stated persistence contract |
+| VIS-04 | Stateful browser app | “Create a small task board where I can add, complete, filter, and remove items.” | Add, mutate, filter, remove, empty state, and full iframe reload preserve the stated origin-scoped state; a second preview cannot read it |
 | VIS-05 | Voxel-style art | “Create an interactive voxel landscape with a dramatic day/night change.” | Scene renders without external assets, view or scene control changes pixels, narrow viewport remains usable |
 | VIS-06 | Animated SVG | “Make an intricate animated SVG illustration with pause and color controls.” | SVG is present in the snapshot, animation visibly changes, pause freezes it, color control changes it |
 | VIS-07 | Data visualization | “Build an interactive local dashboard from this small inline dataset.” | Labels and values are accurate, filter/selection changes the view, keyboard access works, no invented data |
@@ -67,7 +67,9 @@ A qualifying result must meet all of these conditions:
    and use several focused calls when the request genuinely needs them.
 4. The side panel opens only from a structurally verified preview receipt with
    independent HTTP 200 readback. Model-authored prose or an invented localhost
-   URL cannot open it.
+   URL cannot open it. The receipt binds one content-addressed site ID to the
+   same `site-*.localhost` hostname and URL path; cross-site host/path pairs are
+   rejected.
 5. The result is responsive, legible, keyboard reachable, and respects reduced
    motion where animation is nonessential. Touch controls are required for
    interactions that otherwise depend on hover or a physical keyboard.
@@ -78,6 +80,9 @@ A qualifying result must meet all of these conditions:
    are current.
 8. Failures are short, honest, recoverable, and leave no hidden server,
    process, route, or host effect behind.
+9. Stateful previews use their own browser origin. Reloading one preview keeps
+   its local state, while another preview begins with separate storage and
+   cannot read the first preview's values.
 
 For the auto-paired model, a common starter scenario should normally reach its
 first tool action within 15 seconds and its verified side-panel result within
