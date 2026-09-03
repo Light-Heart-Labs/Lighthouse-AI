@@ -45,8 +45,17 @@ else
     log "[DRY RUN] Would write mode metadata to $INSTALL_DIR"
 fi
 
-# Show the cinematic success card
-show_success_card "http://localhost:3000" "http://localhost:3001" "$LOCAL_IP"
+# A dry run is a plan, not a successful installation.  Keep its completion
+# language and checks visibly separate from live-runtime evidence.
+if $DRY_RUN; then
+    echo ""
+    bootline
+    echo -e "${BGRN}DRY RUN PLAN COMPLETE — NOTHING WAS INSTALLED${NC}"
+    bootline
+    echo ""
+else
+    show_success_card "http://localhost:3000" "http://localhost:3001" "$LOCAL_IP"
+fi
 
 # Mark the setup wizard as already completed for fresh installs. The
 # dashboard-api reads this file (container path /data/config/setup-complete.json,
@@ -119,7 +128,11 @@ fi
 
 # Additional service info
 bootline
-echo -e "${BGRN}ALL SERVICES${NC}"
+if $DRY_RUN; then
+    echo -e "${BGRN}PLANNED SERVICES (NOT STARTED)${NC}"
+else
+    echo -e "${BGRN}ALL SERVICES${NC}"
+fi
 bootline
 # Core services always shown
 echo "  • Chat UI:       http://localhost:${SERVICE_PORTS[open-webui]:-3000}"
@@ -139,7 +152,11 @@ echo ""
 
 # Configuration summary
 bootline
-echo -e "${BGRN}YOUR CONFIGURATION${NC}"
+if $DRY_RUN; then
+    echo -e "${BGRN}PLANNED CONFIGURATION${NC}"
+else
+    echo -e "${BGRN}YOUR CONFIGURATION${NC}"
+fi
 bootline
 echo "  • Tier: $TIER ($TIER_NAME)"
 echo "  • Model: $LLM_MODEL"
@@ -173,14 +190,17 @@ if [[ -f "$PREFLIGHT_REPORT_FILE" ]]; then
     echo ""
 fi
 
-# Run preflight check to validate installation
-echo ""
-bootline
-echo -e "${BGRN}RUNNING PREFLIGHT VALIDATION${NC}"
-bootline
-echo ""
-
-if [[ -f "$SCRIPT_DIR/ods-preflight.sh" ]]; then
+# Run preflight only for a real installation. A dry run has no services to
+# validate and must never print missing-service noise as if it were live proof.
+if $DRY_RUN; then
+    echo ""
+    ai "[DRY RUN] Live preflight and extension runtime checks were not run."
+elif [[ -f "$SCRIPT_DIR/ods-preflight.sh" ]]; then
+    echo ""
+    bootline
+    echo -e "${BGRN}RUNNING PREFLIGHT VALIDATION${NC}"
+    bootline
+    echo ""
     # Services like APE and Embeddings may still be starting on fresh installs.
     # Retry up to 3 times with 10s backoff before reporting failures.
     _preflight_passed=false
@@ -202,10 +222,11 @@ else
     log "Preflight script not found — skipping validation"
 fi
 
-# Extension manifest validation (non-blocking)
+# Extension manifest validation (non-blocking). Static manifest validation is
+# useful in dry run, but it must not be presented as a live runtime check.
 echo ""
 bootline
-echo -e "${BGRN}VALIDATING EXTENSIONS${NC}"
+echo -e "${BGRN}VALIDATING EXTENSION MANIFESTS${NC}"
 bootline
 echo ""
 if [[ -f "$SCRIPT_DIR/scripts/validate-manifests.sh" ]]; then
@@ -219,15 +240,17 @@ else
 fi
 
 # Non-core extension runtime check (Docker + optional HTTP health; non-blocking)
-echo ""
-bootline
-echo -e "${BGRN}EXTENSION RUNTIME CHECK${NC}"
-bootline
-echo ""
-if [[ -f "$SCRIPT_DIR/scripts/extension-runtime-check.sh" ]]; then
-    bash "$SCRIPT_DIR/scripts/extension-runtime-check.sh" "$INSTALL_DIR" || true
-else
-    log "extension-runtime-check.sh not found — skipping"
+if ! $DRY_RUN; then
+    echo ""
+    bootline
+    echo -e "${BGRN}EXTENSION RUNTIME CHECK${NC}"
+    bootline
+    echo ""
+    if [[ -f "$SCRIPT_DIR/scripts/extension-runtime-check.sh" ]]; then
+        bash "$SCRIPT_DIR/scripts/extension-runtime-check.sh" "$INSTALL_DIR" || true
+    else
+        log "extension-runtime-check.sh not found — skipping"
+    fi
 fi
 
 #=============================================================================
@@ -401,14 +424,22 @@ if command -v ods_readiness_summary >/dev/null 2>&1; then
 fi
 
 echo ""
-signal "Broadcast stable. You're free now."
+if $DRY_RUN; then
+    signal "Plan simulated. No changes were made."
+else
+    signal "Broadcast stable. You're free now."
+fi
 echo ""
 DASHBOARD_PORT="${SERVICE_PORTS[dashboard]:-3001}"
 WEBUI_PORT="${SERVICE_PORTS[open-webui]:-3000}"
 OPENCLAW_PORT="${SERVICE_PORTS[openclaw]:-7860}"
 LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
 echo -e "${GRN}──────────────────────────────────────────────────────────────────────────────${NC}"
-echo -e "${BGRN}  YOUR ODS IS LIVE${NC}"
+if $DRY_RUN; then
+    echo -e "${BGRN}  DRY RUN COMPLETE — ODS IS NOT RUNNING${NC}"
+else
+    echo -e "${BGRN}  YOUR ODS IS LIVE${NC}"
+fi
 echo -e "${GRN}──────────────────────────────────────────────────────────────────────────────${NC}"
 echo ""
 echo -e "  ${BGRN}Dashboard${NC}    ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
@@ -432,7 +463,11 @@ if [[ -n "$LOCAL_IP" ]]; then
     fi
 fi
 echo ""
-echo -e "  Start here → ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
+if $DRY_RUN; then
+    echo -e "  After a real install, start here → ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
+else
+    echo -e "  Start here → ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
+fi
 echo -e "  The Dashboard shows all services, GPU status, and quick links."
 echo ""
 echo -e "${GRN}──────────────────────────────────────────────────────────────────────────────${NC}"

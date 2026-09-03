@@ -645,6 +645,16 @@ grep -q 'data/config/setup-complete.json' installers/macos/install-macos.sh \
 grep -q 'data\\\\config\\\\setup-complete.json\|setup-complete.json' installers/windows/install-windows.ps1 \
   || { echo "[FAIL] Windows installer does not write setup-complete.json"; exit 1; }
 
+echo "[contract] Linux dry run never claims live runtime evidence"
+grep -Fq 'Dry-run simulation complete; runtime health was not tested.' installers/phases/12-health.sh \
+  || { echo "[FAIL] Linux dry-run health summary is not explicit about untested runtime health"; exit 1; }
+grep -Fq 'DRY RUN PLAN COMPLETE — NOTHING WAS INSTALLED' installers/phases/13-summary.sh \
+  || { echo "[FAIL] Linux dry-run summary does not state that nothing was installed"; exit 1; }
+grep -Fq 'DRY RUN COMPLETE — ODS IS NOT RUNNING' installers/phases/13-summary.sh \
+  || { echo "[FAIL] Linux dry-run summary can still imply that ODS is live"; exit 1; }
+grep -Fq '[DRY RUN] Live preflight and extension runtime checks were not run.' installers/phases/13-summary.sh \
+  || { echo "[FAIL] Linux dry run does not distinguish skipped live checks"; exit 1; }
+
 # --- classify-hardware: shared device_id disambiguation ---
 echo "[contract] classify-hardware shared device_id"
 _classify() {

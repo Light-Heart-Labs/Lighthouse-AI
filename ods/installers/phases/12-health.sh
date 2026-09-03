@@ -45,8 +45,8 @@ if $DRY_RUN; then
     [[ "${ENABLE_QDRANT:-${ENABLE_RAG:-false}}" == "true" ]] && log "[DRY RUN]   - Qdrant"
     [[ "${ENABLE_EMBEDDINGS:-${ENABLE_RAG:-false}}" == "true" ]] && log "[DRY RUN]   - Embeddings (TEI)"
     echo ""
-    signal "All systems nominal. (dry run)"
-    ai_ok "Sovereign intelligence is online. (dry run)"
+    signal "Health checks planned. No services were started."
+    ai_ok "Dry-run simulation complete; runtime health was not tested."
     return 0 2>/dev/null || true
 fi
 
