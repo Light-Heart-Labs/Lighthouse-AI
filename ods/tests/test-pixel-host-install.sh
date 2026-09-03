@@ -925,7 +925,7 @@ assert v["modelApiKey"] == "test-litellm-secret"
 assert v["modelId"] == "ods/current"
 assert v["modelName"] == "ODS Current (qwen-test)"
 assert v["modelContextWindow"] == 32768
-assert v["modelMaxTokens"] == 4096
+assert v["modelMaxTokens"] == 8192
 assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
 assert v["operationsPolicyFile"] == sys.argv[2]

@@ -3167,7 +3167,7 @@ PY
 
 _ods_pixel_write_onboarding() {
     local owner="$1" home="$2" answers="$3" openclaw_bin="$4" plugin_path="$5" plugin_digest="$6"
-    local context="${MAX_CONTEXT:-16384}" max_tokens=4096 reasoning=false
+    local context="${MAX_CONTEXT:-16384}" max_tokens reasoning=false
     local gateway_alias gateway_label runtime_model gateway_port="${LITELLM_PORT:-4000}" gateway_key="${LITELLM_KEY:-}"
     local gateway_key_file write_status=0
     if [[ "$context" =~ ^[0-9]+$ && "$context" -ge 4096 ]]; then
@@ -3176,12 +3176,14 @@ _ods_pixel_write_onboarding() {
         ai_bad "Pixel requires a model context of at least 4096 tokens."
         return 1
     fi
-    # Compact models still need enough output room to emit a complete
-    # structured tool call with useful file content. One eighth of an 8K
-    # context capped real Qwen calls at 1024 tokens and repeatedly truncated
-    # them before the first write. Keep the ceiling capability-derived for
-    # every model while reserving three quarters of compact context for input.
-    (( context < 32768 )) && max_tokens="$((context / 4))"
+    # Models need enough output room to emit a complete structured tool call
+    # containing an original file. Live 64K Qwen qualification proved that a
+    # fixed 4096-token ceiling can truncate a single-file SVG before the first
+    # write. Keep the ceiling model-agnostic and capability-derived: reserve
+    # three quarters of compact contexts for input, with an 8192-token output
+    # ceiling for larger contexts (matching ODS's Windows/macOS agent budget).
+    max_tokens="$((context / 4))"
+    (( max_tokens > 8192 )) && max_tokens=8192
     # This field controls the active OpenClaw reasoning path, not merely the
     # model family's theoretical capability. Keep the default no-think setting
     # false even for reasoning-capable models; an explicit operator setting

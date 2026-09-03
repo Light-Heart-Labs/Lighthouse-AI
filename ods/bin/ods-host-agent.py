@@ -2544,11 +2544,13 @@ def _pixel_max_tokens_for_context(context_length: int) -> int:
     if context_length < _MIN_MANAGED_PIXEL_CONTEXT:
         # Preserve the legacy rollback shape for older managed installations.
         return min(4096, max(1, context_length // 2))
-    # Real 8K Qwen qualification showed that a one-eighth ceiling could
-    # truncate a structured tool call before its first write. Keep enough
-    # output room for compact-model agent work while reserving three quarters
-    # of the context for Pixel's prompt, history, and tool results.
-    return min(4096, max(1, context_length // 4))
+    # Real Qwen qualification showed two distinct truncation failures: a 1K
+    # ceiling at 8K context, and a fixed 4K ceiling at 64K context while the
+    # model was authoring one original SVG tool call. Keep enough output room
+    # for model-authored artifacts while reserving three quarters of compact
+    # contexts for Pixel's prompt, history, and tool results. The 8K ceiling
+    # matches ODS's other platform agent configurations.
+    return min(8192, max(1, context_length // 4))
 
 
 def _reconcile_ods_managed_pixel_model(

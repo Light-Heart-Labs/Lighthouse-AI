@@ -3515,7 +3515,14 @@ def test_managed_pixel_reconcile_rejects_context_below_pixel_contract(monkeypatc
 
 @pytest.mark.parametrize(
     ("context_length", "expected"),
-    [(4096, 1024), (8192, 2048), (16384, 4096), (24576, 4096), (32768, 4096)],
+    [
+        (4096, 1024),
+        (8192, 2048),
+        (16384, 4096),
+        (24576, 6144),
+        (32768, 8192),
+        (65536, 8192),
+    ],
 )
 def test_managed_pixel_output_budget_preserves_agent_prompt_room(
     context_length,
@@ -3614,7 +3621,7 @@ class TestModelActivateRollback:
         assert reconciliations == [(
             "new-model.gguf",
             65536,
-            {"max_tokens": 4096, "reasoning": False},
+            {"max_tokens": 8192, "reasoning": False},
         )]
         response = handler.parse_response()
         assert response["consumers"]["pixel"] == "reconciled"
