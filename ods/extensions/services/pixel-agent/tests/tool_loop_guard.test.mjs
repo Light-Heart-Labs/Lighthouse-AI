@@ -8684,6 +8684,65 @@ test("binds a successful focused model edit to the final preview bytes", () => {
   assert.equal(guard.verificationForRun("run-1").status, "passed");
 });
 
+test("fails closed when a successful model edit cannot be replayed exactly", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me a novel interactive website." }
+  );
+  const initial = {
+    path: "ambiguous-edit/index.html",
+    content: "<!doctype html><p>replace me</p><p>replace me</p>",
+  };
+  call(guard, "write", { event: { params: initial } });
+  afterCall(guard, "write", {
+    event: { params: initial, result: { details: { status: "completed" } } },
+  });
+  const edit = {
+    path: initial.path,
+    edits: [{ oldText: "replace me", newText: "changed" }],
+  };
+  call(guard, "edit", { event: { params: edit } });
+  afterCall(guard, "edit", {
+    event: { params: edit, result: { details: { status: "completed" } } },
+  });
+  const observed = {
+    ...initial,
+    content: initial.content.replace("replace me", "changed"),
+  };
+  const snapshot = workspacePreviewSnapshot("ambiguous-edit", [observed]);
+  const previewParams = { relativeDirectory: "ambiguous-edit" };
+  call(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams },
+  });
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: {
+      params: previewParams,
+      result: {
+        details: {
+          schemaVersion: 1,
+          kind: "ods-pixel-workspace-preview",
+          status: "succeeded",
+          relativeDirectory: "ambiguous-edit",
+          siteId: snapshot.siteId,
+          port: 9437,
+          url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+          ...snapshot,
+          httpStatus: 200,
+          readbackVerified: true,
+          executable: false,
+          overwritten: false,
+        },
+      },
+    },
+  });
+  assert.deepEqual(guard.verificationForRun("run-1"), {
+    status: "failed",
+    text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
+  });
+});
+
 test("tracks a model-authored preview above the repair-loop text threshold", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
