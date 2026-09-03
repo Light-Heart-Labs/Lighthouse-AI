@@ -86,6 +86,100 @@ class ExtensionManagerTests(unittest.TestCase):
                     {"schemaVersion": 1, "action": "exec", "extensionId": "crewai"}
                 ).encode()
             )
+        inventory = json.dumps(
+            {"schemaVersion": 1, "action": "list", "extensionId": "all"}
+        ).encode()
+        self.assertEqual(manager._parse_request(inventory), ("list", "all"))
+        for invalid in (
+            {"schemaVersion": 1, "action": "list", "extensionId": "crewai"},
+            {"schemaVersion": 1, "action": "inspect", "extensionId": "all"},
+        ):
+            with self.assertRaises(manager.ManagerError):
+                manager._parse_request(json.dumps(invalid).encode())
+
+    def test_live_inventory_projects_only_bounded_status_metadata(self) -> None:
+        response = {
+            "extensions": [
+                {
+                    "id": "open-webui",
+                    "name": "Open WebUI",
+                    "description": "must not cross the boundary",
+                    "category": "interfaces",
+                    "status": "enabled",
+                    "source": "core",
+                    "installable": False,
+                    "public_url": "http://secret.internal",
+                    "env_vars": [{"key": "SECRET", "value": "must-not-leak"}],
+                },
+                {
+                    "id": "crewai",
+                    "name": "CrewAI",
+                    "category": "agents",
+                    "status": "not_installed",
+                    "source": "library",
+                    "installable": True,
+                },
+                {
+                    "id": "continue",
+                    "name": "Continue",
+                    "category": "development",
+                    "status": "disabled",
+                    "source": "user",
+                    "installable": False,
+                },
+            ],
+            "summary": {"untrusted": "ignored"},
+            "gpu_backend": "nvidia",
+            "agent_available": True,
+        }
+        with mock.patch.object(manager, "_request_json", return_value=(200, response)) as request:
+            result = manager._extension_inventory(3002, "a" * 64)
+        request.assert_called_once_with(
+            port=3002,
+            credential="a" * 64,
+            method="GET",
+            path="/api/extensions/catalog",
+            timeout=30,
+        )
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertEqual(result["summary"]["total"], 3)
+        self.assertEqual(result["summary"]["installed"], 2)
+        self.assertEqual(result["summary"]["enabled"], 1)
+        self.assertEqual(result["summary"]["disabled"], 1)
+        self.assertEqual(result["summary"]["notInstalled"], 1)
+        self.assertEqual(
+            set(result["extensions"][0]),
+            {"id", "name", "category", "status", "source", "installable"},
+        )
+        serialized = json.dumps(result)
+        self.assertNotIn("must-not-leak", serialized)
+        self.assertNotIn("secret.internal", serialized)
+        self.assertNotIn("a" * 64, serialized)
+
+    def test_live_inventory_rejects_duplicate_or_unbounded_rows(self) -> None:
+        duplicate = {
+            "extensions": [
+                {
+                    "id": "crewai",
+                    "name": "CrewAI",
+                    "category": "agents",
+                    "status": "enabled",
+                    "source": "user",
+                    "installable": False,
+                },
+                {
+                    "id": "crewai",
+                    "name": "CrewAI Again",
+                    "category": "agents",
+                    "status": "disabled",
+                    "source": "library",
+                    "installable": True,
+                },
+            ]
+        }
+        with mock.patch.object(manager, "_request_json", return_value=(200, duplicate)):
+            with self.assertRaises(manager.ManagerError):
+                manager._extension_inventory(3002, "a" * 64)
 
     def test_operations_status_request_is_exact_and_hash_bound(self) -> None:
         job_id = "ops-1788127319657-f3262c99a419"

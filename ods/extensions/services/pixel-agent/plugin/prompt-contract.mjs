@@ -15,6 +15,7 @@ import {
   userMessageRequiresOdsStatusProjection,
   userMessageRequestsExactByteDownload,
   userMessageRequestsExtensionCatalog,
+  userMessageRequestsExtensionInventory,
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceVisualContinuation,
@@ -107,6 +108,9 @@ export const ODS_VERIFICATION_FAILED_CONTRACT =
 
 export const ODS_EXTENSION_CATALOG_CONTRACT =
   "The owner's current request is specifically about the installable ODS extension catalog. In the first tool step call only pixel_ops_inventory and wait for its result; do not call pixel_ods_apps_list, status, exec, web, memory, or any other tool in parallel. Then call pixel_ops_run with target ods-host, action ods.extensions.search, and parameters containing only query, and wait for that submitted job with pixel_ops_job_wait before answering. Copy an explicitly labeled or quoted query value character-for-character; never shorten, normalize, split, correct, or sanitize it. If the copied query violates policy, let the external broker reject it and report that rejection instead of substituting a different query. Inventory describes the action but is not a catalog search result.";
+
+export const ODS_EXTENSION_INVENTORY_CONTRACT =
+  "The owner's current request asks for live ODS extension state, not a search of the installable catalog. In the first tool step call only pixel_ops_inventory and wait for its result. Then call pixel_ops_run with target ods-host, action ods.extensions.list, and no parameters, and wait for that submitted job with pixel_ops_job_wait. This read-only action returns a bounded current list with source and status; do not substitute ods.extensions.search or inspect extensions one by one. After the broker receipt, call each separately requested pixel_ods_status or pixel_ods_apps_list projection exactly once, then answer with observed facts separated from recommendations. Do not mutate an extension, call exec, or infer a state absent from the receipts.";
 
 export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
   "The owner's current request is specifically one ODS extension lifecycle action. First call only pixel_ops_inventory and wait for its result. Then call pixel_ops_run with target ods-host, action ods.extensions.inspect, and parameters containing only the owner's exact extension ID; wait for that job with pixel_ops_job_wait. Do not combine inspection and mutation in a workflow. If inspection reports missing required configuration, report only the missing key names and verified unchanged state; do not submit a mutation. Otherwise submit only the owner's requested ods.extensions.install, ods.extensions.enable, ods.extensions.disable, or ods.extensions.remove action for that same exact ID and wait for its terminal result. An awaiting-approval receipt is not completed work: report the job and immutable plan hash, never approve it yourself, and never claim a change until a later succeeded receipt proves it. Do not call apps, status, exec, web, memory, or any unrelated tool during this lifecycle route.";
@@ -261,7 +265,13 @@ export function promptContractForAgent(
     ? ` ${ODS_PRIVATE_URL_CONTRACT}`
     : "";
   const githubSource = githubSourceContract(event?.messages, event?.prompt);
-  const extensionCatalog = userMessageRequestsExtensionCatalog(
+  const extensionInventory = userMessageRequestsExtensionInventory(
+    event?.messages,
+    event?.prompt
+  )
+    ? ` ${ODS_EXTENSION_INVENTORY_CONTRACT}`
+    : "";
+  const extensionCatalog = !extensionInventory && userMessageRequestsExtensionCatalog(
     event?.messages,
     event?.prompt
   )
@@ -314,6 +324,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${conversationContract}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsInventory}${operationsRequest}${exactDownload}${workspacePreview}${recovery}${verification}${privateUrl}`,
+      `${conversationContract}${githubSource}${extensionInventory}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsInventory}${operationsRequest}${exactDownload}${workspacePreview}${recovery}${verification}${privateUrl}`,
   };
 }

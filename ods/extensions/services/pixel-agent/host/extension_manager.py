@@ -25,6 +25,7 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 KIND = "ods-pixel-extension-lifecycle"
+INVENTORY_KIND = "ods-pixel-extension-inventory"
 OPS_STATUS_KIND = "ods-pixel-operations-status"
 BOUNDARY = (
     "Scoped ODS extension lifecycle proxy; it grants no Docker, shell, "
@@ -33,7 +34,11 @@ BOUNDARY = (
 SERVICE_ID = re.compile(r"^[a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63}$")
 HEX_KEY = re.compile(r"^[0-9a-f]{64}$")
 JOB_ID = re.compile(r"^ops-[0-9]{13}-[a-f0-9]{12}$")
-ALLOWED_ACTIONS = frozenset({"inspect", "install", "enable", "disable", "remove"})
+INVENTORY_BOUNDARY = (
+    "Read-only live ODS extension inventory; it exposes only bounded status metadata "
+    "and grants no installation, configuration, credential, Docker, or shell authority."
+)
+ALLOWED_ACTIONS = frozenset({"list", "inspect", "install", "enable", "disable", "remove"})
 OPS_STATUSES = frozenset(
     {
         "awaiting-approval",
@@ -83,6 +88,8 @@ def _parse_request(payload: bytes) -> tuple[str, str]:
         raise ManagerError("invalid lifecycle request")
     if not isinstance(extension_id, str) or SERVICE_ID.fullmatch(extension_id) is None:
         raise ManagerError("invalid extension id")
+    if (action == "list") != (extension_id == "all"):
+        raise ManagerError("invalid extension inventory request")
     return action, extension_id
 
 
@@ -347,6 +354,88 @@ def _same_effective_status(left: str, right: str) -> bool:
     return left == right or {left, right} <= {"enabled", "cli_installed"}
 
 
+def _bounded_text(value: Any, label: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise ManagerError(f"extension {label} is invalid")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ManagerError(f"extension {label} is invalid")
+    return value
+
+
+def _extension_inventory(port: int, credential: str) -> dict[str, Any]:
+    status, value = _request_json(
+        port=port,
+        credential=credential,
+        method="GET",
+        path="/api/extensions/catalog",
+        timeout=30,
+    )
+    rows = value.get("extensions")
+    if status != 200 or not isinstance(rows, list) or len(rows) > 256:
+        raise ManagerError("extension inventory is unavailable")
+    projected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ManagerError("extension inventory is invalid")
+        extension_id = row.get("id")
+        extension_status = _bounded_status(row.get("status"))
+        source = row.get("source")
+        installable = row.get("installable")
+        if (
+            not isinstance(extension_id, str)
+            or SERVICE_ID.fullmatch(extension_id) is None
+            or extension_id in seen
+            or source not in {"core", "user", "library"}
+            or not isinstance(installable, bool)
+        ):
+            raise ManagerError("extension inventory is invalid")
+        seen.add(extension_id)
+        projected.append(
+            {
+                "id": extension_id,
+                "name": _bounded_text(row.get("name"), "name", 128),
+                "category": _bounded_text(row.get("category"), "category", 64),
+                "status": extension_status,
+                "source": source,
+                "installable": installable,
+            }
+        )
+    projected.sort(key=lambda item: (item["source"], item["name"].casefold(), item["id"]))
+    counts = {
+        name: sum(1 for row in projected if row["status"] == status_name)
+        for name, status_name in (
+            ("enabled", "enabled"),
+            ("cliInstalled", "cli_installed"),
+            ("disabled", "disabled"),
+            ("stopped", "stopped"),
+            ("unhealthy", "unhealthy"),
+            ("installing", "installing"),
+            ("settingUp", "setting_up"),
+            ("error", "error"),
+            ("notInstalled", "not_installed"),
+            ("incompatible", "incompatible"),
+        )
+    }
+    installed_statuses = {
+        "enabled", "cli_installed", "disabled", "stopped", "unhealthy", "installing",
+        "setting_up", "error",
+    }
+    summary = {
+        "total": len(projected),
+        "installed": sum(1 for row in projected if row["status"] in installed_statuses),
+        **counts,
+    }
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": INVENTORY_KIND,
+        "outcome": "succeeded",
+        "summary": summary,
+        "extensions": projected,
+        "boundary": INVENTORY_BOUNDARY,
+    }
+
+
 def _detail(port: int, credential: str, extension_id: str) -> dict[str, Any]:
     encoded = urllib.parse.quote(extension_id, safe="")
     status, value = _request_json(
@@ -444,6 +533,8 @@ def _execute(
 ) -> dict[str, Any]:
     values = _read_env(env_path)
     credential = _read_env_key(values, "DASHBOARD_API_KEY")
+    if action == "list":
+        return _extension_inventory(port, credential)
     before = _detail(port, credential, extension_id)
     previous_status = _bounded_status(before.get("status"))
     required, optional = _configuration_keys(before)
@@ -671,6 +762,28 @@ def _execute(
 
 
 def _error_result(action: str, extension_id: str) -> dict[str, Any]:
+    if action == "list":
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": INVENTORY_KIND,
+            "outcome": "failed",
+            "summary": {
+                "total": 0,
+                "installed": 0,
+                "enabled": 0,
+                "cliInstalled": 0,
+                "disabled": 0,
+                "stopped": 0,
+                "unhealthy": 0,
+                "installing": 0,
+                "settingUp": 0,
+                "error": 0,
+                "notInstalled": 0,
+                "incompatible": 0,
+            },
+            "extensions": [],
+            "boundary": INVENTORY_BOUNDARY,
+        }
     return _public_result(
         action=action if action in ALLOWED_ACTIONS else "inspect",
         extension_id=extension_id if SERVICE_ID.fullmatch(extension_id or "") else "invalid",
@@ -774,6 +887,7 @@ def client(socket_path: pathlib.Path, action: str, extension_id: str) -> int:
         socket_path != pathlib.Path("/run/ods-pixel-manager/extension-manager.sock")
         or action not in ALLOWED_ACTIONS
         or SERVICE_ID.fullmatch(extension_id) is None
+        or (action == "list") != (extension_id == "all")
     ):
         raise ManagerError("invalid lifecycle client request")
     request = {
@@ -800,7 +914,12 @@ def client(socket_path: pathlib.Path, action: str, extension_id: str) -> int:
         value = json.loads(bytes(chunks[:-1]).decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ManagerError("invalid lifecycle manager response") from exc
-    if not isinstance(value, dict) or value.get("schemaVersion") != SCHEMA_VERSION or value.get("kind") != KIND:
+    expected_kind = INVENTORY_KIND if action == "list" else KIND
+    if (
+        not isinstance(value, dict)
+        or value.get("schemaVersion") != SCHEMA_VERSION
+        or value.get("kind") != expected_kind
+    ):
         raise ManagerError("invalid lifecycle manager response")
     sys.stdout.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
     return 0

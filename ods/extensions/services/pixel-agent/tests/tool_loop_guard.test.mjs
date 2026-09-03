@@ -50,6 +50,7 @@ import {
   OPERATIONS_TRUSTED_CONTINUATION_PREFIX,
   OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX,
   OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
+  OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
   OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
   OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON,
@@ -122,6 +123,7 @@ import {
   userMessageWorkspaceDirectoryPath,
   userMessageRequestsOperationsEvidenceArtifact,
   userMessageRequestsExtensionCatalog,
+  userMessageRequestsExtensionInventory,
   userMessageRequestsPrivateUrl,
   userMessageRequestsExactByteDownload,
   userMessageExactDownloadRequest,
@@ -3013,6 +3015,128 @@ test("classifies installable extension catalog work as one exact Operations acti
     ),
     "workflow automation"
   );
+});
+
+test("distinguishes live extension state from an installable catalog search", () => {
+  const prompt =
+    "Inspect this live ODS installation as its owner agent. Tell me which services and extensions are actually installed, enabled, and healthy right now; distinguish core services from optional extensions; then assess what would have to change for Pixel to be the primary ODS experience while Hermes, OpenCode, and Open WebUI remain supported but non-core extensions. Do not install, enable, disable, restart, or change anything.";
+  assert.equal(userMessageRequestsExtensionInventory([], prompt), true);
+  assert.equal(userMessageRequestsExtensionCatalog([], prompt), false);
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true,
+    actions: ["ods.extensions.list"],
+  });
+  assert.deepEqual(userMessageOdsToolRequirements([], prompt), [
+    "pixel_ods_status",
+    "pixel_ods_apps_list",
+  ]);
+  assert.equal(
+    userMessageRequestsExtensionInventory([], "Which extensions are available for notebooks?"),
+    false
+  );
+});
+
+test("routes a live extension inventory to one exact read-only broker action", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "List the installed and enabled ODS extensions and identify their source." }
+  );
+  assert.match(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "ods-host",
+          action: "ods.extensions.search",
+          parameters: { query: "all" },
+        },
+      },
+    })?.blockReason,
+    new RegExp(OPERATIONS_WRONG_ACTION_REASON)
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_run", {
+      event: {
+        params: {
+          target: "host",
+          action: "ods.extensions.list",
+          parameters: { injected: "value" },
+        },
+      },
+    }),
+    { params: { target: "ods-host", action: "ods.extensions.list" } }
+  );
+});
+
+test("renders a strictly validated live extension inventory receipt", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "List the installed and enabled ODS extensions and identify their source." }
+  );
+  afterCall(guard, "pixel_ops_run", {
+    event: {
+      params: { target: "ods-host", action: "ods.extensions.list" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step",
+            target: "ods-host",
+            action: "ods.extensions.list",
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              kind: "ods-pixel-extension-inventory",
+              outcome: "succeeded",
+              summary: {
+                total: 3,
+                installed: 2,
+                enabled: 1,
+                cliInstalled: 0,
+                disabled: 1,
+                stopped: 0,
+                unhealthy: 0,
+                installing: 0,
+                settingUp: 0,
+                error: 0,
+                notInstalled: 1,
+                incompatible: 0,
+              },
+              extensions: [
+                { id: "dashboard", name: "Dashboard", category: "core", status: "enabled", source: "core", installable: false },
+                { id: "continue", name: "Continue", category: "development", status: "disabled", source: "user", installable: false },
+                { id: "crewai", name: "CrewAI", category: "agents", status: "not_installed", source: "library", installable: true },
+              ],
+              boundary:
+                "Read-only live ODS extension inventory; it exposes only bounded status metadata and grants no installation, configuration, credential, Docker, or shell authority.",
+            }) + "\n",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX}`));
+  assert.match(text, /Catalog total: 3; installed: 2; enabled: 1/);
+  assert.match(text, /`Dashboard` \(`dashboard`\): status `enabled`; source `core`/);
+  assert.match(text, /`Continue` \(`continue`\): status `disabled`; source `user`/);
+  assert.doesNotMatch(text, /CrewAI/);
+  assert.match(text, /grants no installation, configuration, credential, Docker, or shell authority/);
 });
 
 test("routes extension catalog requests only to the exact broker action", () => {

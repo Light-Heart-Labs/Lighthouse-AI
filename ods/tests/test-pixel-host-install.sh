@@ -712,8 +712,8 @@ assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"]
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
 host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.gpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports","host.tailscale"}
-assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
-for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.inspect"}:
+assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.list","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
+for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.list","ods.extensions.inspect"}:
     assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
 assert v["actions"]["host.identity"]["argv"] == ["/usr/bin/hostname"]
 assert v["actions"]["host.kernel"]["argv"] == ["/usr/bin/uname", "-sr"]
@@ -735,6 +735,7 @@ assert v["actions"]["host.tailscale"]["argv"] == [str(pathlib.Path("/usr/bin/pyt
 extension_search=v["actions"]["ods.extensions.search"]
 assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
 assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]
+assert v["actions"]["ods.extensions.list"]["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-manager.py","client","/run/ods-pixel-manager/extension-manager.sock","list","all"]
 parameter={"serviceId":{"pattern":"^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$","maxLength":64}}
 for action in ("inspect","install","enable","disable","remove"):
     item=v["actions"][f"ods.extensions.{action}"]

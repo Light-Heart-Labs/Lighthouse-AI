@@ -4,6 +4,7 @@ import {
   ODS_COMPACT_CONVERSATION_CONTRACT,
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
+  ODS_EXTENSION_INVENTORY_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
   ODS_HOST_COMMAND_CONTRACT,
   ODS_OPERATIONS_CONTINUATION_CONTRACT,
@@ -528,6 +529,22 @@ test("adds a salient exact-route contract for extension catalog requests", () =>
   assert.match(result.appendSystemContext, /action ods\.extensions\.search/);
   assert.match(result.appendSystemContext, /character-for-character/);
   assert.match(result.appendSystemContext, /let the external broker reject it/);
+});
+
+test("adds a live-state route instead of catalog search for extension inventory", () => {
+  const event = {
+    prompt:
+      "Inspect this live ODS installation. Tell me which services and extensions are installed, enabled, and healthy; distinguish core from optional extensions without changing anything.",
+  };
+  const result = promptContractForAgent({ agentId: "pixel" }, "pixel", event);
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_EXTENSION_INVENTORY_CONTRACT}`
+  );
+  assert.match(result.appendSystemContext, /action ods\.extensions\.list/);
+  assert.match(result.appendSystemContext, /not a search of the installable catalog/);
+  assert.match(result.appendSystemContext, /call each separately requested pixel_ods_status or pixel_ods_apps_list/);
+  assert.doesNotMatch(result.appendSystemContext, /action ods\.extensions\.search/);
 });
 
 test("adds a sequential approval-aware contract for extension lifecycle requests", () => {

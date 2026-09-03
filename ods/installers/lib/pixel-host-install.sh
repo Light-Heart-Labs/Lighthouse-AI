@@ -3005,6 +3005,20 @@ payload = {
             "timeoutSeconds": 10,
             "exclusiveTarget": False,
         },
+        "ods.extensions.list": {
+            "description": "List the live installed, enabled, disabled, unhealthy, and available ODS extension states through the scoped lifecycle proxy.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "list", "all",
+            ],
+            "timeoutSeconds": 30,
+            "exclusiveTarget": False,
+        },
         "ods.extensions.inspect": {
             "description": "Inspect one ODS extension's installed state and configuration prerequisites through the scoped lifecycle proxy.",
             "tier": "read",

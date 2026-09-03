@@ -302,6 +302,9 @@ export const OPERATIONS_TRUSTED_CONTINUATION_PREFIX =
 export const OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension catalog result through a structurally matched terminal Operations Broker receipt:";
 
+export const OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX =
+  "Pixel verified this live ODS extension inventory through a structurally matched terminal Operations Broker receipt:";
+
 export const OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension lifecycle result through structurally matched Operations Broker receipts:";
 
@@ -3199,6 +3202,59 @@ function operationsEvidenceText(
       odsStatusProjection
     );
   }
+  if (requiredActions.size === 1 && requiredActions.has("ods.extensions.list")) {
+    if (!(terminalJobs instanceof Map) || terminalJobs.size !== 1) return undefined;
+    const outcome = [...terminalJobs.values()][0];
+    if (outcome.status !== "succeeded") {
+      const plan = typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
+        ? ` Plan SHA-256: ${outcome.planHash}.`
+        : "";
+      return `Pixel's live ODS extension inventory job reached terminal status ${outcome.status}. No extension-state result or external effect was accepted. Job: ${outcome.jobId}.${plan}`;
+    }
+    if (outcome.steps.length !== 1 || outcome.actions.length !== 1) return undefined;
+    const result = extensionInventoryResult(outcome.steps[0], outcome.actions[0]);
+    if (!result) return undefined;
+    const lines = [
+      OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX,
+      `- Catalog total: ${result.summary.total}; installed: ${result.summary.installed}; enabled: ${result.summary.enabled}; CLI-installed: ${result.summary.cliInstalled}.`,
+      `- Degraded or inactive installed state: disabled ${result.summary.disabled}; stopped ${result.summary.stopped}; unhealthy ${result.summary.unhealthy}; installing ${result.summary.installing}; setting up ${result.summary.settingUp}; error ${result.summary.error}.`,
+      `- Not installed: ${result.summary.notInstalled}; incompatible: ${result.summary.incompatible}.`,
+    ];
+    const installed = result.extensions.filter(
+      (entry) => !["not_installed", "incompatible"].includes(entry.status)
+    );
+    if (installed.length) {
+      for (const entry of installed) {
+        lines.push(
+          `- \`${entry.name}\` (\`${entry.id}\`): status \`${entry.status}\`; source \`${entry.source}\`; category \`${entry.category}\`; installable ${entry.installable ? "yes" : "no"}.`
+        );
+      }
+    } else {
+      lines.push("- Installed extensions: none.");
+    }
+    if (odsAppsProjection) {
+      const apps = odsAppsProjection.apps
+        .map(({ name, status }) => `\`${name}\` (${status})`)
+        .join(", ");
+      lines.push(
+        `- ODS container projection: ${odsAppsProjection.online_app_count} of ${odsAppsProjection.app_count} allowlisted ODS application containers online; ${apps || "none reported"}.`
+      );
+    }
+    if (odsStatusProjection) {
+      const availability = odsStatusProjection.ingress_ready && odsStatusProjection.gateway_reachable
+        ? "available"
+        : "unavailable";
+      const runtime = odsStatusProjection.runtime
+        ? `model \`${odsStatusProjection.runtime.model}\`; context ${odsStatusProjection.runtime.context_length} tokens`
+        : "model unavailable; context unavailable";
+      lines.push(
+        `- ODS runtime projection: ${runtime}; Pixel ${availability}; ODS version \`${odsStatusProjection.ods_version}\`; ${odsStatusProjection.online_app_count} of ${odsStatusProjection.app_count} projected containers online.`
+      );
+    }
+    lines.push(`- Authority: ${EXTENSION_INVENTORY_BOUNDARY}`);
+    lines.push(`- Broker job: \`${outcome.jobId}\`.`);
+    return lines.join("\n");
+  }
   if (requiredActions.has("ods.extensions.inspect")) {
     return extensionLifecycleEvidenceText(requiredActions, terminalJobs);
   }
@@ -3517,6 +3573,8 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const asksDockerStatus =
     /\bdocker\b[^.!?;\n]{0,48}\b(?:available|health|healthy|online|running|status|working)\b/i.test(text) ||
     /\b(?:available|health|healthy|online|running|status|working)\b[^.!?;\n]{0,48}\bdocker\b/i.test(text);
+  const asksLiveServiceState = /\bODS\b/i.test(text) &&
+    /\bservices?\b[^.!?;\n]{0,80}\b(?:health|healthy|online|running|status)\b/i.test(text);
   const asksStatus =
     !rejectsStatus &&
     (/\bpixel_ods_status\b/i.test(text) ||
@@ -3531,7 +3589,11 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
         text
       ) ||
       asksAvailability ||
-      asksDockerStatus);
+      asksDockerStatus ||
+      asksLiveServiceState);
+  const asksNamedServiceInventory =
+    /\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b[^.!?;\n]{0,120}\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text) ||
+    /\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text);
   const asksApps =
     !rejectsApps &&
     (/\bpixel_ods_apps_list\b/i.test(text) ||
@@ -3540,7 +3602,8 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
       /\bODS(?:\s+(?:app|application|service)s?)?\s+(?:links?|URLs?)\b/i.test(text) ||
       /\bconfigured\s+(?:app\s+)?(?:links?|URLs?)\b.{0,48}\bODS\b/i.test(text) ||
       (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
-        /\b(?:configured|link|URL|where|open|address)\b/i.test(text)));
+        /\b(?:configured|link|URL|where|address)\b/i.test(text)) ||
+      asksNamedServiceInventory);
   if (asksStatus) requirements.push("pixel_ods_status");
   if (asksApps) requirements.push("pixel_ods_apps_list");
   return requirements;
@@ -3553,12 +3616,129 @@ export function userMessageRequiresOperations(messages, prompt = undefined) {
 export function userMessageRequestsExtensionCatalog(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return false;
-  return (
+  const requestsLiveState =
+    /\b(?:which|what|list|show|inspect|audit|inventory|report)\b[^.!?;\n]{0,120}\b(?:ODS\s+)?extensions?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status|state|source|core|optional)\b/i.test(text) ||
+    /\b(?:ODS\s+)?extensions?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status|state|source|core|optional)\b/i.test(text);
+  const explicitCatalog =
     /\bods\.extensions\.search\b/i.test(text) ||
     /\b(?:extension|extensions)\s+catalog\b/i.test(text) ||
+    /\b(?:search|browse|find)\b[^.!?;\n]{0,80}\b(?:installable|supported|available)?\s*(?:ODS\s+)?extensions?\b/i.test(text) ||
+    /\binstallable\b[^.!?;\n]{0,80}\b(?:ODS\s+)?extensions?\b/i.test(text);
+  if (requestsLiveState && !explicitCatalog) return false;
+  return (
+    explicitCatalog ||
     /\b(?:installable|supported|available)\b.{0,80}\b(?:ODS\s+)?extensions?\b/i.test(text) ||
     /\b(?:ODS\s+)?extensions?\b.{0,80}\b(?:installable|supported|available)\b/i.test(text)
   );
+}
+
+const EXTENSION_INVENTORY_BOUNDARY =
+  "Read-only live ODS extension inventory; it exposes only bounded status metadata and grants no installation, configuration, credential, Docker, or shell authority.";
+
+function extensionInventoryResult(step, submittedAction) {
+  if (
+    !step ||
+    step.target !== "ods-host" ||
+    step.action !== "ods.extensions.list" ||
+    submittedAction?.action !== "ods.extensions.list" ||
+    !exactKeys(submittedAction?.parameters ?? {}, []) ||
+    step.stderr.trim() ||
+    step.riskSignals.length > 0 ||
+    typeof step.stdout !== "string" ||
+    step.stdout.length > 256 * 1024
+  ) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  const summaryKeys = [
+    "total", "installed", "enabled", "cliInstalled", "disabled", "stopped",
+    "unhealthy", "installing", "settingUp", "error", "notInstalled", "incompatible",
+  ];
+  if (
+    !exactKeys(value, ["schemaVersion", "kind", "outcome", "summary", "extensions", "boundary"]) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-pixel-extension-inventory" ||
+    value.outcome !== "succeeded" ||
+    value.boundary !== EXTENSION_INVENTORY_BOUNDARY ||
+    !exactKeys(value.summary, summaryKeys) ||
+    !Array.isArray(value.extensions) ||
+    value.extensions.length > 256
+  ) {
+    return undefined;
+  }
+  for (const key of summaryKeys) {
+    if (!Number.isInteger(value.summary[key]) || value.summary[key] < 0 || value.summary[key] > 256) {
+      return undefined;
+    }
+  }
+  if (value.summary.total !== value.extensions.length) return undefined;
+  const identifiers = new Set();
+  const extensions = [];
+  for (const entry of value.extensions) {
+    if (!exactKeys(entry, ["id", "name", "category", "status", "source", "installable"])) {
+      return undefined;
+    }
+    const id = boundedCatalogString(entry.id, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64);
+    const name = boundedCatalogString(entry.name, undefined, 128);
+    const category = boundedCatalogString(entry.category, undefined, 64);
+    if (
+      !id || !name || !category || identifiers.has(id) ||
+      !EXTENSION_LIFECYCLE_STATUSES.has(entry.status) ||
+      !["core", "user", "library"].includes(entry.source) ||
+      typeof entry.installable !== "boolean"
+    ) {
+      return undefined;
+    }
+    identifiers.add(id);
+    extensions.push({
+      id,
+      name,
+      category,
+      status: entry.status,
+      source: entry.source,
+      installable: entry.installable,
+    });
+  }
+  const statusKeys = new Map([
+    ["enabled", "enabled"],
+    ["cli_installed", "cliInstalled"],
+    ["disabled", "disabled"],
+    ["stopped", "stopped"],
+    ["unhealthy", "unhealthy"],
+    ["installing", "installing"],
+    ["setting_up", "settingUp"],
+    ["error", "error"],
+    ["not_installed", "notInstalled"],
+    ["incompatible", "incompatible"],
+  ]);
+  for (const [status, key] of statusKeys) {
+    if (value.summary[key] !== extensions.filter((entry) => entry.status === status).length) {
+      return undefined;
+    }
+  }
+  const installedStatuses = new Set([
+    "enabled", "cli_installed", "disabled", "stopped", "unhealthy", "installing",
+    "setting_up", "error",
+  ]);
+  if (value.summary.installed !== extensions.filter((entry) => installedStatuses.has(entry.status)).length) {
+    return undefined;
+  }
+  return { ...value, extensions };
+}
+
+export function userMessageRequestsExtensionInventory(messages, prompt = undefined) {
+  const text = currentUserText(messages, prompt);
+  if (!text || userMessageExtensionLifecycleIntent(messages, prompt)) return false;
+  const extensionState =
+    /\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status|state|source|core|optional)\b/i;
+  const inventoryIntent =
+    /\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b/i;
+  return /\b(?:ODS\s+)?extensions?\b/i.test(text) && extensionState.test(text) && inventoryIntent.test(text);
 }
 
 export function userMessageExtensionCatalogExactQuery(messages, prompt = undefined) {
@@ -3664,6 +3844,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   const broadHostExploration = hostContext && (hostExplorationIntent || naturalHostOverview) &&
     (hostFacetCount === 0 || broadScopeIntent);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
+  const extensionInventory = userMessageRequestsExtensionInventory(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const hostCommand = userMessageRequestsHostCommand(messages, prompt);
   const actions = [];
@@ -3717,7 +3898,8 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (broadHostExploration) {
     actions.push("host.identity", "host.kernel", "host.platform", "host.os-release", "host.uptime");
   }
-  if (extensionCatalog) actions.push("ods.extensions.search");
+  if (extensionInventory) actions.push("ods.extensions.list");
+  else if (extensionCatalog) actions.push("ods.extensions.search");
   if (extensionLifecycle) {
     actions.push("ods.extensions.inspect");
     actions.push(`ods.extensions.${extensionLifecycle.action}`);
@@ -3763,7 +3945,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     required:
       capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
       (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
-      extensionCatalog || Boolean(extensionLifecycle) || hostCommand,
+      extensionInventory || extensionCatalog || Boolean(extensionLifecycle) || hostCommand,
     actions: requestedActions,
   };
 }
@@ -6017,6 +6199,15 @@ export function createToolLoopGuard({
             }
           }
         }
+      }
+      if (
+        toolName === "pixel_ops_run" &&
+        state.operationsRequiredActions.size === 1 &&
+        state.operationsRequiredActions.has("ods.extensions.list") &&
+        params?.action === "ods.extensions.list"
+      ) {
+        params = { target: "ods-host", action: "ods.extensions.list" };
+        normalizedParams = params;
       }
       // Some otherwise-capable models shorten the single local ODS target to
       // `host` or omit the `host.` namespace from an otherwise exact action.
