@@ -3,9 +3,10 @@
 # ODS Installer — Phase 07: Developer Tools
 # ============================================================================
 # Part of: installers/phases/
-# Purpose: Install Claude Code, Codex CLI, and OpenCode
+# Purpose: Install developer CLIs and, when selected, the OpenCode extension
 #
 # Expects: DRY_RUN, INSTALL_DIR, LOG_FILE, LLM_MODEL, MAX_CONTEXT,
+#           ENABLE_OPENCODE,
 #           PKG_MANAGER,
 #           ai(), ai_ok(), ai_warn(), log()
 # Provides: (developer tools installed to ~/.npm-global)
@@ -18,8 +19,12 @@ ods_progress 42 "devtools" "Installing developer tools"
 # shellcheck source=../lib/node-runtime.sh
 . "$SCRIPT_DIR/installers/lib/node-runtime.sh"
 if $DRY_RUN; then
-    log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
-    log "[DRY RUN] Would configure OpenCode for local llama-server (user-level systemd service on port 3003)"
+    log "[DRY RUN] Would install AI developer tools (Claude Code and Codex CLI)"
+    if [[ "${ENABLE_OPENCODE:-false}" == "true" ]]; then
+        log "[DRY RUN] Would install and configure the optional OpenCode browser IDE (user-level systemd service on port 3003)"
+    else
+        log "[DRY RUN] OpenCode extension is disabled; it would not be installed or started"
+    fi
     log "[DRY RUN] Would install ODS host agent systemd service (system-mode, port 7710)"
     log "[DRY RUN] Would install ODS mDNS announcer systemd service (if zeroconf available)"
 else
@@ -30,11 +35,11 @@ else
         # Node.js install needs root. When sudo isn't usable (rootless box, or
         # non-interactive without cached/passwordless sudo), skip it with a clear
         # warning instead of failing the install. The optional AI dev-tool CLIs
-        # (Claude Code / Codex / OpenCode) simply won't be installed; core ODS is
+        # (Claude Code / Codex) simply won't be installed; core ODS is
         # unaffected. ods_sudo() below also skips these calls when sudo is absent.
         if ! ods_sudo_available; then
             ai_warn "sudo unavailable — skipping Node.js install (optional dev-tool CLIs will be skipped)."
-            ai "  Install Node.js 22+ yourself and re-run to add Claude Code / Codex / OpenCode."
+            ai "  Install Node.js 22+ yourself and re-run to add Claude Code / Codex."
         else
             ai "Installing Node.js..."
             case "$PKG_MANAGER" in
@@ -99,9 +104,10 @@ else
         fi
     else
         ai_warn "Linux Node.js 20+ and npm are not available — skipping Claude Code and Codex CLI install"
-        ai "  Install Linux Node.js 22+ and re-run to add Claude Code / Codex / OpenCode."
+        ai "  Install Linux Node.js 22+ and re-run to add Claude Code / Codex."
     fi
 
+    if [[ "${ENABLE_OPENCODE:-false}" == "true" ]]; then
     _opencode_candidate_is_file() {
         local candidate="$1"
         [[ -n "$candidate" && "$candidate" == /* && -x "$candidate" && ! -d "$candidate" ]]
@@ -306,6 +312,17 @@ OPENCODE_EOF
                 sudo -n loginctl enable-linger "$(whoami)" 2>/dev/null || \
                 ai_warn "Could not enable linger. OpenCode may stop after logout. Run: loginctl enable-linger $(whoami)"
         fi
+    fi
+    else
+        # A rerun with --no-opencode must not leave an earlier ODS-managed
+        # browser IDE running. Preserve the binary and user configuration so
+        # an explicit future opt-in is reversible, but retire the managed unit.
+        if systemctl --user is-active --quiet opencode-web.service 2>/dev/null \
+            || systemctl --user is-enabled --quiet opencode-web.service 2>/dev/null; then
+            systemctl --user disable --now opencode-web.service >> "$LOG_FILE" 2>&1 || \
+                ai_warn "Could not stop the previously enabled OpenCode extension"
+        fi
+        log "OpenCode extension disabled; skipped installation and startup"
     fi
 fi
 

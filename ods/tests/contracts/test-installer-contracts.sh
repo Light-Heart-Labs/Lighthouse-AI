@@ -803,6 +803,7 @@ fi
 
 echo "[contract] Hermes context defaults are installer-wide"
 bash tests/test-installer-context-parity.sh
+bash tests/test-linux-opencode-opt-in.sh
 
 echo "[contract] Linux installer/background model lifecycle serialization"
 bash tests/test-linux-installer-model-lifecycle-lock.sh
