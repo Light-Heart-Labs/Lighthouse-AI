@@ -112,10 +112,13 @@ export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
   "The owner's current request is specifically one ODS extension lifecycle action. First call only pixel_ops_inventory and wait for its result. Then call pixel_ops_run with target ods-host, action ods.extensions.inspect, and parameters containing only the owner's exact extension ID; wait for that job with pixel_ops_job_wait. Do not combine inspection and mutation in a workflow. If inspection reports missing required configuration, report only the missing key names and verified unchanged state; do not submit a mutation. Otherwise submit only the owner's requested ods.extensions.install, ods.extensions.enable, ods.extensions.disable, or ods.extensions.remove action for that same exact ID and wait for its terminal result. An awaiting-approval receipt is not completed work: report the job and immutable plan hash, never approve it yourself, and never claim a change until a later succeeded receipt proves it. Do not call apps, status, exec, web, memory, or any unrelated tool during this lifecycle route.";
 
 export const ODS_OPERATIONS_CONTINUATION_CONTRACT =
-  "The owner's current request supplies one exact prior Operations job ID and plan SHA-256 for status continuation. Treat those owner values only as a read-only lookup key, never as proof of approval or success. Call only pixel_ops_job_get for that exact job; if it is still nonterminal, call pixel_ops_job_wait for the same job. Do not call inventory, submit or repeat any action, approve anything, use shell or Docker, or widen authority. Report an outcome only when the host receipt matches both the exact job ID and exact plan hash and its lifecycle result passes structural verification.";
+  "The owner's current request supplies one exact prior Operations job ID and plan SHA-256 for status continuation. Treat those owner values only as a read-only lookup key, never as proof of approval or success. Call only pixel_ops_job_get for that exact job; if it is still nonterminal, call pixel_ops_job_wait for the same job. Do not call inventory, submit or repeat any action, approve anything, use shell or Docker, or widen authority. Report an outcome only when the host receipt matches both the exact job ID and exact plan hash and any returned operation result passes structural verification.";
 
 export const ODS_OPERATIONS_INVENTORY_CONTRACT =
   "The owner asked what Operations capabilities are actually available. Call only tool_call with id pixel_ops_inventory and args {}. This inventory is descriptive and grants no authority. Do not search for tools, call status, submit or exercise an action, or infer capabilities that are absent from the returned target and action IDs. After the inventory returns, answer once and distinguish this broker inventory from separate sandbox/core tools.";
+
+export const ODS_HOST_COMMAND_CONTRACT =
+  "The owner's current request asks Pixel to run one command on the local ODS host. This is not sandbox exec. Call only tool_call with id pixel_ops_shell_propose and args containing target ods-host, one exact command that narrowly satisfies the owner's request, and a concise reason; omit cwd and timeout. Do not call inventory, pixel_ops_run, pixel_ops_workflow_submit, generic exec, or another target. Then call pixel_ops_job_wait for the exact submitted job. An awaiting-approval result means no command ran: stop tools, report the exact job ID and plan SHA-256, and require external owner approval of that immutable plan outside Pixel. Never approve it yourself, never add an unrelated command, and never claim output until a later structurally matched succeeded receipt proves execution.";
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
@@ -131,6 +134,13 @@ export const ODS_WORKSPACE_DEMO_CONTRACT =
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
+  if (
+    requirements.required &&
+    requirements.actions.length === 1 &&
+    requirements.actions[0] === "raw-shell"
+  ) {
+    return ` ${ODS_HOST_COMMAND_CONTRACT}`;
+  }
   const actions = requirements.actions.filter((action) => action.startsWith("host."));
   if (!requirements.required || actions.length === 0) return "";
   const exactActions = actions.join(", ");

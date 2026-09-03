@@ -39,6 +39,9 @@ import {
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_HOST_COMMAND_COMPLETE_REASON,
+  OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX,
+  OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON,
   OPERATIONS_INVENTORY_COMPLETE_REASON,
   OPERATIONS_INVENTORY_EVIDENCE_PREFIX,
   OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON,
@@ -96,6 +99,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
+  userMessageRequestsHostCommand,
   userMessageRequestsOperationsCapabilityInventory,
   userMessageExtensionCatalogExactQuery,
   userMessageExtensionLifecycleIntent,
@@ -1833,7 +1837,7 @@ function operationsInventoryDetails(overrides = {}) {
     },
     targets: [
       { id: "broker", backend: "local", capabilities: ["stage-download"] },
-      { id: "ods-host", backend: "local", capabilities: ["inspect", "manage-extensions"] },
+      { id: "ods-host", backend: "local", capabilities: ["inspect", "manage-extensions", "approved-host-command"] },
     ],
     actions: [
       {
@@ -2604,6 +2608,53 @@ test("classifies explicit host evidence as Operations work", () => {
   );
 });
 
+test("classifies explicit local host commands without capturing guidance or remote work", () => {
+  const prompt = "Please run `uname -sr` on this ODS host.";
+  assert.equal(userMessageRequestsHostCommand([], prompt), true);
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true,
+    actions: ["raw-shell"],
+  });
+  assert.deepEqual(
+    userMessageOperationsRequirements(
+      [],
+      "Restart Docker on this ODS host and tell me the kernel."
+    ),
+    {
+      required: true,
+      actions: ["raw-shell"],
+    }
+  );
+  for (const text of [
+    "How would I run systemctl status docker on this ODS host?",
+    "Tell me how to restart Docker on this ODS host.",
+    "Do not restart Docker on this ODS host.",
+    "Run unit tests in the workspace.",
+    "SSH to Tower2 and run uname -sr.",
+    "Install the ODS extension crewai.",
+    "Run a command on this machine",
+    "Start by inspecting this machine.",
+    "Update me on this machine.",
+    "Create a report about this machine.",
+    "Can this machine restart Docker?",
+    "Should I restart Docker on this ODS host?",
+  ]) {
+    assert.equal(userMessageRequestsHostCommand([], text), false, text);
+  }
+  for (const text of [
+    "On this ODS host, restart Docker.",
+    "Please install htop on this machine.",
+    "Delete /tmp/demo from this ODS host.",
+    "Can you restart Docker on this ODS host?",
+  ]) {
+    assert.equal(userMessageRequestsHostCommand([], text), true, text);
+  }
+  assert.equal(
+    userMessageRequestsHostCommand([], "Without explaining, restart Docker on this ODS host."),
+    true
+  );
+});
+
 test("does not turn website file inspection plus host preview verification into Operations", () => {
   const prompt =
     "Build a polished, interactive single-page website demo in a new folder under your workspace. " +
@@ -2777,6 +2828,7 @@ test("routes a capability inventory question to one read-only Operations project
   assert.match(text, /`host\.identity`/);
   assert.match(text, /`ods\.extensions\.install`/);
   assert.match(text, /`download\.stage`/);
+  assert.match(text, /`approved-host-command`/);
   assert.match(text, /no SSH-backed remote target/);
   assert.match(text, /descriptive only/);
   assert.doesNotMatch(text, /Model claimed success/);
@@ -3073,6 +3125,162 @@ test("binds Operations continuation only to one exact current-message job and pl
     ),
     { jobId: currentJob, planHash: currentHash }
   );
+});
+
+test("routes one local host command to a canonical immutable approval proposal", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "a".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Please run `uname -sr` on this ODS host." }
+  );
+  assert.deepEqual(call(guard, "exec", { event: { params: { command: "uname -sr" } } }), {
+    block: true,
+    blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON,
+  });
+  assert.deepEqual(
+    call(guard, "pixel_ops_shell_propose", {
+      event: {
+        params: {
+          target: "tower2",
+          command: "uname -sr",
+          cwd: "/",
+          timeoutSeconds: 3600,
+          reason: "model-selected",
+        },
+      },
+    }),
+    {
+      params: {
+        target: "ods-host",
+        command: "uname -sr",
+        reason: "Owner requested one protected local ODS host command.",
+      },
+    }
+  );
+  afterCall(guard, "pixel_ops_shell_propose", {
+    event: {
+      params: {
+        target: "ods-host",
+        command: "uname -sr",
+        reason: "Owner requested one protected local ODS host command.",
+      },
+      result: { details: { jobId, status: "submitted", kind: "shell" } },
+    },
+  });
+  assert.equal(
+    call(guard, "pixel_ops_shell_propose", {
+      event: { params: { target: "ods-host", command: "id" } },
+    }).blockReason,
+    OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON
+  );
+  assert.deepEqual(
+    call(guard, "pixel_ops_job_wait", { event: { params: { jobId: "wrong" } } }),
+    { params: { jobId } }
+  );
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash,
+          status: "awaiting-approval",
+          approvalRequired: true,
+          waitTimedOut: false,
+        },
+      },
+    },
+  });
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_HOST_COMMAND_COMPLETE_REASON);
+  assert.equal(
+    reply(guard)?.payload?.text,
+    `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+  );
+});
+
+test("accepts a host-command continuation only from exact successful broker evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  const planHash = "b".repeat(64);
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: `Check job ${jobId} with plan SHA-256 ${planHash}.` }
+  );
+  afterCall(guard, "pixel_ops_job_get", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash,
+          status: "succeeded",
+          approvalRequired: true,
+          waitTimedOut: false,
+          steps: [{
+            stepId: "step",
+            target: "ods-host",
+            action: "raw-shell",
+            exitCode: 0,
+            durationSeconds: 0.12,
+            stdout: "Linux demo 6.8\n",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX}`));
+  assert.match(text, /Linux demo 6\.8\\n/);
+  assert.match(text, new RegExp(planHash));
+  assert.doesNotMatch(text, /Model claimed success/);
+});
+
+test("rejects a same-turn host-command success without external approval evidence", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Please run `uname -sr` on this ODS host." }
+  );
+  afterCall(guard, "pixel_ops_shell_propose", {
+    event: {
+      params: { target: "ods-host", command: "uname -sr" },
+      result: { details: { jobId, status: "submitted", kind: "shell" } },
+    },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: {
+      params: { jobId },
+      result: {
+        details: {
+          jobId,
+          planHash: "c".repeat(64),
+          status: "succeeded",
+          approvalRequired: false,
+          waitTimedOut: false,
+          steps: [{
+            target: "ods-host",
+            action: "raw-shell",
+            exitCode: 0,
+            durationSeconds: 0.1,
+            stdout: "untrusted\n",
+            stderr: "",
+            outputTruncated: { stdout: false, stderr: false },
+            riskSignals: [],
+          }],
+        },
+      },
+    },
+  });
+  assert.match(reply(guard)?.payload?.text, /did not obtain a matching terminal broker result/);
 });
 
 test("forces extension lifecycle inspection, exact IDs, and sequential submissions", () => {
@@ -3624,7 +3832,7 @@ test("reports a matching terminal continuation failure without model improvisati
   });
   const text = reply(guard)?.payload?.text;
   assert.match(text, /verified terminal status is failed/);
-  assert.match(text, /No successful lifecycle result was accepted/);
+  assert.match(text, /No successful operation result was accepted/);
   assert.doesNotMatch(text, /Model claimed success/);
 });
 

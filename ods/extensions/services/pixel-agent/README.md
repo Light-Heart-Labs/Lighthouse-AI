@@ -90,6 +90,17 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   honest host-authored result. Streaming responses are bounded and buffered
   until that check completes, so false content is never released and then
   retracted.
+- **Protected local host commands.** An explicit owner request to run one
+  command on the local ODS host is routed to Pixel Operations as a raw-shell
+  proposal, never to sandbox `exec`. ODS enables raw shell only on the local
+  `ods-host` target. The broker fixes it to the unprivileged, systemd-confined
+  service identity, marks it break-glass/non-idempotent/non-reversible, and
+  requires an external owner approval of the immutable plan hash every time.
+  Pixel cannot approve its own proposal. The Dashboard independently rechecks
+  the job plus plan hash and copies only the host-generated approval command;
+  that command requires fresh administrator authentication, displays the
+  complete plan, and asks for a one-time challenge before execution. SSH
+  targets and the broker-quarantine target continue to reject raw shell.
 - **Verified interactive previews.** A website request may use the separate
   `pixel-workspace-preview.service` to snapshot bounded static files from the
   Pixel workspace onto `127.0.0.1:${PIXEL_PREVIEW_PORT:-9437}`. The service

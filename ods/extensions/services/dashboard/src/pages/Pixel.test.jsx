@@ -80,6 +80,14 @@ describe('Pixel', () => {
     })
     expect(parseApprovalReceipt(`${content} Approve it now.`)).toBeNull()
     expect(parseApprovalReceipt(content.replace('crewai', '../../shadow'))).toBeNull()
+    const hostCommand = `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+    expect(parseApprovalReceipt(hostCommand)).toEqual({
+      action: 'raw-shell',
+      extensionId: 'ods-host',
+      jobId,
+      planHash,
+    })
+    expect(parseApprovalReceipt(hostCommand.replace('No command was executed.', 'Command completed.'))).toBeNull()
   })
 
   it('accepts only the exact host-authored clean-context terminal marker', () => {
@@ -245,6 +253,35 @@ describe('Pixel', () => {
     await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith(command))
     expect(globalThis.fetch.mock.calls.some(([url]) => url.includes('/api/pixel/ops/'))).toBe(true)
     expect(globalThis.fetch.mock.calls.some(([, options]) => options?.method === 'POST' && options?.body?.includes('approve'))).toBe(false)
+  })
+
+  it('renders the same independently verified approval UX for a protected host command', async () => {
+    const jobId = 'ops-1788127319657-f3262c99a419'
+    const planHash = 'f'.repeat(64)
+    const command = `/opt/ods/bin/ods-pixel-approve ${jobId} ${planHash} --confirm`
+    const content = `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+    globalThis.fetch.mockResolvedValue(response({
+      schemaVersion: 1,
+      kind: 'ods-pixel-operations-status',
+      jobId,
+      planHash,
+      status: 'awaiting-approval',
+      riskTier: 'break-glass',
+      approvalRequired: true,
+      updatedAt: '2026-09-03T02:00:00Z',
+      approvalCommand: command,
+    }))
+
+    render(<OperationsApprovalCard content={content} />)
+
+    expect(await screen.findByText('Owner approval required')).toBeInTheDocument()
+    expect(screen.getByText('raw-shell · ods-host')).toBeInTheDocument()
+    expect(screen.getByText('break-glass')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy secure approval command' })).toBeInTheDocument()
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      `/api/pixel/ops/${jobId}?plan_hash=${planHash}`,
+      expect.any(Object),
+    )
   })
 
   it('recovers an approval card after a transient status projection failure', async () => {

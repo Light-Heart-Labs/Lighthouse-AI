@@ -5,6 +5,7 @@ import {
   ODS_CONVERSATION_CONTRACT,
   ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
+  ODS_HOST_COMMAND_CONTRACT,
   ODS_OPERATIONS_CONTINUATION_CONTRACT,
   ODS_OPERATIONS_INVENTORY_CONTRACT,
   ODS_EXACT_DOWNLOAD_CONTRACT,
@@ -152,6 +153,28 @@ test("adds one exact compact tool route for natural broad host questions", () =>
   assert.equal(
     promptContractForAgent({ agentId: "pixel" }, "pixel", { prompt }).appendSystemContext,
     `${ODS_CONVERSATION_CONTRACT}${exact}`
+  );
+});
+
+test("adds one model-agnostic approval route for a local ODS host command", () => {
+  const prompt = "Please run `uname -sr` on this ODS host.";
+  const exact = operationsRequestContract([], prompt);
+  assert.equal(exact, ` ${ODS_HOST_COMMAND_CONTRACT}`);
+  assert.match(exact, /pixel_ops_shell_propose/);
+  assert.match(exact, /target ods-host/);
+  assert.match(exact, /omit cwd and timeout/);
+  assert.match(exact, /external owner approval/);
+  assert.match(exact, /Never approve it yourself/);
+  assert.equal(
+    promptContractForAgent({ agentId: "pixel" }, "pixel", { prompt }).appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_HOST_COMMAND_CONTRACT}`
+  );
+  assert.equal(
+    operationsRequestContract(
+      [],
+      "Restart Docker on this ODS host and tell me the kernel."
+    ),
+    ` ${ODS_HOST_COMMAND_CONTRACT}`
   );
 });
 

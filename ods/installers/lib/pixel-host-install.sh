@@ -2759,9 +2759,14 @@ payload = {
             ],
             "writableRoots": [workspace],
             "shell": "/bin/bash",
-            "allowRaw": False,
+            # Raw host commands remain a proposal-only break-glass path in the
+            # external broker: every immutable plan requires a separate owner
+            # approval, and the broker service itself is unprivileged and
+            # systemd-confined. This enables useful host work for every model
+            # without granting any model ambient execution authority.
+            "allowRaw": True,
             "labels": ["ods-host"],
-            "capabilities": ["inspect", "manage-extensions", "stage-download"],
+            "capabilities": ["inspect", "manage-extensions", "stage-download", "approved-host-command"],
         },
         "broker": {
             "enabled": True,

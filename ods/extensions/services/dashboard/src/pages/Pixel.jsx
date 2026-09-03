@@ -55,6 +55,7 @@ const STATUS_POLL_MS = 3000
 const OPS_STATUS_POLL_MS = 3000
 const OPS_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'rejected'])
 const OPS_APPROVAL_RECEIPT = /^Pixel prepared the exact (ods\.extensions\.(?:install|enable|disable|remove)) plan for extension ([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63}), but external approval is required\. No lifecycle change was executed\. Job: (ops-[0-9]{13}-[a-f0-9]{12})\. Plan SHA-256: ([a-f0-9]{64})\.$/
+const OPS_HOST_COMMAND_APPROVAL_RECEIPT = /^Pixel prepared a protected ODS host command plan, but external approval is required\. No command was executed\. Job: (ops-[0-9]{13}-[a-f0-9]{12})\. Plan SHA-256: ([a-f0-9]{64})\.$/
 let fallbackChatSequence = 0
 
 const SUGGESTED_TASKS = [
@@ -105,13 +106,21 @@ export function formatElapsed(value) {
 export function parseApprovalReceipt(content) {
   if (typeof content !== 'string') return null
   const match = content.trim().match(OPS_APPROVAL_RECEIPT)
-  if (!match) return null
-  return {
-    action: match[1],
-    extensionId: match[2],
-    jobId: match[3],
-    planHash: match[4],
+  if (match) {
+    return {
+      action: match[1],
+      extensionId: match[2],
+      jobId: match[3],
+      planHash: match[4],
+    }
   }
+  const hostCommand = content.trim().match(OPS_HOST_COMMAND_APPROVAL_RECEIPT)
+  return hostCommand ? {
+    action: 'raw-shell',
+    extensionId: 'ods-host',
+    jobId: hostCommand[1],
+    planHash: hostCommand[2],
+  } : null
 }
 
 export function isCleanContextRecoveryFrame(frame) {

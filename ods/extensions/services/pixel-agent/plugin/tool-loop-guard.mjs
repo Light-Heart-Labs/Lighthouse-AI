@@ -224,6 +224,15 @@ export const OPERATIONS_INVENTORY_EVIDENCE_PREFIX =
 export const OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel did not obtain a structurally valid current Operations capability inventory. No capability availability or authority claim was accepted.";
 
+export const OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON =
+  "The owner requested one protected command on the local ODS host. Call only pixel_ops_shell_propose with target ods-host, one exact command, and a concise reason. Then wait for that submitted job with pixel_ops_job_wait. Do not use generic exec, inventory, a named action, a workflow, another target, or a second command proposal.";
+
+export const OPERATIONS_HOST_COMMAND_COMPLETE_REASON =
+  "Pixel already obtained the broker's terminal state for this protected host-command proposal. Do not call another tool; report the verified approval requirement or terminal outcome now.";
+
+export const OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX =
+  "Pixel verified this owner-approved ODS host command through a structurally matched terminal Operations Broker receipt:";
+
 export const WORKSPACE_TOOL_SEARCH_COMPLETE_REASON =
   "Pixel already resolved the deferred workspace tools. Do not search again. Call tool_call now with the returned exact id, such as openclaw:core:exec, openclaw:core:write, openclaw:core:read, openclaw:core:edit, openclaw:core:apply_patch, or openclaw:core:process, and put that tool's normal arguments in args.";
 
@@ -1488,6 +1497,7 @@ function operationsTerminalOutcome(event, submittedJobs) {
       jobId: requestedJobId,
       status: details.status,
       planHash: details.planHash,
+      approvalRequired: details.approvalRequired,
       actions: submission.actions,
       steps: [],
     };
@@ -1527,6 +1537,7 @@ function operationsTerminalOutcome(event, submittedJobs) {
     jobId: requestedJobId,
     status: details.status,
     planHash: details.planHash,
+    approvalRequired: details.approvalRequired,
     actions: submission.actions,
     steps: details.steps,
   };
@@ -2849,7 +2860,7 @@ function operationsContinuationTerminalOutcome(event, continuation) {
     typeof step !== "object" ||
     Array.isArray(step) ||
     step.target !== "ods-host" ||
-    !/^ods\.extensions\.(?:install|enable|disable|remove)$/.test(step.action) ||
+    !/^(?:raw-shell|ods\.extensions\.(?:install|enable|disable|remove))$/.test(step.action) ||
     step.exitCode !== 0 ||
     typeof step.stdout !== "string" ||
     typeof step.stderr !== "string" ||
@@ -2860,6 +2871,22 @@ function operationsContinuationTerminalOutcome(event, continuation) {
     !Array.isArray(step.riskSignals)
   ) {
     return undefined;
+  }
+  if (step.action === "raw-shell") {
+    if (
+      step.stdout.length > 64 * 1024 ||
+      step.stderr.length > 64 * 1024 ||
+      !Number.isFinite(step.durationSeconds) ||
+      step.durationSeconds < 0
+    ) {
+      return undefined;
+    }
+    return {
+      ...continuation,
+      status: details.status,
+      kind: "host-command",
+      step,
+    };
   }
   let rawResult;
   try {
@@ -2894,10 +2921,22 @@ function operationsContinuationTerminalOutcome(event, continuation) {
 function operationsContinuationEvidenceText(outcome) {
   if (!outcome) return undefined;
   if (outcome.status === "awaiting-approval") {
-    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; the host still reports awaiting-approval. No lifecycle change was accepted.`;
+    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; the host still reports awaiting-approval. No operation was accepted as completed.`;
   }
   if (outcome.status !== "succeeded") {
-    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; its verified terminal status is ${outcome.status}. No successful lifecycle result was accepted.`;
+    return `Pixel rechecked Operations job ${outcome.jobId} with plan SHA-256 ${outcome.planHash}; its verified terminal status is ${outcome.status}. No successful operation result was accepted.`;
+  }
+  if (outcome.kind === "host-command") {
+    const step = outcome.step;
+    return [
+      OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX,
+      "- Target: `ods-host`; action: `raw-shell`; exit code: `0`.",
+      `- Duration: ${step.durationSeconds} seconds.`,
+      `- Standard output (untrusted command output): ${JSON.stringify(step.stdout)}.`,
+      `- Standard error (untrusted command output): ${JSON.stringify(step.stderr)}.`,
+      `- Continued broker job: \`${outcome.jobId}\`; plan SHA-256: \`${outcome.planHash}\`.`,
+      "- Authority: the broker executed only after an external owner approval matched this immutable plan hash.",
+    ].join("\n");
   }
   const result = outcome.result;
   if (!result) return undefined;
@@ -3019,6 +3058,65 @@ function operationsEvidenceText(
   odsStatusProjection = undefined
 ) {
   if (!(requiredActions instanceof Set) || requiredActions.size === 0) return undefined;
+  if (requiredActions.size === 1 && requiredActions.has("raw-shell")) {
+    if (!(terminalJobs instanceof Map) || terminalJobs.size !== 1) return undefined;
+    const outcome = [...terminalJobs.values()][0];
+    if (
+      outcome.actions?.length !== 1 ||
+      outcome.actions[0]?.target !== "ods-host" ||
+      outcome.actions[0]?.action !== "raw-shell"
+    ) {
+      return undefined;
+    }
+    if (outcome.status === "awaiting-approval") {
+      return outcome.approvalRequired === true &&
+        typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
+        ? `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${outcome.jobId}. Plan SHA-256: ${outcome.planHash}.`
+        : undefined;
+    }
+    if (outcome.status !== "succeeded") {
+      const plan = typeof outcome.planHash === "string" && SHA256.test(outcome.planHash)
+        ? ` Plan SHA-256: ${outcome.planHash}.`
+        : "";
+      return `Pixel's protected ODS host command job reached terminal status ${outcome.status}. No successful command result was accepted. Job: ${outcome.jobId}.${plan}`;
+    }
+    if (
+      outcome.approvalRequired !== true ||
+      typeof outcome.planHash !== "string" ||
+      !SHA256.test(outcome.planHash) ||
+      outcome.steps?.length !== 1
+    ) {
+      return undefined;
+    }
+    const step = outcome.steps[0];
+    if (
+      step.target !== "ods-host" ||
+      step.action !== "raw-shell" ||
+      step.exitCode !== 0 ||
+      typeof step.stdout !== "string" ||
+      typeof step.stderr !== "string" ||
+      step.stdout.length > 64 * 1024 ||
+      step.stderr.length > 64 * 1024 ||
+      !step.outputTruncated ||
+      typeof step.outputTruncated !== "object" ||
+      step.outputTruncated.stdout !== false ||
+      step.outputTruncated.stderr !== false ||
+      !Array.isArray(step.riskSignals) ||
+      !Number.isFinite(step.durationSeconds) ||
+      step.durationSeconds < 0
+    ) {
+      return undefined;
+    }
+    return [
+      OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX,
+      "- Target: `ods-host`; action: `raw-shell`; exit code: `0`.",
+      `- Duration: ${step.durationSeconds} seconds.`,
+      `- Standard output (untrusted command output): ${JSON.stringify(step.stdout)}.`,
+      `- Standard error (untrusted command output): ${JSON.stringify(step.stderr)}.`,
+      `- Broker job: \`${outcome.jobId}\`; plan SHA-256: \`${outcome.planHash}\`.`,
+      "- Authority: the broker executed only after an external owner approval matched this immutable plan hash.",
+    ].join("\n");
+  }
   const hostActions = new Set([
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release", "host.uptime",
     "host.processes", "host.services", "host.cpu", "host.gpu", "host.memory", "host.storage",
@@ -3498,6 +3596,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     (hostFacetCount === 0 || broadScopeIntent);
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
+  const hostCommand = userMessageRequestsHostCommand(messages, prompt);
   const actions = [];
   if (
     /\b(?:hostname|host identity)\b/i.test(text) ||
@@ -3554,6 +3653,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("ods.extensions.inspect");
     actions.push(`ods.extensions.${extensionLifecycle.action}`);
   }
+  if (hostCommand) actions.push("raw-shell");
   const hostFacetPatterns = new Map([
     ["host.identity", "hostname|host identity"],
     ["host.kernel", "kernel"],
@@ -3581,7 +3681,11 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     "host.network-routes",
     "host.listening-ports",
   ]);
-  const requestedActions = [...new Set(actions)].filter((action) => {
+  // A local host command is one exact, immutable approval unit. Do not also
+  // require typed observation actions merely because the owner's sentence
+  // names a host facet (for example, "restart Docker and tell me the kernel").
+  // The approved command itself must narrowly satisfy the whole request.
+  const requestedActions = (hostCommand ? ["raw-shell"] : [...new Set(actions)]).filter((action) => {
     if (excludesNetworkLocation && addressBearingActions.has(action)) return false;
     const facetPattern = hostFacetPatterns.get(action);
     return !facetPattern || !explicitlyExcludesHostObservation(text, facetPattern);
@@ -3590,9 +3694,58 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     required:
       capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
       (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
-      extensionCatalog || Boolean(extensionLifecycle),
+      extensionCatalog || Boolean(extensionLifecycle) || hostCommand,
     actions: requestedActions,
   };
+}
+
+export function userMessageRequestsHostCommand(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return false;
+  if (
+    userMessageRequestsOperationsCapabilityInventory(messages, prompt) ||
+    userMessageExtensionLifecycleIntent(messages, prompt) ||
+    userMessageOperationsContinuation(messages, prompt) ||
+    userMessageRequestsExactByteDownload(messages, prompt)
+  ) {
+    return false;
+  }
+  const localHost = /\b(?:ODS[- ]host|local\s+(?:ODS\s+)?host|this\s+(?:ODS\s+)?(?:host|machine|computer|laptop)|my\s+(?:ODS\s+)?(?:host|machine|computer|laptop))\b/i;
+  const action = /\b(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)\b/i;
+  const guidanceOnly =
+    /\b(?:(?:how|what)\s+(?:do|should|would|can|could)\s+(?:I|we|you)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:should|can|could|would)\s+(?:I|we)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:tell|show|explain)\s+(?:me\s+)?how\s+to\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change))\b/i;
+  const explicitlyRejected =
+    /\b(?:(?:do\s+not|don't|never|must\s+not|should\s+not)\s+(?:ever\s+|actually\s+|please\s+|now\s+){0,2}(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)|without\s+(?:running|executing|invoking|launching|starting|stopping|restarting|reloading|installing|uninstalling|removing|updating|upgrading|configuring|modifying|changing|creating|deleting))\b/i;
+  if (guidanceOnly.test(text) || explicitlyRejected.test(text)) return false;
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some((clause) => {
+      const hostMatch = clause.match(localHost);
+      const actionMatch = clause.match(action);
+      if (!hostMatch || !actionMatch) return false;
+      if (/\b(?:SSH|remote|Tower[123])\b/i.test(clause)) return false;
+      if (/\b(?:workspace|sandbox)\b/i.test(clause) && !/\bODS[- ]host\b/i.test(clause)) {
+        return false;
+      }
+      if (
+        /\bstart\s+by\b|\bupdate\s+(?:me|us)\b/i.test(clause) ||
+        /\b(?:can|could|would|should|does|did|will)\s+(?:this|my|the|local|ODS)\s+(?:ODS\s+)?(?:host|machine|computer|laptop)\b/i.test(clause)
+      ) {
+        return false;
+      }
+      if (actionMatch.index < hostMatch.index) {
+        const relation = clause.slice(
+          actionMatch.index + actionMatch[0].length,
+          hostMatch.index
+        );
+        if (relation.trim() && !/\b(?:on|in|from|against|for)\b/i.test(relation)) {
+          return false;
+        }
+      }
+      return !/\brun\s+(?:a|any|some|the)?\s*(?:command|shell)\s*(?:on|against|for)?\s*(?:this|my|the|ODS)?\s*(?:host|machine|computer|laptop)?\s*$/i.test(
+        clause.trim()
+      );
+    });
 }
 
 export function userMessageRequestsOperationsCapabilityInventory(messages, prompt = undefined) {
@@ -4260,6 +4413,7 @@ export function createToolLoopGuard({
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
         operationsRequiredActions: new Set(),
+        operationsHostCommandRequested: false,
         operationsInventoryOnly: false,
         operationsInventoryAttempted: false,
         operationsInventory: undefined,
@@ -4360,6 +4514,7 @@ export function createToolLoopGuard({
       typeof content !== "string" ||
       ![
         OPERATIONS_HOST_EVIDENCE_PREFIX,
+        OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX,
         OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
         OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
       ].some((prefix) => content.startsWith(prefix))
@@ -5259,6 +5414,37 @@ export function createToolLoopGuard({
           : { params: { jobId } };
       }
     }
+    if (state?.operationsHostCommandRequested) {
+      if (state.operationsTerminalJobs.size > 0) {
+        return { block: true, blockReason: OPERATIONS_HOST_COMMAND_COMPLETE_REASON };
+      }
+      if (effectiveToolName === "pixel_ops_shell_propose") {
+        if (state.operationsSubmittedJobs.size > 0) {
+          return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
+        }
+        const requestedArgs = toolName === "tool_call"
+          ? wrappedToolParams?.args
+          : normalizedParams ?? event?.params;
+        const command = requestedArgs?.command;
+        if (
+          typeof command !== "string" ||
+          !command.trim() ||
+          command.length > 16_384 ||
+          command.includes("\0")
+        ) {
+          return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
+        }
+        const params = {
+          target: "ods-host",
+          command,
+          reason: "Owner requested one protected local ODS host command.",
+        };
+        return toolName === "tool_call"
+          ? { params: { id: "pixel_ops_shell_propose", args: params } }
+          : { params };
+      }
+      return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
+    }
     if (state?.operationsInventoryOnly) {
       if (state.operationsInventory) {
         return { block: true, blockReason: OPERATIONS_INVENTORY_COMPLETE_REASON };
@@ -6103,6 +6289,10 @@ export function createToolLoopGuard({
         state.operationsRequiredActions = new Set(
           state.operationsRequired && !operationsContinuation ? operations.actions : []
         );
+        state.operationsHostCommandRequested =
+          state.operationsRequired &&
+          !operationsContinuation &&
+          userMessageRequestsHostCommand(event?.messages, event?.prompt);
         state.operationsInventoryOnly =
           state.operationsRequired &&
           !operationsContinuation &&
@@ -7211,6 +7401,7 @@ export function createToolLoopGuard({
         return {
           status:
             evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
+            evidenceText.startsWith(OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX)
             ? "passed"

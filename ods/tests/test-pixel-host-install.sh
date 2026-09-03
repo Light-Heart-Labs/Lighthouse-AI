@@ -698,10 +698,10 @@ assert v["download"]["maxBytes"] == 536870912 and v["download"]["maxRedirects"] 
 assert {"example.com","github.com","githubusercontent.com","hf.co","huggingface.co","nodejs.org","npmjs.org","pypi.org","pythonhosted.org"} == set(v["download"]["allowedDomains"])
 target=v["targets"]["ods-host"]
 assert target["backend"] == "local" and target["expectedHostname"] == socket.gethostname()
-assert target["allowRaw"] is False and target["writableRoots"] == [sys.argv[3]]
+assert target["allowRaw"] is True and target["writableRoots"] == [sys.argv[3]]
 assert target["defaultCwd"] == "/var/lib/pixel-ops-broker"
 assert target["allowedRoots"] == [sys.argv[2],sys.argv[3],"/var/lib/pixel-ops-broker","/run/ods-pixel-manager"]
-assert set(target["capabilities"]) == {"inspect","manage-extensions","stage-download"}
+assert set(target["capabilities"]) == {"inspect","manage-extensions","stage-download","approved-host-command"}
 broker=v["targets"]["broker"]
 assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
