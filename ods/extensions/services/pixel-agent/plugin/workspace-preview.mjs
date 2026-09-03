@@ -149,12 +149,12 @@ const keys={left:false,right:false};
 const paddle={x:375,y:550,w:150,h:15,speed:560};
 const ball={x:450,y:526,r:9,vx:250,vy:-300};
 const colors=['#ff3fd2','#b45cff','#5c7cff','#38dcff','#72ffce'];
-function rounded(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
+function rounded(x,y,w,h,r){ctx.beginPath();if(typeof ctx.roundRect==='function')ctx.roundRect(x,y,w,h,r);else ctx.rect(x,y,w,h)}
 function buildBricks(){bricks=[];const cols=9,rows=Math.min(5+level,8),gap=8,bw=80,bh=22,start=(W-(cols*bw+(cols-1)*gap))/2;for(let row=0;row<rows;row++)for(let col=0;col<cols;col++)bricks.push({x:start+col*(bw+gap),y:72+row*(bh+gap),w:bw,h:bh,alive:true,color:colors[row%colors.length]})}
 function syncHud(){scoreEl.textContent=String(score).padStart(6,'0');livesEl.textContent=Array.from({length:Math.max(0,lives)},()=> '●').join(' ')||'—';levelEl.textContent=String(level).padStart(2,'0')}
 function setStatus(text){statusEl.textContent=text}
-function setOverlay(title,copy,button){overlayTitle.textContent=title;overlayCopy.textContent=copy;launchButton.textContent=button;overlay.classList.remove('hidden')}
-function hideOverlay(){overlay.classList.add('hidden');canvas.focus()}
+function setOverlay(title,copy,button){overlayTitle.textContent=title;overlayCopy.textContent=copy;launchButton.textContent=button;overlay.inert=false;overlay.removeAttribute('aria-hidden');overlay.classList.remove('hidden')}
+function hideOverlay(){overlay.inert=true;overlay.setAttribute('aria-hidden','true');overlay.classList.add('hidden');canvas.focus()}
 function resetBall(){paddle.x=(W-paddle.w)/2;ball.x=W/2;ball.y=paddle.y-ball.r-4;const direction=Math.random()>.5?1:-1;ball.vx=direction*(230+level*16);ball.vy=-(300+level*18)}
 function newRun(){score=0;lives=3;level=1;mode='ready';particles=[];buildBricks();resetBall();syncHud();setStatus('Ready for input');setOverlay('Signal locked','Clear every neon brick. Move with the pointer, touch, arrow keys, or A and D.','Launch game')}
 function launch(){if(mode==='gameover'){newRun();return}if(mode==='paused'){mode='playing';hideOverlay();setStatus('Run resumed');return}if(mode==='ready'){mode='playing';hideOverlay();setStatus('Signal in motion')}}

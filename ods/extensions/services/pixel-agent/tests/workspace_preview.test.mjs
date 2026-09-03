@@ -153,9 +153,11 @@ test("creates a responsive self-contained Breakout game scaffold", async () => {
     assert.match(html, /A safe &amp; local arcade/);
     assert.match(html, /<canvas id="game"/);
     assert.match(html, /requestAnimationFrame/);
+    assert.match(html, /typeof ctx\.roundRect==='function'/);
     assert.match(html, /pointermove/);
     assert.match(html, /addEventListener\('keydown'/);
     assert.match(html, /Touch controls/);
+    assert.match(html, /overlay\.inert=true/);
     assert.match(html, /Content-Security-Policy/);
     assert.doesNotMatch(html, /https?:\/\//);
     assert.equal((await stat(entry)).mode & 0o777, 0o600);

@@ -7776,6 +7776,24 @@ test("classifies a requested website demo as a verified workspace preview", () =
     userMessageRequestsWorkspacePreview([], "Now make a breakout style videogame."),
     true
   );
+  for (const request of [
+    "Create an interactive voxel landscape I can explore.",
+    "Make an intricate animated SVG illustration.",
+    "Create a small browser task app.",
+    "I want a polished web dashboard.",
+    "Keep that game and make it faster.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
+  }
+  for (const request of [
+    "Build a native desktop app.",
+    "Explain how animated SVG works.",
+    "Review a voxel art tutorial.",
+    "Do not make an animated SVG.",
+    "Write an SVG parser in Rust.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
+  }
   assert.equal(
     userMessageRequestsWorkspaceGameScaffold(
       [],
@@ -7791,6 +7809,23 @@ test("classifies a requested website demo as a verified workspace preview", () =
     userMessageRequestsWorkspaceGameScaffold([], "Do not make a Breakout game."),
     false
   );
+  for (const request of [
+    "I want a Breakout clone.",
+    "Can you make me a brick breaker?",
+    "Build a brick-breaker game.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspaceGameScaffold([], request), true, request);
+  }
+  for (const request of [
+    "I don’t want a Breakout clone.",
+    "Write a Breakout tutorial.",
+    "Make a responsive website featuring a Breakout game.",
+    "Make a Breakout game with power-ups.",
+    "Skip the menu and make a Breakout-style videogame.",
+    "Build me a Breakout game in a retro amber theme.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspaceGameScaffold([], request), false, request);
+  }
   assert.equal(
     userMessageRequestsWorkspacePreview([], "Implement a command-line game in Python."),
     false
@@ -7828,6 +7863,83 @@ test("turns a compact model's first Breakout tool attempt into one bounded game 
       },
     },
   });
+
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: {
+      params: routed.params.args,
+      result: { isError: true, details: { status: "failed" } },
+    },
+  });
+  const customScaffold = {
+    title: "Owner Variant",
+    tagline: "A focused retry.",
+    theme: "solar",
+  };
+  const retry = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_workspace_preview",
+        args: { relativeDirectory: "owner-variant", scaffold: customScaffold },
+      },
+    },
+  });
+  assert.deepEqual(retry.params, {
+    id: "pixel_ods_workspace_preview",
+    args: {
+      relativeDirectory: "neon-breakout",
+      scaffold: customScaffold,
+    },
+  });
+});
+
+test("canonicalizes a direct first game preview but rejects unsolicited generated templates", () => {
+  const game = createToolLoopGuard();
+  game.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "I want a Breakout clone." }
+  );
+  assert.deepEqual(
+    call(game, "pixel_ods_workspace_preview", {
+      event: {
+        params: {
+          relativeDirectory: "wrong",
+          scaffold: { title: "Wrong", tagline: "Wrong", theme: "solar" },
+        },
+      },
+    }).params,
+    {
+      relativeDirectory: "neon-breakout",
+      scaffold: {
+        title: "Neon Breakout",
+        tagline: "Smash the signal wall in a responsive local arcade.",
+        theme: "orchid",
+        template: "breakout",
+      },
+    }
+  );
+
+  const site = createToolLoopGuard();
+  site.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build any interactive website demo." }
+  );
+  const injected = call(site, "pixel_ods_workspace_preview", {
+    event: {
+      params: {
+        relativeDirectory: "demo",
+        scaffold: {
+          title: "Demo",
+          tagline: "Demo",
+          theme: "aurora",
+          template: "breakout",
+        },
+      },
+    },
+  });
+  assert.equal(injected.block, true);
+  assert.match(injected.blockReason, /did not select/);
 });
 
 test("permits an explicitly requested preview after inspecting an existing site", () => {
@@ -8049,6 +8161,8 @@ test("permits a bounded create-only demo scaffold before an index exists", () =>
   const verification = guard.verificationForRun("run-1");
   assert.equal(verification.status, "passed");
   assert.equal(verification.preview.relativeDirectory, "signal-garden-12345678");
+  assert.match(verification.text, /Workspace artifact: `signal-garden-12345678\/index\.html`/);
+  assert.match(verification.text, /ODS generated a create-only starter/);
 });
 
 test("ends a verified preview cleanly instead of curling its localhost URL", () => {
