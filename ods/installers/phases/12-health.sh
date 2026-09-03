@@ -46,7 +46,7 @@ if $DRY_RUN; then
     [[ "${ENABLE_EMBEDDINGS:-${ENABLE_RAG:-false}}" == "true" ]] && log "[DRY RUN]   - Embeddings (TEI)"
     echo ""
     signal "Health checks planned. No services were started."
-    ai_ok "Simulation complete; runtime health was not tested in dry run."
+    ai_ok "Dry-run simulation complete; runtime health was not tested."
     return 0 2>/dev/null || true
 fi
 
