@@ -131,6 +131,8 @@ test("adds a bounded first-write contract only for requested website previews", 
     "Build a task board with cloud sync.",
     "Make a playful puzzle game.",
     "Build a tiny habit-tracker app.",
+    "Create a beautiful signup-flow prototype with useful validation; do not submit anywhere.",
+    "Create a contact form with useful validation.",
   ]) {
     const result = promptContractForAgent(
       { agentId: "pixel", contextTokenBudget: 65536 },
@@ -158,6 +160,8 @@ test("routes natural visual follow-ups to a read-edit-republish contract", () =>
     "Keep that game and make it faster.",
     "Change the previous website to a solar palette.",
     "Polish it and improve the mobile layout.",
+    "Make this form mobile-friendly.",
+    "Improve the previous prototype's keyboard navigation.",
   ]) {
     const result = promptContractForAgent(
       { agentId: "pixel", contextTokenBudget: 16384 },
