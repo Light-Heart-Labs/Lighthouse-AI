@@ -8,6 +8,7 @@ import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { visualScaffoldHtml } from "./visual-scaffolds.mjs";
 
 const SOCKET_PATH = "/run/ods-pixel-preview/control.sock";
 const PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -15,7 +16,12 @@ const SITE_ID = /^site-[a-f0-9]{24}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_RESPONSE_BYTES = 8192;
 const SCAFFOLD_THEMES = new Set(["aurora", "ember", "ocean", "orchid", "solar"]);
-const SCAFFOLD_TEMPLATES = new Set(["breakout"]);
+const SCAFFOLD_TEMPLATES = new Set([
+  "animated-svg",
+  "breakout",
+  "task-board",
+  "voxel",
+]);
 const BOUNDARY =
   "Create-only static-site snapshot from the configured Pixel workspace to a dedicated loopback preview origin; no arbitrary host path, network destination, server process, overwrite, or execution authority.";
 
@@ -172,9 +178,8 @@ addEventListener('keydown',event=>{if(['ArrowLeft','a','A'].includes(event.key))
 }
 
 function scaffoldHtml(scaffold) {
-  return scaffold.template === "breakout"
-    ? breakoutScaffoldHtml(scaffold)
-    : showcaseScaffoldHtml(scaffold);
+  if (scaffold.template === "breakout") return breakoutScaffoldHtml(scaffold);
+  return visualScaffoldHtml(scaffold) ?? showcaseScaffoldHtml(scaffold);
 }
 
 export async function createWorkspaceScaffold(
@@ -353,7 +358,7 @@ export function createWorkspacePreviewTool({
   return {
     name: "pixel_ods_workspace_preview",
     description:
-      "Publish and verify a static visual artifact in Pixel's writable workspace. For an open-ended demo, include scaffold with a short title, tagline, and one theme (aurora, ember, ocean, orchid, or solar); use the optional breakout template only for an explicitly requested Breakout-style game. ODS will create a polished interactive create-only index.html before publishing it. For a custom site, app, SVG, game, or visualization already written with workspace tools, pass only relativeDirectory. ODS validates and snapshots the files, then returns the only localhost URL Pixel may claim is browser-accessible. Never start a sandbox server.",
+      "Publish and verify a static visual artifact in Pixel's writable workspace. For an open-ended demo, include scaffold with a short title, tagline, and one theme (aurora, ember, ocean, orchid, or solar). ODS also provides bounded animated-svg, breakout, task-board, and voxel starters when the owner's request explicitly selects that artifact. ODS creates a polished interactive create-only index.html before publishing it. For a custom site, app, SVG, game, or visualization already written with workspace tools, pass only relativeDirectory. ODS validates and snapshots the files, then returns the only localhost URL Pixel may claim is browser-accessible. Never start a sandbox server.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -377,7 +382,7 @@ export function createWorkspacePreviewTool({
             },
             template: {
               type: "string",
-              enum: ["breakout"],
+              enum: ["animated-svg", "breakout", "task-board", "voxel"],
             },
           },
         },

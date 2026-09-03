@@ -114,6 +114,7 @@ import {
   userMessageRequestsWorkspaceGameScaffold,
   userMessageRequestsWorkspacePreview,
   userMessageRequestsWorkspacePreviewInspection,
+  userMessageWorkspaceStarterScaffold,
   userMessageWorkspaceContinuationPath,
   userMessageWorkspaceDirectoryPath,
   userMessageRequestsOperationsEvidenceArtifact,
@@ -7785,12 +7786,41 @@ test("classifies a requested website demo as a verified workspace preview", () =
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
   }
+  assert.equal(
+    userMessageWorkspaceStarterScaffold(
+      [],
+      "Create an interactive voxel landscape with a dramatic day/night change."
+    )?.scaffold.template,
+    "voxel"
+  );
+  assert.equal(
+    userMessageWorkspaceStarterScaffold(
+      [],
+      "Make an intricate animated SVG illustration with pause and color controls."
+    )?.scaffold.template,
+    "animated-svg"
+  );
+  assert.equal(
+    userMessageWorkspaceStarterScaffold(
+      [],
+      "Create a small task board where I can add, complete, filter, and remove items."
+    )?.scaffold.template,
+    "task-board"
+  );
+  for (const request of [
+    "Create a voxel city under the ocean.",
+    "Make an animated SVG of our dragon mascot.",
+    "Build a task board with cloud sync.",
+  ]) {
+    assert.equal(userMessageWorkspaceStarterScaffold([], request), undefined, request);
+  }
   for (const request of [
     "Build a native desktop app.",
     "Explain how animated SVG works.",
     "Review a voxel art tutorial.",
     "Do not make an animated SVG.",
     "Write an SVG parser in Rust.",
+    "Build a voxel parser library.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
   }
@@ -7940,6 +7970,75 @@ test("canonicalizes a direct first game preview but rejects unsolicited generate
   });
   assert.equal(injected.block, true);
   assert.match(injected.blockReason, /did not select/);
+});
+
+test("routes diverse compact-model visual starters through one selected template", () => {
+  const cases = [
+    {
+      prompt: "Create an interactive voxel landscape with a dramatic day/night change.",
+      relativeDirectory: "voxel-horizon",
+      template: "voxel",
+    },
+    {
+      prompt: "Make an intricate animated SVG illustration with pause and color controls.",
+      relativeDirectory: "living-vector",
+      template: "animated-svg",
+    },
+    {
+      prompt: "Create a small task board where I can add, complete, filter, and remove items.",
+      relativeDirectory: "orbit-tasks",
+      template: "task-board",
+    },
+  ];
+  for (const visual of cases) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt: visual.prompt }
+    );
+    const routed = call(guard, "tool_call", {
+      event: {
+        params: {
+          id: "write",
+          args: { path: "wrong/index.html", content: "wrong" },
+        },
+      },
+    });
+    assert.equal(routed.params.id, "pixel_ods_workspace_preview");
+    assert.equal(routed.params.args.relativeDirectory, visual.relativeDirectory);
+    assert.equal(routed.params.args.scaffold.template, visual.template);
+  }
+});
+
+test("keeps custom visual requests on the owner-specific workspace path", () => {
+  for (const prompt of [
+    "Create a voxel city under the ocean.",
+    "Make an animated SVG of our dragon mascot.",
+    "Build a task board with cloud sync.",
+    "Build and show me a website for Acme's accounting product.",
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt }
+    );
+    const attemptedStarter = call(guard, "pixel_ods_workspace_preview", {
+      event: {
+        params: {
+          relativeDirectory: "generic",
+          scaffold: {
+            title: "Generic",
+            tagline: "Not the requested custom artifact.",
+            theme: "aurora",
+          },
+        },
+      },
+    });
+    assert.equal(attemptedStarter.block, true, prompt);
+    assert.match(attemptedStarter.blockReason, /custom visual request/);
+  }
 });
 
 test("permits an explicitly requested preview after inspecting an existing site", () => {

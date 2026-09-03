@@ -117,6 +117,20 @@ test("normalizes only exact bounded demo scaffold fields", () => {
       template: "breakout",
     }
   );
+  for (const template of ["animated-svg", "breakout", "task-board", "voxel"]) {
+    assert.equal(
+      normalizeWorkspacePreviewParams({
+        relativeDirectory: "visual",
+        scaffold: {
+          title: "Visual",
+          tagline: "A local visual.",
+          theme: "aurora",
+          template,
+        },
+      }).scaffold.template,
+      template
+    );
+  }
   assert.throws(
     () => normalizeWorkspacePreviewParams({
       relativeDirectory: "demo",
@@ -161,6 +175,54 @@ test("creates a responsive self-contained Breakout game scaffold", async () => {
     assert.match(html, /Content-Security-Policy/);
     assert.doesNotMatch(html, /https?:\/\//);
     assert.equal((await stat(entry)).mode & 0o777, 0o600);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("creates diverse self-contained visual starters with real controls", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-visuals-"));
+  const cases = [
+    {
+      template: "voxel",
+      marker: /<canvas id="world"/,
+      interactions: [/Shift to night/, /Remix terrain/, /type="range"/],
+    },
+    {
+      template: "animated-svg",
+      marker: /<svg id="art"/,
+      interactions: [/Pause motion/, /Reverse orbit/, /data-palette/],
+    },
+    {
+      template: "task-board",
+      marker: /<form class="composer" id="form"/,
+      interactions: [/Add task/, /data-filter="done"/, /localStorage/],
+    },
+  ];
+  try {
+    for (const [index, visual] of cases.entries()) {
+      const relativeDirectory = await createWorkspaceScaffold({
+        workspaceRoot,
+        relativeDirectory: visual.template,
+        scaffold: {
+          title: `Unsafe <${visual.template}>`,
+          tagline: "Local & interactive.",
+          theme: "ocean",
+          template: visual.template,
+        },
+      }, {
+        uniqueSuffix: () => `1234567${index}`,
+      });
+      const entry = path.join(workspaceRoot, relativeDirectory, "index.html");
+      const html = await readFile(entry, "utf8");
+      assert.match(html, /Unsafe &lt;/);
+      assert.match(html, /Local &amp; interactive/);
+      assert.match(html, visual.marker);
+      for (const interaction of visual.interactions) assert.match(html, interaction);
+      assert.match(html, /Content-Security-Policy/);
+      assert.doesNotMatch(html, /https?:\/\//);
+      assert.equal((await stat(entry)).mode & 0o777, 0o600);
+    }
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

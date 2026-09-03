@@ -13,6 +13,9 @@ import {
   ODS_PRIVATE_URL_CONTRACT,
   ODS_WORKSPACE_DEMO_CONTRACT,
   ODS_WORKSPACE_GAME_CONTRACT,
+  ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
+  ODS_WORKSPACE_TASK_BOARD_CONTRACT,
+  ODS_WORKSPACE_VOXEL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
@@ -88,6 +91,53 @@ test("adds a bounded first-write contract only for requested website previews", 
   assert.match(breakout.appendSystemContext, /exactly one tool call now/);
   assert.match(breakout.appendSystemContext, /template breakout/);
   assert.match(breakout.appendSystemContext, /keyboard, pointer, and touch-playable/);
+
+  for (const visual of [
+    {
+      prompt: "Create an interactive voxel landscape with a dramatic day/night change.",
+      contract: ODS_WORKSPACE_VOXEL_CONTRACT,
+      marker: /template voxel/,
+    },
+    {
+      prompt: "Make an intricate animated SVG illustration with pause and color controls.",
+      contract: ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
+      marker: /template animated-svg/,
+    },
+    {
+      prompt: "Create a small task board where I can add, complete, filter, and remove items.",
+      contract: ODS_WORKSPACE_TASK_BOARD_CONTRACT,
+      marker: /template task-board/,
+    },
+  ]) {
+    const result = promptContractForAgent(
+      { agentId: "pixel", contextTokenBudget: 65536 },
+      "pixel",
+      { prompt: visual.prompt },
+      { configuredLeanPrompt: true }
+    );
+    assert.equal(
+      result.appendSystemContext,
+      `${ODS_COMPACT_CONVERSATION_CONTRACT} ${visual.contract}`
+    );
+    assert.match(result.appendSystemContext, visual.marker);
+  }
+
+  for (const prompt of [
+    "Create a voxel city under the ocean.",
+    "Make an animated SVG of our dragon mascot.",
+    "Build a task board with cloud sync.",
+  ]) {
+    const result = promptContractForAgent(
+      { agentId: "pixel", contextTokenBudget: 65536 },
+      "pixel",
+      { prompt },
+      { configuredLeanPrompt: true }
+    );
+    assert.equal(
+      result.appendSystemContext,
+      `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+    );
+  }
 
   const explanation = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },

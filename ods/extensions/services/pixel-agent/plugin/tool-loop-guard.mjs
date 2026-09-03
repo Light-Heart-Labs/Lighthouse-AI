@@ -344,6 +344,36 @@ const WORKSPACE_GAME_SCAFFOLD = Object.freeze({
     template: "breakout",
   }),
 });
+const WORKSPACE_VISUAL_SCAFFOLDS = Object.freeze({
+  "animated-svg": Object.freeze({
+    relativeDirectory: "living-vector",
+    scaffold: Object.freeze({
+      title: "Living Vector",
+      tagline: "An intricate local SVG system with motion and color controls.",
+      theme: "orchid",
+      template: "animated-svg",
+    }),
+  }),
+  breakout: WORKSPACE_GAME_SCAFFOLD,
+  "task-board": Object.freeze({
+    relativeDirectory: "orbit-tasks",
+    scaffold: Object.freeze({
+      title: "Orbit Tasks",
+      tagline: "A focused local task board that remembers what matters.",
+      theme: "aurora",
+      template: "task-board",
+    }),
+  }),
+  voxel: Object.freeze({
+    relativeDirectory: "voxel-horizon",
+    scaffold: Object.freeze({
+      title: "Voxel Horizon",
+      tagline: "Explore a responsive isometric landscape from day into night.",
+      theme: "ocean",
+      template: "voxel",
+    }),
+  }),
+});
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -3857,7 +3887,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const revise =
     /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
   const browserVisual =
-    /\b(?:animated\s+svg|breakout|brick[- ]?breaker|browser[- ]?game|canvas\s+(?:demo|game)|interactive\s+(?:demo|experience|visuali[sz]ation)|svg\s+animation|video\s*game|videogame|visuali[sz]ation|voxel(?:-based)?\s+(?:art|landscape|scene|world)|webgl\s+(?:demo|scene))\b/i.test(text) ||
+    /\b(?:animated\s+svg|breakout|brick[- ]?breaker|browser[- ]?game|canvas\s+(?:demo|game)|interactive\s+(?:demo|experience|visuali[sz]ation)|svg\s+animation|task\s+board|to-?do\s+(?:app|board|list)|video\s*game|videogame|visuali[sz]ation|voxel(?:-based)?|webgl\s+(?:demo|scene))\b/i.test(text) ||
     /\b(?:that|the|this)\s+(?:browser[- ]?)?game\b/i.test(text);
   const explicitBrowser =
     website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
@@ -3872,7 +3902,16 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const explanatoryOnly =
     /\b(?:explain|history|review|tutorial|what\s+is|why)\b/i.test(text) &&
     !/\b(?:build|create|develop|design|generate|implement|make)\b/i.test(text);
-  if (rejectsPreview || rejectsCreation || nativeOnly || explanatoryOnly) return false;
+  const nonVisualImplementation =
+    /\b(?:engine|file\s+format|library|parser|renderer|seriali[sz]er)\b/i.test(text) &&
+    !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
+  if (
+    rejectsPreview ||
+    rejectsCreation ||
+    nativeOnly ||
+    explanatoryOnly ||
+    nonVisualImplementation
+  ) return false;
   const directPreview =
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
     /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
@@ -3945,6 +3984,45 @@ export function userMessageRequestsWorkspaceGameScaffold(
         !rejection.test(clause) &&
         !explanation.test(clause)
     );
+}
+
+export function userMessageWorkspaceStarterScaffold(
+  messages,
+  prompt = undefined
+) {
+  if (userMessageRequestsWorkspaceGameScaffold(messages, prompt)) {
+    return WORKSPACE_VISUAL_SCAFFOLDS.breakout;
+  }
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) {
+    return undefined;
+  }
+  const exactNameRequested =
+    /\b(?:called|named)\s+[a-z0-9][a-z0-9._-]{1,80}\b/i.test(text);
+  if (exactNameRequested) return undefined;
+
+  const voxel =
+    /\bvoxel(?:-based)?\s+(?:art|landscape|scene|world)\b/i.test(text);
+  const customVoxel =
+    /\b(?:city|dragon|dungeon|minecraft|spaceship|specific|underwater)\b/i.test(text);
+  if (voxel && !customVoxel) return WORKSPACE_VISUAL_SCAFFOLDS.voxel;
+
+  const animatedSvg =
+    /\b(?:animated\s+svg|svg\s+animation)\b/i.test(text);
+  const customSvg =
+    /\b(?:depict|logo|mascot|of\s+(?:a|an|my|our|the)|portrait|specific|showing)\b/i.test(text);
+  if (animatedSvg && !customSvg) {
+    return WORKSPACE_VISUAL_SCAFFOLDS["animated-svg"];
+  }
+
+  const taskBoard =
+    /\b(?:task\s+board|to-?do\s+(?:app|board|list))\b/i.test(text);
+  const unsupportedTaskFeature =
+    /\b(?:account|calendar|cloud|collaborat|drag|email|login|multi[- ]?user|notification|sync)\w*\b/i.test(text);
+  if (taskBoard && !unsupportedTaskFeature) {
+    return WORKSPACE_VISUAL_SCAFFOLDS["task-board"];
+  }
+  return undefined;
 }
 
 function workspacePreviewDirectoryFromState(state) {
@@ -4501,7 +4579,9 @@ export function createToolLoopGuard({
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspacePreviewRequested: false,
+        workspaceDemoScaffoldRequested: false,
         workspaceGameScaffoldRequested: false,
+        workspaceStarterScaffold: undefined,
         workspacePreviewInspectionRequested: false,
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
@@ -5063,17 +5143,18 @@ export function createToolLoopGuard({
         },
       };
     }
-    const forceGameScaffold = Boolean(
-      state?.workspaceGameScaffoldRequested &&
+    const selectedWorkspaceStarter = state?.workspaceStarterScaffold;
+    const forceWorkspaceStarter = Boolean(
+      selectedWorkspaceStarter &&
       !state.workspacePreviewAttempted &&
       !state.workspacePreview
     );
-    if (forceGameScaffold && toolName === "tool_call") {
+    if (forceWorkspaceStarter && toolName === "tool_call") {
       pendingParams = {
         id: WORKSPACE_PREVIEW_TOOL,
         args: {
-          relativeDirectory: WORKSPACE_GAME_SCAFFOLD.relativeDirectory,
-          scaffold: { ...WORKSPACE_GAME_SCAFFOLD.scaffold },
+          relativeDirectory: selectedWorkspaceStarter.relativeDirectory,
+          scaffold: { ...selectedWorkspaceStarter.scaffold },
         },
       };
     }
@@ -5092,19 +5173,31 @@ export function createToolLoopGuard({
       const suppliedArgs =
         toolName === "tool_call" ? pendingParams?.args : pendingParams;
       if (
-        suppliedArgs?.scaffold?.template !== undefined &&
-        !state.workspaceGameScaffoldRequested
+        suppliedArgs?.scaffold !== undefined &&
+        !selectedWorkspaceStarter &&
+        !state.workspaceDemoScaffoldRequested
       ) {
         return {
           block: true,
           blockReason:
-            "Pixel blocked a generated game template that the owner's current request did not select. Create the requested custom visual artifact with workspace tools instead.",
+            "Pixel blocked a generated starter for a custom visual request. Create the owner-requested artifact with workspace tools, then publish that exact directory.",
         };
       }
-      const args = forceGameScaffold
+      if (
+        suppliedArgs?.scaffold?.template !== undefined &&
+        suppliedArgs.scaffold.template !==
+          selectedWorkspaceStarter?.scaffold?.template
+      ) {
+        return {
+          block: true,
+          blockReason:
+            "Pixel blocked a generated visual template that the owner's current request did not select. Create the requested custom visual artifact with workspace tools instead.",
+        };
+      }
+      const args = forceWorkspaceStarter
         ? {
-          relativeDirectory: WORKSPACE_GAME_SCAFFOLD.relativeDirectory,
-          scaffold: { ...WORKSPACE_GAME_SCAFFOLD.scaffold },
+          relativeDirectory: selectedWorkspaceStarter.relativeDirectory,
+          scaffold: { ...selectedWorkspaceStarter.scaffold },
         }
         : suppliedArgs;
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
@@ -6319,6 +6412,15 @@ export function createToolLoopGuard({
             event?.messages,
             event?.prompt
           );
+        state.workspaceDemoScaffoldRequested =
+          userMessageRequestsWorkspaceDemoScaffold(
+            event?.messages,
+            event?.prompt
+          );
+        state.workspaceStarterScaffold = userMessageWorkspaceStarterScaffold(
+          event?.messages,
+          event?.prompt
+        );
         state.workspacePreviewInspectionRequested =
           userMessageRequestsWorkspacePreviewInspection(
             event?.messages,

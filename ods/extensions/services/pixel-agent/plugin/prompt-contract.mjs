@@ -18,8 +18,8 @@ import {
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceDemoScaffold,
-  userMessageRequestsWorkspaceGameScaffold,
   userMessageRequestsWorkspacePreview,
+  userMessageWorkspaceStarterScaffold,
 } from "./tool-loop-guard.mjs";
 
 export const ODS_CONVERSATION_CONTRACT = [
@@ -135,6 +135,22 @@ export const ODS_WORKSPACE_DEMO_CONTRACT =
 
 export const ODS_WORKSPACE_GAME_CONTRACT =
   "The owner asked for a Breakout-style browser game. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory neon-breakout plus scaffold with title Neon Breakout, a concise tagline, theme orchid, and template breakout. The ODS guard binds this create-only request and the host generates a polished responsive keyboard, pointer, and touch-playable game before independent preview readback. Do not generate HTML, call write, call exec, plan the game, or start a server. Reply only after the verified tool receipt.";
+
+export const ODS_WORKSPACE_VOXEL_CONTRACT =
+  "The owner asked for an interactive voxel scene. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory voxel-horizon plus scaffold with title Voxel Horizon, a concise tagline, theme ocean, and template voxel. The ODS guard binds this create-only request and the host generates a responsive local Canvas landscape with orbit, terrain-remix, and day/night controls before independent preview readback. Do not generate HTML, call write, call exec, plan the scene, or start a server. Reply only after the verified tool receipt.";
+
+export const ODS_WORKSPACE_ANIMATED_SVG_CONTRACT =
+  "The owner asked for open-ended animated SVG art. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory living-vector plus scaffold with title Living Vector, a concise tagline, theme orchid, and template animated-svg. The ODS guard binds this create-only request and the host generates an intricate responsive local SVG with pause, direction, and palette controls before independent preview readback. Do not generate SVG or HTML, call write, call exec, plan the illustration, or start a server. Reply only after the verified tool receipt.";
+
+export const ODS_WORKSPACE_TASK_BOARD_CONTRACT =
+  "The owner asked for a small local task board. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory orbit-tasks plus scaffold with title Orbit Tasks, a concise tagline, theme aurora, and template task-board. The ODS guard binds this create-only request and the host generates a responsive browser app with add, complete, filter, remove, empty-state, and local persistence behavior before independent preview readback. Do not generate HTML, call write, call exec, plan the app, or start a server. Reply only after the verified tool receipt.";
+
+const ODS_WORKSPACE_STARTER_CONTRACTS = Object.freeze({
+  "animated-svg": ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
+  breakout: ODS_WORKSPACE_GAME_CONTRACT,
+  "task-board": ODS_WORKSPACE_TASK_BOARD_CONTRACT,
+  voxel: ODS_WORKSPACE_VOXEL_CONTRACT,
+});
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
@@ -296,12 +312,18 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_EXACT_DOWNLOAD_CONTRACT}`
     : "";
+  const workspaceStarterTemplate = userMessageWorkspaceStarterScaffold(
+    event?.messages,
+    event?.prompt
+  )?.scaffold?.template;
+  const workspaceStarterContract =
+    ODS_WORKSPACE_STARTER_CONTRACTS[workspaceStarterTemplate];
   const workspacePreview = userMessageRequestsWorkspacePreview(
     event?.messages,
     event?.prompt
   )
-    ? userMessageRequestsWorkspaceGameScaffold(event?.messages, event?.prompt)
-      ? ` ${ODS_WORKSPACE_GAME_CONTRACT}`
+    ? workspaceStarterContract
+      ? ` ${workspaceStarterContract}`
       : userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
         ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
         : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
