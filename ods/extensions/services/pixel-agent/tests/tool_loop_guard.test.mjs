@@ -7869,6 +7869,21 @@ test("classifies a requested website demo as a verified workspace preview", () =
     userMessageRequestsWorkspacePreview([], "Build a website for Acme."),
     true
   );
+  for (const request of [
+    "Make a playful puzzle game.",
+    "Build a tiny habit-tracker app.",
+    "Create a drawing application.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
+  }
+  for (const request of [
+    "Build a Python desktop app.",
+    "Write a Rust game engine.",
+    "Create a multiplayer game server.",
+    "Explain how mobile apps work.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
+  }
 });
 
 test("turns a compact model's first Breakout tool attempt into one bounded game scaffold", () => {

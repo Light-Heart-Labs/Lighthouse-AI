@@ -3894,18 +3894,21 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   if (!text) return false;
   const website =
     /\b(?:browser\b[^.!?;\n]{0,32}\bapp|dashboard|frontend|landing\s+page|portal|static\s+site|web\b[^.!?;\n]{0,32}\bapp|web\s*page|web\s*site|website)\b/i.test(text);
+  const application = /\bapp(?:lication)?\b/i.test(text);
   const build =
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(text);
   const revise =
     /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
   const browserVisual =
     /\b(?:animated\s+svg|breakout|brick[- ]?breaker|browser[- ]?game|canvas\s+(?:demo|game)|interactive\s+(?:demo|experience|visuali[sz]ation)|svg\s+animation|task\s+board|to-?do\s+(?:app|board|list)|video\s*game|videogame|visuali[sz]ation|voxel(?:-based)?|webgl\s+(?:demo|scene))\b/i.test(text) ||
-    /\b(?:that|the|this)\s+(?:browser[- ]?)?game\b/i.test(text);
+    /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*game\b/i.test(text);
   const explicitBrowser =
     website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
+  const nativeImplementation =
+    /\b(?:c\+\+|command[- ]?line|cli|desktop|java|kotlin|native|python|rust|swift|terminal)\b/i.test(text) ||
+    /\bgo\s+(?:app|application|binary|code|program|service)\b/i.test(text);
   const nativeOnly =
-    /\b(?:command[- ]?line|cli|desktop|native|python|terminal)\b/i.test(text) &&
-    !explicitBrowser;
+    nativeImplementation && !explicitBrowser;
   const rejectsPreview =
     /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip)\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text) ||
     /\bwithout\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text);
@@ -3915,7 +3918,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:explain|history|review|tutorial|what\s+is|why)\b/i.test(text) &&
     !/\b(?:build|create|develop|design|generate|implement|make)\b/i.test(text);
   const nonVisualImplementation =
-    /\b(?:engine|file\s+format|library|parser|renderer|seriali[sz]er)\b/i.test(text) &&
+    /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(text) &&
     !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
   if (
     rejectsPreview ||
@@ -3932,7 +3935,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
   return directPreview || unreachableLocalPreview ||
-    (website && (build || revise)) || (browserVisual && build);
+    ((website || application) && (build || revise)) || (browserVisual && build);
 }
 
 export function userMessageRequestsWorkspacePreviewInspection(

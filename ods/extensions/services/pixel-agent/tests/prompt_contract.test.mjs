@@ -57,8 +57,10 @@ test("adds a bounded first-write contract only for requested website previews", 
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
   assert.match(custom.appendSystemContext, /first tool step call tool_call with id write/);
-  assert.match(custom.appendSystemContext, /under 2500 characters/);
+  assert.match(custom.appendSystemContext, /under 7000 characters/);
   assert.match(custom.appendSystemContext, /semantic interactive elements such as button/);
+  assert.match(custom.appendSystemContext, /responsive layout/);
+  assert.match(custom.appendSystemContext, /keyboard access/);
   assert.match(custom.appendSystemContext, /never claim a requested interaction was exercised/);
   assert.match(
     ODS_COMPACT_CONVERSATION_CONTRACT,
@@ -127,6 +129,8 @@ test("adds a bounded first-write contract only for requested website previews", 
     "Create a voxel city under the ocean.",
     "Make an animated SVG of our dragon mascot.",
     "Build a task board with cloud sync.",
+    "Make a playful puzzle game.",
+    "Build a tiny habit-tracker app.",
   ]) {
     const result = promptContractForAgent(
       { agentId: "pixel", contextTokenBudget: 65536 },
