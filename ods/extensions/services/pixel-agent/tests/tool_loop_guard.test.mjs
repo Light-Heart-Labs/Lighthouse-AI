@@ -2647,7 +2647,7 @@ test("classifies explicit host evidence as Operations work", () => {
   );
 });
 
-test("classifies explicit local host commands without capturing guidance or remote work", () => {
+test("classifies explicit local and SSH host commands without capturing guidance or negation", () => {
   const prompt = "Please run `uname -sr` on this ODS host.";
   assert.equal(userMessageRequestsHostCommand([], prompt), true);
   assert.deepEqual(userMessageOperationsRequirements([], prompt), {
@@ -2669,7 +2669,6 @@ test("classifies explicit local host commands without capturing guidance or remo
     "Tell me how to restart Docker on this ODS host.",
     "Do not restart Docker on this ODS host.",
     "Run unit tests in the workspace.",
-    "SSH to Tower2 and run uname -sr.",
     "Install the ODS extension crewai.",
     "Run a command on this machine",
     "Start by inspecting this machine.",
@@ -2677,6 +2676,9 @@ test("classifies explicit local host commands without capturing guidance or remo
     "Create a report about this machine.",
     "Can this machine restart Docker?",
     "Should I restart Docker on this ODS host?",
+    "How would I SSH to Strixy and run hostname?",
+    "Do not SSH to Strixy or contact any remote machine.",
+    "The remote server uses SSH for administration.",
   ]) {
     assert.equal(userMessageRequestsHostCommand([], text), false, text);
   }
@@ -2687,6 +2689,8 @@ test("classifies explicit local host commands without capturing guidance or remo
     "Can you restart Docker on this ODS host?",
     "Please run exactly `uname -sr` on this ODS host. Do not run anything else.",
     "Do not restart Docker on this ODS host. Instead, run `uname -sr` on this ODS host.",
+    "SSH to Strixy and run hostname.",
+    "Verify SSH connectivity to the host named Strixy and report its hostname.",
   ]) {
     assert.equal(userMessageRequestsHostCommand([], text), true, text);
   }
@@ -2694,6 +2698,13 @@ test("classifies explicit local host commands without capturing guidance or remo
     userMessageRequestsHostCommand([], "Without explaining, restart Docker on this ODS host."),
     true
   );
+  const laptopToStrixy =
+    "Inspect this laptop's Tailscale status, then verify SSH connectivity to the host named Strixy and report its hostname. Do not contact Tower1, Tower2, or Tower3.";
+  assert.equal(userMessageRequestsHostCommand([], laptopToStrixy), true);
+  assert.deepEqual(userMessageOperationsRequirements([], laptopToStrixy), {
+    required: true,
+    actions: ["raw-shell"],
+  });
 });
 
 test("binds an exact compound owner command across shell separators", () => {

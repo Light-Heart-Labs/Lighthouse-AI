@@ -88,7 +88,10 @@ test("host command adapter publishes exact protocol bytes and returns one approv
     assert.equal(request.kind, "shell");
     assert.equal(request.target, "ods-host");
     assert.equal(request.command, command);
-    assert.equal(request.reason, "Owner requested one protected local ODS host command.");
+    assert.equal(
+      request.reason,
+      "Owner requested one protected command from the local ODS host, possibly to an explicitly named SSH destination."
+    );
     assert.doesNotMatch(request.boundary, /approve/i);
 
     const planHash = "a".repeat(64);

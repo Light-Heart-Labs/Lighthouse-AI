@@ -262,7 +262,7 @@ test("adds one exact compact tool route for natural broad host questions", () =>
   );
 });
 
-test("adds one model-agnostic approval route for a local ODS host command", () => {
+test("adds one model-agnostic approval route for local and explicit SSH host commands", () => {
   const prompt = "Please run `uname -sr` on this ODS host.";
   const exact = operationsRequestContract([], prompt);
   assert.equal(exact, ` ${ODS_HOST_COMMAND_CONTRACT}`);
@@ -290,6 +290,15 @@ test("adds one model-agnostic approval route for a local ODS host command", () =
     ),
     ` ${ODS_HOST_COMMAND_CONTRACT}`
   );
+  assert.equal(
+    operationsRequestContract(
+      [],
+      "Verify SSH connectivity to the host named Strixy and report its hostname."
+    ),
+    ` ${ODS_HOST_COMMAND_CONTRACT}`
+  );
+  assert.match(ODS_HOST_COMMAND_CONTRACT, /explicitly requested SSH operation/);
+  assert.match(ODS_HOST_COMMAND_CONTRACT, /every stated target exclusion/);
 });
 
 test("adds owner-requested projections and workspace continuation only after terminal host evidence", () => {

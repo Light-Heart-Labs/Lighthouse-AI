@@ -238,7 +238,7 @@ export const OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel did not obtain a structurally valid current Operations capability inventory. No capability availability or authority claim was accepted.";
 
 export const OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON =
-  "The owner requested one protected command on the local ODS host. Call only pixel_ods_host_command_propose with the exact command. The ODS adapter fixes the target to ods-host and waits internally for the immutable approval plan or terminal broker receipt. Do not use generic exec, inventory, a named action, a workflow, another target, pixel_ops_shell_propose, pixel_ops_job_wait, or a second command proposal.";
+  "The owner requested one protected command from the local ODS host, possibly including an explicit SSH operation to an owner-named destination. Call only pixel_ods_host_command_propose with the exact command. The ODS adapter fixes execution to ods-host and waits internally for the immutable approval plan or terminal broker receipt. Do not use generic exec, inventory, a named action, a workflow, another broker target, pixel_ops_shell_propose, pixel_ops_job_wait, or a second command proposal.";
 
 export const OPERATIONS_HOST_COMMAND_COMPLETE_REASON =
   "Pixel already obtained the broker's terminal state for this protected host-command proposal. Do not call another tool; report the verified approval requirement or terminal outcome now.";
@@ -3791,13 +3791,29 @@ export function userMessageRequestsHostCommand(messages, prompt = undefined) {
   if (userMessageExactHostCommand(messages, prompt)) return true;
   const localHost = /\b(?:ODS[- ]host|local\s+(?:ODS\s+)?host|this\s+(?:ODS\s+)?(?:host|machine|computer|laptop)|my\s+(?:ODS\s+)?(?:host|machine|computer|laptop))\b/i;
   const action = /\b(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)\b/i;
+  const remoteHost = /\b(?:SSH\s+(?:(?:connection|connectivity)\s+)?(?:to|into)|remote\s+(?:host|machine|computer|server|device)|(?:host|machine|computer|server|device)\s+(?:named|called)\s+[A-Za-z0-9][A-Za-z0-9._-]{0,127})\b/i;
+  const remoteAction = /\b(?:connect|verify|check|inspect|query|report|troubleshoot|debug|run|execute|invoke)\b/i;
   const guidanceOnly =
     /\b(?:(?:how|what)\s+(?:do|should|would|can|could)\s+(?:I|we|you)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:should|can|could|would)\s+(?:I|we)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:tell|show|explain)\s+(?:me\s+)?how\s+to\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change))\b/i;
   const explicitlyRejected =
     /\b(?:(?:do\s+not|don't|never|must\s+not|should\s+not)\s+(?:ever\s+|actually\s+|please\s+|now\s+){0,2}(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)|without\s+(?:running|executing|invoking|launching|starting|stopping|restarting|reloading|installing|uninstalling|removing|updating|upgrading|configuring|modifying|changing|creating|deleting))\b/i;
+  const remoteGuidanceOnly =
+    /\b(?:(?:how|what)\s+(?:do|should|would|can|could)\s+(?:I|we|you)\b[^.!?;\n]{0,96}\b(?:SSH|connect|inspect|query)|(?:tell|show|explain)\s+(?:me\s+)?how\s+to\b[^.!?;\n]{0,96}\b(?:SSH|connect|inspect|query))\b/i;
+  const remoteExplicitlyRejected =
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not)\s+(?:ever\s+|actually\s+|please\s+|now\s+){0,2}(?:SSH|connect|contact|access|inspect|query|run|execute|invoke)\b/i;
   return text
     .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
     .some((clause) => {
+      const remoteHostMatch = clause.match(remoteHost);
+      const remoteActionMatch = clause.match(remoteAction);
+      if (remoteHostMatch && remoteActionMatch) {
+        if (remoteGuidanceOnly.test(clause) || remoteExplicitlyRejected.test(clause)) {
+          return false;
+        }
+        return !/\b(?:can|could|would|should|does|did|will)\s+(?:the\s+)?(?:remote\s+)?(?:host|machine|computer|server|device)\b/i.test(
+          clause
+        );
+      }
       const hostMatch = clause.match(localHost);
       const actionMatch = clause.match(action);
       if (!hostMatch || !actionMatch) return false;
@@ -3805,7 +3821,6 @@ export function userMessageRequestsHostCommand(messages, prompt = undefined) {
       // safety boundary such as "Do not run anything else" must not erase an
       // earlier exact host command that the owner explicitly requested.
       if (guidanceOnly.test(clause) || explicitlyRejected.test(clause)) return false;
-      if (/\b(?:SSH|remote|Tower[123])\b/i.test(clause)) return false;
       if (/\b(?:workspace|sandbox)\b/i.test(clause) && !/\bODS[- ]host\b/i.test(clause)) {
         return false;
       }
