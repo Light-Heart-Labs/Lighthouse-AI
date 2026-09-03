@@ -3747,6 +3747,14 @@ export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
 export function userMessageRequestsExactByteDownload(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return false;
+  const capabilityInquiryWithoutSource =
+    !/https:\/\//i.test(text) &&
+    /\b(?:capabilit(?:y|ies)|capability\s+inventory|supported\s+(?:actions?|operations?|tools?)|what\s+can\s+you\s+do|whether\s+you\s+can)\b/i.test(text) &&
+    /\b(?:inspect|inventory|list|report|tell|explain|whether|what)\b/i.test(text);
+  // Mentioning a capability in a read-only inventory question is not a request
+  // to exercise it. Keep ambiguous action requests fail-closed, but do not let
+  // phrases such as "can you fetch exact bytes?" hijack the inventory route.
+  if (capabilityInquiryWithoutSource) return false;
   const asksDownload =
     /\b(?:download|fetch|retrieve|save)\b/i.test(text) &&
     /\b(?:file|artifact|object|page|response|bytes?)\b/i.test(text);

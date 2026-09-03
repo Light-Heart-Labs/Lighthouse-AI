@@ -1862,6 +1862,20 @@ test("classifies exact-byte downloads without capturing ordinary page research",
     userMessageRequestsExactByteDownload([], "Save this exact sentence to notes.txt."),
     false
   );
+  assert.equal(
+    userMessageRequestsExactByteDownload(
+      [],
+      "Inspect your capability inventory and report whether you can fetch exact bytes from the public internet. Make no changes."
+    ),
+    false
+  );
+  assert.equal(
+    userMessageRequestsExactByteDownload(
+      [],
+      "Can you download https://example.com/file.bin byte-for-byte?"
+    ),
+    true
+  );
   assert.deepEqual(
     userMessageExactDownloadRequest(
       [],
