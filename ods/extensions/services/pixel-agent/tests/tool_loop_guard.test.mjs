@@ -2567,7 +2567,39 @@ test("routes explicit ODS facts through projections before mixed workspace work"
 });
 
 test("does not route unrelated model, app, or n8n implementation work", () => {
+  const creativePrompt =
+    "Create from scratch a novel single-file interactive voxel night-market scene in a new " +
+    "workspace directory. The composition must feature a teal robot fox vendor, exactly seven " +
+    "hanging lanterns, a tiny magenta tram, layered parallax rain, and a visible sign reading " +
+    "NIGHT BYTE 73. Add working buttons labeled Pause rain and Shift palette plus arrow-key " +
+    "camera movement. The active model must design and author every creative line for this " +
+    "request; do not use, copy, or adapt any existing template, starter, scaffold, prior demo, " +
+    "or generated sample. Keep it self-contained with no remote assets, publish it in Pixel's " +
+    "native side-panel preview, and report only what you actually wrote and verified.";
+  assert.deepEqual(userMessageOdsToolRequirements([], creativePrompt), []);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      creativePrompt +
+        "\n\n[ODS Pixel delivery requirement: Answer the owner's complete message above.]" +
+        "\n[ODS Pixel workspace task route: Perform the requested workspace mutation before verification.]"
+    ),
+    []
+  );
+  assert.deepEqual(userMessageOperationsRequirements([], creativePrompt), {
+    required: false,
+    actions: [],
+  });
+  assert.equal(userMessageRequestsWorkspacePreview([], creativePrompt), true);
   assert.deepEqual(userMessageOdsToolRequirements([], "Explain model classes in my app."), []);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "The active model must design and author every creative line for this request; " +
+        "publish it in Pixel's native side-panel preview and report only what you wrote."
+    ),
+    []
+  );
   assert.deepEqual(
     userMessageOdsToolRequirements([], "Create an n8n workflow fixture in flow.json."),
     []

@@ -3720,17 +3720,27 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
     /\b(?:available|health|healthy|online|running|status|working)\b[^.!?;\n]{0,48}\bdocker\b/i.test(text);
   const asksLiveServiceState = /\bODS\b/i.test(text) &&
     /\bservices?\b[^.!?;\n]{0,80}\b(?:health|healthy|online|running|status)\b/i.test(text);
+  const asksModelState = text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some((clause) => {
+      const modelState =
+        /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(clause) ||
+        /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
+          clause
+        );
+      const asks =
+        /\b(?:what|which|identify|name|report|tell|show|inspect|check|verify)\b/i.test(clause) ||
+        clause.trimEnd().endsWith("?");
+      return modelState && asks;
+    });
   const asksStatus =
     !rejectsStatus &&
     (/\bpixel_ods_status\b/i.test(text) ||
-      /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(text) ||
-      /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
+      asksModelState ||
+      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b/i.test(
         text
       ) ||
-      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|active model|current model|context (?:window|length|limit))\b/i.test(
-        text
-      ) ||
-      /\b(?:health|status|online|service count|services online|active model|current model|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
+      /\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
         text
       ) ||
       asksAvailability ||
@@ -4351,7 +4361,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const explicitBrowser =
     website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
   const nativeImplementation =
-    /\b(?:c\+\+|command[- ]?line|cli|desktop|java|kotlin|native|python|rust|swift|terminal)\b/i.test(text) ||
+    /\b(?:c\+\+|command[- ]?line|cli|desktop|java|kotlin|python|rust|swift|terminal)\b/i.test(text) ||
+    /\bnative\s+(?:apps?|applications?|binar(?:y|ies)|code|programs?|services?|tools?)\b/i.test(text) ||
     /\bgo\s+(?:app|application|binary|code|program|service)\b/i.test(text);
   const nativeOnly =
     nativeImplementation && !explicitBrowser;
