@@ -19,12 +19,14 @@ def test_snapshot_is_content_addressed_and_create_only():
         workspace = root / "workspace"
         previews = root / "previews"
         site = workspace / "demo-site"
+        assets = site / "assets"
         site.mkdir(parents=True, mode=0o700)
+        assets.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
-        (site / "styles.css").write_text("h1{color:purple}", encoding="utf-8")
+        (assets / "styles.css").write_text("h1{color:purple}", encoding="utf-8")
         os.chmod(site / "index.html", 0o600)
-        os.chmod(site / "styles.css", 0o600)
+        os.chmod(assets / "styles.css", 0o600)
 
         first = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
         second = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
@@ -34,6 +36,7 @@ def test_snapshot_is_content_addressed_and_create_only():
         assert first["files"] == 2
         assert first["overwritten"] is False
         assert (previews / first["siteId"] / "index.html").read_text() == "<h1>Hello</h1>"
+        assert (previews / first["siteId"] / "assets" / "styles.css").read_text() == "h1{color:purple}"
 
 
 def test_snapshot_rejects_symlinks_and_missing_entrypoint():

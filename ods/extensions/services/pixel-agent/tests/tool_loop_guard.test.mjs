@@ -8575,12 +8575,16 @@ test("accepts a novel multi-file visual only when every published file was writt
   );
   const writes = [
     {
-      path: "observatory/styles.css",
+      path: "observatory/index.html",
+      content: "<!doctype html><link rel=stylesheet href=assets/styles.css><h1>Observatory</h1><script src=scripts/app.js></script>",
+    },
+    {
+      path: "observatory/assets/styles.css",
       content: "body{background:#050714;color:#f7f8ff}",
     },
     {
-      path: "observatory/index.html",
-      content: "<!doctype html><link rel=stylesheet href=styles.css><h1>Observatory</h1>",
+      path: "observatory/scripts/app.js",
+      content: "document.documentElement.dataset.ready='true'",
     },
   ];
   for (const params of writes) {
