@@ -6,6 +6,7 @@ import {
   ODS_EXTENSION_CATALOG_CONTRACT,
   ODS_EXTENSION_LIFECYCLE_CONTRACT,
   ODS_OPERATIONS_CONTINUATION_CONTRACT,
+  ODS_OPERATIONS_INVENTORY_CONTRACT,
   ODS_EXACT_DOWNLOAD_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
@@ -425,6 +426,25 @@ test("adds a read-only exact-job continuation contract after external approval",
   );
   assert.match(mutationWording.appendSystemContext, /read-only lookup key/);
   assert.doesNotMatch(mutationWording.appendSystemContext, /First call only pixel_ops_inventory/);
+});
+
+test("adds a single-tool read-only Operations capability inventory contract", () => {
+  const result = promptContractForAgent(
+    { agentId: "pixel" },
+    "pixel",
+    {
+      prompt:
+        "Inspect your actual currently available Operations capability inventory. " +
+        "Report exact capability IDs and make no changes.",
+    }
+  );
+  assert.equal(
+    result.appendSystemContext,
+    `${ODS_CONVERSATION_CONTRACT} ${ODS_OPERATIONS_INVENTORY_CONTRACT}`
+  );
+  assert.match(result.appendSystemContext, /Call only tool_call with id pixel_ops_inventory/);
+  assert.match(result.appendSystemContext, /inventory is descriptive and grants no authority/);
+  assert.match(result.appendSystemContext, /distinguish this broker inventory from separate sandbox\/core tools/);
 });
 
 test("adds exact pending and failed verification truth constraints", () => {

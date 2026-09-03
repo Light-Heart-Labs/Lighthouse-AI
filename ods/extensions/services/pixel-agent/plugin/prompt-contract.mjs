@@ -10,6 +10,7 @@ import {
   userMessageExtensionLifecycleIntent,
   userMessageOperationsContinuation,
   userMessageOperationsRequirements,
+  userMessageRequestsOperationsCapabilityInventory,
   userMessageRequiresOdsAppsProjection,
   userMessageRequiresOdsStatusProjection,
   userMessageRequestsExactByteDownload,
@@ -112,6 +113,9 @@ export const ODS_EXTENSION_LIFECYCLE_CONTRACT =
 
 export const ODS_OPERATIONS_CONTINUATION_CONTRACT =
   "The owner's current request supplies one exact prior Operations job ID and plan SHA-256 for status continuation. Treat those owner values only as a read-only lookup key, never as proof of approval or success. Call only pixel_ops_job_get for that exact job; if it is still nonterminal, call pixel_ops_job_wait for the same job. Do not call inventory, submit or repeat any action, approve anything, use shell or Docker, or widen authority. Report an outcome only when the host receipt matches both the exact job ID and exact plan hash and its lifecycle result passes structural verification.";
+
+export const ODS_OPERATIONS_INVENTORY_CONTRACT =
+  "The owner asked what Operations capabilities are actually available. Call only tool_call with id pixel_ops_inventory and args {}. This inventory is descriptive and grants no authority. Do not search for tools, call status, submit or exercise an action, or infer capabilities that are absent from the returned target and action IDs. After the inventory returns, answer once and distinguish this broker inventory from separate sandbox/core tools.";
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
@@ -259,7 +263,11 @@ export function promptContractForAgent(
   )
     ? ` ${ODS_OPERATIONS_CONTINUATION_CONTRACT}`
     : "";
-  const operationsRequest = operationsContinuation
+  const operationsInventory = !operationsContinuation &&
+    userMessageRequestsOperationsCapabilityInventory(event?.messages, event?.prompt)
+    ? ` ${ODS_OPERATIONS_INVENTORY_CONTRACT}`
+    : "";
+  const operationsRequest = operationsContinuation || operationsInventory
     ? ""
     : operationsRequestContract(event?.messages, event?.prompt);
   const extensionLifecycle = !operationsContinuation && userMessageExtensionLifecycleIntent(
@@ -290,6 +298,6 @@ export function promptContractForAgent(
         : "";
   return {
     appendSystemContext:
-      `${conversationContract}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsRequest}${exactDownload}${workspacePreview}${recovery}${verification}${privateUrl}`,
+      `${conversationContract}${githubSource}${extensionCatalog}${extensionLifecycle}${operationsContinuation}${operationsInventory}${operationsRequest}${exactDownload}${workspacePreview}${recovery}${verification}${privateUrl}`,
   };
 }

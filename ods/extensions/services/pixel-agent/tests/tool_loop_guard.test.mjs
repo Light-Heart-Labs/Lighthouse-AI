@@ -39,6 +39,9 @@ import {
   ODS_TOOL_ROUTING_ABORT_REASON,
   ODS_TOOL_ROUTING_LOOP_ABORT_REASON,
   OPERATIONS_HOST_EVIDENCE_PREFIX,
+  OPERATIONS_INVENTORY_COMPLETE_REASON,
+  OPERATIONS_INVENTORY_EVIDENCE_PREFIX,
+  OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON,
   OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT,
   OPERATIONS_ODS_STATUS_UNAVAILABLE_TEXT,
   OPERATIONS_TRUSTED_CONTINUATION_PREFIX,
@@ -93,6 +96,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
+  userMessageRequestsOperationsCapabilityInventory,
   userMessageExtensionCatalogExactQuery,
   userMessageExtensionLifecycleIntent,
   userMessageOperationsContinuation,
@@ -1816,6 +1820,51 @@ function lifecycleResult(action, overrides = {}) {
   };
 }
 
+function operationsInventoryDetails(overrides = {}) {
+  return {
+    schemaVersion: 2,
+    generatedAt: "2026-09-03T01:28:28.004Z",
+    policySha256: "a".repeat(64),
+    authority: {
+      defaultLevel: "propose",
+      standingGrantIds: ["ods-approved-downloads"],
+      paused: false,
+      activeLeaseIds: [],
+    },
+    targets: [
+      { id: "broker", backend: "local", capabilities: ["stage-download"] },
+      { id: "ods-host", backend: "local", capabilities: ["inspect", "manage-extensions"] },
+    ],
+    actions: [
+      {
+        id: "host.identity",
+        tier: "read",
+        effect: "observe",
+        defaultAuthority: "observe",
+        targets: ["ods-host"],
+        parameters: [],
+      },
+      {
+        id: "ods.extensions.install",
+        tier: "managed",
+        effect: "manage",
+        defaultAuthority: "propose",
+        targets: ["ods-host"],
+        parameters: ["serviceId"],
+      },
+      {
+        id: "download.stage",
+        tier: "staging",
+        effect: "stage",
+        defaultAuthority: "propose",
+        targets: ["broker"],
+        parameters: ["expectedSha256", "filename", "timeoutSeconds", "url"],
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function lifecycleStep(action, result = lifecycleResult(action)) {
   return {
     stepId: `step-${action}`,
@@ -2683,6 +2732,76 @@ test("does not require host facets that a follow-up explicitly says not to repea
     ),
     false
   );
+});
+
+test("routes a capability inventory question to one read-only Operations projection", () => {
+  const prompt =
+    "Inspect your actual currently available Operations capability inventory. Report exact capability IDs, whether SSH, browser, email, goals, and approved host changes exist, and make no changes.";
+  assert.equal(userMessageRequestsOperationsCapabilityInventory([], prompt), true);
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true,
+    actions: [],
+  });
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  assert.equal(
+    call(guard, "tool_search")?.blockReason,
+    OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON
+  );
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: { params: { id: "pixel_ops_inventory", args: { invented: true } } },
+    }),
+    { params: { id: "pixel_ops_inventory", args: {} } }
+  );
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "pixel_ops_inventory", args: {} },
+      result: wrappedPluginResult(
+        "pixel-operations-broker",
+        "pixel_ops_inventory",
+        { details: operationsInventoryDetails() }
+      ),
+    },
+  });
+  assert.equal(
+    call(guard, "pixel_ods_status")?.blockReason,
+    OPERATIONS_INVENTORY_COMPLETE_REASON
+  );
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, new RegExp(`^${OPERATIONS_INVENTORY_EVIDENCE_PREFIX}`));
+  assert.match(text, /`host\.identity`/);
+  assert.match(text, /`ods\.extensions\.install`/);
+  assert.match(text, /`download\.stage`/);
+  assert.match(text, /no SSH-backed remote target/);
+  assert.match(text, /descriptive only/);
+  assert.doesNotMatch(text, /Model claimed success/);
+});
+
+test("fails closed on a malformed Operations capability inventory", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "List the exact Pixel Operations capability inventory." }
+  );
+  afterCall(guard, "pixel_ops_inventory", {
+    event: {
+      result: {
+        details: operationsInventoryDetails({
+          actions: [
+            operationsInventoryDetails().actions[0],
+            operationsInventoryDetails().actions[0],
+          ],
+        }),
+      },
+    },
+  });
+  assert.match(reply(guard)?.payload?.text, /did not obtain a structurally valid/);
 });
 
 test("classifies installable extension catalog work as one exact Operations action", () => {

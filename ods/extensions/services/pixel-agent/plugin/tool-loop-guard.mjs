@@ -212,6 +212,18 @@ export const OPERATIONS_REQUIRES_BROKER_REASON =
 export const OPERATIONS_NOT_REQUESTED_REASON =
   "Pixel blocked this Operations tool because the owner's current request did not ask for host or ODS Operations work. For sandbox workspace work, use read, write, edit, apply_patch, exec, or process only; do not submit an Operations job.";
 
+export const OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON =
+  "The owner asked what Operations capabilities are actually available. Call only pixel_ops_inventory with no arguments, then report its bounded current inventory. Do not submit a job, call status, search for tools, or exercise any capability.";
+
+export const OPERATIONS_INVENTORY_COMPLETE_REASON =
+  "Pixel already obtained the current bounded Operations capability inventory. Do not call another tool; report that inventory and its authority boundary now.";
+
+export const OPERATIONS_INVENTORY_EVIDENCE_PREFIX =
+  "Pixel verified the current Operations capability inventory through the external broker's bounded projection:";
+
+export const OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX =
+  "Pixel did not obtain a structurally valid current Operations capability inventory. No capability availability or authority claim was accepted.";
+
 export const WORKSPACE_TOOL_SEARCH_COMPLETE_REASON =
   "Pixel already resolved the deferred workspace tools. Do not search again. Call tool_call now with the returned exact id, such as openclaw:core:exec, openclaw:core:write, openclaw:core:read, openclaw:core:edit, openclaw:core:apply_patch, or openclaw:core:process, and put that tool's normal arguments in args.";
 
@@ -1032,8 +1044,161 @@ const OPS_JOB_ID = /^ops-[0-9]{13}-[a-f0-9]{12}$/;
 const OPS_ARTIFACT_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const WORKSPACE_PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const OPS_NAME = /^[a-z][a-z0-9_.-]{1,127}$/;
+const OPS_FIELD_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const DOWNLOAD_PROMOTION_BOUNDARY =
   "Verified create-only promotion from Pixel Operations quarantine into the configured owner workspace; no arbitrary source, overwrite, execution, or path traversal authority.";
+
+function boundedOperationsNames(value, maximum, pattern = OPS_NAME) {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximum ||
+    value.some((item) => typeof item !== "string" || !pattern.test(item))
+  ) {
+    return undefined;
+  }
+  return [...new Set(value)];
+}
+
+function operationsInventoryProjection(event) {
+  if (toolCallFailed(event)) return undefined;
+  const details = event?.result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.schemaVersion !== 2 ||
+    typeof details.generatedAt !== "string" ||
+    !Number.isFinite(Date.parse(details.generatedAt)) ||
+    typeof details.policySha256 !== "string" ||
+    !SHA256.test(details.policySha256) ||
+    !details.authority ||
+    typeof details.authority !== "object" ||
+    Array.isArray(details.authority) ||
+    typeof details.authority.defaultLevel !== "string" ||
+    !["observe", "propose", "execute"].includes(details.authority.defaultLevel) ||
+    typeof details.authority.paused !== "boolean"
+  ) {
+    return undefined;
+  }
+  const standingGrantIds = boundedOperationsNames(
+    details.authority.standingGrantIds,
+    64,
+    OPS_FIELD_NAME
+  );
+  const activeLeaseIds = boundedOperationsNames(
+    details.authority.activeLeaseIds,
+    64,
+    OPS_FIELD_NAME
+  );
+  if (!standingGrantIds || !activeLeaseIds) return undefined;
+  if (!Array.isArray(details.targets) || details.targets.length > 64) return undefined;
+  const targetIds = new Set();
+  const targets = [];
+  for (const target of details.targets) {
+    if (
+      !target ||
+      typeof target !== "object" ||
+      Array.isArray(target) ||
+      typeof target.id !== "string" ||
+      !OPS_NAME.test(target.id) ||
+      targetIds.has(target.id) ||
+      !["local", "ssh"].includes(target.backend)
+    ) {
+      return undefined;
+    }
+    const capabilities = boundedOperationsNames(target.capabilities, 64, OPS_FIELD_NAME);
+    if (!capabilities) return undefined;
+    targetIds.add(target.id);
+    targets.push({ id: target.id, backend: target.backend, capabilities });
+  }
+  if (!Array.isArray(details.actions) || details.actions.length > 512) return undefined;
+  const actionIds = new Set();
+  const actions = [];
+  for (const action of details.actions) {
+    if (
+      !action ||
+      typeof action !== "object" ||
+      Array.isArray(action) ||
+      typeof action.id !== "string" ||
+      !OPS_NAME.test(action.id) ||
+      actionIds.has(action.id) ||
+      !["read", "staging", "managed", "change"].includes(action.tier) ||
+      !["observe", "stage", "manage", "change"].includes(action.effect) ||
+      !["observe", "propose", "execute"].includes(action.defaultAuthority)
+    ) {
+      return undefined;
+    }
+    const actionTargets = boundedOperationsNames(action.targets, 64, /^[a-z*][a-z0-9_.*-]{0,127}$/);
+    const parameters = boundedOperationsNames(action.parameters, 64, OPS_FIELD_NAME);
+    if (!actionTargets || !parameters) return undefined;
+    actionIds.add(action.id);
+    actions.push({
+      id: action.id,
+      tier: action.tier,
+      effect: action.effect,
+      defaultAuthority: action.defaultAuthority,
+      targets: actionTargets,
+      parameters,
+    });
+  }
+  return {
+    generatedAt: new Date(details.generatedAt).toISOString(),
+    policySha256: details.policySha256,
+    authority: {
+      defaultLevel: details.authority.defaultLevel,
+      paused: details.authority.paused,
+      standingGrantIds,
+      activeLeaseIds,
+    },
+    targets,
+    actions,
+  };
+}
+
+function operationsInventoryEvidenceText(inventory) {
+  if (!inventory) return undefined;
+  const actionIds = new Set(inventory.actions.map(({ id }) => id));
+  const targetLines = inventory.targets.map((target) =>
+    `  - \`${target.id}\` (${target.backend}); capabilities: ${target.capabilities.length > 0
+      ? target.capabilities.map((item) => `\`${item}\``).join(", ")
+      : "none"}.`
+  );
+  const authorityGroups = ["observe", "propose", "execute"]
+    .map((level) => ({
+      level,
+      ids: inventory.actions
+        .filter((action) => action.defaultAuthority === level)
+        .map((action) => `\`${action.id}\``),
+    }))
+    .filter(({ ids }) => ids.length > 0)
+    .map(({ level, ids }) => `  - ${level}: ${ids.join(", ")}.`);
+  const missing = [];
+  if (!inventory.targets.some((target) => target.backend === "ssh")) {
+    missing.push("no SSH-backed remote target");
+  }
+  for (const [label, pattern] of [
+    ["interactive browser", /browser/i],
+    ["email or messaging", /(?:email|mail|message)/i],
+    ["scheduled or goal work", /(?:schedule|cron|goal)/i],
+  ]) {
+    if (![...actionIds].some((id) => pattern.test(id))) missing.push(`no ${label} action`);
+  }
+  return [
+    OPERATIONS_INVENTORY_EVIDENCE_PREFIX,
+    `- Generated: ${inventory.generatedAt}; policy SHA-256: \`${inventory.policySha256}\`.`,
+    `- Authority: default \`${inventory.authority.defaultLevel}\`; paused ${inventory.authority.paused ? "yes" : "no"}; active leases ${inventory.authority.activeLeaseIds.length}.`,
+    `- Standing grant IDs: ${inventory.authority.standingGrantIds.length > 0
+      ? inventory.authority.standingGrantIds.map((id) => `\`${id}\``).join(", ")
+      : "none"}.`,
+    "- Enabled targets:",
+    ...targetLines,
+    "- Exact named actions by default authority:",
+    ...authorityGroups,
+    `- Not present in this Operations inventory: ${missing.join("; ")}.`,
+    "- Boundary: this inventory is descriptive only. It grants no authority, and it does not enumerate separate sandbox/core tools.",
+  ].join("\n");
+}
 
 function exactDownloadSubmission(event, requested) {
   if (toolCallFailed(event)) return undefined;
@@ -3285,6 +3450,10 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:use|using|via|through|with)\b.{0,48}\b(?:Pixel\s+)?Operations(?:\s+(?:Broker|capabilit(?:y|ies)|tools?))?\b/i.test(
       text
     );
+  const capabilityInventory = userMessageRequestsOperationsCapabilityInventory(
+    messages,
+    prompt
+  );
   const hostEvidence =
     /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i.test(
       text
@@ -3419,11 +3588,23 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   });
   return {
     required:
-      explicitOperations || hostEvidence || broadHostExploration ||
+      capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
       (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
       extensionCatalog || Boolean(extensionLifecycle),
     actions: requestedActions,
   };
+}
+
+export function userMessageRequestsOperationsCapabilityInventory(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !/\b(?:Pixel\s+)?Operations\b/i.test(text)) return false;
+  const inventoryScope =
+    /\b(?:capabilit(?:y|ies)|inventory|named\s+(?:actions?|operations?)|action\s+IDs?|enabled\s+targets?)\b/i.test(
+      text
+    );
+  const inspectionIntent =
+    /\b(?:inspect|inventory|list|report|show|tell|what|which|available|exist)\b/i.test(text);
+  return inventoryScope && inspectionIntent;
 }
 
 export function userMessageRequiresOdsAppsProjection(messages, prompt = undefined) {
@@ -4079,6 +4260,9 @@ export function createToolLoopGuard({
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
         operationsRequiredActions: new Set(),
+        operationsInventoryOnly: false,
+        operationsInventoryAttempted: false,
+        operationsInventory: undefined,
         operationsExpectedQuery: undefined,
         operationsExpectedExtensionLifecycle: undefined,
         operationsContinuation: undefined,
@@ -5075,6 +5259,23 @@ export function createToolLoopGuard({
           : { params: { jobId } };
       }
     }
+    if (state?.operationsInventoryOnly) {
+      if (state.operationsInventory) {
+        return { block: true, blockReason: OPERATIONS_INVENTORY_COMPLETE_REASON };
+      }
+      if (state.operationsInventoryAttempted) {
+        return {
+          block: true,
+          blockReason: OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX,
+        };
+      }
+      if (effectiveToolName === "pixel_ops_inventory") {
+        return toolName === "tool_call"
+          ? { params: { id: "pixel_ops_inventory", args: {} } }
+          : { params: {} };
+      }
+      return { block: true, blockReason: OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON };
+    }
     if (
       state?.operationsRequired &&
       toolName === "tool_call" &&
@@ -5902,6 +6103,13 @@ export function createToolLoopGuard({
         state.operationsRequiredActions = new Set(
           state.operationsRequired && !operationsContinuation ? operations.actions : []
         );
+        state.operationsInventoryOnly =
+          state.operationsRequired &&
+          !operationsContinuation &&
+          userMessageRequestsOperationsCapabilityInventory(
+            event?.messages,
+            event?.prompt
+          );
         state.operationsExpectedQuery = state.operationsRequired && !operationsContinuation
           ? userMessageExtensionCatalogExactQuery(event?.messages, event?.prompt)
           : undefined;
@@ -6142,6 +6350,23 @@ export function createToolLoopGuard({
       }
     }
     if (state.operationsRequired) {
+      if (state.operationsInventoryOnly) {
+        const wrappedInventory =
+          toolName === "tool_call"
+            ? toolSearchSelectedToolEvent(
+              event,
+              "pixel_ops_inventory",
+              "pixel-operations-broker"
+            )
+            : undefined;
+        const inventoryEvent = toolName === "pixel_ops_inventory"
+          ? event
+          : wrappedInventory;
+        if (inventoryEvent) {
+          state.operationsInventoryAttempted = true;
+          state.operationsInventory = operationsInventoryProjection(inventoryEvent);
+        }
+      }
       const wrappedHostObservation =
         toolName === "tool_call"
           ? toolSearchSelectedToolEvent(
@@ -6512,6 +6737,15 @@ export function createToolLoopGuard({
 
   function trustedOperationsContinuation(state, runId) {
     if (!state?.operationsRequired) return undefined;
+    if (state.operationsInventoryOnly) {
+      if (state.operationsInventory || state.operationsInventoryAttempted) return undefined;
+      return {
+        stage: "operations-inventory",
+        instruction:
+          "Do not reply yet. Call tool_call now with id pixel_ops_inventory and args {}. " +
+          "This one read-only projection must finish before you report available capabilities.",
+      };
+    }
     const requiredHostActions = exactRequiredHostActions(state);
     if (state.operationsSubmittedJobs.size === 0) {
       if (!requiredHostActions) return undefined;
@@ -6866,6 +7100,15 @@ export function createToolLoopGuard({
       };
     }
     if (state.operationsRequired) {
+      if (state.operationsInventoryOnly) {
+        const inventoryText = operationsInventoryEvidenceText(state.operationsInventory);
+        return inventoryText
+          ? { status: "passed", text: inventoryText }
+          : {
+            status: "failed",
+            text: OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX,
+          };
+      }
       if (state.operationsContinuation) {
         const evidenceText = operationsContinuationEvidenceText(
           state.operationsContinuationOutcome
