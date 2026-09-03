@@ -872,16 +872,18 @@ test("streaming response exposes only the host-authoritative clean-context recov
 });
 
 test("streaming response exposes only a strictly verified workspace preview marker", async () => {
+  const sha256 = "a".repeat(64);
+  const siteId = `site-${sha256.slice(0, 24)}`;
   const preview = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     relativeDirectory: "demo-website",
-    siteId: "site-0123456789abcdef01234567",
+    siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
+    url: `http://${siteId}.localhost:9437/${siteId}/`,
     files: 3,
     bytes: 4096,
-    sha256: "a".repeat(64),
+    sha256,
     entrySha256: "b".repeat(64),
   };
   const safeText = "Pixel published and independently read back the static website.";
@@ -915,22 +917,29 @@ test("streaming response exposes only a strictly verified workspace preview mark
 });
 
 test("workspace preview metadata fails closed for an unverified URL or extra field", async () => {
+  const sha256 = "a".repeat(64);
+  const siteId = `site-${sha256.slice(0, 24)}`;
   const base = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     relativeDirectory: "demo-website",
-    siteId: "site-0123456789abcdef01234567",
+    siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
+    url: `http://${siteId}.localhost:9437/${siteId}/`,
     files: 3,
     bytes: 4096,
-    sha256: "a".repeat(64),
+    sha256,
     entrySha256: "b".repeat(64),
   };
   for (const preview of [
     { ...base, url: "https://attacker.example/" },
     { ...base, modelClaim: true },
     { ...base, relativeDirectory: "../outside" },
+    {
+      ...base,
+      siteId: "site-0123456789abcdef01234567",
+      url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
+    },
   ]) {
     const gw = await fakeGateway({
       verification: { status: "passed", text: "untrusted", preview },
