@@ -137,7 +137,11 @@ bootline
 # Core services always shown
 echo "  • Chat UI:       http://localhost:${SERVICE_PORTS[open-webui]:-3000}"
 echo "  • Dashboard:     http://localhost:${SERVICE_PORTS[dashboard]:-3001}"
-echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-11434}/v1  (llama-server)"
+if [[ "${ODS_MODE:-local}" == "cloud" || "${ODS_MODE:-local}" == "lemonade" || "${LEMONADE_EXTERNAL:-false}" == "true" ]]; then
+    echo "  • LLM API:       http://localhost:${SERVICE_PORTS[litellm]:-4000}/v1  (managed LiteLLM gateway)"
+else
+    echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-11434}/v1  (llama-server)"
+fi
 [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  • Pixel Agent:   http://localhost:${SERVICE_PORTS[dashboard]:-3001}/pixel  (also the default Open WebUI model)"
 [[ "${ENABLE_PERPLEXICA:-false}" == "true" ]] && echo "  • Perplexica:    http://localhost:${SERVICE_PORTS[perplexica]:-3004}"
 [[ "${ENABLE_COMFYUI:-false}" == "true" ]] && echo "  • ComfyUI:       http://localhost:${SERVICE_PORTS[comfyui]:-8188}"
@@ -389,7 +393,7 @@ print("ok" if values.get("setupComplete") and has_model and prefs.get("defaultCh
     fi
 fi
 
-if command -v ods_readiness_summary >/dev/null 2>&1; then
+if ! $DRY_RUN && command -v ods_readiness_summary >/dev/null 2>&1; then
     _dashboard_url="http://localhost:${SERVICE_PORTS[dashboard]:-3001}"
     {
         printf 'Dashboard|http://127.0.0.1:%s%s|%s|%s\n' \

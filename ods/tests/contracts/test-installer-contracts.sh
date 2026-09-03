@@ -654,6 +654,8 @@ grep -Fq 'DRY RUN COMPLETE — ODS IS NOT RUNNING' installers/phases/13-summary.
   || { echo "[FAIL] Linux dry-run summary can still imply that ODS is live"; exit 1; }
 grep -Fq '[DRY RUN] Live preflight and extension runtime checks were not run.' installers/phases/13-summary.sh \
   || { echo "[FAIL] Linux dry run does not distinguish skipped live checks"; exit 1; }
+grep -Fq 'if ! $DRY_RUN && command -v ods_readiness_summary' installers/phases/13-summary.sh \
+  || { echo "[FAIL] Linux dry run can still execute the live readiness summary"; exit 1; }
 
 # --- classify-hardware: shared device_id disambiguation ---
 echo "[contract] classify-hardware shared device_id"
