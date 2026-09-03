@@ -167,6 +167,7 @@ export function parseVerifiedPreviewFrame(frame) {
     || typeof preview.relativeDirectory !== 'string'
     || !/^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(preview.relativeDirectory)
     || !/^site-[a-f0-9]{24}$/.test(preview.siteId)
+    || preview.siteId !== `site-${preview.sha256?.slice(0, 24)}`
     || !Number.isInteger(preview.port)
     || preview.port < 1
     || preview.port > 65535

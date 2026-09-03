@@ -115,16 +115,18 @@ describe('Pixel', () => {
   })
 
   it('accepts only an exact host-authored workspace preview terminal marker', () => {
+    const sha256 = 'a'.repeat(64)
+    const siteId = `site-${sha256.slice(0, 24)}`
     const preview = {
       schemaVersion: 1,
       kind: 'ods-pixel-workspace-preview',
       relativeDirectory: 'demo-website',
-      siteId: 'site-0123456789abcdef01234567',
+      siteId,
       port: 9437,
-      url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
+      url: `http://${siteId}.localhost:9437/${siteId}/`,
       files: 3,
       bytes: 4096,
-      sha256: 'a'.repeat(64),
+      sha256,
       entrySha256: 'b'.repeat(64),
     }
     const frame = {
@@ -136,6 +138,18 @@ describe('Pixel', () => {
       ...frame,
       pixel: { schemaVersion: 1, preview: { ...preview, url: 'https://attacker.example/' } },
     })).toBeNull()
+    const mismatchedSiteId = 'site-0123456789abcdef01234567'
+    expect(parseVerifiedPreviewFrame({
+      ...frame,
+      pixel: {
+        schemaVersion: 1,
+        preview: {
+          ...preview,
+          siteId: mismatchedSiteId,
+          url: `http://${mismatchedSiteId}.localhost:9437/${mismatchedSiteId}/`,
+        },
+      },
+    })).toBeNull()
     expect(parseVerifiedPreviewFrame({
       ...frame,
       pixel: { schemaVersion: 1, preview, extra: true },
@@ -143,16 +157,18 @@ describe('Pixel', () => {
   })
 
   it('opens an interactive side panel only from a verified terminal marker', async () => {
+    const sha256 = 'a'.repeat(64)
+    const siteId = `site-${sha256.slice(0, 24)}`
     const preview = {
       schemaVersion: 1,
       kind: 'ods-pixel-workspace-preview',
       relativeDirectory: 'demo-website',
-      siteId: 'site-0123456789abcdef01234567',
+      siteId,
       port: 9437,
-      url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
+      url: `http://${siteId}.localhost:9437/${siteId}/`,
       files: 3,
       bytes: 4096,
-      sha256: 'a'.repeat(64),
+      sha256,
       entrySha256: 'b'.repeat(64),
     }
     globalThis.fetch.mockResolvedValueOnce(
