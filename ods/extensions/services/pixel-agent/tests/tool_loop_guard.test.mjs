@@ -7923,6 +7923,9 @@ test("classifies a requested website demo as a verified workspace preview", () =
     true
   );
   for (const request of [
+    "Make the coolest visual demo you can to show what you can do.",
+    "Create a visual showcase of your capabilities.",
+    "Build a high-quality responsive site for a fictional observatory with local CSS and JavaScript.",
     "Create an interactive voxel landscape I can explore.",
     "Make an intricate animated SVG illustration.",
     "Create a small browser task app.",
@@ -7972,6 +7975,8 @@ test("classifies a requested website demo as a verified workspace preview", () =
   }
   for (const request of [
     "Build a native desktop app.",
+    "Explain how a visual demo works.",
+    "Explain how construction sites work.",
     "Explain how animated SVG works.",
     "Review a voxel art tutorial.",
     "Do not make an animated SVG.",
