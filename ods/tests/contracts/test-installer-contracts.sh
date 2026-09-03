@@ -592,7 +592,7 @@ done
 
 windows_plan="installers/windows/lib/service-plan.ps1"
 test -f "$windows_plan" || { echo "[FAIL] missing $windows_plan"; exit 1; }
-for svc in litellm searxng token-spy hermes hermes-proxy openclaw ape perplexica privacy-shield ods-proxy tailscale brave-search; do
+for svc in litellm searxng token-spy hermes hermes-proxy openclaw ape pixel-edge perplexica privacy-shield ods-proxy tailscale brave-search; do
   grep -q "\"$svc\"" "$windows_plan" \
     || { echo "[FAIL] Windows service plan missing '$svc'"; exit 1; }
 done
