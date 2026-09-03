@@ -7927,7 +7927,11 @@ test("classifies a requested website demo as a verified workspace preview", () =
     "Make an intricate animated SVG illustration.",
     "Create a small browser task app.",
     "I want a polished web dashboard.",
+    "Create a beautiful signup-flow prototype with useful validation; do not submit anywhere.",
+    "Design a user interface prototype for booking a neighborhood workshop.",
+    "Create a contact form with useful validation.",
     "Keep that game and make it faster.",
+    "Make this form mobile-friendly.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
   }
@@ -7973,6 +7977,10 @@ test("classifies a requested website demo as a verified workspace preview", () =
     "Do not make an animated SVG.",
     "Write an SVG parser in Rust.",
     "Build a voxel parser library.",
+    "Write a form parser in Python.",
+    "Explain form validation.",
+    "Build a native desktop prototype.",
+    "Build a prototype compiler.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
   }
@@ -8186,6 +8194,8 @@ test("recognizes only affirmative natural visual follow-ups", () => {
     "Change the previous website to a solar palette.",
     "Polish it and improve the mobile layout.",
     "Update this animated SVG with a calmer orbit.",
+    "Make this form mobile-friendly.",
+    "Improve the previous prototype's keyboard navigation.",
   ]) {
     assert.equal(
       userMessageRequestsWorkspaceVisualContinuation([], prompt),

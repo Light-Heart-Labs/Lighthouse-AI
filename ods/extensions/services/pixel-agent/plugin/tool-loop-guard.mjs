@@ -3938,6 +3938,10 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const website =
     /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|static\s+sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|web\s*sites?|websites?)\b/i.test(text);
   const application = /\b(?:apps?|applications?)\b/i.test(text);
+  const browserInterface =
+    /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(text) ||
+    (/\bprototypes?\b/i.test(text) &&
+      /\b(?:browser|checkout|flow|form|interface|onboarding|screen|sign[- ]?up|ui|ux|web)\b/i.test(text));
   const build =
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(text);
   const revise =
@@ -3978,7 +3982,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
   return directPreview || unreachableLocalPreview ||
-    ((website || application) && (build || revise)) || (browserVisual && build);
+    ((website || application || browserInterface) && (build || revise)) ||
+    (browserVisual && build);
 }
 
 export function userMessageRequestsWorkspacePreviewInspection(
@@ -4025,7 +4030,7 @@ export function userMessageRequestsWorkspaceVisualContinuation(
   const action =
     /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
   const visualReference =
-    /\b(?:existing|previous|prior|same|that|the|this)\s+(?:animated\s+)?(?:app|artifact|board|dashboard|demo|game|illustration|page|preview|scene|site|svg|task\s+board|visual|voxel(?:\s+world)?|web\s*page|web\s*site|website)\b/i;
+    /\b(?:existing|previous|prior|same|that|the|this)\s+(?:animated\s+)?(?:app|artifact|board|dashboard|demo|form|game|illustration|interface|page|preview|prototype|scene|site|svg|task\s+board|visual|voxel(?:\s+world)?|web\s*page|web\s*site|website)\b/i;
   const pronounReference =
     /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\s+(?:it|that)\b/i;
   const rejection =
