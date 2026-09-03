@@ -1,6 +1,7 @@
 """Tests for pixel_edge — upstream Unix socket + edge proxy routes."""
 
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -98,6 +99,24 @@ async def _upstream_cancel(request):
     return web.json_response({"aborted": True})
 
 
+async def _upstream_preview(request):
+    request.app["preview_hosts"].append(request.headers.get("Host"))
+    site_id = "site-" + "a" * 24
+    if request.match_info.get("site_id") != site_id:
+        return web.Response(status=404)
+    body = b"<button id=launch>Remote preview</button>"
+    digest = (
+        "b" * 64
+        if request.match_info.get("tail") == "tampered.html"
+        else hashlib.sha256(body).hexdigest()
+    )
+    return web.Response(
+        body=body,
+        content_type="text/html",
+        headers={"X-Preview-SHA256": digest},
+    )
+
+
 async def _start_upstream():
     fd, path = tempfile.mkstemp(suffix=".sock")
     os.close(fd)
@@ -108,10 +127,12 @@ async def _start_upstream():
     app["stream_started"] = asyncio.Event()
     app["release_stream"] = asyncio.Event()
     app["release_on_cancel"] = False
+    app["preview_hosts"] = []
     app.router.add_post("/v1/chat/completions", _upstream_chat)
     app.router.add_post("/v1/chat/cancel", _upstream_cancel)
     app.router.add_get("/v1/models", _upstream_models)
     app.router.add_get("/health", _upstream_health)
+    app.router.add_get("/{site_id}/{tail:.*}", _upstream_preview)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.UnixSite(runner, path)
@@ -131,6 +152,8 @@ async def _stop_upstream(runner, path=None):
 def _set_env(sock_path):
     os.environ["PIXEL_OPENWEBUI_KEY"] = TOKEN
     os.environ["PIXEL_INGRESS_SOCKET"] = sock_path
+    os.environ["PIXEL_PREVIEW_PROXY_KEY"] = TOKEN
+    os.environ["PIXEL_PREVIEW_SOCKET"] = sock_path
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +210,10 @@ class TestConfigValidation(unittest.TestCase):
         self.pixel_edge = importlib.reload(pixel_edge)
 
     def _reload_with_env(self, env):
-        old = {k: os.environ.get(k) for k in
-               ("PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_SOCKET")}
+        old = {k: os.environ.get(k) for k in (
+            "PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_SOCKET",
+            "PIXEL_PREVIEW_PROXY_KEY", "PIXEL_PREVIEW_SOCKET",
+        )}
         for k, v in old.items():
             if v is not None:
                 os.environ[k] = v
@@ -240,6 +265,15 @@ class TestConfigValidation(unittest.TestCase):
                     importlib.reload(self.pixel_edge)
             finally:
                 self._restore(old)
+
+    def test_blank_preview_proxy_token_exits(self):
+        old = self._reload_with_env({"PIXEL_PREVIEW_PROXY_KEY": ""})
+        try:
+            import importlib
+            with self.assertRaises(SystemExit):
+                importlib.reload(self.pixel_edge)
+        finally:
+            self._restore(old)
 
     def test_chat_timeout_budget_outlives_private_host_ingress(self):
         self.assertEqual(self.pixel_edge._TOTAL_TIMEOUT, 1980)
@@ -325,6 +359,50 @@ class TestAuth(BaseEdgeTest):
             "http://localhost/v1/chat/cancel", json={"user": "conversation-1"}
         ) as resp:
             self.assertEqual(resp.status, 401)
+
+
+class TestPreviewRelay(BaseEdgeTest):
+    async def test_preview_requires_the_dashboard_proxy_token(self):
+        site_id = "site-" + "a" * 24
+        async with self.client.get(f"http://localhost/preview/{site_id}/") as resp:
+            self.assertEqual(resp.status, 401)
+
+    async def test_preview_relays_exact_bytes_with_an_opaque_browser_sandbox(self):
+        site_id = "site-" + "a" * 24
+        async with self.client.get(
+            f"http://localhost/preview/{site_id}/", headers=self.auth()
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(
+                await resp.read(), b"<button id=launch>Remote preview</button>"
+            )
+            self.assertEqual(
+                resp.headers["X-Preview-SHA256"],
+                hashlib.sha256(b"<button id=launch>Remote preview</button>").hexdigest(),
+            )
+            csp = resp.headers["Content-Security-Policy"]
+            self.assertIn("sandbox allow-scripts", csp)
+            self.assertNotIn("allow-same-origin", csp)
+            self.assertIn("frame-ancestors 'self'", csp)
+        self.assertEqual(self.up_runner.app["preview_hosts"], ["pixel-preview.internal"])
+
+    async def test_preview_rejects_invalid_or_unknown_snapshot_paths(self):
+        async with self.client.get(
+            "http://localhost/preview/not-a-site/index.html", headers=self.auth()
+        ) as resp:
+            self.assertEqual(resp.status, 404)
+        unknown = "site-" + "c" * 24
+        async with self.client.get(
+            f"http://localhost/preview/{unknown}/", headers=self.auth()
+        ) as resp:
+            self.assertEqual(resp.status, 404)
+
+    async def test_preview_rejects_bytes_that_do_not_match_the_host_digest(self):
+        site_id = "site-" + "a" * 24
+        async with self.client.get(
+            f"http://localhost/preview/{site_id}/tampered.html", headers=self.auth()
+        ) as resp:
+            self.assertEqual(resp.status, 502)
 
 
 # ---------------------------------------------------------------------------

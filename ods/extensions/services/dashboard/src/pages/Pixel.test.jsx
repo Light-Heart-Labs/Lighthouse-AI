@@ -10,6 +10,7 @@ import Pixel, {
   isCleanContextRecoveryFrame,
   parseApprovalReceipt,
   parseVerifiedPreviewFrame,
+  resolvePreviewAccess,
 } from './Pixel'
 
 const response = (body, status = 200) => ({
@@ -198,6 +199,29 @@ describe('Pixel', () => {
 
     fireEvent.click(screen.getByTitle('Close preview'))
     expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
+  })
+
+  it('uses the authenticated Dashboard preview route with an opaque sandbox remotely', () => {
+    const preview = {
+      siteId: 'site-0123456789abcdef01234567',
+      url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
+    }
+    expect(resolvePreviewAccess(preview, {
+      hostname: 'dashboard.ods.local',
+      protocol: 'http:',
+    })).toEqual({
+      url: '/pixel-preview/site-0123456789abcdef01234567/',
+      sandbox: 'allow-scripts',
+      route: 'private-dashboard',
+    })
+    expect(resolvePreviewAccess(preview, {
+      hostname: 'localhost',
+      protocol: 'http:',
+    })).toEqual({
+      url: preview.url,
+      sandbox: 'allow-scripts allow-same-origin',
+      route: 'loopback',
+    })
   })
 
   it('does not open a preview from model-authored localhost text', async () => {

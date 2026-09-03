@@ -20,6 +20,7 @@ import pwd
 import re
 import shutil
 import socket
+import socketserver
 import stat
 import struct
 import sys
@@ -32,6 +33,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 KIND = "ods-pixel-workspace-preview"
 SOCKET_PATH = pathlib.Path("/run/ods-pixel-preview/control.sock")
+HTTP_SOCKET_PATH = pathlib.Path("/run/ods-pixel-preview/http.sock")
 PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SITE_ID = re.compile(r"site-[a-f0-9]{24}")
 ALLOWED_SUFFIXES = frozenset(
@@ -52,7 +54,7 @@ BOUNDARY = (
     "destination, server process, overwrite, or execution authority."
 )
 CSP = (
-    "default-src 'self' data: blob:; connect-src 'none'; img-src 'self' data: blob:; "
+    "default-src 'self' data: blob:; connect-src 'self'; img-src 'self' data: blob:; "
     "media-src 'self'; font-src 'self'; script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; "
     "form-action 'none'; frame-ancestors http://localhost:* http://127.0.0.1:*"
@@ -340,7 +342,12 @@ class PreviewHandler(http.server.BaseHTTPRequestHandler):
         if len(parts) < 1 or SITE_ID.fullmatch(parts[0]) is None:
             return None
         site_id = parts[0]
-        expected_host = f"{site_id}.localhost:{self.server.server_port}"  # type: ignore[attr-defined]
+        if self.server.internal_proxy:  # type: ignore[attr-defined]
+            expected_host = "pixel-preview.internal"
+        else:
+            expected_host = (
+                f"{site_id}.localhost:{self.server.preview_port}"  # type: ignore[attr-defined]
+            )
         if self.headers.get("Host", "").lower() != expected_host:
             return None
         if parts[-1] == "":
@@ -404,6 +411,20 @@ class PreviewHTTPServer(http.server.ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], preview_root: pathlib.Path):
         self.preview_root = preview_root
+        self.internal_proxy = False
+        super().__init__(address, PreviewHandler)
+        self.preview_port = self.server_address[1]
+
+
+class PreviewUnixHTTPServer(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+
+    def __init__(
+        self, address: str, preview_root: pathlib.Path, preview_port: int
+    ):
+        self.preview_root = preview_root
+        self.preview_port = preview_port
+        self.internal_proxy = True
         super().__init__(address, PreviewHandler)
 
 
@@ -529,10 +550,19 @@ def serve(
         if not stat.S_ISSOCK(info.st_mode) or info.st_uid != owner_uid:
             raise PreviewError("unsafe existing preview socket")
         socket_path.unlink()
+    if HTTP_SOCKET_PATH.exists() or HTTP_SOCKET_PATH.is_symlink():
+        info = HTTP_SOCKET_PATH.lstat()
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != owner_uid:
+            raise PreviewError("unsafe existing preview HTTP socket")
+        HTTP_SOCKET_PATH.unlink()
 
     httpd = PreviewHTTPServer(("127.0.0.1", port), previews)
     http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     http_thread.start()
+    unix_httpd = PreviewUnixHTTPServer(str(HTTP_SOCKET_PATH), previews, port)
+    os.chmod(HTTP_SOCKET_PATH, 0o660)
+    unix_http_thread = threading.Thread(target=unix_httpd.serve_forever, daemon=True)
+    unix_http_thread.start()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         listener.bind(str(socket_path))
@@ -552,8 +582,14 @@ def serve(
         listener.close()
         httpd.shutdown()
         httpd.server_close()
+        unix_httpd.shutdown()
+        unix_httpd.server_close()
         try:
             socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            HTTP_SOCKET_PATH.unlink()
         except FileNotFoundError:
             pass
 

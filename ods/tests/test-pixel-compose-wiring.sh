@@ -21,6 +21,9 @@ assert "network_mode: host" not in edge
 assert "networks:\n      - default" in edge
 assert "http://pixel-edge:9595/v1;${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}" in text
 assert "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env};${OPEN_WEBUI_LLM_API_KEY:-}" in text
+assert "PIXEL_PREVIEW_PROXY_KEY=${DASHBOARD_API_KEY:?Set DASHBOARD_API_KEY in .env}" in text
+assert "PIXEL_PREVIEW_SOCKET=/pixel-preview-runtime/http.sock" in text
+assert "${PIXEL_PREVIEW_RUNTIME_DIR:?Set PIXEL_PREVIEW_RUNTIME_DIR in .env}:/pixel-preview-runtime:ro" in text
 assert 'TASK_MODEL_EXTERNAL: "${OPEN_WEBUI_TASK_MODEL:-${GGUF_FILE:-${LLM_MODEL:-default}}}"' in text
 for required in (
     'ENABLE_OPENAI_API: "true"',
@@ -47,11 +50,15 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
     PIXEL_INGRESS_GID=1234 \
     PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    PIXEL_PREVIEW_RUNTIME_DIR="$runtime" \
+    DASHBOARD_API_KEY="$(printf 'c%.0s' {1..64})" \
     WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
         docker compose -f "$BASE" -f "$EDGE" config --quiet
     PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
     PIXEL_INGRESS_GID=1234 \
     PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    PIXEL_PREVIEW_RUNTIME_DIR="$runtime" \
+    DASHBOARD_API_KEY="$(printf 'c%.0s' {1..64})" \
     WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
     GGUF_FILE="Qwen-Test-Q4_K_M.gguf" \
     LLM_MODEL="qwen-test" \
@@ -63,6 +70,9 @@ edge = value["services"]["pixel-edge"]
 assert not edge.get("ports")
 assert edge.get("network_mode") != "host"
 assert set(edge["networks"]) == {"default"}
+assert edge["environment"]["PIXEL_PREVIEW_PROXY_KEY"] == "c" * 64
+assert edge["environment"]["PIXEL_PREVIEW_SOCKET"] == "/pixel-preview-runtime/http.sock"
+assert any(mount["target"] == "/pixel-preview-runtime" and mount["read_only"] for mount in edge["volumes"])
 webui = value["services"]["open-webui"]
 assert webui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
 assert webui["environment"]["OPENAI_API_BASE_URLS"].startswith("http://pixel-edge:9595/v1;")
@@ -78,10 +88,14 @@ assert webui["environment"]["ENABLE_TAGS_GENERATION"] == "false"
 assert webui["environment"]["ENABLE_FOLLOW_UP_GENERATION"] == "false"
 dashboard = value["services"]["dashboard-api"]
 assert dashboard["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+ui = value["services"]["dashboard"]
+assert ui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
 PY
     PIXEL_OPENWEBUI_KEY="$(printf 'a%.0s' {1..64})" \
     PIXEL_INGRESS_GID=1234 \
     PIXEL_INGRESS_RUNTIME_DIR="$runtime" \
+    PIXEL_PREVIEW_RUNTIME_DIR="$runtime" \
+    DASHBOARD_API_KEY="$(printf 'c%.0s' {1..64})" \
     WEBUI_SECRET="$(printf 'b%.0s' {1..64})" \
     GGUF_FILE="Qwen-Test-Q4_K_M.gguf" \
     LLM_MODEL="qwen-test" \

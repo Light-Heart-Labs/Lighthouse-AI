@@ -2,6 +2,7 @@ import http.client
 import importlib.util
 import os
 import pathlib
+import socket
 import tempfile
 import threading
 
@@ -11,6 +12,17 @@ SPEC = importlib.util.spec_from_file_location("workspace_preview", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str):
+        super().__init__("pixel-preview.internal", timeout=5)
+        self.socket_path = socket_path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
 
 
 def test_snapshot_is_content_addressed_and_create_only():
@@ -132,6 +144,8 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
                 response.read()
                 assert response.status == 200
                 assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+                assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
+                assert "connect-src 'none'" not in response.headers["Content-Security-Policy"]
                 assert "frame-ancestors http://localhost:* http://127.0.0.1:*" in (
                     response.headers["Content-Security-Policy"]
                 )
@@ -147,6 +161,50 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
                 rejected.read()
                 assert rejected.status == 404
                 cross_site.close()
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+
+
+def test_unix_http_preview_accepts_only_the_internal_relay_authority():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace = root / "workspace"
+        previews = root / "previews"
+        site = workspace / "demo-site"
+        socket_path = root / "preview.sock"
+        site.mkdir(parents=True, mode=0o700)
+        previews.mkdir(mode=0o700)
+        (site / "index.html").write_text("<button>Remote</button>", encoding="utf-8")
+        os.chmod(site / "index.html", 0o600)
+        receipt = MODULE.publish_snapshot(workspace, previews, "demo-site", os.getuid())
+
+        with MODULE.PreviewUnixHTTPServer(str(socket_path), previews, 9437) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = UnixHTTPConnection(str(socket_path))
+                connection.request(
+                    "GET",
+                    f"/{receipt['siteId']}/",
+                    headers={"Host": "pixel-preview.internal"},
+                )
+                response = connection.getresponse()
+                assert response.read() == b"<button>Remote</button>"
+                assert response.status == 200
+                assert response.headers["X-Preview-SHA256"] == receipt["entrySha256"]
+                connection.close()
+
+                rejected_connection = UnixHTTPConnection(str(socket_path))
+                rejected_connection.request(
+                    "GET",
+                    f"/{receipt['siteId']}/",
+                    headers={"Host": "attacker.invalid"},
+                )
+                rejected = rejected_connection.getresponse()
+                rejected.read()
+                assert rejected.status == 404
+                rejected_connection.close()
             finally:
                 server.shutdown()
                 thread.join(timeout=5)

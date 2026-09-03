@@ -708,12 +708,14 @@ properties = json.load(open(sys.argv[1], encoding="utf-8"))["properties"]
 expected = {
     "ENABLE_PIXEL", "PIXEL_AGENT_MODE", "PIXEL_LICENSE_ACCEPTED",
     "PIXEL_SOURCE_URL", "PIXEL_SOURCE_REF", "PIXEL_SOURCE_DIR",
-    "PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_RUNTIME_DIR", "PIXEL_INGRESS_GID",
+    "PIXEL_OPENWEBUI_KEY", "PIXEL_INGRESS_RUNTIME_DIR",
+    "PIXEL_PREVIEW_RUNTIME_DIR", "PIXEL_INGRESS_GID",
 }
 assert expected <= properties.keys()
 assert properties["PIXEL_SOURCE_REF"]["pattern"] == "^[0-9a-f]{40}$"
 assert properties["PIXEL_OPENWEBUI_KEY"]["minLength"] == 64
 assert properties["PIXEL_OPENWEBUI_KEY"]["maxLength"] == 64
+assert properties["PIXEL_PREVIEW_RUNTIME_DIR"]["enum"] == ["/run/ods-pixel-preview"]
 assert properties["PIXEL_INGRESS_GID"]["minimum"] == 1
 assert properties["PIXEL_LICENSE_ACCEPTED"]["type"] == "boolean"
 PY

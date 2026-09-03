@@ -185,6 +185,29 @@ export function parseVerifiedPreviewFrame(frame) {
   return { ...preview }
 }
 
+export function resolvePreviewAccess(preview, browserLocation = globalThis.location) {
+  if (!preview) return null
+  const hostname = typeof browserLocation?.hostname === 'string'
+    ? browserLocation.hostname.toLowerCase()
+    : ''
+  const loopback = hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '[::1]'
+    || hostname === '::1'
+  if (loopback || !/^https?:$/.test(browserLocation?.protocol || '')) {
+    return {
+      url: preview.url,
+      sandbox: 'allow-scripts allow-same-origin',
+      route: 'loopback',
+    }
+  }
+  return {
+    url: `/pixel-preview/${preview.siteId}/`,
+    sandbox: 'allow-scripts',
+    route: 'private-dashboard',
+  }
+}
+
 export function OperationsApprovalCard({ content }) {
   const receipt = parseApprovalReceipt(content)
   const [projection, setProjection] = useState(null)
@@ -421,6 +444,7 @@ export default function Pixel({ systemStatus = null }) {
   const activeContext = formatContext(
     agentRuntime?.contextLength || systemStatus?.inference?.contextSize || systemStatus?.model?.contextLength
   )
+  const previewAccess = resolvePreviewAccess(preview)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1100,7 +1124,7 @@ export default function Pixel({ systemStatus = null }) {
                 <RefreshCw className="h-4 w-4" />
               </button>
               <a
-                href={preview.url}
+                href={previewAccess.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-lg p-2 text-theme-text-muted transition hover:bg-theme-surface-hover hover:text-theme-text"
@@ -1119,9 +1143,10 @@ export default function Pixel({ systemStatus = null }) {
             </div>
             <iframe
               key={`${preview.siteId}-${previewRefresh}`}
-              src={preview.url}
+              src={previewAccess.url}
               title="Interactive Pixel preview"
-              sandbox="allow-scripts allow-same-origin"
+              sandbox={previewAccess.sandbox}
+              data-preview-route={previewAccess.route}
               referrerPolicy="no-referrer"
               className="min-h-0 flex-1 border-0 bg-white"
             />

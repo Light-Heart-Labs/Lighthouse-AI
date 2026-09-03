@@ -638,10 +638,14 @@ check grep -F "RestrictAddressFamilies=AF_UNIX" "$artifact_promoter_unit"
 check grep -F "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE" "$artifact_promoter_unit"
 check grep -F "ReadOnlyPaths=/var/lib/pixel-ops-broker/results /var/lib/pixel-ops-broker/artifacts" "$artifact_promoter_unit"
 check grep -F "User=$owner" "$workspace_preview_unit"
+check grep -F "Group=ods-pixel" "$workspace_preview_unit"
 check grep -F " 9437" "$workspace_preview_unit"
+check grep -F "RuntimeDirectoryMode=0750" "$workspace_preview_unit"
 check grep -F "BindReadOnlyPaths=\"$home/.openclaw/workspace-pixel\"" "$workspace_preview_unit"
 check grep -F "RestrictAddressFamilies=AF_UNIX AF_INET" "$workspace_preview_unit"
 check grep -F "IPAddressAllow=localhost" "$workspace_preview_unit"
+check grep -F 'HTTP_SOCKET_PATH = pathlib.Path("/run/ods-pixel-preview/http.sock")' \
+    "$INSTALL_DIR/extensions/services/pixel-agent/host/workspace_preview.py"
 check python3 -c '
 import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))

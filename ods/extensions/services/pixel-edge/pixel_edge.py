@@ -2,6 +2,7 @@
 
 Routes:
   GET  /health                — unauthenticated liveness
+  GET  /preview/<site>/<path> — bearer-auth, immutable preview UDS relay
   GET  /v1/models             — bearer-auth, synthetic listing only
   GET  /v1/activity           — bearer-auth, content-free active-turn count
   POST /v1/chat/completions   — bearer-auth, model rewrite, SSE passthrough
@@ -10,6 +11,7 @@ All other paths/methods return 404 (catch-all).
 """
 
 import asyncio
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -17,7 +19,7 @@ import os
 import re
 import sys
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web, ClientSession, UnixConnector, ClientTimeout
 
@@ -27,6 +29,10 @@ from aiohttp import web, ClientSession, UnixConnector, ClientTimeout
 
 _BEARER_TOKEN = os.environ.get("PIXEL_OPENWEBUI_KEY", "")
 _SOCKET_PATH = os.environ.get("PIXEL_INGRESS_SOCKET", "/pixel-runtime/pixel-ingress.sock")
+_PREVIEW_BEARER_TOKEN = os.environ.get("PIXEL_PREVIEW_PROXY_KEY", "")
+_PREVIEW_SOCKET_PATH = os.environ.get(
+    "PIXEL_PREVIEW_SOCKET", "/pixel-preview-runtime/http.sock"
+)
 _ALLOWED_MODELS = ("pixel/default",)
 _LISTEN_PORT = int(os.environ.get("PIXEL_EDGE_PORT_INTERNAL", "9595"))
 
@@ -52,6 +58,7 @@ _MAX_BODY = 2 * 1024 * 1024          # 2 MiB request body
 _MAX_CANCEL_BODY = 256
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MiB non-stream response cap
 _MAX_CANCEL_RESPONSE_BYTES = 1024
+_MAX_PREVIEW_RESPONSE_BYTES = 4 * 1024 * 1024
 
 _CONNECT_TIMEOUT = 5
 # The host ingress is capped at 32 minutes. Pixel Edge sits outside that
@@ -64,6 +71,8 @@ _MAX_SSE_LINE = 1024 * 1024
 _UPSTREAM_REWRITE = "openclaw/default"
 _PIXEL_REWRITE = "pixel/default"
 _SAFE_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_PREVIEW_SITE_ID = re.compile(r"^site-[a-f0-9]{24}$")
+_PREVIEW_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HTTP_URL = re.compile(r"https?://[^\s<>{}\[\]\"']+", re.IGNORECASE)
 _PRIVATE_URL_INTENT = re.compile(
     r"\b(?:access|browse|call|check|connect|download|fetch|inspect|open|query|read|"
@@ -209,7 +218,21 @@ def _validate_config() -> str:
     return _BEARER_TOKEN
 
 
+def _validate_preview_config() -> str:
+    if (
+        not _PREVIEW_BEARER_TOKEN
+        or _PREVIEW_BEARER_TOKEN != _PREVIEW_BEARER_TOKEN.strip()
+        or len(_PREVIEW_BEARER_TOKEN) < 32
+        or len(_PREVIEW_BEARER_TOKEN) > 4096
+        or any(ord(ch) < 33 for ch in _PREVIEW_BEARER_TOKEN)
+    ):
+        print("FATAL: PIXEL_PREVIEW_PROXY_KEY is invalid", file=sys.stderr)
+        sys.exit(1)
+    return _PREVIEW_BEARER_TOKEN
+
+
 config_token = _validate_config()
+preview_proxy_token = _validate_preview_config()
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +251,16 @@ def _check_auth(request: web.Request):
         return web.json_response({"error": "unauthorized"}, status=401)
     token = auth[len("Bearer "):]
     if not _constant_time_compare(token, config_token):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    return None
+
+
+def _check_preview_auth(request: web.Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    token = auth[len("Bearer "):]
+    if not _constant_time_compare(token, preview_proxy_token):
         return web.json_response({"error": "unauthorized"}, status=401)
     return None
 
@@ -929,6 +962,88 @@ async def _stream_upstream(
     return response
 
 
+_REMOTE_PREVIEW_CSP = (
+    "sandbox allow-scripts; default-src 'self' data: blob:; "
+    "connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
+    "font-src 'self' data:; script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; "
+    "form-action 'none'; frame-ancestors 'self'"
+)
+
+
+def _preview_upstream_path(site_id: str, tail: str) -> str | None:
+    if _PREVIEW_SITE_ID.fullmatch(site_id) is None:
+        return None
+    if not tail:
+        return f"/{site_id}/"
+    parts = tail.split("/")
+    if any(_PREVIEW_PATH_COMPONENT.fullmatch(part) is None for part in parts):
+        return None
+    encoded = "/".join(quote(part, safe="") for part in parts)
+    return f"/{site_id}/{encoded}"
+
+
+async def handle_preview(request: web.Request):
+    """Relay one immutable host snapshot without exposing its host listener."""
+    fail = _check_preview_auth(request)
+    if fail is not None:
+        return fail
+    upstream_path = _preview_upstream_path(
+        request.match_info.get("site_id", ""), request.match_info.get("tail", "")
+    )
+    if upstream_path is None:
+        return web.json_response({"error": "not found"}, status=404)
+
+    connector = UnixConnector(path=_PREVIEW_SOCKET_PATH)
+    timeout = ClientTimeout(total=10, sock_connect=3, sock_read=5)
+    try:
+        async with ClientSession(connector=connector, timeout=timeout) as session:
+            async with session.request(
+                request.method,
+                f"http://pixel-preview.internal{upstream_path}",
+                headers={"Host": "pixel-preview.internal"},
+            ) as upstream:
+                if upstream.status not in {200, 404}:
+                    return web.json_response({"error": "preview unavailable"}, status=502)
+                body = await upstream.content.read(_MAX_PREVIEW_RESPONSE_BYTES + 1)
+                if len(body) > _MAX_PREVIEW_RESPONSE_BYTES:
+                    return web.json_response({"error": "preview too large"}, status=502)
+                if upstream.status == 404:
+                    return web.json_response({"error": "not found"}, status=404)
+                content_type = upstream.headers.get(
+                    "Content-Type", "application/octet-stream"
+                )
+                content_length = upstream.headers.get("Content-Length", str(len(body)))
+                digest = upstream.headers.get("X-Preview-SHA256", "")
+                if (
+                    not content_length.isdigit()
+                    or int(content_length) > _MAX_PREVIEW_RESPONSE_BYTES
+                    or int(content_length) != len(body)
+                    or not re.fullmatch(r"[a-f0-9]{64}", digest)
+                    or not hmac.compare_digest(
+                        hashlib.sha256(body).hexdigest(), digest
+                    )
+                ):
+                    return web.json_response({"error": "invalid preview response"}, status=502)
+    except (OSError, asyncio.TimeoutError):
+        return web.json_response({"error": "preview unavailable"}, status=503)
+    except Exception:
+        return web.json_response({"error": "preview unavailable"}, status=502)
+
+    headers = {
+        "Content-Type": content_type,
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": _REMOTE_PREVIEW_CSP,
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Preview-SHA256": digest,
+    }
+    return web.Response(status=200, body=body, headers=headers)
+
+
 async def handle_not_found(_request: web.Request):
     return web.json_response({"error": "not found"}, status=404)
 
@@ -942,6 +1057,7 @@ def create_app() -> web.Application:
     app[_CANCEL_EVENTS_KEY] = {}
     app[_ACTIVE_REQUESTS_KEY] = set()
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/preview/{site_id}/{tail:.*}", handle_preview)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/v1/activity", handle_activity)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)

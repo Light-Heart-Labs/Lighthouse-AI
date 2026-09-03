@@ -73,9 +73,12 @@ A qualifying result must meet all of these conditions:
 4. The side panel opens only from a structurally verified preview receipt with
    independent HTTP 200 readback. Model-authored prose or an invented localhost
    URL cannot open it. The receipt binds one content-addressed site ID to its
-   canonical origin and URL path; local access uses the same `site-*.localhost`
-   hostname and path, while a supported remote-owner route must never send a
-   client to its own loopback. Cross-site host/path pairs are rejected.
+   canonical origin and URL path. Local access uses the same
+   `site-*.localhost` hostname and path. A remote owner uses the authenticated
+   same-Dashboard `/pixel-preview/<site-id>/` relay, whose response and iframe
+   both omit same-origin authority while keeping scripts and immutable local
+   assets usable; it must never send a client to its own loopback. Cross-site
+   host/path pairs and unauthenticated relay requests are rejected.
 5. The result is responsive, legible, keyboard reachable, and respects reduced
    motion where animation is nonessential. Touch controls are required for
    interactions that otherwise depend on hover or a physical keyboard.

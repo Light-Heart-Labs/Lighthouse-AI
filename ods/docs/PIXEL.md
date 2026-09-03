@@ -113,8 +113,10 @@ Browser
                              |
                              v
                    create-only static snapshot
-                   -> site-*.localhost origin
-                   -> sandboxed Dashboard panel
+                   -> site-*.localhost on-host origin
+                   -> group-scoped Unix HTTP relay
+                   -> authenticated Dashboard remote route
+                   -> sandboxed Dashboard panel/new tab
 ```
 
 The Open WebUI and Dashboard paths converge at `pixel-edge`. The browser never
@@ -426,13 +428,20 @@ act as a capability gate:
   performs an HTTP readback before returning a receipt. The private ingress
   carries that exact receipt in a structured terminal frame; the Dashboard
   never opens a URL parsed from model prose. The Pixel portal automatically
-  shows the snapshot in a side panel with a script-capable iframe. Each
-  content-addressed snapshot receives its own `site-*.localhost` origin, and
-  the host rejects a request whose origin hostname does not match the snapshot
-  path. That isolation lets ordinary browser apps use origin-scoped storage
-  without exposing another generated preview's state. The iframe and preview
-  CSP still block outbound connections, form submissions, popups, top-level
-  navigation, downloads, camera, microphone, and geolocation. Starting a
+  shows the snapshot in a side panel with a script-capable iframe. On the ODS
+  host, each content-addressed snapshot receives its own `site-*.localhost`
+  origin, and the host rejects a request whose origin hostname does not match
+  the snapshot path. That path retains ordinary origin-scoped browser storage.
+  When the Dashboard itself is opened on another private LAN or Tailscale
+  client, it uses `/pixel-preview/<site-id>/` on that same Dashboard authority.
+  Nginx authenticates the hop to the internal-only Pixel Edge, Pixel Edge reads
+  through a group-scoped Unix socket rather than opening a host port, and the
+  returned document receives an enforced CSP sandbox without
+  `allow-same-origin`. The remote document can run its scripts and load its own
+  immutable local assets, but it cannot inherit Dashboard cookies, DOM, or
+  storage authority; the same CSP applies to the new-tab view. Both routes
+  block outbound connections, form submissions, popups, top-level navigation,
+  downloads, camera, microphone, and geolocation. Starting a
   development server inside Pixel's disposable sandbox is explicitly rejected
   because that port is not the owner's browser-facing host.
 
@@ -544,6 +553,7 @@ untouched.
 | `PIXEL_SOURCE_DIR` | empty | Secure owner-controlled root for a local checkout |
 | `PIXEL_OPENWEBUI_KEY` | generated; installer | Narrow Open WebUI/Dashboard-to-edge key; secret |
 | `PIXEL_INGRESS_RUNTIME_DIR` | `/run/ods-pixel` | Host directory containing only the socket/projection |
+| `PIXEL_PREVIEW_RUNTIME_DIR` | `/run/ods-pixel-preview` | Host runtime directory containing the group-scoped immutable-preview relay socket |
 | `PIXEL_INGRESS_GID` | generated; installer | Numeric `ods-pixel` group used by the edge container |
 | `PIXEL_PREVIEW_PORT` | `9437` | Dedicated loopback-only static preview service; every snapshot uses an isolated `site-*.localhost` origin and the port must not collide with an ODS application port |
 
