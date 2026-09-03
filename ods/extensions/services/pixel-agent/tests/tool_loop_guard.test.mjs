@@ -111,6 +111,7 @@ import {
   userMessageRequestsWorkspaceTools,
   userMessageRequestsWorkspaceMutation,
   userMessageRequestsWorkspaceDemoScaffold,
+  userMessageRequestsWorkspaceGameScaffold,
   userMessageRequestsWorkspacePreview,
   userMessageRequestsWorkspacePreviewInspection,
   userMessageWorkspaceContinuationPath,
@@ -7776,6 +7777,21 @@ test("classifies a requested website demo as a verified workspace preview", () =
     true
   );
   assert.equal(
+    userMessageRequestsWorkspaceGameScaffold(
+      [],
+      "Now make a breakout style videogame."
+    ),
+    true
+  );
+  assert.equal(
+    userMessageRequestsWorkspaceGameScaffold([], "Explain how Breakout works."),
+    false
+  );
+  assert.equal(
+    userMessageRequestsWorkspaceGameScaffold([], "Do not make a Breakout game."),
+    false
+  );
+  assert.equal(
     userMessageRequestsWorkspacePreview([], "Implement a command-line game in Python."),
     false
   );
@@ -7783,6 +7799,35 @@ test("classifies a requested website demo as a verified workspace preview", () =
     userMessageRequestsWorkspacePreview([], "Build a website for Acme."),
     true
   );
+});
+
+test("turns a compact model's first Breakout tool attempt into one bounded game scaffold", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Now make a breakout style videogame." }
+  );
+  const routed = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "exec",
+        args: { command: "mkdir -p /workspace/breakout", workdir: "/workspace" },
+      },
+    },
+  });
+  assert.deepEqual(routed.params, {
+    id: "pixel_ods_workspace_preview",
+    args: {
+      relativeDirectory: "neon-breakout",
+      scaffold: {
+        title: "Neon Breakout",
+        tagline: "Smash the signal wall in a responsive local arcade.",
+        theme: "orchid",
+        template: "breakout",
+      },
+    },
+  });
 });
 
 test("permits an explicitly requested preview after inspecting an existing site", () => {

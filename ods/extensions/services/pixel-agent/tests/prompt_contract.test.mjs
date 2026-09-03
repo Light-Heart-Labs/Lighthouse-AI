@@ -12,6 +12,7 @@ import {
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
   ODS_WORKSPACE_DEMO_CONTRACT,
+  ODS_WORKSPACE_GAME_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
@@ -73,6 +74,20 @@ test("adds a bounded first-write contract only for requested website previews", 
     specifiedDemo.appendSystemContext,
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
+
+  const breakout = promptContractForAgent(
+    { agentId: "pixel", contextTokenBudget: 65536 },
+    "pixel",
+    { prompt: "Now make a Breakout-style videogame." },
+    { configuredLeanPrompt: true }
+  );
+  assert.equal(
+    breakout.appendSystemContext,
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_GAME_CONTRACT}`
+  );
+  assert.match(breakout.appendSystemContext, /exactly one tool call now/);
+  assert.match(breakout.appendSystemContext, /template breakout/);
+  assert.match(breakout.appendSystemContext, /keyboard, pointer, and touch-playable/);
 
   const explanation = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },

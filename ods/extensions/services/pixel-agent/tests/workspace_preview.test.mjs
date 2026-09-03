@@ -100,6 +100,68 @@ test("normalizes only exact bounded demo scaffold fields", () => {
       }),
     /invalid Pixel workspace preview request/
   );
+  assert.deepEqual(
+    normalizeWorkspacePreviewParams({
+      relativeDirectory: "neon-breakout",
+      scaffold: {
+        title: "Neon Breakout",
+        tagline: "A local arcade.",
+        theme: "orchid",
+        template: "breakout",
+      },
+    }).scaffold,
+    {
+      title: "Neon Breakout",
+      tagline: "A local arcade.",
+      theme: "orchid",
+      template: "breakout",
+    }
+  );
+  assert.throws(
+    () => normalizeWorkspacePreviewParams({
+      relativeDirectory: "demo",
+      scaffold: {
+        title: "Demo",
+        tagline: "Tagline",
+        theme: "aurora",
+        template: "untrusted",
+      },
+    }),
+    /invalid Pixel workspace preview request/
+  );
+});
+
+test("creates a responsive self-contained Breakout game scaffold", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-breakout-"));
+  try {
+    const relativeDirectory = await createWorkspaceScaffold({
+      workspaceRoot,
+      relativeDirectory: "neon-breakout",
+      scaffold: {
+        title: "Neon <Breakout>",
+        tagline: "A safe & local arcade.",
+        theme: "orchid",
+        template: "breakout",
+      },
+    }, {
+      uniqueSuffix: () => "12345678",
+    });
+    const entry = path.join(workspaceRoot, relativeDirectory, "index.html");
+    const html = await readFile(entry, "utf8");
+    assert.equal(relativeDirectory, "neon-breakout-12345678");
+    assert.match(html, /Neon &lt;Breakout&gt;/);
+    assert.match(html, /A safe &amp; local arcade/);
+    assert.match(html, /<canvas id="game"/);
+    assert.match(html, /requestAnimationFrame/);
+    assert.match(html, /pointermove/);
+    assert.match(html, /addEventListener\('keydown'/);
+    assert.match(html, /Touch controls/);
+    assert.match(html, /Content-Security-Policy/);
+    assert.doesNotMatch(html, /https?:\/\//);
+    assert.equal((await stat(entry)).mode & 0o777, 0o600);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
 });
 
 

@@ -18,6 +18,7 @@ import {
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceDemoScaffold,
+  userMessageRequestsWorkspaceGameScaffold,
   userMessageRequestsWorkspacePreview,
 } from "./tool-loop-guard.mjs";
 
@@ -131,6 +132,9 @@ export const ODS_WORKSPACE_PREVIEW_CONTRACT =
 
 export const ODS_WORKSPACE_DEMO_CONTRACT =
   "The owner asked for an open-ended website demonstration. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory as one fresh short directory name plus scaffold with a creative title, a concise tagline, and theme set to exactly one of aurora, ember, ocean, orchid, or solar. This create-only ODS tool generates a polished responsive interactive site and publishes it through independent loopback readback. Do not generate HTML, call write, call exec, plan the design, or start a server. Reply only after the verified tool receipt.";
+
+export const ODS_WORKSPACE_GAME_CONTRACT =
+  "The owner asked for a Breakout-style browser game. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory neon-breakout plus scaffold with title Neon Breakout, a concise tagline, theme orchid, and template breakout. The ODS guard binds this create-only request and the host generates a polished responsive keyboard, pointer, and touch-playable game before independent preview readback. Do not generate HTML, call write, call exec, plan the game, or start a server. Reply only after the verified tool receipt.";
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
@@ -296,9 +300,11 @@ export function promptContractForAgent(
     event?.messages,
     event?.prompt
   )
-    ? userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
-      ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
-      : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+    ? userMessageRequestsWorkspaceGameScaffold(event?.messages, event?.prompt)
+      ? ` ${ODS_WORKSPACE_GAME_CONTRACT}`
+      : userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
+        ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
+        : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
     : "";
   const verification =
     verificationStatus === "pending"

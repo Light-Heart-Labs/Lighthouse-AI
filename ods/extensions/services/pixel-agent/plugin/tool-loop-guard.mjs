@@ -335,6 +335,15 @@ const SYNCHRONOUS_HOST_OBSERVE_TOOL = "pixel_ods_host_observe";
 const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
 const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
 const WORKSPACE_PREVIEW_TOOL = "pixel_ods_workspace_preview";
+const WORKSPACE_GAME_SCAFFOLD = Object.freeze({
+  relativeDirectory: "neon-breakout",
+  scaffold: Object.freeze({
+    title: "Neon Breakout",
+    tagline: "Smash the signal wall in a responsive local arcade.",
+    theme: "orchid",
+    template: "breakout",
+  }),
+});
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -3898,6 +3907,21 @@ export function userMessageRequestsWorkspaceDemoScaffold(
   );
 }
 
+export function userMessageRequestsWorkspaceGameScaffold(
+  messages,
+  prompt = undefined
+) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) return false;
+  const breakout = /\b(?:breakout|brick[- ]?breaker)\b/i;
+  const create = /\b(?:build|create|develop|generate|implement|make|write)\b/i;
+  const rejection =
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|generate|implement|make|write)\b/i;
+  return text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some((clause) => breakout.test(clause) && create.test(clause) && !rejection.test(clause));
+}
+
 function workspacePreviewDirectoryFromState(state) {
   const indexDirectories = new Set(
     [...(state?.successfulWritePaths ?? []), ...(state?.successfulReadPaths ?? [])]
@@ -4452,6 +4476,7 @@ export function createToolLoopGuard({
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspacePreviewRequested: false,
+        workspaceGameScaffoldRequested: false,
         workspacePreviewInspectionRequested: false,
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
@@ -5012,6 +5037,20 @@ export function createToolLoopGuard({
         },
       };
     }
+    if (
+      state?.workspaceGameScaffoldRequested &&
+      !state.workspacePreviewAttempted &&
+      !state.workspacePreview &&
+      toolName === "tool_call"
+    ) {
+      pendingParams = {
+        id: WORKSPACE_PREVIEW_TOOL,
+        args: {
+          relativeDirectory: WORKSPACE_GAME_SCAFFOLD.relativeDirectory,
+          scaffold: { ...WORKSPACE_GAME_SCAFFOLD.scaffold },
+        },
+      };
+    }
     const pendingSelectedName =
       toolName === "tool_call" && typeof pendingParams?.id === "string"
         ? pendingParams.id.split(":").at(-1)
@@ -5024,8 +5063,14 @@ export function createToolLoopGuard({
             "Pixel blocked an unsolicited workspace publication. Publish a preview only when the owner's current request asks to build or display a website or browser-rendered visual.",
         };
       }
-      const args =
+      const suppliedArgs =
         toolName === "tool_call" ? pendingParams?.args : pendingParams;
+      const args = state.workspaceGameScaffoldRequested
+        ? {
+          relativeDirectory: WORKSPACE_GAME_SCAFFOLD.relativeDirectory,
+          scaffold: { ...WORKSPACE_GAME_SCAFFOLD.scaffold },
+        }
+        : suppliedArgs;
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
       const observedDirectory = workspacePreviewDirectoryFromState(state);
       const directory = observedDirectory ?? providedDirectory;
@@ -6233,6 +6278,11 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        state.workspaceGameScaffoldRequested =
+          userMessageRequestsWorkspaceGameScaffold(
+            event?.messages,
+            event?.prompt
+          );
         state.workspacePreviewInspectionRequested =
           userMessageRequestsWorkspacePreviewInspection(
             event?.messages,
