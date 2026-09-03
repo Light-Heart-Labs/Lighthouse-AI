@@ -5433,13 +5433,10 @@ export function createToolLoopGuard({
           block: true,
           blockReason:
             "Pixel does not need a separate directory-preparation command for this preview. " +
-            "Call tool_call now with id write and args " +
-            JSON.stringify({
-              path: `${setupDirectory}/index.html`,
-              content: "<!doctype html>...complete self-contained site...",
-            }) +
-            "; use one visually polished interactive HTML document under 7000 characters, " +
-            "then call pixel_ods_workspace_preview for that directory.",
+            `Call tool_call now with id write and path "${setupDirectory}/index.html" plus ` +
+            "HTML authored entirely by the active model. Use a polished self-contained document, " +
+            "or write any local assets inside that artifact directory before calling " +
+            "pixel_ods_workspace_preview for that directory. ODS supplies no creative bytes.",
         };
       }
       rememberToolRun(

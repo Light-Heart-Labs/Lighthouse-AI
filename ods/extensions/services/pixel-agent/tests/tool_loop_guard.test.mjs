@@ -8422,7 +8422,11 @@ test("turns a setup-only preview mkdir into an immediate bounded write correctio
   assert.equal(mkdir.block, true);
   assert.match(mkdir.blockReason, /id write/);
   assert.match(mkdir.blockReason, /demo-interactive\/index\.html/);
-  assert.match(mkdir.blockReason, /under 7000 characters/);
+  assert.match(mkdir.blockReason, /authored entirely by the active model/);
+  assert.match(mkdir.blockReason, /local assets inside that artifact directory/);
+  assert.match(mkdir.blockReason, /ODS supplies no creative bytes/);
+  assert.doesNotMatch(mkdir.blockReason, /<!doctype html>/);
+  assert.doesNotMatch(mkdir.blockReason, /under 7000 characters/);
   assert.equal(
     reply(guard).payload.text,
     WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX

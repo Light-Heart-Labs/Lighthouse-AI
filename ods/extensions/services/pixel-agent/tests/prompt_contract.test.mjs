@@ -39,7 +39,11 @@ test("requires novel model-authored files for every requested browser visual", (
   assert.match(preview.appendSystemContext, /first tool step call tool_call with id write/);
   assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
   assert.match(preview.appendSystemContext, /Design and write every creative line/);
-  assert.match(preview.appendSystemContext, /ODS supplies no website, game, app, SVG, voxel-scene, or visualization starter bytes/);
+  assert.match(preview.appendSystemContext, /ODS supplies no creative artifact bytes/);
+  assert.match(preview.appendSystemContext, /local CSS, JavaScript, SVG, or data files inside that artifact directory/);
+  assert.match(preview.appendSystemContext, /you write yourself in subsequent tool steps before publication/);
+  assert.doesNotMatch(preview.appendSystemContext, /under 7000 characters/);
+  assert.doesNotMatch(preview.appendSystemContext, /<!doctype html>/i);
   assert.doesNotMatch(preview.appendSystemContext, /scaffold with|template breakout|Do not generate HTML/);
 
   const custom = promptContractForAgent(
@@ -53,7 +57,8 @@ test("requires novel model-authored files for every requested browser visual", (
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
   assert.match(custom.appendSystemContext, /first tool step call tool_call with id write/);
-  assert.match(custom.appendSystemContext, /under 7000 characters/);
+  assert.match(custom.appendSystemContext, /self-contained document is welcome when it fits naturally/);
+  assert.match(custom.appendSystemContext, /Do not use external CDNs, remote assets/);
   assert.match(custom.appendSystemContext, /semantic interactive elements such as button/);
   assert.match(custom.appendSystemContext, /responsive layout/);
   assert.match(custom.appendSystemContext, /keyboard access/);

@@ -442,7 +442,9 @@ act as a capability gate:
   preview adapter can publish them. ODS contains no creative templates or
   generated starter bytes. The adapter accepts only the existing relative
   directory, so safety enforcement, static validation, snapshot isolation, and
-  HTTP readback cannot be confused with authorship.
+  HTTP readback cannot be confused with authorship. Pixel may author either a
+  self-contained `index.html` or a richer set of local files; ODS imposes no
+  creative-size ceiling and publishes only the exact completed snapshot.
 
 The status tools read only `/run/ods-pixel/ods-status.json`. The plugin does not
 receive the Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS

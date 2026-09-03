@@ -65,7 +65,9 @@ A qualifying result must meet all of these conditions:
 3. Every creative byte is authored through the active model's workspace tools.
    The ODS harness may route, constrain, verify, snapshot, and publish the
    result, but it must not provide a website, game, app, SVG, voxel scene, or
-   visualization template. Compact and capable models use this same path.
+   visualization template. Compact and capable models use this same path, and
+   may choose a self-contained document or multiple model-authored local files
+   without an ODS-imposed creative-size ceiling.
 4. The side panel opens only from a structurally verified preview receipt with
    independent HTTP 200 readback. Model-authored prose or an invented localhost
    URL cannot open it. The receipt binds one content-addressed site ID to the
