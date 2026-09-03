@@ -3750,6 +3750,15 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   };
 }
 
+export function userMessageExactHostCommand(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text) return undefined;
+  const exact = text.match(
+    /(?:^|[.!?]\s+)(?:please\s+)?(?:run|execute|invoke)\s+(?:exactly\s+)?`([^`\r\n\0]{1,16384})`\s+(?:on|in|from|against|for)\s+(?:this|my|the|local)\s+(?:ODS\s+)?(?:host|machine|computer|laptop)\b/i
+  );
+  return exact?.[1];
+}
+
 export function userMessageRequestsHostCommand(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
@@ -3761,6 +3770,7 @@ export function userMessageRequestsHostCommand(messages, prompt = undefined) {
   ) {
     return false;
   }
+  if (userMessageExactHostCommand(messages, prompt)) return true;
   const localHost = /\b(?:ODS[- ]host|local\s+(?:ODS\s+)?host|this\s+(?:ODS\s+)?(?:host|machine|computer|laptop)|my\s+(?:ODS\s+)?(?:host|machine|computer|laptop))\b/i;
   const action = /\b(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)\b/i;
   const guidanceOnly =
@@ -4594,6 +4604,7 @@ export function createToolLoopGuard({
         operationsRequired: false,
         operationsRequiredActions: new Set(),
         operationsHostCommandRequested: false,
+        operationsExactHostCommand: undefined,
         operationsInventoryOnly: false,
         operationsInventoryAttempted: false,
         operationsInventory: undefined,
@@ -5715,7 +5726,7 @@ export function createToolLoopGuard({
         const requestedArgs = toolName === "tool_call"
           ? wrappedToolParams?.args
           : normalizedParams ?? event?.params;
-        const command = requestedArgs?.command;
+        const command = state.operationsExactHostCommand ?? requestedArgs?.command;
         if (
           typeof command !== "string" ||
           !command.trim() ||
@@ -6621,6 +6632,9 @@ export function createToolLoopGuard({
           state.operationsRequired &&
           !operationsContinuation &&
           userMessageRequestsHostCommand(event?.messages, event?.prompt);
+        state.operationsExactHostCommand = state.operationsHostCommandRequested
+          ? userMessageExactHostCommand(event?.messages, event?.prompt)
+          : undefined;
         state.operationsInventoryOnly =
           state.operationsRequired &&
           !operationsContinuation &&
@@ -7271,6 +7285,24 @@ export function createToolLoopGuard({
         instruction:
           "Do not reply yet. Call tool_call now with id pixel_ops_inventory and args {}. " +
           "This one read-only projection must finish before you report available capabilities.",
+      };
+    }
+    if (
+      state.operationsHostCommandRequested &&
+      state.operationsSubmittedJobs.size === 0
+    ) {
+      const proposalArgs = state.operationsExactHostCommand
+        ? `args ${JSON.stringify({
+            target: "ods-host",
+            command: state.operationsExactHostCommand,
+            reason: "Owner requested one protected local ODS host command.",
+          })}`
+        : "args containing target ods-host, one command that narrowly satisfies the owner's request, and a concise reason";
+      return {
+        stage: "host-command-proposal",
+        instruction:
+          `Do not reply yet. Call tool_call now with id pixel_ops_shell_propose and ${proposalArgs}. ` +
+          "This submits an immutable approval proposal only; it does not execute or approve the command.",
       };
     }
     const requiredHostActions = exactRequiredHostActions(state);

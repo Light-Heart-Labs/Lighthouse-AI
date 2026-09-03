@@ -103,6 +103,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
+  userMessageExactHostCommand,
   userMessageRequestsHostCommand,
   userMessageRequestsOperationsCapabilityInventory,
   userMessageExtensionCatalogExactQuery,
@@ -2661,6 +2662,59 @@ test("classifies explicit local host commands without capturing guidance or remo
   assert.equal(
     userMessageRequestsHostCommand([], "Without explaining, restart Docker on this ODS host."),
     true
+  );
+});
+
+test("binds an exact compound owner command across shell separators", () => {
+  const prompt =
+    "Please run exactly `printf 'HOST_COMMAND_OK\\n'; /usr/bin/uname -sr; /usr/bin/id -un` " +
+    "on this ODS host as a benign read-only capability test. Do not run anything else.";
+  const exactCommand = "printf 'HOST_COMMAND_OK\\n'; /usr/bin/uname -sr; /usr/bin/id -un";
+  assert.equal(userMessageExactHostCommand([], prompt), exactCommand);
+  assert.equal(userMessageRequestsHostCommand([], prompt), true);
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true,
+    actions: ["raw-shell"],
+  });
+  assert.equal(
+    userMessageExactHostCommand(
+      [],
+      "How would I run exactly `uname -sr; id -un` on this ODS host?"
+    ),
+    undefined
+  );
+
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  const retry = guard.beforeAgentFinalize(
+    { runId: "run-1", lastAssistantMessage: "I cannot access the host." },
+    { agentId: "pixel", runId: "run-1" },
+    "pixel"
+  ).retry.instruction;
+  assert.match(retry, /pixel_ops_shell_propose/);
+  assert.match(retry, /"target":"ods-host"/);
+  assert.ok(retry.includes(JSON.stringify(exactCommand)));
+  assert.deepEqual(
+    call(guard, "pixel_ops_shell_propose", {
+      event: {
+        params: {
+          target: "elsewhere",
+          command: "id",
+          reason: "model-selected",
+        },
+      },
+    }),
+    {
+      params: {
+        target: "ods-host",
+        command: exactCommand,
+        reason: "Owner requested one protected local ODS host command.",
+      },
+    }
   );
 });
 
