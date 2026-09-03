@@ -3893,15 +3893,15 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
   const website =
-    /\b(?:browser\b[^.!?;\n]{0,32}\bapp|dashboard|frontend|landing\s+page|portal|static\s+site|web\b[^.!?;\n]{0,32}\bapp|web\s*page|web\s*site|website)\b/i.test(text);
-  const application = /\bapp(?:lication)?\b/i.test(text);
+    /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|static\s+sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|web\s*sites?|websites?)\b/i.test(text);
+  const application = /\b(?:apps?|applications?)\b/i.test(text);
   const build =
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(text);
   const revise =
     /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
   const browserVisual =
-    /\b(?:animated\s+svg|breakout|brick[- ]?breaker|browser[- ]?game|canvas\s+(?:demo|game)|interactive\s+(?:demo|experience|visuali[sz]ation)|svg\s+animation|task\s+board|to-?do\s+(?:app|board|list)|video\s*game|videogame|visuali[sz]ation|voxel(?:-based)?|webgl\s+(?:demo|scene))\b/i.test(text) ||
-    /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*game\b/i.test(text);
+    /\b(?:animated\s+svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|svg\s+animations?|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
+    /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*games?\b/i.test(text);
   const explicitBrowser =
     website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
   const nativeImplementation =
@@ -4042,7 +4042,7 @@ export function userMessageWorkspaceStarterScaffold(
   if (exactNameRequested) return undefined;
 
   const voxel =
-    /\bvoxel(?:-based)?\s+(?:art|landscape|scene|world)\b/i.test(text);
+    /\bvoxel(?:[- ](?:based|styles?))?\s+(?:art|landscape|scene|world)\b/i.test(text);
   const customVoxel =
     /\b(?:city|dragon|dungeon|minecraft|spaceship|specific|underwater)\b/i.test(text);
   if (voxel && !customVoxel) return WORKSPACE_VISUAL_SCAFFOLDS.voxel;

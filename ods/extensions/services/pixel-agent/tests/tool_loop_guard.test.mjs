@@ -7801,6 +7801,13 @@ test("classifies a requested website demo as a verified workspace preview", () =
   assert.equal(
     userMessageWorkspaceStarterScaffold(
       [],
+      "Create some voxel based art I can explore."
+    )?.scaffold.template,
+    "voxel"
+  );
+  assert.equal(
+    userMessageWorkspaceStarterScaffold(
+      [],
       "Make an intricate animated SVG illustration with pause and color controls."
     )?.scaffold.template,
     "animated-svg"
@@ -7873,6 +7880,8 @@ test("classifies a requested website demo as a verified workspace preview", () =
     "Make a playful puzzle game.",
     "Build a tiny habit-tracker app.",
     "Create a drawing application.",
+    "Build games, websites, and apps.",
+    "Create some voxel based art I can explore.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
   }
