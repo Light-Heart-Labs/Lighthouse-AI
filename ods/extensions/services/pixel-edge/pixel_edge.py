@@ -72,13 +72,14 @@ _PRIVATE_URL_INTENT = re.compile(
     re.IGNORECASE,
 )
 _ARTIFACT_DRAFT_PREFIX = re.compile(
-    r"^\s*(?:please\s+)?(?:write|draft|document|compose|create|edit|update|"
+    r"^\s*(?:please\s+)?(?:build|write|draft|document|compose|create|edit|update|"
     r"refactor|implement|generate)\b",
     re.IGNORECASE,
 )
 _ARTIFACT_NOUN = re.compile(
-    r"\b(?:code|config(?:uration)?|documentation|example|file|fixture|readme|"
-    r"script|snippet|test)\b",
+    r"\b(?:app(?:lication)?|code|config(?:uration)?|documentation|example|file|"
+    r"fixture|page|project|readme|script|site|snippet|test|web(?:site|page)?|"
+    r"workspace)\b",
     re.IGNORECASE,
 )
 _FOLLOWUP_PRIVATE_ACCESS = re.compile(
@@ -126,7 +127,8 @@ _WORKSPACE_MUTATION_SCOPE = re.compile(
     re.IGNORECASE,
 )
 _WORKSPACE_MUTATION_INTENT = re.compile(
-    r"\b(?:add|change|create|edit|modify|patch|save|update|write)\b",
+    r"\b(?:add|build|change|create|edit|generate|implement|make|modify|patch|"
+    r"save|update|write)\b",
     re.IGNORECASE,
 )
 _RUN_COMMAND_AND_WAIT = re.compile(

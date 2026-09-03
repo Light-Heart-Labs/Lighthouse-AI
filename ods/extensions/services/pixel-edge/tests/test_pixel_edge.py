@@ -640,6 +640,28 @@ class TestModelAllowlist(BaseEdgeTest):
         content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
         self.assertNotIn("pixel_ops_workflow_submit", content)
 
+    async def test_website_preview_verification_does_not_get_host_inspection_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions",
+            headers=self.auth(),
+            json={
+                "model": "pixel/default",
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Build a polished interactive website in a new folder under your "
+                        "workspace, inspect every file, and do not claim success until the "
+                        "host can verify the preview."
+                    ),
+                }],
+            },
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertIn("[ODS Pixel workspace task route:", content)
+        self.assertNotIn("[ODS Pixel host inspection route:", content)
+        self.assertNotIn("pixel_ods_host_observe", content)
+
     async def test_workspace_mutation_gets_mutate_before_verify_route(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",
