@@ -116,11 +116,8 @@ import {
   userMessageRequestsWorkspaceVisualContinuation,
   userMessageRequestsWorkspaceTools,
   userMessageRequestsWorkspaceMutation,
-  userMessageRequestsWorkspaceDemoScaffold,
-  userMessageRequestsWorkspaceGameScaffold,
   userMessageRequestsWorkspacePreview,
   userMessageRequestsWorkspacePreviewInspection,
-  userMessageWorkspaceStarterScaffold,
   userMessageWorkspaceContinuationPath,
   userMessageWorkspaceDirectoryPath,
   userMessageRequestsOperationsEvidenceArtifact,
@@ -129,6 +126,40 @@ import {
   userMessageRequestsExactByteDownload,
   userMessageExactDownloadRequest,
 } from "../plugin/tool-loop-guard.mjs";
+
+function workspacePreviewSnapshot(relativeDirectory, writes) {
+  const digest = createHash("sha256");
+  let bytes = 0;
+  const ordered = [...writes].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+  );
+  for (const { path: fullPath, content } of ordered) {
+    const relativePath = fullPath.slice(`${relativeDirectory}/`.length);
+    const encodedPath = Buffer.from(relativePath, "utf8");
+    const encodedContent = Buffer.from(content, "utf8");
+    const pathLength = Buffer.alloc(4);
+    const contentLength = Buffer.alloc(8);
+    pathLength.writeUInt32BE(encodedPath.length);
+    contentLength.writeBigUInt64BE(BigInt(encodedContent.length));
+    digest.update(pathLength);
+    digest.update(encodedPath);
+    digest.update(contentLength);
+    digest.update(encodedContent);
+    bytes += encodedContent.length;
+  }
+  const sha256 = digest.digest("hex");
+  const entry = writes.find(({ path }) =>
+    path === `${relativeDirectory}/index.html`
+  );
+  return {
+    siteId: `site-${sha256.slice(0, 24)}`,
+    files: writes.length,
+    bytes,
+    sha256,
+    entryFile: "index.html",
+    entrySha256: createHash("sha256").update(entry.content, "utf8").digest("hex"),
+  };
+}
 
 test("exec cancellation control creates exact owner-private markers and fails closed", () => {
   const temporary = mkdtempSync(path.join(tmpdir(), "pixel-exec-control-"));
@@ -7866,34 +7897,6 @@ test("classifies a requested website demo as a verified workspace preview", () =
     false
   );
   assert.equal(
-    userMessageRequestsWorkspaceDemoScaffold(
-      [],
-      "Build a website, any website, as a cool high-quality demo of your capabilities."
-    ),
-    true
-  );
-  assert.equal(
-    userMessageRequestsWorkspaceDemoScaffold(
-      [],
-      "Build and show me a website for Acme's accounting product."
-    ),
-    false
-  );
-  assert.equal(
-    userMessageRequestsWorkspaceDemoScaffold(
-      [],
-      "Build and open a fresh interactive website demo named swiss-watch-preview with a semantic theme button and a separate semantic counter button."
-    ),
-    false
-  );
-  assert.equal(
-    userMessageRequestsWorkspaceDemoScaffold(
-      [],
-      "Demonstrate your capabilities with a website that includes a working form."
-    ),
-    false
-  );
-  assert.equal(
     userMessageRequestsWorkspacePreview(
       [],
       "Not seeing it when I go to local host; could you investigate?"
@@ -7938,41 +7941,6 @@ test("classifies a requested website demo as a verified workspace preview", () =
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
   }
-  assert.equal(
-    userMessageWorkspaceStarterScaffold(
-      [],
-      "Create an interactive voxel landscape with a dramatic day/night change."
-    )?.scaffold.template,
-    "voxel"
-  );
-  assert.equal(
-    userMessageWorkspaceStarterScaffold(
-      [],
-      "Create some voxel based art I can explore."
-    )?.scaffold.template,
-    "voxel"
-  );
-  assert.equal(
-    userMessageWorkspaceStarterScaffold(
-      [],
-      "Make an intricate animated SVG illustration with pause and color controls."
-    )?.scaffold.template,
-    "animated-svg"
-  );
-  assert.equal(
-    userMessageWorkspaceStarterScaffold(
-      [],
-      "Create a small task board where I can add, complete, filter, and remove items."
-    )?.scaffold.template,
-    "task-board"
-  );
-  for (const request of [
-    "Create a voxel city under the ocean.",
-    "Make an animated SVG of our dragon mascot.",
-    "Build a task board with cloud sync.",
-  ]) {
-    assert.equal(userMessageWorkspaceStarterScaffold([], request), undefined, request);
-  }
   for (const request of [
     "Build a native desktop app.",
     "Explain how a visual demo works.",
@@ -7988,38 +7956,6 @@ test("classifies a requested website demo as a verified workspace preview", () =
     "Build a prototype compiler.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
-  }
-  assert.equal(
-    userMessageRequestsWorkspaceGameScaffold(
-      [],
-      "Now make a breakout style videogame."
-    ),
-    true
-  );
-  assert.equal(
-    userMessageRequestsWorkspaceGameScaffold([], "Explain how Breakout works."),
-    false
-  );
-  assert.equal(
-    userMessageRequestsWorkspaceGameScaffold([], "Do not make a Breakout game."),
-    false
-  );
-  for (const request of [
-    "I want a Breakout clone.",
-    "Can you make me a brick breaker?",
-    "Build a brick-breaker game.",
-  ]) {
-    assert.equal(userMessageRequestsWorkspaceGameScaffold([], request), true, request);
-  }
-  for (const request of [
-    "I don’t want a Breakout clone.",
-    "Write a Breakout tutorial.",
-    "Make a responsive website featuring a Breakout game.",
-    "Make a Breakout game with power-ups.",
-    "Skip the menu and make a Breakout-style videogame.",
-    "Build me a Breakout game in a retro amber theme.",
-  ]) {
-    assert.equal(userMessageRequestsWorkspaceGameScaffold([], request), false, request);
   }
   assert.equal(
     userMessageRequestsWorkspacePreview([], "Implement a command-line game in Python."),
@@ -8048,14 +7984,14 @@ test("classifies a requested website demo as a verified workspace preview", () =
   }
 });
 
-test("turns a compact model's first Breakout tool attempt into one bounded game scaffold", () => {
+test("requires the model to author a game before publication", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
     { prompt: "Now make a breakout style videogame." }
   );
-  const routed = call(guard, "tool_call", {
+  const setupOnly = call(guard, "tool_call", {
     event: {
       params: {
         id: "exec",
@@ -8063,133 +7999,50 @@ test("turns a compact model's first Breakout tool attempt into one bounded game 
       },
     },
   });
-  assert.deepEqual(routed.params, {
-    id: "pixel_ods_workspace_preview",
-    args: {
-      relativeDirectory: "neon-breakout",
-      scaffold: {
-        title: "Neon Breakout",
-        tagline: "Smash the signal wall in a responsive local arcade.",
-        theme: "orchid",
-        template: "breakout",
-      },
-    },
-  });
+  assert.equal(setupOnly.block, true);
+  assert.match(setupOnly.blockReason, /id write/);
+  assert.match(setupOnly.blockReason, /breakout\/index\.html/);
 
-  afterCall(guard, "pixel_ods_workspace_preview", {
-    event: {
-      params: routed.params.args,
-      result: { isError: true, details: { status: "failed" } },
-    },
-  });
-  const customScaffold = {
-    title: "Owner Variant",
-    tagline: "A focused retry.",
-    theme: "solar",
-  };
-  const retry = call(guard, "tool_call", {
+  const generated = call(guard, "tool_call", {
     event: {
       params: {
         id: "pixel_ods_workspace_preview",
-        args: { relativeDirectory: "owner-variant", scaffold: customScaffold },
-      },
-    },
-  });
-  assert.deepEqual(retry.params, {
-    id: "pixel_ods_workspace_preview",
-    args: {
-      relativeDirectory: "neon-breakout",
-      scaffold: customScaffold,
-    },
-  });
-});
-
-test("canonicalizes a direct first game preview but rejects unsolicited generated templates", () => {
-  const game = createToolLoopGuard();
-  game.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    { prompt: "I want a Breakout clone." }
-  );
-  assert.deepEqual(
-    call(game, "pixel_ods_workspace_preview", {
-      event: {
-        params: {
-          relativeDirectory: "wrong",
-          scaffold: { title: "Wrong", tagline: "Wrong", theme: "solar" },
-        },
-      },
-    }).params,
-    {
-      relativeDirectory: "neon-breakout",
-      scaffold: {
-        title: "Neon Breakout",
-        tagline: "Smash the signal wall in a responsive local arcade.",
-        theme: "orchid",
-        template: "breakout",
-      },
-    }
-  );
-
-  const site = createToolLoopGuard();
-  site.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    { prompt: "Build any interactive website demo." }
-  );
-  const injected = call(site, "pixel_ods_workspace_preview", {
-    event: {
-      params: {
-        relativeDirectory: "demo",
-        scaffold: {
-          title: "Demo",
-          tagline: "Demo",
-          theme: "aurora",
-          template: "breakout",
+        args: {
+          relativeDirectory: "breakout",
+          scaffold: { title: "Generated", tagline: "Generated", theme: "solar" },
         },
       },
     },
   });
-  assert.equal(injected.block, true);
-  assert.match(injected.blockReason, /did not select/);
+  assert.equal(generated.block, true);
+  assert.match(generated.blockReason, /ODS-authored creative scaffold/);
 });
 
-test("routes diverse compact-model visual starters through one selected template", () => {
-  const cases = [
-    {
-      prompt: "Create an interactive voxel landscape with a dramatic day/night change.",
-      relativeDirectory: "voxel-horizon",
-      template: "voxel",
-    },
-    {
-      prompt: "Make an intricate animated SVG illustration with pause and color controls.",
-      relativeDirectory: "living-vector",
-      template: "animated-svg",
-    },
-    {
-      prompt: "Create a small task board where I can add, complete, filter, and remove items.",
-      relativeDirectory: "orbit-tasks",
-      template: "task-board",
-    },
-  ];
-  for (const visual of cases) {
+test("keeps every visual category on the model-authored write path", () => {
+  for (const prompt of [
+    "Create an interactive voxel landscape with a dramatic day/night change.",
+    "Make an intricate animated SVG illustration with pause and color controls.",
+    "Create a small task board where I can add, complete, filter, and remove items.",
+    "Build a Breakout-style browser game.",
+  ]) {
     const guard = createToolLoopGuard();
     guard.observeRun(
       { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
       "pixel",
-      { prompt: visual.prompt }
+      { prompt }
     );
     const routed = call(guard, "tool_call", {
       event: {
         params: {
           id: "write",
-          args: { path: "wrong/index.html", content: "wrong" },
+          args: {
+            path: "novel-artifact/index.html",
+            content: "<!doctype html><title>Novel model output</title>",
+          },
         },
       },
     });
-    assert.equal(routed.params.id, "pixel_ods_workspace_preview");
-    assert.equal(routed.params.args.relativeDirectory, visual.relativeDirectory);
-    assert.equal(routed.params.args.scaffold.template, visual.template);
+    assert.equal(routed, undefined, prompt);
   }
 });
 
@@ -8229,28 +8082,26 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     "pixel",
     { prompt: "Build and show me an interactive website demo." }
   );
-  const initialParams = {
-    relativeDirectory: "signal-garden",
-    scaffold: {
-      title: "Signal Garden",
-      tagline: "A responsive field of local light.",
-      theme: "aurora",
-    },
+  const initialWrite = {
+    path: "signal-garden/index.html",
+    content: "<!doctype html><title>Signal Garden</title><p>slow</p>",
   };
+  call(guard, "write", { event: { params: initialWrite } });
+  afterCall(guard, "write", {
+    event: { params: initialWrite, result: { details: { status: "completed" } } },
+  });
+  const initialParams = { relativeDirectory: "signal-garden" };
   call(guard, "pixel_ods_workspace_preview", { event: { params: initialParams } });
+  const initialSnapshot = workspacePreviewSnapshot("signal-garden", [initialWrite]);
   const initialDetails = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     status: "succeeded",
-    relativeDirectory: "signal-garden-12345678",
-    siteId: "site-0123456789abcdef01234567",
+    relativeDirectory: "signal-garden",
+    siteId: initialSnapshot.siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 1,
-    bytes: 6200,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
+    url: `http://${initialSnapshot.siteId}.localhost:9437/${initialSnapshot.siteId}/`,
+    ...initialSnapshot,
     httpStatus: 200,
     readbackVerified: true,
     executable: false,
@@ -8299,7 +8150,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   });
   assert.deepEqual(read.params, {
     id: "read",
-    args: { path: "signal-garden-12345678/index.html" },
+    args: { path: "signal-garden/index.html" },
   });
   afterCall(guard, "tool_call", {
     event: {
@@ -8324,7 +8175,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
       ...run2.event,
       params: {
         id: "pixel_ods_workspace_preview",
-        args: { relativeDirectory: "signal-garden-12345678" },
+        args: { relativeDirectory: "signal-garden" },
       },
     },
   });
@@ -8371,7 +8222,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   assert.deepEqual(edit.params, {
     id: "edit",
     args: {
-      path: "signal-garden-12345678/index.html",
+      path: "signal-garden/index.html",
       edits: [{ oldText: "slow", newText: "fast" }],
     },
   });
@@ -8403,13 +8254,13 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   });
   assert.deepEqual(preview.params, {
     id: "pixel_ods_workspace_preview",
-    args: { relativeDirectory: "signal-garden-12345678" },
+    args: { relativeDirectory: "signal-garden" },
   });
   const revisedDetails = {
     ...initialDetails,
-    siteId: "site-89abcdef0123456789abcdef",
-    url: "http://site-89abcdef0123456789abcdef.localhost:9437/site-89abcdef0123456789abcdef/",
     sha256: "c".repeat(64),
+    siteId: `site-${"c".repeat(24)}`,
+    url: `http://site-${"c".repeat(24)}.localhost:9437/site-${"c".repeat(24)}/`,
     entrySha256: "d".repeat(64),
   };
   afterCall(guard, "tool_call", {
@@ -8445,7 +8296,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
       event: { runId: "run-3", params: { path: "index.html" } },
       context: { runId: "run-3", sessionId: "session-1" },
     }),
-    { params: { path: "signal-garden-12345678/index.html" } }
+    { params: { path: "signal-garden/index.html" } }
   );
 });
 
@@ -8466,7 +8317,7 @@ test("never carries natural visual authority into another session", () => {
   );
 });
 
-test("keeps custom visual requests on the owner-specific workspace path", () => {
+test("rejects ODS-authored creative bytes for every visual request", () => {
   for (const prompt of [
     "Create a voxel city under the ocean.",
     "Make an animated SVG of our dragon mascot.",
@@ -8492,7 +8343,7 @@ test("keeps custom visual requests on the owner-specific workspace path", () => 
       },
     });
     assert.equal(attemptedStarter.block, true, prompt);
-    assert.match(attemptedStarter.blockReason, /custom visual request/);
+    assert.match(attemptedStarter.blockReason, /ODS-authored creative scaffold/);
   }
 });
 
@@ -8503,7 +8354,7 @@ test("permits an explicitly requested preview after inspecting an existing site"
     "pixel",
     {
       prompt:
-        "Improve the website in the same workspace, verify the update, and show the refreshed preview here.",
+        "Inspect the existing website in the same workspace and show the preview here.",
     }
   );
   const readParams = { path: "interactive-demo/index.html" };
@@ -8611,19 +8462,16 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
     event: { params: previewParams },
   });
   assert.deepEqual(normalized.params, { relativeDirectory: "demo-site" });
+  const snapshot = workspacePreviewSnapshot("demo-site", [writeParams]);
   const details = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     status: "succeeded",
     relativeDirectory: "demo-site",
-    siteId: "site-0123456789abcdef01234567",
+    siteId: snapshot.siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 1,
-    bytes: 43,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
+    url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+    ...snapshot,
     httpStatus: 200,
     readbackVerified: true,
     executable: false,
@@ -8640,11 +8488,15 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   assert.match(verification.text, new RegExp(WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX));
   assert.match(
     verification.text,
+    /active model wrote every published file in this request/
+  );
+  assert.match(
+    verification.text,
     /this static receipt does not claim that controls were clicked or exercised/
   );
   assert.match(
     verification.text,
-    /http:\/\/site-0123456789abcdef01234567\.localhost:9437\/site-0123456789abcdef01234567\//
+    new RegExp(`http://${snapshot.siteId}\\.localhost:9437/${snapshot.siteId}/`)
   );
   assert.equal(
     guard.beforeAgentFinalize(
@@ -8656,71 +8508,149 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   );
 });
 
-test("permits a bounded create-only demo scaffold before an index exists", () => {
+test("rejects publication evidence not bound to every current-run model write", () => {
+  for (const mismatch of ["entry-digest", "file-count", "snapshot-digest", "byte-count"]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt: "Build and show me a novel interactive website." }
+    );
+    const writeParams = {
+      path: "novel-site/index.html",
+      content: "<!doctype html><title>Novel model work</title>",
+    };
+    call(guard, "write", { event: { params: writeParams } });
+    afterCall(guard, "write", {
+      event: { params: writeParams, result: { details: { status: "completed" } } },
+    });
+    const previewParams = { relativeDirectory: "novel-site" };
+    call(guard, "pixel_ods_workspace_preview", {
+      event: { params: previewParams },
+    });
+    const snapshot = workspacePreviewSnapshot("novel-site", [writeParams]);
+    const sha256 = mismatch === "snapshot-digest" ? "b".repeat(64) : snapshot.sha256;
+    const siteId = `site-${sha256.slice(0, 24)}`;
+    const details = {
+      schemaVersion: 1,
+      kind: "ods-pixel-workspace-preview",
+      status: "succeeded",
+      relativeDirectory: "novel-site",
+      siteId,
+      port: 9437,
+      url: `http://${siteId}.localhost:9437/${siteId}/`,
+      ...snapshot,
+      siteId,
+      files: mismatch === "file-count" ? 2 : snapshot.files,
+      bytes: mismatch === "byte-count" ? snapshot.bytes + 1 : snapshot.bytes,
+      sha256,
+      entrySha256: mismatch === "entry-digest"
+        ? "b".repeat(64)
+        : snapshot.entrySha256,
+      httpStatus: 200,
+      readbackVerified: true,
+      executable: false,
+      overwritten: false,
+    };
+    afterCall(guard, "pixel_ods_workspace_preview", {
+      event: { params: previewParams, result: { details } },
+    });
+    assert.deepEqual(guard.verificationForRun("run-1"), {
+      status: "failed",
+      text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
+    });
+  }
+});
+
+test("accepts a novel multi-file visual only when every published file was written", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
-    { prompt: "Build and show me an interactive website demo." }
+    { prompt: "Build and show me a polished multi-file observatory website." }
   );
-  const scaffold = {
-    title: "Signal Garden",
-    tagline: "A responsive field of local light.",
-    theme: "aurora",
-  };
-  const normalized = call(guard, "tool_call", {
-    event: {
-      params: {
-        id: "pixel_ods_workspace_preview",
-        args: { relativeDirectory: "signal-garden", scaffold },
-      },
+  const writes = [
+    {
+      path: "observatory/styles.css",
+      content: "body{background:#050714;color:#f7f8ff}",
     },
-  });
-  assert.deepEqual(normalized.params.args, {
-    relativeDirectory: "signal-garden",
-    scaffold,
-  });
-  afterCall(guard, "tool_call", {
+    {
+      path: "observatory/index.html",
+      content: "<!doctype html><link rel=stylesheet href=styles.css><h1>Observatory</h1>",
+    },
+  ];
+  for (const params of writes) {
+    call(guard, "write", { event: { params } });
+    afterCall(guard, "write", {
+      event: { params, result: { details: { status: "completed" } } },
+    });
+  }
+  const previewParams = { relativeDirectory: "observatory" };
+  assert.deepEqual(
+    call(guard, "pixel_ods_workspace_preview", {
+      event: { params: previewParams },
+    }),
+    { params: previewParams }
+  );
+  const snapshot = workspacePreviewSnapshot("observatory", writes);
+  const siteId = snapshot.siteId;
+  afterCall(guard, "pixel_ods_workspace_preview", {
     event: {
-      params: normalized.params,
+      params: previewParams,
       result: {
         details: {
-          tool: {
-            id: "openclaw:pixel-ods:pixel_ods_workspace_preview",
-            source: "openclaw",
-            sourceName: "pixel-ods",
-            name: "pixel_ods_workspace_preview",
-          },
-          result: {
-            details: {
-              schemaVersion: 1,
-              kind: "ods-pixel-workspace-preview",
-              status: "succeeded",
-              relativeDirectory: "signal-garden-12345678",
-              siteId: "site-0123456789abcdef01234567",
-              port: 9437,
-              url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-              files: 1,
-              bytes: 6200,
-              sha256: "a".repeat(64),
-              entryFile: "index.html",
-              entrySha256: "b".repeat(64),
-              httpStatus: 200,
-              readbackVerified: true,
-              executable: false,
-              overwritten: false,
-            },
-          },
+          schemaVersion: 1,
+          kind: "ods-pixel-workspace-preview",
+          status: "succeeded",
+          relativeDirectory: "observatory",
+          siteId,
+          port: 9437,
+          url: `http://${siteId}.localhost:9437/${siteId}/`,
+          ...snapshot,
+          httpStatus: 200,
+          readbackVerified: true,
+          executable: false,
+          overwritten: false,
         },
       },
     },
   });
   const verification = guard.verificationForRun("run-1");
   assert.equal(verification.status, "passed");
-  assert.equal(verification.preview.relativeDirectory, "signal-garden-12345678");
-  assert.match(verification.text, /Workspace artifact: `signal-garden-12345678\/index\.html`/);
-  assert.match(verification.text, /ODS generated a create-only starter/);
+  assert.match(verification.text, /active model wrote every published file/);
 });
+
+test("blocks every creative scaffold even when a visual was requested", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me an interactive website demo." }
+  );
+  const blocked = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_workspace_preview",
+        args: {
+          relativeDirectory: "signal-garden",
+          scaffold: {
+            title: "Signal Garden",
+            tagline: "A generated substitute.",
+            theme: "aurora",
+          },
+        },
+      },
+    },
+  });
+  assert.equal(blocked.block, true);
+  assert.match(blocked.blockReason, /active model must create/);
+  assert.equal(
+    guard.verificationForRun("run-1").text,
+    WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX
+  );
+});
+
+
 
 test("ends a verified preview cleanly instead of curling its localhost URL", () => {
   const guard = createToolLoopGuard();
@@ -8729,30 +8659,32 @@ test("ends a verified preview cleanly instead of curling its localhost URL", () 
     "pixel",
     { prompt: "Build a polished interactive demo website." }
   );
+  const writeParams = {
+    path: "signal-garden/index.html",
+    content: "<!doctype html><title>Model-authored Signal Garden</title>",
+  };
+  call(guard, "write", { event: { params: writeParams } });
+  afterCall(guard, "write", {
+    event: { params: writeParams, result: { details: { status: "completed" } } },
+  });
   const params = {
     id: "pixel_ods_workspace_preview",
-    args: {
-      relativeDirectory: "signal-garden",
-      scaffold: { title: "Signal Garden", tagline: "Local light", theme: "aurora" },
-    },
+    args: { relativeDirectory: "signal-garden" },
   };
   const normalized = call(guard, "tool_call", {
     event: { toolCallId: "preview-call", params },
     context: { toolCallId: "preview-call" },
   });
+  const snapshot = workspacePreviewSnapshot("signal-garden", [writeParams]);
   const details = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     status: "succeeded",
-    relativeDirectory: "signal-garden-12345678",
-    siteId: "site-0123456789abcdef01234567",
+    relativeDirectory: "signal-garden",
+    siteId: snapshot.siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 1,
-    bytes: 6200,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
+    url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+    ...snapshot,
     httpStatus: 200,
     readbackVerified: true,
     executable: false,
@@ -8809,24 +8741,26 @@ test("allows only requested preview-file readback before ending the tool loop", 
     "pixel",
     { prompt }
   );
-  const previewParams = {
-    relativeDirectory: "signal-garden",
-    scaffold: { title: "Signal Garden", tagline: "Local light", theme: "aurora" },
+  const writeParams = {
+    path: "signal-garden/index.html",
+    content: "<!doctype html><title>Model-authored Signal Garden</title>",
   };
+  call(guard, "write", { event: { params: writeParams } });
+  afterCall(guard, "write", {
+    event: { params: writeParams, result: { details: { status: "completed" } } },
+  });
+  const previewParams = { relativeDirectory: "signal-garden" };
   call(guard, "pixel_ods_workspace_preview", { event: { params: previewParams } });
+  const snapshot = workspacePreviewSnapshot("signal-garden", [writeParams]);
   const details = {
     schemaVersion: 1,
     kind: "ods-pixel-workspace-preview",
     status: "succeeded",
-    relativeDirectory: "signal-garden-12345678",
-    siteId: "site-0123456789abcdef01234567",
+    relativeDirectory: "signal-garden",
+    siteId: snapshot.siteId,
     port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 1,
-    bytes: 6200,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
+    url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+    ...snapshot,
     httpStatus: 200,
     readbackVerified: true,
     executable: false,
@@ -8842,7 +8776,7 @@ test("allows only requested preview-file readback before ending the tool loop", 
     block: true,
     blockReason: WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
   });
-  const path = "signal-garden-12345678/index.html";
+  const path = "signal-garden/index.html";
   assert.notEqual(
     call(guard, "read", { event: { params: { path } } })?.block,
     true

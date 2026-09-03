@@ -62,9 +62,10 @@ A qualifying result must meet all of these conditions:
    publish, provide a directory, or manually open a localhost URL.
 2. The Dashboard shows useful progress and then returns to `Available`; it does
    not sit on an unexplained timer after the turn has already failed.
-3. Common compact-model requests reach a first verified starter through one
-   bounded creation call. More capable models may build arbitrary local assets
-   and use several focused calls when the request genuinely needs them.
+3. Every creative byte is authored through the active model's workspace tools.
+   The ODS harness may route, constrain, verify, snapshot, and publish the
+   result, but it must not provide a website, game, app, SVG, voxel scene, or
+   visualization template. Compact and capable models use this same path.
 4. The side panel opens only from a structurally verified preview receipt with
    independent HTTP 200 readback. Model-authored prose or an invented localhost
    URL cannot open it. The receipt binds one content-addressed site ID to the
@@ -84,12 +85,12 @@ A qualifying result must meet all of these conditions:
    its local state, while another preview begins with separate storage and
    cannot read the first preview's values.
 
-For the auto-paired model, a common starter scenario should normally reach its
-first tool action within 15 seconds and its verified side-panel result within
-60 seconds on an otherwise idle supported laptop. Record slower results rather
-than deleting them; repeated misses are product defects to diagnose. Custom
-multi-file work may take longer, but it must emit visible progress and retain a
-bounded cancellation path.
+For the auto-paired model, a novel compact visual scenario should normally reach
+its first workspace tool action within 15 seconds and its verified side-panel
+result within 90 seconds on an otherwise idle supported laptop. Record slower
+results rather than deleting them; repeated misses are product defects to
+diagnose. Rich multi-file work may take longer, but it must emit visible
+progress and retain a bounded cancellation path.
 
 ## Evidence packet
 
@@ -109,11 +110,12 @@ For each live row retain a sanitized packet containing:
   descendants; and
 - any failure, retry, skipped surface, or environmental limitation.
 
-The evidence must distinguish generated scaffold behavior from model-authored
-custom behavior. A scaffold pass proves the dependable baseline; it does not
-claim that the model independently wrote those bytes. Conversely, a custom
-artifact pass must identify the model-authored files and independently replay
-their requested verification.
+For each novel request, evidence must identify the model route, the successful
+workspace write events, the exact published files and digest, and independent
+verification of requested behavior. A repository search and negative adapter
+test must also prove that ODS has no creative artifact generator or accepted
+content-bearing preview parameter. Any pre-authored harness artifact is a test
+fixture only and cannot count as a capability pass.
 
 ## Acceptance
 

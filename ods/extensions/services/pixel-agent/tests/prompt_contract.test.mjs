@@ -11,11 +11,6 @@ import {
   ODS_EXACT_DOWNLOAD_CONTRACT,
   ODS_LOOP_RECOVERY_CONTRACT,
   ODS_PRIVATE_URL_CONTRACT,
-  ODS_WORKSPACE_DEMO_CONTRACT,
-  ODS_WORKSPACE_GAME_CONTRACT,
-  ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
-  ODS_WORKSPACE_TASK_BOARD_CONTRACT,
-  ODS_WORKSPACE_VOXEL_CONTRACT,
   ODS_TOOL_REPLY_CONTRACT,
   ODS_VERIFICATION_FAILED_CONTRACT,
   ODS_VERIFICATION_PENDING_CONTRACT,
@@ -27,7 +22,7 @@ import {
   promptContractForAgent,
 } from "../plugin/prompt-contract.mjs";
 
-test("adds a bounded first-write contract only for requested website previews", () => {
+test("requires novel model-authored files for every requested browser visual", () => {
   const preview = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },
     "pixel",
@@ -39,12 +34,13 @@ test("adds a bounded first-write contract only for requested website previews", 
   );
   assert.equal(
     preview.appendSystemContext,
-    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_DEMO_CONTRACT}`
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(preview.appendSystemContext, /exactly one tool call now/);
+  assert.match(preview.appendSystemContext, /first tool step call tool_call with id write/);
   assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
-  assert.match(preview.appendSystemContext, /scaffold with a creative title/);
-  assert.match(preview.appendSystemContext, /Do not generate HTML/);
+  assert.match(preview.appendSystemContext, /Design and write every creative line/);
+  assert.match(preview.appendSystemContext, /ODS supplies no website, game, app, SVG, voxel-scene, or visualization starter bytes/);
+  assert.doesNotMatch(preview.appendSystemContext, /scaffold with|template breakout|Do not generate HTML/);
 
   const custom = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },
@@ -75,7 +71,7 @@ test("adds a bounded first-write contract only for requested website previews", 
   );
   assert.equal(
     visualDemo.appendSystemContext,
-    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_DEMO_CONTRACT}`
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
 
   const specifiedDemo = promptContractForAgent(
@@ -100,40 +96,29 @@ test("adds a bounded first-write contract only for requested website previews", 
   );
   assert.equal(
     breakout.appendSystemContext,
-    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_GAME_CONTRACT}`
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(breakout.appendSystemContext, /exactly one tool call now/);
-  assert.match(breakout.appendSystemContext, /template breakout/);
-  assert.match(breakout.appendSystemContext, /keyboard, pointer, and touch-playable/);
+  assert.match(breakout.appendSystemContext, /first tool step call tool_call with id write/);
+  assert.match(breakout.appendSystemContext, /Design and write every creative line/);
+  assert.doesNotMatch(breakout.appendSystemContext, /template breakout|host generates/);
 
   for (const visual of [
-    {
-      prompt: "Create an interactive voxel landscape with a dramatic day/night change.",
-      contract: ODS_WORKSPACE_VOXEL_CONTRACT,
-      marker: /template voxel/,
-    },
-    {
-      prompt: "Make an intricate animated SVG illustration with pause and color controls.",
-      contract: ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
-      marker: /template animated-svg/,
-    },
-    {
-      prompt: "Create a small task board where I can add, complete, filter, and remove items.",
-      contract: ODS_WORKSPACE_TASK_BOARD_CONTRACT,
-      marker: /template task-board/,
-    },
+    "Create an interactive voxel landscape with a dramatic day/night change.",
+    "Make an intricate animated SVG illustration with pause and color controls.",
+    "Create a small task board where I can add, complete, filter, and remove items.",
   ]) {
     const result = promptContractForAgent(
       { agentId: "pixel", contextTokenBudget: 65536 },
       "pixel",
-      { prompt: visual.prompt },
+      { prompt: visual },
       { configuredLeanPrompt: true }
     );
     assert.equal(
       result.appendSystemContext,
-      `${ODS_COMPACT_CONVERSATION_CONTRACT} ${visual.contract}`
+      `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
     );
-    assert.match(result.appendSystemContext, visual.marker);
+    assert.match(result.appendSystemContext, /Design and write every creative line/);
+    assert.doesNotMatch(result.appendSystemContext, /scaffold|template (?:voxel|animated-svg|task-board)/);
   }
 
   for (const prompt of [
@@ -195,7 +180,7 @@ test("routes natural visual follow-ups to a read-edit-republish contract", () =>
   );
   assert.equal(
     fresh.appendSystemContext,
-    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_GAME_CONTRACT}`
+    `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
 });
 

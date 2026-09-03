@@ -436,14 +436,13 @@ act as a capability gate:
   development server inside Pixel's disposable sandbox is explicitly rejected
   because that port is not the owner's browser-facing host.
 
-  Open-ended demos and common compact-model requests can take a one-call,
-  create-only starter path. The bounded starters cover a showcase, Breakout,
-  a task board, an animated SVG, and a Canvas voxel landscape. The receipt and
-  chat response identify those bytes as ODS-generated; they are a dependable
-  first result, not a claim that the model authored the artifact. A named,
-  themed, or otherwise custom request stays on Pixel's general workspace path,
-  where the model creates the exact files before publishing them. Starter
-  selection is therefore an accelerator, never an artifact allowlist.
+  Every creative artifact follows the same model-authored workspace path.
+  Open-ended demos, games, task boards, animated SVGs, voxel scenes, named
+  designs, and arbitrary sites must be written by the active model before the
+  preview adapter can publish them. ODS contains no creative templates or
+  generated starter bytes. The adapter accepts only the existing relative
+  directory, so safety enforcement, static validation, snapshot isolation, and
+  HTTP readback cannot be confused with authorship.
 
 The status tools read only `/run/ods-pixel/ods-status.json`. The plugin does not
 receive the Docker socket, Dashboard API key, Open WebUI key, host shell, or ODS
@@ -690,7 +689,7 @@ alone is not proof of live usability.
 | Open WebUI and Dashboard edge | `extensions/services/pixel-edge/` |
 | Host ingress and bounded ODS plugin | `extensions/services/pixel-agent/` |
 | Exact-download promotion boundary | `extensions/services/pixel-agent/host/artifact_promoter.py`, `extensions/services/pixel-agent/plugin/download-promote.mjs` |
-| Static workspace preview boundary | `extensions/services/pixel-agent/host/workspace_preview.py`, `extensions/services/pixel-agent/plugin/workspace-preview.mjs`, `extensions/services/pixel-agent/plugin/visual-scaffolds.mjs` |
+| Static workspace preview boundary | `extensions/services/pixel-agent/host/workspace_preview.py`, `extensions/services/pixel-agent/plugin/workspace-preview.mjs` |
 | Dashboard API/UI | `extensions/services/dashboard-api/routers/pixel.py`, `extensions/services/dashboard/src/pages/Pixel.jsx` |
 | Feature selection and Compose inclusion | `installers/phases/03-features.sh`, `installers/phases/11-services.sh` |
 | Generated secrets and pinned source | `installers/phases/06-directories.sh` |

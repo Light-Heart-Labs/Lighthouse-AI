@@ -1,18 +1,39 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import test from "node:test";
 
 import {
-  createWorkspaceScaffold,
   createWorkspacePreviewTool,
   normalizeWorkspacePreviewParams,
   testing,
 } from "../plugin/workspace-preview.mjs";
 
+function succeededResponse(overrides = {}) {
+  const sha256 = "a".repeat(64);
+  const siteId = `site-${sha256.slice(0, 24)}`;
+  const port = 9437;
+  return {
+    schemaVersion: 1,
+    kind: "ods-pixel-workspace-preview",
+    status: "succeeded",
+    relativeDirectory: "demo-site",
+    siteId,
+    port,
+    url: `http://${siteId}.localhost:${port}/${siteId}/`,
+    files: 3,
+    bytes: 9000,
+    sha256,
+    entryFile: "index.html",
+    entrySha256: "b".repeat(64),
+    httpStatus: 200,
+    readbackVerified: true,
+    executable: false,
+    overwritten: false,
+    boundary: testing.BOUNDARY,
+    ...overrides,
+  };
+}
 
-test("normalizes one bounded workspace-relative directory", () => {
+test("normalizes only one bounded workspace-relative directory", () => {
   assert.deepEqual(normalizeWorkspacePreviewParams({ relativeDirectory: "demo-site" }), {
     schemaVersion: 1,
     action: "publish",
@@ -26,245 +47,40 @@ test("normalizes one bounded workspace-relative directory", () => {
   }
 });
 
-test("creates one owner-private self-contained interactive scaffold without overwrite", async () => {
-  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-scaffold-"));
-  try {
-    const request = {
-      workspaceRoot,
-      relativeDirectory: "signal-garden",
-      scaffold: {
-        title: "Signal <Garden>",
-        tagline: "A local & interactive field.",
-        theme: "ocean",
-      },
-    };
-    const firstDirectory = await createWorkspaceScaffold(request, {
-      uniqueSuffix: () => "12345678",
-    });
-    const entry = path.join(workspaceRoot, firstDirectory, "index.html");
-    const html = await readFile(entry, "utf8");
-    assert.match(html, /Signal &lt;Garden&gt;/);
-    assert.match(html, /A local &amp; interactive field/);
-    assert.match(html, /data-theme="ocean"/);
-    assert.match(html, /Launch sequence/);
-    assert.match(html, /requestAnimationFrame/);
-    assert.equal((await stat(entry)).mode & 0o777, 0o600);
-    const secondDirectory = await createWorkspaceScaffold(request, {
-      uniqueSuffix: () => "90abcdef",
-    });
-    assert.equal(firstDirectory, "signal-garden-12345678");
-    assert.equal(secondDirectory, "signal-garden-90abcdef");
-    assert.notEqual(firstDirectory, secondDirectory);
-    assert.equal((await stat(entry)).size > 0, true);
-  } finally {
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
-});
-
-test("normalizes only exact bounded demo scaffold fields", () => {
-  assert.deepEqual(
-    normalizeWorkspacePreviewParams({
-      relativeDirectory: "signal-garden",
-      scaffold: {
-        title: "Signal Garden",
-        tagline: "A local interactive field.",
-        theme: "aurora",
-      },
-    }),
-    {
-      schemaVersion: 1,
-      action: "publish",
-      relativeDirectory: "signal-garden",
-      scaffold: {
-        title: "Signal Garden",
-        tagline: "A local interactive field.",
-        theme: "aurora",
-      },
-    }
-  );
-  for (const scaffold of [
-    { title: "Demo", tagline: "Tagline", theme: "unknown" },
-    { title: "Demo", tagline: "Tagline", theme: "aurora", extra: true },
-    { title: "", tagline: "Tagline", theme: "aurora" },
+test("rejects every ODS-authored creative scaffold or extra request field", () => {
+  for (const extra of [
+    { scaffold: { title: "Demo", tagline: "Generated", theme: "aurora" } },
+    { template: "breakout" },
+    { html: "<h1>Generated</h1>" },
   ]) {
     assert.throws(
-      () => normalizeWorkspacePreviewParams({ relativeDirectory: "demo", scaffold }),
+      () => normalizeWorkspacePreviewParams({ relativeDirectory: "demo-site", ...extra }),
       /invalid Pixel workspace preview request/
     );
   }
-  assert.throws(
-    () =>
-      normalizeWorkspacePreviewParams({
-        relativeDirectory: "nested/demo",
-        scaffold: { title: "Demo", tagline: "Tagline", theme: "aurora" },
-      }),
-    /invalid Pixel workspace preview request/
-  );
-  assert.deepEqual(
-    normalizeWorkspacePreviewParams({
-      relativeDirectory: "neon-breakout",
-      scaffold: {
-        title: "Neon Breakout",
-        tagline: "A local arcade.",
-        theme: "orchid",
-        template: "breakout",
-      },
-    }).scaffold,
-    {
-      title: "Neon Breakout",
-      tagline: "A local arcade.",
-      theme: "orchid",
-      template: "breakout",
-    }
-  );
-  for (const template of ["animated-svg", "breakout", "task-board", "voxel"]) {
-    assert.equal(
-      normalizeWorkspacePreviewParams({
-        relativeDirectory: "visual",
-        scaffold: {
-          title: "Visual",
-          tagline: "A local visual.",
-          theme: "aurora",
-          template,
-        },
-      }).scaffold.template,
-      template
-    );
-  }
-  assert.throws(
-    () => normalizeWorkspacePreviewParams({
-      relativeDirectory: "demo",
-      scaffold: {
-        title: "Demo",
-        tagline: "Tagline",
-        theme: "aurora",
-        template: "untrusted",
-      },
-    }),
-    /invalid Pixel workspace preview request/
-  );
 });
 
-test("creates a responsive self-contained Breakout game scaffold", async () => {
-  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-breakout-"));
-  try {
-    const relativeDirectory = await createWorkspaceScaffold({
-      workspaceRoot,
-      relativeDirectory: "neon-breakout",
-      scaffold: {
-        title: "Neon <Breakout>",
-        tagline: "A safe & local arcade.",
-        theme: "orchid",
-        template: "breakout",
-      },
-    }, {
-      uniqueSuffix: () => "12345678",
-    });
-    const entry = path.join(workspaceRoot, relativeDirectory, "index.html");
-    const html = await readFile(entry, "utf8");
-    assert.equal(relativeDirectory, "neon-breakout-12345678");
-    assert.match(html, /Neon &lt;Breakout&gt;/);
-    assert.match(html, /A safe &amp; local arcade/);
-    assert.match(html, /<canvas id="game"/);
-    assert.match(html, /requestAnimationFrame/);
-    assert.match(html, /typeof ctx\.roundRect==='function'/);
-    assert.match(html, /pointermove/);
-    assert.match(html, /addEventListener\('keydown'/);
-    assert.match(html, /Touch controls/);
-    assert.match(html, /overlay\.inert=true/);
-    assert.match(html, /Content-Security-Policy/);
-    assert.doesNotMatch(html, /https?:\/\//);
-    assert.equal((await stat(entry)).mode & 0o777, 0o600);
-  } finally {
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
+test("exposes a publish-only schema with no creative generator input", () => {
+  const tool = createWorkspacePreviewTool({ request: async () => succeededResponse() });
+  assert.deepEqual(Object.keys(tool.parameters.properties), ["relativeDirectory"]);
+  assert.equal(tool.parameters.additionalProperties, false);
+  assert.match(tool.description, /already created by the active model/);
+  assert.match(tool.description, /never supplies creative starter bytes/i);
+  assert.doesNotMatch(JSON.stringify(tool.parameters), /scaffold|template|title|tagline|theme/);
 });
 
-test("creates diverse self-contained visual starters with real controls", async () => {
-  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "pixel-preview-visuals-"));
-  const cases = [
-    {
-      template: "voxel",
-      marker: /<canvas id="world"/,
-      interactions: [
-        /Shift to night/,
-        /Remix terrain/,
-        /Terrain remixed · /,
-        /type="range"/,
-      ],
-    },
-    {
-      template: "animated-svg",
-      marker: /<svg id="art"/,
-      interactions: [/Pause motion/, /Reverse orbit/, /data-palette/],
-    },
-    {
-      template: "task-board",
-      marker: /<form class="composer" id="form"/,
-      interactions: [/Add task/, /data-filter="done"/, /localStorage/],
-    },
-  ];
-  try {
-    for (const [index, visual] of cases.entries()) {
-      const relativeDirectory = await createWorkspaceScaffold({
-        workspaceRoot,
-        relativeDirectory: visual.template,
-        scaffold: {
-          title: `Unsafe <${visual.template}>`,
-          tagline: "Local & interactive.",
-          theme: "ocean",
-          template: visual.template,
-        },
-      }, {
-        uniqueSuffix: () => `1234567${index}`,
-      });
-      const entry = path.join(workspaceRoot, relativeDirectory, "index.html");
-      const html = await readFile(entry, "utf8");
-      assert.match(html, /Unsafe &lt;/);
-      assert.match(html, /Local &amp; interactive/);
-      assert.match(html, visual.marker);
-      for (const interaction of visual.interactions) assert.match(html, interaction);
-      assert.match(html, /Content-Security-Policy/);
-      assert.doesNotMatch(html, /https?:\/\//);
-      assert.equal((await stat(entry)).mode & 0o777, 0o600);
-    }
-  } finally {
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
-});
-
-
-test("returns only a structurally verified localhost preview", async () => {
-  const response = {
-    schemaVersion: 1,
-    kind: "ods-pixel-workspace-preview",
-    status: "succeeded",
-    relativeDirectory: "demo-site",
-    siteId: "site-0123456789abcdef01234567",
-    port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 3,
-    bytes: 9000,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
-    httpStatus: 200,
-    readbackVerified: true,
-    executable: false,
-    overwritten: false,
-    boundary: testing.BOUNDARY,
-  };
+test("publishes only the exact existing workspace directory", async () => {
   const calls = [];
   const tool = createWorkspacePreviewTool({
     request: async (request) => {
       calls.push(request);
-      return response;
+      return succeededResponse();
     },
   });
   const result = await tool.execute("call-1", { relativeDirectory: "demo-site" });
   assert.equal(result.isError, undefined);
   assert.equal(result.details.readbackVerified, true);
-  assert.match(result.content[0].text, /Verified browser URL/);
+  assert.match(result.content[0].text, /independently published and read back/);
   assert.deepEqual(calls, [{
     schemaVersion: 1,
     action: "publish",
@@ -272,83 +88,42 @@ test("returns only a structurally verified localhost preview", async () => {
   }]);
 });
 
-test("creates a requested scaffold before sending the narrow publish request", async () => {
-  const calls = [];
-  const scaffolds = [];
-  const response = {
-    schemaVersion: 1,
-    kind: "ods-pixel-workspace-preview",
-    status: "succeeded",
-    relativeDirectory: "signal-garden-12345678",
-    siteId: "site-0123456789abcdef01234567",
-    port: 9437,
-    url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-    files: 1,
-    bytes: 7000,
-    sha256: "a".repeat(64),
-    entryFile: "index.html",
-    entrySha256: "b".repeat(64),
-    httpStatus: 200,
-    readbackVerified: true,
-    executable: false,
-    overwritten: false,
-    boundary: testing.BOUNDARY,
-  };
+test("rejects a preview site ID that is not content-addressed to the snapshot", async () => {
+  const mismatchedSiteId = "site-0123456789abcdef01234567";
   const tool = createWorkspacePreviewTool({
-    workspaceRoot: "/workspace",
-    scaffold: async (request) => {
-      scaffolds.push(request);
-      return "signal-garden-12345678";
-    },
-    request: async (request) => {
-      calls.push(request);
-      return response;
-    },
+    request: async () => succeededResponse({
+      siteId: mismatchedSiteId,
+      url: `http://${mismatchedSiteId}.localhost:9437/${mismatchedSiteId}/`,
+    }),
   });
-  const scaffold = {
-    title: "Signal Garden",
-    tagline: "A local interactive field.",
-    theme: "aurora",
-  };
-  const result = await tool.execute("call-scaffold", {
-    relativeDirectory: "signal-garden",
-    scaffold,
+  const result = await tool.execute("call-mismatched-site", {
+    relativeDirectory: "demo-site",
   });
-  assert.equal(result.isError, undefined);
-  assert.match(result.content[0].text, /created, published/);
-  assert.deepEqual(scaffolds, [{
-    workspaceRoot: "/workspace",
-    relativeDirectory: "signal-garden",
-    scaffold,
-  }]);
-  assert.deepEqual(calls, [{
-    schemaVersion: 1,
-    action: "publish",
-    relativeDirectory: "signal-garden-12345678",
-  }]);
+  assert.equal(result.isError, true);
 });
 
+test("fails before contacting the host when creative bytes are supplied", async () => {
+  let calls = 0;
+  const tool = createWorkspacePreviewTool({
+    request: async () => {
+      calls += 1;
+      return succeededResponse();
+    },
+  });
+  const result = await tool.execute("call-generated", {
+    relativeDirectory: "demo-site",
+    scaffold: { title: "Demo", tagline: "Generated", theme: "aurora" },
+  });
+  assert.equal(result.isError, true);
+  assert.equal(calls, 0);
+});
 
 test("fails closed on a mismatched or unverified service response", async () => {
   const tool = createWorkspacePreviewTool({
-    request: async () => ({
-      schemaVersion: 1,
-      kind: "ods-pixel-workspace-preview",
-      status: "succeeded",
-      relativeDirectory: "demo-site",
-      siteId: "site-0123456789abcdef01234567",
+    request: async () => succeededResponse({
       port: 3000,
       url: "http://localhost:3000/demo-site/",
-      files: 1,
-      bytes: 1,
-      sha256: "a".repeat(64),
-      entryFile: "index.html",
-      entrySha256: "b".repeat(64),
-      httpStatus: 200,
       readbackVerified: false,
-      executable: false,
-      overwritten: false,
-      boundary: testing.BOUNDARY,
     }),
   });
   const result = await tool.execute("call-2", { relativeDirectory: "demo-site" });
@@ -359,26 +134,7 @@ test("fails closed on a mismatched or unverified service response", async () => 
 
 test("fails closed when the host response contains an uncontracted field", async () => {
   const tool = createWorkspacePreviewTool({
-    request: async () => ({
-      schemaVersion: 1,
-      kind: "ods-pixel-workspace-preview",
-      status: "succeeded",
-      relativeDirectory: "demo-site",
-      siteId: "site-0123456789abcdef01234567",
-      port: 9437,
-      url: "http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/",
-      files: 1,
-      bytes: 1,
-      sha256: "a".repeat(64),
-      entryFile: "index.html",
-      entrySha256: "b".repeat(64),
-      httpStatus: 200,
-      readbackVerified: true,
-      executable: false,
-      overwritten: false,
-      boundary: testing.BOUNDARY,
-      redirect: "https://attacker.example/",
-    }),
+    request: async () => succeededResponse({ redirect: "https://attacker.example/" }),
   });
   const result = await tool.execute("call-3", { relativeDirectory: "demo-site" });
   assert.equal(result.isError, true);

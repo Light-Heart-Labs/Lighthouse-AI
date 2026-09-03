@@ -18,9 +18,7 @@ import {
   userMessageRequestsPrivateUrl,
   userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceVisualContinuation,
-  userMessageRequestsWorkspaceDemoScaffold,
   userMessageRequestsWorkspacePreview,
-  userMessageWorkspaceStarterScaffold,
 } from "./tool-loop-guard.mjs";
 
 export const ODS_CONVERSATION_CONTRACT = [
@@ -129,32 +127,10 @@ export const ODS_EXACT_DOWNLOAD_CONTRACT =
   "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
 
 export const ODS_WORKSPACE_PREVIEW_CONTRACT =
-  "The owner's current request requires a live static browser visual. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete polished self-contained HTML document under 7000 characters with inline CSS and JavaScript. Use semantic interactive elements such as button for requested controls, responsive layout, keyboard access, and reduced-motion behavior where applicable. Parent directories are created by write. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply. That receipt proves publication and HTTP readback only: never claim a requested interaction was exercised unless an interaction-capable tool produced evidence for it.";
+  "The owner's current request requires a novel live static browser visual authored by the active model. Do not call exec, mkdir, or start a server, and do not spend a response planning the design. In the first tool step call tool_call with id write and args containing one fresh directory path ending in /index.html plus one complete polished self-contained HTML document under 7000 characters with inline CSS and JavaScript. Design and write every creative line for this request; ODS supplies no website, game, app, SVG, voxel-scene, or visualization starter bytes. Use semantic interactive elements such as button for requested controls, responsive layout, keyboard access, and reduced-motion behavior where applicable. Parent directories are created by write. After write succeeds, call pixel_ods_workspace_preview with exactly that directory. Only after its readback-verified receipt may you reply. That receipt proves publication and HTTP readback only: never claim a requested interaction was exercised unless an interaction-capable tool produced evidence for it.";
 
 export const ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT =
   "The owner is naturally continuing the most recently readback-verified visual artifact in this same Pixel chat. In the first tool step call tool_call with id read and args path index.html; the ODS guard binds that basename to the exact verified artifact directory. Then use only a focused edit on the returned path to make the requested change, and call pixel_ods_workspace_preview with that same directory. Do not call write, apply_patch, exec, process, mkdir, start a server, create another directory, or use a generated scaffold. The new preview receipt proves publication and static readback only; never claim an interaction was exercised without interaction-capable evidence.";
-
-export const ODS_WORKSPACE_DEMO_CONTRACT =
-  "The owner asked for an open-ended website demonstration. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory as one fresh short directory name plus scaffold with a creative title, a concise tagline, and theme set to exactly one of aurora, ember, ocean, orchid, or solar. This create-only ODS tool generates a polished responsive interactive site and publishes it through independent loopback readback. Do not generate HTML, call write, call exec, plan the design, or start a server. Reply only after the verified tool receipt.";
-
-export const ODS_WORKSPACE_GAME_CONTRACT =
-  "The owner asked for a Breakout-style browser game. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory neon-breakout plus scaffold with title Neon Breakout, a concise tagline, theme orchid, and template breakout. The ODS guard binds this create-only request and the host generates a polished responsive keyboard, pointer, and touch-playable game before independent preview readback. Do not generate HTML, call write, call exec, plan the game, or start a server. Reply only after the verified tool receipt.";
-
-export const ODS_WORKSPACE_VOXEL_CONTRACT =
-  "The owner asked for an interactive voxel scene. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory voxel-horizon plus scaffold with title Voxel Horizon, a concise tagline, theme ocean, and template voxel. The ODS guard binds this create-only request and the host generates a responsive local Canvas landscape with orbit, terrain-remix, and day/night controls before independent preview readback. Do not generate HTML, call write, call exec, plan the scene, or start a server. Reply only after the verified tool receipt.";
-
-export const ODS_WORKSPACE_ANIMATED_SVG_CONTRACT =
-  "The owner asked for open-ended animated SVG art. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory living-vector plus scaffold with title Living Vector, a concise tagline, theme orchid, and template animated-svg. The ODS guard binds this create-only request and the host generates an intricate responsive local SVG with pause, direction, and palette controls before independent preview readback. Do not generate SVG or HTML, call write, call exec, plan the illustration, or start a server. Reply only after the verified tool receipt.";
-
-export const ODS_WORKSPACE_TASK_BOARD_CONTRACT =
-  "The owner asked for a small local task board. Make exactly one tool call now, with no introductory text: call tool_call with id pixel_ods_workspace_preview and args containing relativeDirectory orbit-tasks plus scaffold with title Orbit Tasks, a concise tagline, theme aurora, and template task-board. The ODS guard binds this create-only request and the host generates a responsive browser app with add, complete, filter, remove, empty-state, and local persistence behavior before independent preview readback. Do not generate HTML, call write, call exec, plan the app, or start a server. Reply only after the verified tool receipt.";
-
-const ODS_WORKSPACE_STARTER_CONTRACTS = Object.freeze({
-  "animated-svg": ODS_WORKSPACE_ANIMATED_SVG_CONTRACT,
-  breakout: ODS_WORKSPACE_GAME_CONTRACT,
-  "task-board": ODS_WORKSPACE_TASK_BOARD_CONTRACT,
-  voxel: ODS_WORKSPACE_VOXEL_CONTRACT,
-});
 
 export function operationsRequestContract(messages, prompt = undefined) {
   const requirements = userMessageOperationsRequirements(messages, prompt);
@@ -323,22 +299,12 @@ export function promptContractForAgent(
     )
       ? ` ${ODS_WORKSPACE_VISUAL_CONTINUATION_CONTRACT}`
       : "";
-  const workspaceStarterTemplate = userMessageWorkspaceStarterScaffold(
-    event?.messages,
-    event?.prompt
-  )?.scaffold?.template;
-  const workspaceStarterContract =
-    ODS_WORKSPACE_STARTER_CONTRACTS[workspaceStarterTemplate];
   const workspacePreview = workspaceVisualContinuation ||
     (userMessageRequestsWorkspacePreview(
     event?.messages,
     event?.prompt
   )
-    ? workspaceStarterContract
-      ? ` ${workspaceStarterContract}`
-      : userMessageRequestsWorkspaceDemoScaffold(event?.messages, event?.prompt)
-        ? ` ${ODS_WORKSPACE_DEMO_CONTRACT}`
-        : ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
+    ? ` ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
     : "");
   const verification =
     verificationStatus === "pending"

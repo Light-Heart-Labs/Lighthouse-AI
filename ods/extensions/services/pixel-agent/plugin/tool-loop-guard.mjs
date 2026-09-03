@@ -349,45 +349,6 @@ const SYNCHRONOUS_HOST_COMMAND_TOOL = "pixel_ods_host_command_propose";
 const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
 const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
 const WORKSPACE_PREVIEW_TOOL = "pixel_ods_workspace_preview";
-const WORKSPACE_GAME_SCAFFOLD = Object.freeze({
-  relativeDirectory: "neon-breakout",
-  scaffold: Object.freeze({
-    title: "Neon Breakout",
-    tagline: "Smash the signal wall in a responsive local arcade.",
-    theme: "orchid",
-    template: "breakout",
-  }),
-});
-const WORKSPACE_VISUAL_SCAFFOLDS = Object.freeze({
-  "animated-svg": Object.freeze({
-    relativeDirectory: "living-vector",
-    scaffold: Object.freeze({
-      title: "Living Vector",
-      tagline: "An intricate local SVG system with motion and color controls.",
-      theme: "orchid",
-      template: "animated-svg",
-    }),
-  }),
-  breakout: WORKSPACE_GAME_SCAFFOLD,
-  "task-board": Object.freeze({
-    relativeDirectory: "orbit-tasks",
-    scaffold: Object.freeze({
-      title: "Orbit Tasks",
-      tagline: "A focused local task board that remembers what matters.",
-      theme: "aurora",
-      template: "task-board",
-    }),
-  }),
-  voxel: Object.freeze({
-    relativeDirectory: "voxel-horizon",
-    scaffold: Object.freeze({
-      title: "Voxel Horizon",
-      tagline: "Explore a responsive isometric landscape from day into night.",
-      theme: "ocean",
-      template: "voxel",
-    }),
-  }),
-});
 const MAX_TRACKED_RUNS = 256;
 const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
@@ -3986,6 +3947,19 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     (browserVisual && build);
 }
 
+function userMessageRequiresWorkspacePreviewAuthorship(
+  messages,
+  prompt = undefined
+) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) return false;
+  const create =
+    /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i;
+  const rejectsCreation =
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|design|generate|implement|make|write)\b/i;
+  return create.test(text) && !rejectsCreation.test(text);
+}
+
 export function userMessageRequestsWorkspacePreviewInspection(
   messages,
   prompt = undefined
@@ -3995,28 +3969,6 @@ export function userMessageRequestsWorkspacePreviewInspection(
   return (
     /\b(?:inspect|read|review|check)\s+(?:each|every|all)(?:\s+(?:of\s+the|the))?\s+(?:created|generated|preview|site|website)?\s*files?\b/i.test(text) ||
     /\b(?:inspect|read|review|check)\s+(?:the\s+)?(?:created|generated|preview|site|website)\s+files?\b/i.test(text)
-  );
-}
-
-export function userMessageRequestsWorkspaceDemoScaffold(
-  messages,
-  prompt = undefined
-) {
-  const text = currentOwnerIntentText(messages, prompt);
-  const exactNameRequested =
-    /\b(?:called|named)\s+[a-z0-9][a-z0-9._-]{1,80}\b/i.test(text);
-  const customInteractionRequested =
-    /\b(?:with|include|including|containing|feature|featuring|must\s+have|should\s+have)\b[^.!?;\n]{0,180}\b(?:button|control|counter|form|game|input|menu|navigation|slider|table|toggle)\b/i.test(
-      text
-    );
-  return Boolean(
-    text &&
-    userMessageRequestsWorkspacePreview(messages, prompt) &&
-    !exactNameRequested &&
-    !customInteractionRequested &&
-    /\b(?:demo|demonstrat(?:e|ion)|showcase|any\s+(?:website|site|web\s*page)|capabilit(?:y|ies))\b/i.test(
-      text
-    )
   );
 }
 
@@ -4043,74 +3995,6 @@ export function userMessageRequestsWorkspaceVisualContinuation(
         (visualReference.test(clause) || pronounReference.test(clause)) &&
         !rejection.test(clause)
     );
-}
-
-export function userMessageRequestsWorkspaceGameScaffold(
-  messages,
-  prompt = undefined
-) {
-  const text = currentOwnerIntentText(messages, prompt);
-  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) return false;
-  const breakout = /\b(?:breakout|brick[- ]?breaker)\b/i;
-  const create =
-    /\b(?:build|create|develop|generate|implement|make|want|would\s+like|write)\b/i;
-  const rejection =
-    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not)\s+(?:build|create|develop|generate|implement|make|want|write)\b/i;
-  const explanation =
-    /\b(?:explain|history|how\s+(?:does|do|to)|review|tutorial|what\s+is|why)\b/i;
-  const compoundArtifact =
-    /\b(?:app|application|front\s*end|homepage|landing\s+page|portfolio|site|web\s*page|website)\b/i;
-  const customGame =
-    /\b(?:add|audio|colors?|colours?|custom|levels?|lives?|menu|multiplayer|music|palette|paddle|physics|power[- ]?ups?|remove|retro|skip|sound|theme)\b/i;
-  if (compoundArtifact.test(text) || customGame.test(text)) return false;
-  return text
-    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
-    .some(
-      (clause) =>
-        breakout.test(clause) &&
-        create.test(clause) &&
-        !rejection.test(clause) &&
-        !explanation.test(clause)
-    );
-}
-
-export function userMessageWorkspaceStarterScaffold(
-  messages,
-  prompt = undefined
-) {
-  if (userMessageRequestsWorkspaceGameScaffold(messages, prompt)) {
-    return WORKSPACE_VISUAL_SCAFFOLDS.breakout;
-  }
-  const text = currentOwnerIntentText(messages, prompt);
-  if (!text || !userMessageRequestsWorkspacePreview(messages, prompt)) {
-    return undefined;
-  }
-  const exactNameRequested =
-    /\b(?:called|named)\s+[a-z0-9][a-z0-9._-]{1,80}\b/i.test(text);
-  if (exactNameRequested) return undefined;
-
-  const voxel =
-    /\bvoxel(?:[- ](?:based|styles?))?\s+(?:art|landscape|scene|world)\b/i.test(text);
-  const customVoxel =
-    /\b(?:city|dragon|dungeon|minecraft|spaceship|specific|underwater)\b/i.test(text);
-  if (voxel && !customVoxel) return WORKSPACE_VISUAL_SCAFFOLDS.voxel;
-
-  const animatedSvg =
-    /\b(?:animated\s+svg|svg\s+animation)\b/i.test(text);
-  const customSvg =
-    /\b(?:depict|logo|mascot|of\s+(?:a|an|my|our|the)|portrait|specific|showing)\b/i.test(text);
-  if (animatedSvg && !customSvg) {
-    return WORKSPACE_VISUAL_SCAFFOLDS["animated-svg"];
-  }
-
-  const taskBoard =
-    /\b(?:task\s+board|to-?do\s+(?:app|board|list))\b/i.test(text);
-  const unsupportedTaskFeature =
-    /\b(?:account|calendar|cloud|collaborat|drag|email|login|multi[- ]?user|notification|sync)\w*\b/i.test(text);
-  if (taskBoard && !unsupportedTaskFeature) {
-    return WORKSPACE_VISUAL_SCAFFOLDS["task-board"];
-  }
-  return undefined;
 }
 
 function workspacePreviewDirectoryFromState(state) {
@@ -4156,17 +4040,39 @@ function workspacePreviewNextKnownReadPath(state) {
   return [...candidates].find((value) => !state.successfulReadPaths.has(value));
 }
 
-function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = false) {
+function workspacePreviewAuthoredSnapshot(state, expectedDirectory) {
+  const prefix = `${expectedDirectory}/`;
+  const paths = [...state.successfulWritePaths]
+    .filter((value) => typeof value === "string" && value.startsWith(prefix))
+    .sort();
+  const digest = createHash("sha256");
+  let bytes = 0;
+  for (const fullPath of paths) {
+    const content = state.successfulWriteContentByPath.get(fullPath);
+    if (typeof content !== "string") return undefined;
+    const relativePath = fullPath.slice(prefix.length);
+    const encodedPath = Buffer.from(relativePath, "utf8");
+    const encodedContent = Buffer.from(content, "utf8");
+    const pathLength = Buffer.alloc(4);
+    const contentLength = Buffer.alloc(8);
+    pathLength.writeUInt32BE(encodedPath.length);
+    contentLength.writeBigUInt64BE(BigInt(encodedContent.length));
+    digest.update(pathLength);
+    digest.update(encodedPath);
+    digest.update(contentLength);
+    digest.update(encodedContent);
+    bytes += encodedContent.length;
+  }
+  return {
+    paths,
+    bytes,
+    sha256: digest.digest("hex"),
+  };
+}
+
+function workspacePreviewOutcome(event, expectedDirectory, state) {
   const details = event?.result?.details;
   const exactDirectory = details?.relativeDirectory === expectedDirectory;
-  const allocatedScaffoldDirectory = Boolean(
-    scaffoldRequested &&
-    typeof details?.relativeDirectory === "string" &&
-    details.relativeDirectory.startsWith(`${expectedDirectory}-`) &&
-    /^[a-f0-9]{8}$/.test(
-      details.relativeDirectory.slice(expectedDirectory.length + 1)
-    )
-  );
   if (
     !details ||
     typeof details !== "object" ||
@@ -4175,8 +4081,9 @@ function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = f
     details.schemaVersion !== 1 ||
     details.kind !== "ods-pixel-workspace-preview" ||
     details.status !== "succeeded" ||
-    (!exactDirectory && !allocatedScaffoldDirectory) ||
+    !exactDirectory ||
     !/^site-[a-f0-9]{24}$/.test(details.siteId) ||
+    details.siteId !== `site-${details.sha256?.slice(0, 24)}` ||
     !Number.isInteger(details.port) ||
     details.port < 1 ||
     details.port > 65535 ||
@@ -4197,6 +4104,22 @@ function workspacePreviewOutcome(event, expectedDirectory, scaffoldRequested = f
     details.overwritten !== false
   ) {
     return undefined;
+  }
+  if (state?.workspacePreviewAuthorshipRequired) {
+    const authored = workspacePreviewAuthoredSnapshot(state, expectedDirectory);
+    const entryPath = `${expectedDirectory}/${details.entryFile}`;
+    const entryContent = state.successfulWriteContentByPath.get(entryPath);
+    if (
+      !authored ||
+      authored.paths.length !== details.files ||
+      authored.bytes !== details.bytes ||
+      authored.sha256 !== details.sha256 ||
+      typeof entryContent !== "string" ||
+      createHash("sha256").update(entryContent, "utf8").digest("hex") !==
+        details.entrySha256
+    ) {
+      return undefined;
+    }
   }
   return {
     relativeDirectory: details.relativeDirectory,
@@ -4679,16 +4602,14 @@ export function createToolLoopGuard({
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
         workspacePreviewRequested: false,
+        workspacePreviewAuthorshipRequired: false,
+        workspacePreviewModelAuthored: false,
         workspaceVisualContinuationRequested: false,
         workspaceVisualContinuationUnavailable: false,
         workspaceVisualContinuationEdited: false,
-        workspaceDemoScaffoldRequested: false,
-        workspaceGameScaffoldRequested: false,
-        workspaceStarterScaffold: undefined,
         workspacePreviewInspectionRequested: false,
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
-        workspacePreviewGeneratedScaffold: false,
         workspacePreview: undefined,
         workspaceToolSearchRouted: false,
         workspaceInspectionRouted: false,
@@ -5259,21 +5180,6 @@ export function createToolLoopGuard({
         },
       };
     }
-    const selectedWorkspaceStarter = state?.workspaceStarterScaffold;
-    const forceWorkspaceStarter = Boolean(
-      selectedWorkspaceStarter &&
-      !state.workspacePreviewAttempted &&
-      !state.workspacePreview
-    );
-    if (forceWorkspaceStarter && toolName === "tool_call") {
-      pendingParams = {
-        id: WORKSPACE_PREVIEW_TOOL,
-        args: {
-          relativeDirectory: selectedWorkspaceStarter.relativeDirectory,
-          scaffold: { ...selectedWorkspaceStarter.scaffold },
-        },
-      };
-    }
     const pendingSelectedName =
       toolName === "tool_call" && typeof pendingParams?.id === "string"
         ? pendingParams.id.split(":").at(-1)
@@ -5288,49 +5194,26 @@ export function createToolLoopGuard({
       }
       const suppliedArgs =
         toolName === "tool_call" ? pendingParams?.args : pendingParams;
-      if (
-        suppliedArgs?.scaffold !== undefined &&
-        !selectedWorkspaceStarter &&
-        !state.workspaceDemoScaffoldRequested
-      ) {
+      if (suppliedArgs?.scaffold !== undefined) {
         return {
           block: true,
           blockReason:
-            "Pixel blocked a generated starter for a custom visual request. Create the owner-requested artifact with workspace tools, then publish that exact directory.",
+            "Pixel blocked an ODS-authored creative scaffold. The active model must create the owner's requested artifact with workspace tools, then publish that exact directory.",
         };
       }
-      if (
-        suppliedArgs?.scaffold?.template !== undefined &&
-        suppliedArgs.scaffold.template !==
-          selectedWorkspaceStarter?.scaffold?.template
-      ) {
-        return {
-          block: true,
-          blockReason:
-            "Pixel blocked a generated visual template that the owner's current request did not select. Create the requested custom visual artifact with workspace tools instead.",
-        };
-      }
-      const args = forceWorkspaceStarter
-        ? {
-          relativeDirectory: selectedWorkspaceStarter.relativeDirectory,
-          scaffold: { ...selectedWorkspaceStarter.scaffold },
-        }
-        : suppliedArgs;
+      const args = suppliedArgs;
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
       const observedDirectory = workspacePreviewDirectoryFromState(state);
       const directory = observedDirectory ?? providedDirectory;
-      const scaffoldRequested = Boolean(
-        args?.scaffold &&
-        typeof args.scaffold === "object" &&
-        !Array.isArray(args.scaffold)
-      );
       const hasObservedIndex =
         typeof directory === "string" &&
-        (
-          state.successfulWritePaths.has(`${directory}/index.html`) ||
-          state.successfulReadPaths.has(`${directory}/index.html`)
-        );
-      if (!directory || (!hasObservedIndex && !scaffoldRequested)) {
+        (state.workspacePreviewAuthorshipRequired
+          ? state.successfulWritePaths.has(`${directory}/index.html`)
+          : (
+            state.successfulWritePaths.has(`${directory}/index.html`) ||
+            state.successfulReadPaths.has(`${directory}/index.html`)
+          ));
+      if (!directory || !hasObservedIndex) {
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
       }
       state.workspacePreviewDirectory = directory;
@@ -5338,16 +5221,10 @@ export function createToolLoopGuard({
         pendingParams = {
           ...pendingParams,
           id: WORKSPACE_PREVIEW_TOOL,
-          args: {
-            relativeDirectory: directory,
-            ...(scaffoldRequested ? { scaffold: args.scaffold } : {}),
-          },
+          args: { relativeDirectory: directory },
         };
       } else {
-        normalizedParams = {
-          relativeDirectory: directory,
-          ...(scaffoldRequested ? { scaffold: args.scaffold } : {}),
-        };
+        normalizedParams = { relativeDirectory: directory };
         pendingParams = normalizedParams;
       }
     }
@@ -6585,19 +6462,13 @@ export function createToolLoopGuard({
               event?.messages,
               event?.prompt
             ));
-        state.workspaceGameScaffoldRequested =
-          userMessageRequestsWorkspaceGameScaffold(
+        state.workspacePreviewAuthorshipRequired = Boolean(
+          state.workspacePreviewRequested &&
+          !trustedSessionPreview &&
+          userMessageRequiresWorkspacePreviewAuthorship(
             event?.messages,
             event?.prompt
-          );
-        state.workspaceDemoScaffoldRequested =
-          userMessageRequestsWorkspaceDemoScaffold(
-            event?.messages,
-            event?.prompt
-          );
-        state.workspaceStarterScaffold = userMessageWorkspaceStarterScaffold(
-          event?.messages,
-          event?.prompt
+          )
         );
         state.workspacePreviewInspectionRequested =
           userMessageRequestsWorkspacePreviewInspection(
@@ -6623,9 +6494,6 @@ export function createToolLoopGuard({
           event?.prompt
         );
         if (trustedSessionPreview) {
-          state.workspaceGameScaffoldRequested = false;
-          state.workspaceDemoScaffoldRequested = false;
-          state.workspaceStarterScaffold = undefined;
           state.workspaceTaskPath =
             `${trustedSessionPreview.relativeDirectory}/index.html`;
           state.workspaceTaskDirectory = trustedSessionPreview.relativeDirectory;
@@ -6921,11 +6789,11 @@ export function createToolLoopGuard({
       const preview = workspacePreviewOutcome(
         previewEvent,
         state.workspacePreviewDirectory,
-        Boolean(previewEvent?.params?.scaffold)
+        state
       );
       if (preview) {
         state.workspacePreviewDirectory = preview.relativeDirectory;
-        state.workspacePreviewGeneratedScaffold = Boolean(previewEvent?.params?.scaffold);
+        state.workspacePreviewModelAuthored = state.workspacePreviewAuthorshipRequired;
         state.workspacePreview = preview;
         rememberSessionPreview(state.currentSessionId, preview);
       }
@@ -7711,9 +7579,9 @@ export function createToolLoopGuard({
           `${state.workspacePreview.bytes} bytes, SHA-256 ` +
           `\`${state.workspacePreview.sha256}\`.\n` +
           `- Workspace artifact: \`${state.workspacePreview.relativeDirectory}/index.html\`.\n` +
-          (state.workspacePreviewGeneratedScaffold
-            ? "- Origin: ODS generated a create-only starter; refine it with a follow-up request or ask for a custom build.\n"
-            : "- Origin: Pixel published the workspace files created for this request.\n") +
+          (state.workspacePreviewModelAuthored
+            ? "- Origin: Pixel's active model wrote every published file in this request; ODS supplied no creative artifact bytes.\n"
+            : "- Origin: ODS supplied no creative artifact bytes; Pixel published the workspace files selected in this request.\n") +
           "- Browser readback: HTTP 200 from the dedicated loopback preview origin.\n" +
           "- Interaction evidence: this static receipt does not claim that controls were clicked or exercised.",
         preview: {

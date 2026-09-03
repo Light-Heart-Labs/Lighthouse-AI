@@ -110,11 +110,11 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   nothing, never overwrites a snapshot, and reads back `index.html` before its
   receipt is accepted. Only that exact receipt can produce the structured SSE
   marker that opens the Dashboard's sandboxed side panel; model-authored URLs
-  remain ordinary text. Bounded create-only starters give compact models a
-  dependable first result for open-ended showcases, Breakout, task boards,
-  animated SVGs, and voxel landscapes. Custom visual requests are deliberately
-  excluded from those starters and use the same unrestricted workspace-file
-  path as any other site, app, game, or visualization.
+  remain ordinary text. ODS supplies no creative artifact bytes: open-ended
+  showcases, games, task boards, animated SVGs, voxel scenes, and every other
+  visual request use the same model-authored workspace-file path. The preview
+  adapter can publish only an existing directory containing `index.html`; it
+  has no template, scaffold, HTML, title, theme, or content input.
 
 ## Configuration (nonsecret)
 
