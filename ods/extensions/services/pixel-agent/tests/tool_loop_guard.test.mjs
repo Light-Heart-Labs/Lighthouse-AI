@@ -2695,21 +2695,14 @@ test("binds an exact compound owner command across shell separators", () => {
     { agentId: "pixel", runId: "run-1" },
     "pixel"
   ).retry.instruction;
-  assert.match(retry, /pixel_ops_shell_propose/);
-  assert.match(retry, /"target":"ods-host"/);
+  assert.match(retry, /pixel_ods_host_command_propose/);
   assert.ok(retry.includes(JSON.stringify(exactCommand)));
-  const canonicalProposal = {
-    target: "ods-host",
-    command: exactCommand,
-    reason: "Owner requested one protected local ODS host command.",
-  };
+  const canonicalProposal = { command: exactCommand };
   assert.deepEqual(
-    call(guard, "pixel_ops_shell_propose", {
+    call(guard, "pixel_ods_host_command_propose", {
       event: {
         params: {
-          target: "elsewhere",
           command: "id",
-          reason: "model-selected",
         },
       },
     }),
@@ -2719,55 +2712,9 @@ test("binds an exact compound owner command across shell separators", () => {
   );
   const jobId = "ops-1234567890123-abcdef123456";
   const planHash = "a".repeat(64);
-  afterCall(guard, "pixel_ops_shell_propose", {
+  afterCall(guard, "pixel_ods_host_command_propose", {
     event: {
       params: canonicalProposal,
-      result: { details: { jobId, status: "submitted", kind: "shell" } },
-    },
-  });
-  assert.match(
-    guard.beforeAgentFinalize(
-      { runId: "run-1", lastAssistantMessage: "The command was submitted." },
-      { agentId: "pixel", runId: "run-1" },
-      "pixel"
-    ).retry.instruction,
-    new RegExp(`pixel_ops_job_wait.*${jobId}`)
-  );
-  assert.deepEqual(
-    call(guard, "pixel_ops_job_wait", {
-      event: { params: { jobId: "ops-1234567890124-fedcba654321" } },
-    }),
-    { params: { jobId } }
-  );
-  afterCall(guard, "pixel_ops_job_wait", {
-    event: {
-      params: { jobId },
-      result: {
-        details: {
-          jobId: "ops-1234567890124-fedcba654321",
-          planHash,
-          status: "awaiting-approval",
-          approvalRequired: true,
-          waitTimedOut: false,
-        },
-      },
-    },
-  });
-  assert.equal(
-    reply(guard)?.payload?.text,
-    OPERATIONS_UNVERIFIED_DELIVERY_PREFIX
-  );
-  assert.match(
-    guard.beforeAgentFinalize(
-      { runId: "run-1", lastAssistantMessage: "Approval is pending." },
-      { agentId: "pixel", runId: "run-1" },
-      "pixel"
-    ).retry.instruction,
-    new RegExp(`pixel_ops_job_wait.*${jobId}`)
-  );
-  afterCall(guard, "pixel_ops_job_wait", {
-    event: {
-      params: { jobId },
       result: {
         details: {
           jobId,
@@ -3291,51 +3238,121 @@ test("routes one local host command to a canonical immutable approval proposal",
       },
     }),
     {
-      params: {
-        target: "ods-host",
-        command: "uname -sr",
-        reason: "Owner requested one protected local ODS host command.",
-      },
+      block: true,
+      blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON,
     }
   );
-  afterCall(guard, "pixel_ops_shell_propose", {
-    event: {
-      params: {
-        target: "ods-host",
-        command: "uname -sr",
-        reason: "Owner requested one protected local ODS host command.",
-      },
-      result: { details: { jobId, status: "submitted", kind: "shell" } },
-    },
-  });
-  assert.equal(
-    call(guard, "pixel_ops_shell_propose", {
-      event: { params: { target: "ods-host", command: "id" } },
-    }).blockReason,
-    OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON
-  );
   assert.deepEqual(
-    call(guard, "pixel_ops_job_wait", { event: { params: { jobId: "wrong" } } }),
-    { params: { jobId } }
+    call(guard, "pixel_ods_host_command_propose", {
+      event: { params: { command: "id -un" } },
+    }),
+    { params: { command: "uname -sr" } }
   );
-  afterCall(guard, "pixel_ops_job_wait", {
+  const routed = call(guard, "tool_call", {
     event: {
-      params: { jobId },
+      toolCallId: "host-command-call",
+      params: {
+        id: "pixel_ops_shell_propose",
+        args: { target: "tower2", command: "id", reason: "model-selected" },
+      },
+    },
+    context: { toolCallId: "host-command-call" },
+  });
+  assert.deepEqual(routed, {
+    params: { id: "pixel_ods_host_command_propose", args: { command: "uname -sr" } },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: routed.params,
       result: {
         details: {
-          jobId,
-          planHash,
-          status: "awaiting-approval",
-          approvalRequired: true,
-          waitTimedOut: false,
+          tool: {
+            id: "openclaw:pixel-ods:pixel_ods_host_command_propose",
+            source: "openclaw",
+            sourceName: "pixel-ods",
+            name: "pixel_ods_host_command_propose",
+          },
+          result: {
+            details: {
+              jobId,
+              planHash,
+              status: "awaiting-approval",
+              approvalRequired: true,
+              waitTimedOut: false,
+            },
+          },
         },
       },
     },
   });
+  const persisted = persistToolResult(guard, "tool_call", "host-command-call", {
+    content: [{ type: "text", text: "oversized raw command receipt" }],
+  });
+  assert.equal(persisted.message.content.length, 1);
+  assert.equal(
+    persisted.message.content[0].text.startsWith(
+      "Pixel prepared a protected ODS host command plan"
+    ),
+    true
+  );
+  assert.doesNotMatch(persisted.message.content[0].text, /trusted continuation/i);
   assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_HOST_COMMAND_COMPLETE_REASON);
   assert.equal(
     reply(guard)?.payload?.text,
     `Pixel prepared a protected ODS host command plan, but external approval is required. No command was executed. Job: ${jobId}. Plan SHA-256: ${planHash}.`
+  );
+  assert.equal(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "Approval is pending." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ),
+    undefined
+  );
+});
+
+test("fails closed on a malformed synchronous host-command approval receipt", () => {
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Please run `uname -sr` on this ODS host." }
+  );
+  afterCall(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_command_propose",
+        args: { command: "uname -sr" },
+      },
+      result: {
+        details: {
+          tool: {
+            id: "openclaw:pixel-ods:pixel_ods_host_command_propose",
+            source: "openclaw",
+            sourceName: "pixel-ods",
+            name: "pixel_ods_host_command_propose",
+          },
+          result: {
+            details: {
+              jobId,
+              planHash: "a".repeat(64),
+              status: "awaiting-approval",
+              waitTimedOut: false,
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
+  assert.match(
+    guard.beforeAgentFinalize(
+      { runId: "run-1", lastAssistantMessage: "Approval is pending." },
+      { agentId: "pixel", runId: "run-1" },
+      "pixel"
+    ).retry.instruction,
+    new RegExp(`pixel_ops_job_wait.*${jobId}`)
   );
 });
 
@@ -3380,7 +3397,7 @@ test("accepts a host-command continuation only from exact successful broker evid
   assert.doesNotMatch(text, /Model claimed success/);
 });
 
-test("rejects a same-turn host-command success without external approval evidence", () => {
+test("rejects a synchronous host-command success without external approval evidence", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
   guard.observeRun(
@@ -3388,15 +3405,9 @@ test("rejects a same-turn host-command success without external approval evidenc
     "pixel",
     { prompt: "Please run `uname -sr` on this ODS host." }
   );
-  afterCall(guard, "pixel_ops_shell_propose", {
+  afterCall(guard, "pixel_ods_host_command_propose", {
     event: {
-      params: { target: "ods-host", command: "uname -sr" },
-      result: { details: { jobId, status: "submitted", kind: "shell" } },
-    },
-  });
-  afterCall(guard, "pixel_ops_job_wait", {
-    event: {
-      params: { jobId },
+      params: { command: "uname -sr" },
       result: {
         details: {
           jobId,

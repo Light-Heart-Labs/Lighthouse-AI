@@ -33,7 +33,10 @@ import {
 } from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
-import { createHostObserveTool } from "./host-observe.mjs";
+import {
+  createHostCommandProposeTool,
+  createHostObserveTool,
+} from "./host-observe.mjs";
 import { createEvidenceArtifactWriter } from "./evidence-artifact.mjs";
 import { createWorkspacePreviewTool } from "./workspace-preview.mjs";
 
@@ -298,6 +301,10 @@ export default definePluginEntry({
       readOdsStatus: async () => statusPayload(await readProjection(statusFile)),
     }), {
       names: ["pixel_ods_host_observe"],
+    });
+
+    registerTool(api, createHostCommandProposeTool(), {
+      names: ["pixel_ods_host_command_propose"],
     });
 
     for (const [name, description] of [

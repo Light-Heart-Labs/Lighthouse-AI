@@ -237,7 +237,7 @@ export const OPERATIONS_INVENTORY_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel did not obtain a structurally valid current Operations capability inventory. No capability availability or authority claim was accepted.";
 
 export const OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON =
-  "The owner requested one protected command on the local ODS host. Call only pixel_ops_shell_propose with target ods-host, one exact command, and a concise reason. Then wait for that submitted job with pixel_ops_job_wait. Do not use generic exec, inventory, a named action, a workflow, another target, or a second command proposal.";
+  "The owner requested one protected command on the local ODS host. Call only pixel_ods_host_command_propose with the exact command. The ODS adapter fixes the target to ods-host and waits internally for the immutable approval plan or terminal broker receipt. Do not use generic exec, inventory, a named action, a workflow, another target, pixel_ops_shell_propose, pixel_ops_job_wait, or a second command proposal.";
 
 export const OPERATIONS_HOST_COMMAND_COMPLETE_REASON =
   "Pixel already obtained the broker's terminal state for this protected host-command proposal. Do not call another tool; report the verified approval requirement or terminal outcome now.";
@@ -325,6 +325,7 @@ const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
 ]);
 const OPERATIONS_TOOLS = new Set([
   "pixel_ods_host_observe",
+  "pixel_ods_host_command_propose",
   "pixel_ops_inventory",
   "pixel_ops_run",
   "pixel_ops_workflow_submit",
@@ -344,6 +345,7 @@ const OPERATIONS_SUBMISSION_TOOLS = new Set([
   "pixel_ops_shell_propose",
 ]);
 const SYNCHRONOUS_HOST_OBSERVE_TOOL = "pixel_ods_host_observe";
+const SYNCHRONOUS_HOST_COMMAND_TOOL = "pixel_ods_host_command_propose";
 const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
 const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
 const WORKSPACE_PREVIEW_TOOL = "pixel_ods_workspace_preview";
@@ -1632,6 +1634,37 @@ function synchronousHostObservationOutcome(event, state) {
     new Map([[details.jobId, submission]])
   );
   return outcome ? { submission, outcome } : undefined;
+}
+
+function synchronousHostCommandOutcome(event, state) {
+  if (toolCallFailed(event) || !state?.operationsHostCommandRequested) return undefined;
+  const command = event?.params?.command;
+  const details = event?.result?.details;
+  if (
+    typeof command !== "string" ||
+    !command.trim() ||
+    command.length > 16_384 ||
+    Buffer.byteLength(command, "utf8") > 16_384 ||
+    command.includes("\0") ||
+    (typeof state.operationsExactHostCommand === "string" &&
+      command !== state.operationsExactHostCommand) ||
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    typeof details.jobId !== "string" ||
+    !OPS_JOB_ID.test(details.jobId)
+  ) {
+    return undefined;
+  }
+  const submission = {
+    jobId: details.jobId,
+    actions: [{ target: "ods-host", action: "raw-shell" }],
+  };
+  const outcome = operationsTerminalOutcome(
+    { params: { jobId: details.jobId }, result: event.result },
+    new Map([[details.jobId, submission]])
+  );
+  return { submission, outcome };
 }
 
 function synchronousHostOdsStatusProjection(event) {
@@ -5537,6 +5570,7 @@ export function createToolLoopGuard({
       );
       if (
         selectedToolName !== SYNCHRONOUS_HOST_OBSERVE_TOOL &&
+        selectedToolName !== SYNCHRONOUS_HOST_COMMAND_TOOL &&
         state.operationsHostResultCompactionsRemaining > 0
       ) {
         state.operationsHostResultCompactionsRemaining = 0;
@@ -5719,7 +5753,10 @@ export function createToolLoopGuard({
       if (state.operationsTerminalJobs.size > 0) {
         return { block: true, blockReason: OPERATIONS_HOST_COMMAND_COMPLETE_REASON };
       }
-      if (effectiveToolName === "pixel_ops_shell_propose") {
+      if (
+        effectiveToolName === SYNCHRONOUS_HOST_COMMAND_TOOL ||
+        (toolName === "tool_call" && effectiveToolName === "pixel_ops_shell_propose")
+      ) {
         if (state.operationsSubmittedJobs.size > 0) {
           return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
         }
@@ -5731,17 +5768,14 @@ export function createToolLoopGuard({
           typeof command !== "string" ||
           !command.trim() ||
           command.length > 16_384 ||
+          Buffer.byteLength(command, "utf8") > 16_384 ||
           command.includes("\0")
         ) {
           return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
         }
-        const params = {
-          target: "ods-host",
-          command,
-          reason: "Owner requested one protected local ODS host command.",
-        };
+        const params = { command };
         return toolName === "tool_call"
-          ? { params: { id: "pixel_ops_shell_propose", args: params } }
+          ? { params: { id: SYNCHRONOUS_HOST_COMMAND_TOOL, args: params } }
           : { params };
       }
       return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
@@ -6908,6 +6942,33 @@ export function createToolLoopGuard({
           state.operationsInventory = operationsInventoryProjection(inventoryEvent);
         }
       }
+      const wrappedHostCommand =
+        toolName === "tool_call"
+          ? toolSearchSelectedToolEvent(
+            event,
+            SYNCHRONOUS_HOST_COMMAND_TOOL,
+            "pixel-ods"
+          )
+          : undefined;
+      const hostCommand =
+        toolName === SYNCHRONOUS_HOST_COMMAND_TOOL
+          ? synchronousHostCommandOutcome(event, state)
+          : wrappedHostCommand
+            ? synchronousHostCommandOutcome(wrappedHostCommand, state)
+            : undefined;
+      if (hostCommand) {
+        state.operationsSubmittedJobs.set(
+          hostCommand.submission.jobId,
+          hostCommand.submission
+        );
+        if (hostCommand.outcome) {
+          state.operationsTerminalJobs.set(
+            hostCommand.outcome.jobId,
+            hostCommand.outcome
+          );
+        }
+        state.operationsHostResultCompactionsRemaining = 2;
+      }
       const wrappedHostObservation =
         toolName === "tool_call"
           ? toolSearchSelectedToolEvent(
@@ -7293,16 +7354,14 @@ export function createToolLoopGuard({
     ) {
       const proposalArgs = state.operationsExactHostCommand
         ? `args ${JSON.stringify({
-            target: "ods-host",
             command: state.operationsExactHostCommand,
-            reason: "Owner requested one protected local ODS host command.",
           })}`
-        : "args containing target ods-host, one command that narrowly satisfies the owner's request, and a concise reason";
+        : "args containing one command that narrowly satisfies the owner's request";
       return {
         stage: "host-command-proposal",
         instruction:
-          `Do not reply yet. Call tool_call now with id pixel_ops_shell_propose and ${proposalArgs}. ` +
-          "This submits an immutable approval proposal only; it does not execute or approve the command.",
+          `Do not reply yet. Call tool_call now with id ${SYNCHRONOUS_HOST_COMMAND_TOOL} and ${proposalArgs}. ` +
+          "This submits one immutable approval proposal and waits internally for the broker receipt; it cannot execute while approval is pending or approve the command.",
       };
     }
     if (state.operationsHostCommandRequested) {
@@ -7526,15 +7585,21 @@ export function createToolLoopGuard({
     })();
     const hostToolResult =
       pending?.selectedToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL ||
+      pending?.selectedToolName === SYNCHRONOUS_HOST_COMMAND_TOOL ||
       state?.operationsHostResultCompactionsRemaining > 0 ||
       persistedToolSearchResult(
         message,
         SYNCHRONOUS_HOST_OBSERVE_TOOL,
         "pixel-ods"
+      ) ||
+      persistedToolSearchResult(
+        message,
+        SYNCHRONOUS_HOST_COMMAND_TOOL,
+        "pixel-ods"
       );
     const hostEvidence =
       hostToolResult
-        ? operationsHostEvidenceText(
+        ? operationsEvidenceText(
           state?.operationsRequiredActions,
           state?.operationsTerminalJobs,
           state?.operationsOdsAppsProjection,

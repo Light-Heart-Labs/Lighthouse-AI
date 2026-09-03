@@ -92,8 +92,10 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
   retracted.
 - **Protected local host commands.** An explicit owner request to run one
   command on the local ODS host is routed to Pixel Operations as a raw-shell
-  proposal, never to sandbox `exec`. ODS enables raw shell only on the local
-  `ods-host` target. The broker fixes it to the unprivileged, systemd-confined
+  proposal, never to sandbox `exec`. One ODS-owned adapter submits the exact
+  command and waits internally for the broker receipt, so compact models do
+  not need to coordinate a fragile second tool call. ODS enables raw shell only
+  on the local `ods-host` target. The broker fixes it to the unprivileged, systemd-confined
   service identity, marks it break-glass/non-idempotent/non-reversible, and
   requires an external owner approval of the immutable plan hash every time.
   Pixel cannot approve its own proposal. The Dashboard independently rechecks

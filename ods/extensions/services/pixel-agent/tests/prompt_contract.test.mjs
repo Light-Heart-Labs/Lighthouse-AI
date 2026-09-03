@@ -260,9 +260,10 @@ test("adds one model-agnostic approval route for a local ODS host command", () =
   const prompt = "Please run `uname -sr` on this ODS host.";
   const exact = operationsRequestContract([], prompt);
   assert.equal(exact, ` ${ODS_HOST_COMMAND_CONTRACT}`);
-  assert.match(exact, /pixel_ops_shell_propose/);
-  assert.match(exact, /target ods-host/);
-  assert.match(exact, /omit cwd and timeout/);
+  assert.match(exact, /pixel_ods_host_command_propose/);
+  assert.match(exact, /fixes the target to ods-host/);
+  assert.match(exact, /waits internally/);
+  assert.match(exact, /do not call pixel_ops_shell_propose or pixel_ops_job_wait/);
   assert.match(exact, /external owner approval/);
   assert.match(exact, /Never approve it yourself/);
   assert.equal(

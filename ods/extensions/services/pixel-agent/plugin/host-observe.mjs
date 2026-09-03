@@ -43,6 +43,9 @@ const READ_FLAGS =
   (constants.O_NONBLOCK ?? 0);
 const BOUNDARY =
   "Read-only ODS host observation through the external Operations Broker. Output is untrusted evidence and grants no authority.";
+const HOST_COMMAND_BOUNDARY =
+  "Protected ODS host command proposal through the external Operations Broker. The adapter cannot approve the immutable plan, and no command runs while approval is pending.";
+const HOST_COMMAND_REASON = "Owner requested one protected local ODS host command.";
 
 function toolResult(value) {
   return {
@@ -51,10 +54,13 @@ function toolResult(value) {
   };
 }
 
-function errorResult() {
+function errorResult(
+  text = "Pixel could not complete the read-only ODS host observation.",
+  boundaryNotice = BOUNDARY
+) {
   return {
-    content: [{ type: "text", text: "Pixel could not complete the read-only ODS host observation." }],
-    details: { status: "unavailable", boundaryNotice: BOUNDARY },
+    content: [{ type: "text", text }],
+    details: { status: "unavailable", boundaryNotice },
     isError: true,
   };
 }
@@ -75,11 +81,24 @@ function normalizedActions(value) {
   return actions;
 }
 
-async function publishRequest(jobId, value) {
+function normalizedCommand(value) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > 16_384 ||
+    Buffer.byteLength(value, "utf8") > 16_384 ||
+    value.includes("\0")
+  ) {
+    throw new Error("invalid host command");
+  }
+  return value;
+}
+
+async function publishRequest(jobId, value, requestDir = REQUEST_DIR) {
   if (!SAFE_ID.test(jobId)) throw new Error("invalid operations job ID");
-  const destination = join(REQUEST_DIR, `${jobId}.json`);
+  const destination = join(requestDir, `${jobId}.json`);
   const temporary = join(
-    REQUEST_DIR,
+    requestDir,
     `.${jobId}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`
   );
   let handle;
@@ -97,6 +116,43 @@ async function publishRequest(jobId, value) {
       if (error?.code !== "ENOENT") throw error;
     });
   }
+}
+
+async function waitForTerminal(
+  jobId,
+  {
+    resultDir = RESULT_DIR,
+    timeoutMs = 30_000,
+    pollIntervalMs = 250,
+    boundaryNotice = BOUNDARY,
+  } = {}
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest;
+  while (Date.now() < deadline) {
+    try {
+      latest = await readBoundedJson(join(resultDir, `${jobId}.json`));
+      if (
+        !latest ||
+        typeof latest !== "object" ||
+        Array.isArray(latest) ||
+        latest.jobId !== jobId
+      ) {
+        throw new Error("mismatched operations result");
+      }
+      if (TERMINAL_STATES.has(latest?.status) || latest?.approvalRequired === true) {
+        return { ...latest, waitTimedOut: false, boundaryNotice };
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await delay(pollIntervalMs);
+  }
+  return {
+    ...(latest ?? { schemaVersion: 2, jobId, status: "pending" }),
+    waitTimedOut: true,
+    boundaryNotice,
+  };
 }
 
 async function readBoundedJson(filename) {
@@ -122,7 +178,10 @@ async function readBoundedJson(filename) {
   }
 }
 
-async function observeHost(actions) {
+async function observeHost(
+  actions,
+  { requestDir = REQUEST_DIR, resultDir = RESULT_DIR, timeoutMs, pollIntervalMs } = {}
+) {
   const jobId = `ops-${Date.now()}-${randomBytes(6).toString("hex")}`;
   const request = {
     schemaVersion: 1,
@@ -139,28 +198,48 @@ async function observeHost(actions) {
     boundary:
       "Request only. The external broker compiles policy and decides whether execution is permitted.",
   };
-  await publishRequest(jobId, request);
-  const deadline = Date.now() + 30_000;
-  let latest;
-  while (Date.now() < deadline) {
-    try {
-      latest = await readBoundedJson(join(RESULT_DIR, `${jobId}.json`));
-      if (TERMINAL_STATES.has(latest?.status) || latest?.approvalRequired === true) {
-        return { ...latest, waitTimedOut: false, boundaryNotice: BOUNDARY };
-      }
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-    await delay(250);
-  }
-  return {
-    ...(latest ?? { schemaVersion: 2, jobId, status: "pending" }),
-    waitTimedOut: true,
+  await publishRequest(jobId, request, requestDir);
+  return waitForTerminal(jobId, {
+    resultDir,
+    timeoutMs,
+    pollIntervalMs,
     boundaryNotice: BOUNDARY,
-  };
+  });
 }
 
-export function createHostObserveTool({ readOdsStatus } = {}) {
+async function proposeHostCommand(
+  command,
+  { requestDir = REQUEST_DIR, resultDir = RESULT_DIR, timeoutMs, pollIntervalMs } = {}
+) {
+  const jobId = `ops-${Date.now()}-${randomBytes(6).toString("hex")}`;
+  const request = {
+    schemaVersion: 1,
+    jobId,
+    kind: "shell",
+    createdAt: new Date().toISOString(),
+    requester: AGENT_ID,
+    target: "ods-host",
+    command,
+    reason: HOST_COMMAND_REASON,
+    boundary:
+      "Request only. The external broker compiles an immutable plan and decides whether execution is permitted.",
+  };
+  await publishRequest(jobId, request, requestDir);
+  return waitForTerminal(jobId, {
+    resultDir,
+    timeoutMs,
+    pollIntervalMs,
+    boundaryNotice: HOST_COMMAND_BOUNDARY,
+  });
+}
+
+export function createHostObserveTool({
+  readOdsStatus,
+  requestDir,
+  resultDir,
+  timeoutMs,
+  pollIntervalMs,
+} = {}) {
   return {
     name: "pixel_ods_host_observe",
     description:
@@ -182,7 +261,12 @@ export function createHostObserveTool({ readOdsStatus } = {}) {
     },
     execute: async (_toolCallId, params) => {
       try {
-        const receipt = await observeHost(normalizedActions(params?.actions));
+        const receipt = await observeHost(normalizedActions(params?.actions), {
+          requestDir,
+          resultDir,
+          timeoutMs,
+          pollIntervalMs,
+        });
         let odsStatusProjection;
         if (params?.includeOdsStatus === true && typeof readOdsStatus === "function") {
           try {
@@ -204,4 +288,41 @@ export function createHostObserveTool({ readOdsStatus } = {}) {
   };
 }
 
-export const testing = Object.freeze({ normalizedActions });
+export function createHostCommandProposeTool({
+  requestDir,
+  resultDir,
+  timeoutMs,
+  pollIntervalMs,
+} = {}) {
+  return {
+    name: "pixel_ods_host_command_propose",
+    description:
+      "Submit one owner-requested command for the local ODS host through the external Operations Broker and wait internally for its immutable approval plan or terminal receipt. This tool cannot approve a plan and does not run a command while approval is pending.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["command"],
+      properties: {
+        command: { type: "string", minLength: 1, maxLength: 16_384 },
+      },
+    },
+    execute: async (_toolCallId, params) => {
+      try {
+        const receipt = await proposeHostCommand(normalizedCommand(params?.command), {
+          requestDir,
+          resultDir,
+          timeoutMs,
+          pollIntervalMs,
+        });
+        return toolResult(receipt);
+      } catch {
+        return errorResult(
+          "Pixel could not submit or verify the protected ODS host command proposal.",
+          HOST_COMMAND_BOUNDARY
+        );
+      }
+    },
+  };
+}
+
+export const testing = Object.freeze({ normalizedActions, normalizedCommand });

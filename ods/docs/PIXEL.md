@@ -397,6 +397,10 @@ act as a capability gate:
 - `pixel_ods_host_observe` runs one exact, read-only host observation through
   the external Operations Broker and returns its terminal receipt. It has no
   command, target, mutation, approval, or raw-shell input.
+- `pixel_ods_host_command_propose` submits one owner-requested command to the
+  fixed `ods-host` target and waits internally for the broker's immutable plan
+  or terminal receipt. Its only input is the exact command; it cannot approve
+  the plan, and an `awaiting-approval` receipt proves that no command ran.
 - `pixel_ods_evidence_report` and `pixel_ods_evidence_readback` are guard-only
   controls for an owner-requested report tied to verified Operations evidence.
   On compact models the guard may complete that exact report atomically after

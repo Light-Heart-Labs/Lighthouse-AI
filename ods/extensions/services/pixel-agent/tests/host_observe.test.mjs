@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHostObserveTool, testing } from "../plugin/host-observe.mjs";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  createHostCommandProposeTool,
+  createHostObserveTool,
+  testing,
+} from "../plugin/host-observe.mjs";
 
 test("host observation accepts only unique fixed read-only actions", () => {
   assert.deepEqual(
@@ -35,4 +43,134 @@ test("host observation schema exposes no target, command, parameters, or approva
   assert.equal(result.isError, true);
   assert.deepEqual(Object.keys(result.details).sort(), ["boundaryNotice", "status"]);
   assert.doesNotMatch(result.content[0].text, /raw-shell|var\/lib|operations job ID/);
+});
+
+test("host command adapter publishes exact protocol bytes and returns one approval receipt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-host-command-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  const command = "printf 'HOST_COMMAND_OK\\n'; /usr/bin/uname -sr; /usr/bin/id -un";
+  try {
+    const tool = createHostCommandProposeTool({
+      requestDir,
+      resultDir,
+      timeoutMs: 2_000,
+      pollIntervalMs: 5,
+    });
+    assert.equal(tool.name, "pixel_ods_host_command_propose");
+    assert.deepEqual(tool.parameters.required, ["command"]);
+    assert.deepEqual(Object.keys(tool.parameters.properties), ["command"]);
+    assert.equal(tool.parameters.additionalProperties, false);
+
+    const pending = tool.execute("call-1", { command });
+    let names = [];
+    for (let attempt = 0; attempt < 100 && names.length === 0; attempt += 1) {
+      names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+      if (names.length === 0) await delay(5);
+    }
+    assert.equal(names.length, 1);
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
+    assert.deepEqual(Object.keys(request).sort(), [
+      "boundary",
+      "command",
+      "createdAt",
+      "jobId",
+      "kind",
+      "reason",
+      "requester",
+      "schemaVersion",
+      "target",
+    ]);
+    assert.equal(request.schemaVersion, 1);
+    assert.match(request.jobId, /^ops-[0-9]{13}-[a-f0-9]{12}$/);
+    assert.equal(request.kind, "shell");
+    assert.equal(request.target, "ods-host");
+    assert.equal(request.command, command);
+    assert.equal(request.reason, "Owner requested one protected local ODS host command.");
+    assert.doesNotMatch(request.boundary, /approve/i);
+
+    const planHash = "a".repeat(64);
+    await writeFile(
+      join(resultDir, `${request.jobId}.json`),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        jobId: request.jobId,
+        status: "awaiting-approval",
+        approvalRequired: true,
+        planHash,
+      })}\n`,
+      { encoding: "utf8", mode: 0o640 }
+    );
+    const result = await pending;
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.jobId, request.jobId);
+    assert.equal(result.details.status, "awaiting-approval");
+    assert.equal(result.details.approvalRequired, true);
+    assert.equal(result.details.planHash, planHash);
+    assert.equal(result.details.waitTimedOut, false);
+    assert.match(result.details.boundaryNotice, /cannot approve/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host command adapter rejects unbounded commands without publishing a request", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-host-command-invalid-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createHostCommandProposeTool({ requestDir, resultDir, timeoutMs: 10 });
+    for (const command of ["", "\0", "é".repeat(9_000)]) {
+      const result = await tool.execute("call-invalid", { command });
+      assert.equal(result.isError, true);
+      assert.equal(result.details.status, "unavailable");
+    }
+    assert.deepEqual(await readdir(requestDir), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host command adapter rejects a result whose embedded job ID does not match", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-host-command-mismatch-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createHostCommandProposeTool({
+      requestDir,
+      resultDir,
+      timeoutMs: 2_000,
+      pollIntervalMs: 5,
+    });
+    const pending = tool.execute("call-mismatch", { command: "uname -sr" });
+    let names = [];
+    for (let attempt = 0; attempt < 100 && names.length === 0; attempt += 1) {
+      names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+      if (names.length === 0) await delay(5);
+    }
+    assert.equal(names.length, 1);
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
+    await writeFile(
+      join(resultDir, `${request.jobId}.json`),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        jobId: "ops-1234567890123-abcdef123456",
+        status: "awaiting-approval",
+        approvalRequired: true,
+        planHash: "b".repeat(64),
+      })}\n`,
+      "utf8"
+    );
+    const result = await pending;
+    assert.equal(result.isError, true);
+    assert.equal(result.details.status, "unavailable");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
