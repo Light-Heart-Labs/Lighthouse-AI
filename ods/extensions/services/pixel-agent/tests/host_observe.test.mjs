@@ -26,16 +26,19 @@ test("host observation accepts only unique fixed read-only actions", () => {
   );
 });
 
-test("host observation schema exposes no target, command, parameters, or approval input", async () => {
+test("host observation schema exposes no broker target, command, or approval input", async () => {
   const tool = createHostObserveTool();
   assert.equal(tool.name, "pixel_ods_host_observe");
   assert.deepEqual(tool.parameters.required, ["actions"]);
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["actions", "includeOdsStatus"]);
+  assert.deepEqual(Object.keys(tool.parameters.properties), [
+    "actions", "includeOdsStatus", "peer", "ports",
+  ]);
   assert.equal(tool.parameters.additionalProperties, false);
   assert.equal(tool.parameters.properties.actions.uniqueItems, true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("host.identity"), true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("host.gpu"), true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("host.tailscale"), true);
+  assert.equal(tool.parameters.properties.actions.items.enum.includes("host.network-peer"), true);
   assert.equal(tool.parameters.properties.actions.items.enum.includes("raw-shell"), false);
   assert.deepEqual(tool.parameters.properties.includeOdsStatus, { type: "boolean" });
 
@@ -43,6 +46,71 @@ test("host observation schema exposes no target, command, parameters, or approva
   assert.equal(result.isError, true);
   assert.deepEqual(Object.keys(result.details).sort(), ["boundaryNotice", "status"]);
   assert.doesNotMatch(result.content[0].text, /raw-shell|var\/lib|operations job ID/);
+});
+
+test("host observation binds one private peer and bounded ports into the workflow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-host-peer-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createHostObserveTool({
+      requestDir,
+      resultDir,
+      timeoutMs: 2_000,
+      pollIntervalMs: 5,
+    });
+    const pending = tool.execute("call-peer", {
+      actions: ["host.tailscale", "host.network-peer"],
+      peer: "Strixy",
+      ports: [22, 3389],
+    });
+    let names = [];
+    for (let attempt = 0; attempt < 100 && names.length === 0; attempt += 1) {
+      names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+      if (names.length === 0) await delay(5);
+    }
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
+    assert.deepEqual(request.steps, [
+      { id: "observe-1", target: "ods-host", action: "host.tailscale" },
+      {
+        id: "observe-2",
+        target: "ods-host",
+        action: "host.network-peer",
+        parameters: { peer: "Strixy", ports: "22,3389" },
+      },
+    ]);
+    await writeFile(
+      join(resultDir, `${request.jobId}.json`),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        jobId: request.jobId,
+        status: "succeeded",
+        steps: [],
+      })}\n`,
+      "utf8"
+    );
+    const result = await pending;
+    assert.equal(result.details.jobId, request.jobId);
+    assert.equal(result.details.status, "succeeded");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host peer observation rejects ranges, URLs, public paths, and oversized port sets", () => {
+  for (const value of [
+    "192.168.0.0/24", "https://strixy", "Strixy;whoami", "../Strixy",
+    "8.8.8.8", "2606:4700:4700::1111", "localhost",
+  ]) {
+    assert.throws(() => testing.normalizedPeer(value), /invalid network peer/);
+  }
+  assert.deepEqual(testing.normalizedPorts(undefined), [22, 80, 443, 3389, 5985, 5986]);
+  assert.throws(
+    () => testing.normalizedPorts([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    /invalid network peer ports/
+  );
 });
 
 test("host command adapter publishes exact protocol bytes and returns one approval receipt", async () => {

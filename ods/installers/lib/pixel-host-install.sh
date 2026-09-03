@@ -2982,6 +2982,30 @@ payload = {
             "timeoutSeconds": 15,
             "exclusiveTarget": False,
         },
+        "host.network-peer": {
+            "description": "Resolve and perform bounded ICMP and TCP reachability checks against one owner-named private LAN or Tailscale peer without authentication or mutation.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "parameters": {
+                "peer": {
+                    "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?$",
+                    "maxLength": 253,
+                },
+                "ports": {
+                    "pattern": "^[0-9]{1,5}(?:,[0-9]{1,5}){0,7}$",
+                    "maxLength": 47,
+                },
+            },
+            "argv": [
+                python_binary, system_observer, "network-peer", "{peer}", "{ports}",
+            ],
+            "timeoutSeconds": 30,
+            "exclusiveTarget": False,
+        },
         "ods.extensions.search": {
             "description": "Search the installable ODS extension catalog. Use query 'all' to list the bounded first page. This read-only action does not install or configure anything.",
             "tier": "read",

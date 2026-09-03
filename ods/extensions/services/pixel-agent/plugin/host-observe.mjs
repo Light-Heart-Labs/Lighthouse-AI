@@ -3,6 +3,7 @@ import { link, open, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isIP } from "node:net";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const STATE_DIR = process.env.PIXEL_OPS_STATE_DIR ?? "/var/lib/pixel-ops-broker";
@@ -33,8 +34,11 @@ const HOST_ACTIONS = Object.freeze([
   "host.network-routes",
   "host.listening-ports",
   "host.tailscale",
+  "host.network-peer",
 ]);
 const HOST_ACTION_SET = new Set(HOST_ACTIONS);
+const SAFE_PEER = /^[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?$/;
+const DEFAULT_PEER_PORTS = Object.freeze([22, 80, 443, 3389, 5985, 5986]);
 const SAFE_ID = /^ops-[0-9]{13}-[a-f0-9]{12}$/;
 const READ_FLAGS =
   constants.O_RDONLY |
@@ -93,6 +97,57 @@ function normalizedCommand(value) {
     throw new Error("invalid host command");
   }
   return value;
+}
+
+function normalizedPeer(value) {
+  const target = typeof value === "string" ? value.trim() : "";
+  const family = isIP(target);
+  const privateLiteral = (() => {
+    if (family === 0) return true;
+    if (family === 4) {
+      const octets = target.split(".").map(Number);
+      return (
+        octets[0] === 10 ||
+        (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) ||
+        (octets[0] === 169 && octets[1] === 254) ||
+        (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168)
+      );
+    }
+    const first = Number.parseInt(target.toLowerCase().split(":", 1)[0], 16);
+    return (
+      target.toLowerCase().startsWith("fd7a:115c:a1e0:") ||
+      (first & 0xffc0) === 0xfe80 ||
+      (first & 0xfe00) === 0xfc00
+    );
+  })();
+  if (
+    typeof value !== "string" ||
+    !target ||
+    value.length > 253 ||
+    !SAFE_PEER.test(target) ||
+    target.includes("..") ||
+    target.split(".").some((label) => label.startsWith("-") || label.endsWith("-")) ||
+    /^localhost(?:\.|$)/i.test(target) ||
+    !privateLiteral
+  ) {
+    throw new Error("invalid network peer");
+  }
+  return target.replace(/\.$/, "");
+}
+
+function normalizedPorts(value) {
+  const ports = value === undefined ? [...DEFAULT_PEER_PORTS] : value;
+  if (
+    !Array.isArray(ports) ||
+    ports.length < 1 ||
+    ports.length > 8 ||
+    ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535) ||
+    new Set(ports).size !== ports.length
+  ) {
+    throw new Error("invalid network peer ports");
+  }
+  return ports;
 }
 
 async function publishRequest(jobId, value, requestDir = REQUEST_DIR) {
@@ -181,7 +236,14 @@ async function readBoundedJson(filename) {
 
 async function observeHost(
   actions,
-  { requestDir = REQUEST_DIR, resultDir = RESULT_DIR, timeoutMs, pollIntervalMs } = {}
+  {
+    peer,
+    ports,
+    requestDir = REQUEST_DIR,
+    resultDir = RESULT_DIR,
+    timeoutMs,
+    pollIntervalMs,
+  } = {}
 ) {
   const jobId = `ops-${Date.now()}-${randomBytes(6).toString("hex")}`;
   const request = {
@@ -194,6 +256,9 @@ async function observeHost(
       id: `observe-${index + 1}`,
       target: "ods-host",
       action,
+      ...(action === "host.network-peer"
+        ? { parameters: { peer, ports: ports.join(",") } }
+        : {}),
     })),
     reason: "Read-only ODS host observation requested by the owner through Pixel.",
     boundary:
@@ -244,7 +309,7 @@ export function createHostObserveTool({
   return {
     name: "pixel_ods_host_observe",
     description:
-      "Run one complete, read-only ODS host observation through the external Operations Broker and return its terminal receipt. Use only the requested host.* actions. This tool cannot execute commands, mutate the host, or approve plans.",
+      "Run one complete, read-only ODS host observation through the external Operations Broker and return its terminal receipt. Use only the requested host.* actions. host.network-peer may resolve and probe one owner-named private LAN or Tailscale peer with bounded ports. This tool cannot scan a range, authenticate, execute commands, mutate a host, or approve plans.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -258,11 +323,28 @@ export function createHostObserveTool({
           items: { type: "string", enum: HOST_ACTIONS },
         },
         includeOdsStatus: { type: "boolean" },
+        peer: { type: "string", minLength: 1, maxLength: 253, pattern: SAFE_PEER.source },
+        ports: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          uniqueItems: true,
+          items: { type: "integer", minimum: 1, maximum: 65535 },
+        },
       },
     },
     execute: async (_toolCallId, params) => {
       try {
-        const receipt = await observeHost(normalizedActions(params?.actions), {
+        const actions = normalizedActions(params?.actions);
+        const requiresPeer = actions.includes("host.network-peer");
+        if (!requiresPeer && (params?.peer !== undefined || params?.ports !== undefined)) {
+          throw new Error("unexpected network peer parameters");
+        }
+        const peer = requiresPeer ? normalizedPeer(params?.peer) : undefined;
+        const ports = requiresPeer ? normalizedPorts(params?.ports) : undefined;
+        const receipt = await observeHost(actions, {
+          peer,
+          ports,
           requestDir,
           resultDir,
           timeoutMs,
@@ -326,4 +408,9 @@ export function createHostCommandProposeTool({
   };
 }
 
-export const testing = Object.freeze({ normalizedActions, normalizedCommand });
+export const testing = Object.freeze({
+  normalizedActions,
+  normalizedCommand,
+  normalizedPeer,
+  normalizedPorts,
+});

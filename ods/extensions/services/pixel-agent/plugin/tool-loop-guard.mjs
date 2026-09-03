@@ -1576,12 +1576,21 @@ function synchronousHostObservationOutcome(event, state) {
   if (toolCallFailed(event)) return undefined;
   const expectedActions = exactRequiredHostActions(state);
   const observedActions = event?.params?.actions;
+  const expectedPeer = expectedActions?.includes("host.network-peer")
+    ? state?.operationsNetworkPeer
+    : undefined;
   const details = event?.result?.details;
   if (
     !expectedActions ||
     !Array.isArray(observedActions) ||
     observedActions.length !== expectedActions.length ||
     !expectedActions.every((action) => observedActions.includes(action)) ||
+    (expectedActions.includes("host.network-peer") && !expectedPeer) ||
+    (expectedPeer &&
+      (event?.params?.peer !== expectedPeer.peer ||
+        !Array.isArray(event?.params?.ports) ||
+        event.params.ports.length !== expectedPeer.ports.length ||
+        event.params.ports.some((port, index) => port !== expectedPeer.ports[index]))) ||
     !details ||
     typeof details !== "object" ||
     Array.isArray(details) ||
@@ -1592,7 +1601,13 @@ function synchronousHostObservationOutcome(event, state) {
   }
   const submission = {
     jobId: details.jobId,
-    actions: expectedActions.map((action) => ({ target: "ods-host", action })),
+    actions: expectedActions.map((action) => ({
+      target: "ods-host",
+      action,
+      ...(action === "host.network-peer" && expectedPeer
+        ? { parameters: { peer: expectedPeer.peer, ports: expectedPeer.ports.join(",") } }
+        : {}),
+    })),
   };
   const outcome = operationsTerminalOutcome(
     { params: { jobId: details.jobId }, result: event.result },
@@ -2014,6 +2029,127 @@ function listeningPortEvidence(step) {
   return `Listening TCP/UDP endpoints: ${endpoints.length}; sample: ${prioritized.slice(0, 12).join("; ")}.`;
 }
 
+function privatePeerAddressScope(address) {
+  const family = isIP(address);
+  if (family === 4) {
+    const octets = address.split(".").map(Number);
+    if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) return "tailscale";
+    if (
+      octets[0] === 10 ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    ) return "lan";
+    if (octets[0] === 169 && octets[1] === 254) return "link-local";
+    return undefined;
+  }
+  if (family !== 6) return undefined;
+  const lower = address.toLowerCase();
+  if (lower.startsWith("fd7a:115c:a1e0:")) return "tailscale";
+  const first = Number.parseInt(lower.split(":", 1)[0], 16);
+  if ((first & 0xffc0) === 0xfe80) return "link-local";
+  if ((first & 0xfe00) === 0xfc00) return "lan";
+  return undefined;
+}
+
+function networkPeerEvidence(step) {
+  if (!step || step.stderr.trim() || step.riskSignals.length > 0 || step.stdout.length > 64 * 1024) {
+    return undefined;
+  }
+  let value;
+  try {
+    value = JSON.parse(step.stdout);
+  } catch {
+    return undefined;
+  }
+  if (
+    !exactKeys(value, [
+      "addresses", "kind", "ports", "reachable", "resolved",
+      "schemaVersion", "tailscale", "target",
+    ]) ||
+    value.schemaVersion !== 1 ||
+    value.kind !== "ods-host-network-peer" ||
+    typeof value.target !== "string" ||
+    value.target !== step.parameters?.peer ||
+    typeof value.resolved !== "boolean" ||
+    typeof value.reachable !== "boolean" ||
+    !Array.isArray(value.ports) ||
+    value.ports.length < 1 ||
+    value.ports.length > 8 ||
+    value.ports.join(",") !== step.parameters?.ports ||
+    value.ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535) ||
+    !Array.isArray(value.addresses) ||
+    value.addresses.length > 8 ||
+    !exactKeys(value.tailscale, ["addresses", "available", "found", "online"]) ||
+    typeof value.tailscale.available !== "boolean" ||
+    typeof value.tailscale.found !== "boolean" ||
+    ![true, false, null].includes(value.tailscale.online) ||
+    !Array.isArray(value.tailscale.addresses) ||
+    value.tailscale.addresses.length > 4
+  ) {
+    return undefined;
+  }
+  if (
+    (!value.tailscale.available && (value.tailscale.found || value.tailscale.online !== null)) ||
+    (!value.tailscale.found &&
+      (value.tailscale.online !== null || value.tailscale.addresses.length !== 0)) ||
+    (value.tailscale.found && typeof value.tailscale.online !== "boolean") ||
+    value.tailscale.addresses.some(
+      (address) => privatePeerAddressScope(address) !== "tailscale"
+    )
+  ) {
+    return undefined;
+  }
+  const paths = [];
+  let positive = value.tailscale.online === true;
+  for (const item of value.addresses) {
+    if (
+      !exactKeys(item, ["address", "family", "icmpReachable", "scope", "tcp"]) ||
+      !["ipv4", "ipv6"].includes(item.family) ||
+      !["lan", "link-local", "tailscale"].includes(item.scope) ||
+      ![true, false, null].includes(item.icmpReachable) ||
+      !Array.isArray(item.tcp) ||
+      item.tcp.length !== value.ports.length ||
+      isIP(item.address) !== (item.family === "ipv4" ? 4 : 6) ||
+      privatePeerAddressScope(item.address) !== item.scope
+    ) {
+      return undefined;
+    }
+    const open = [];
+    for (const [index, result] of item.tcp.entries()) {
+      if (
+        !exactKeys(result, ["open", "port"]) ||
+        result.port !== value.ports[index] ||
+        typeof result.open !== "boolean"
+      ) {
+        return undefined;
+      }
+      if (result.open) open.push(result.port);
+    }
+    if (item.icmpReachable === true || open.length > 0) positive = true;
+    paths.push(
+      `${item.address} (${item.scope}; ICMP ${
+        item.icmpReachable === null ? "unavailable" : item.icmpReachable ? "reachable" : "no reply"
+      }; open TCP ${open.length ? open.join(",") : "none of probed ports"})`
+    );
+  }
+  if (value.resolved !== (value.addresses.length > 0) || value.reachable !== positive) {
+    return undefined;
+  }
+  const tailscale = value.tailscale.available
+    ? value.tailscale.found
+      ? `exact peer found; online ${value.tailscale.online ? "yes" : "no"}`
+      : "available; exact peer not found"
+    : "status unavailable";
+  return (
+    `Private network peer \`${value.target}\`: resolved ${value.resolved ? "yes" : "no"}; ` +
+    `positive reachability ${value.reachable ? "yes" : "no"}; ` +
+    `addresses ${paths.length ? paths.join("; ") : "none"}; Tailscale ${tailscale}. ` +
+    (value.reachable
+      ? ""
+      : "No reply or open probed service does not by itself prove that the peer is offline.")
+  ).trim();
+}
+
 function operationsHostEvidenceText(
   requiredActions,
   terminalJobs,
@@ -2031,7 +2167,14 @@ function operationsHostEvidenceText(
     }
     for (const step of outcome.steps) {
       if (step.target === "ods-host" && requiredActions.has(step.action)) {
-        steps.set(step.action, { ...step, jobId: outcome.jobId });
+        const submission = outcome.actions.find(
+          (action) => action.target === step.target && action.action === step.action
+        );
+        steps.set(step.action, {
+          ...step,
+          parameters: submission?.parameters,
+          jobId: outcome.jobId,
+        });
       }
     }
   }
@@ -2124,6 +2267,7 @@ function operationsHostEvidenceText(
     ["host.network-routes", "Routes", networkRouteEvidence],
     ["host.listening-ports", "Listening ports", listeningPortEvidence],
     ["host.tailscale", "Tailscale", tailscaleEvidence],
+    ["host.network-peer", "Network peer", networkPeerEvidence],
   ];
   for (const [action, label, renderer] of renderers) {
     const step = steps.get(action);
@@ -3193,6 +3337,7 @@ function operationsEvidenceText(
     "host.identity", "host.kernel", "host.architecture", "host.platform", "host.os-release", "host.uptime",
     "host.processes", "host.services", "host.cpu", "host.gpu", "host.memory", "host.storage",
     "host.network-addresses", "host.network-routes", "host.listening-ports", "host.tailscale",
+    "host.network-peer",
   ]);
   if ([...requiredActions].every((action) => hostActions.has(action))) {
     return operationsHostEvidenceText(
@@ -3786,6 +3931,65 @@ export function userMessageOperationsContinuation(messages, prompt = undefined) 
   return { jobId: jobIds[0], planHash: planHashes[0] };
 }
 
+const DEFAULT_NETWORK_PEER_PORTS = Object.freeze([22, 80, 443, 3389, 5985, 5986]);
+
+export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
+  const text = currentOwnerIntentText(messages, prompt);
+  if (
+    !text ||
+    /https?:\/\//i.test(text) ||
+    /(?:^|\s)[0-9a-f:.]+\/[0-9]{1,3}\b/i.test(text) ||
+    !/\b(?:LAN|local\s+network|Tailscale|network|reachable|reachability|resolve|ping|probe|connectivity)\b/i.test(text) ||
+    !/\b(?:check|inspect|probe|ping|resolve|test|verify|reachable|reachability|connectivity|online)\b/i.test(text)
+  ) {
+    return undefined;
+  }
+  const patterns = [
+    /^\s*[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?\s+is\s+(?:an?\s+)?(?:Windows|Linux|macOS|Mac)?\s*(?:computer|machine|host|device)\b/i,
+    /\b(?:computer|machine|host|device|peer)\s+(?:named|called)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    /\b(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    /\b(?:reachability|connectivity)\s+(?:of|to|for)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+  ];
+  const peer = patterns.map((pattern) => text.match(pattern)?.[1]).find(Boolean);
+  if (
+    !peer ||
+    /^(?:this|the|my|our|local|ODS|Pixel|computer|machine|host|system|network|Tailscale)$/i.test(peer) ||
+    peer.includes("..") ||
+    peer.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))
+  ) {
+    return undefined;
+  }
+  const escapedPeer = peer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (
+    new RegExp(
+      `\\b(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\b[^.!?;\\n]{0,64}` +
+        `\\b(?:contact|access|inspect|query|connect|ping|probe|resolve)?\\s*${escapedPeer}\\b`,
+      "i"
+    ).test(text)
+  ) {
+    return undefined;
+  }
+  if (isIP(peer) && !privatePeerAddressScope(peer)) return undefined;
+  const ports = [];
+  const explicit = text.match(
+    /\bports?\s+((?:[0-9]{1,5}(?:\s*(?:,|and)\s*[0-9]{1,5}){0,7}))/i
+  )?.[1] ?? "";
+  for (const value of explicit.match(/\b[0-9]{1,5}\b/g) ?? []) {
+    const port = Number(value);
+    if (port >= 1 && port <= 65535 && !ports.includes(port)) ports.push(port);
+    if (ports.length === 8) break;
+  }
+  if (/\bSSH\b/i.test(text) && !ports.includes(22)) ports.push(22);
+  if (/\b(?:RDP|Remote Desktop)\b/i.test(text) && !ports.includes(3389)) ports.push(3389);
+  if (/\bWinRM\b/i.test(text)) {
+    for (const port of [5985, 5986]) if (!ports.includes(port)) ports.push(port);
+  }
+  return {
+    peer,
+    ports: (ports.length ? ports : [...DEFAULT_NETWORK_PEER_PORTS]).slice(0, 8),
+  };
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   // Pixel Edge appends trusted delivery/routing guidance beside the owner
   // message for small local models. That guidance is not owner intent: words
@@ -3847,6 +4051,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   const extensionInventory = userMessageRequestsExtensionInventory(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
   const hostCommand = userMessageRequestsHostCommand(messages, prompt);
+  const networkPeer = hostCommand
+    ? undefined
+    : userMessageNetworkPeerRequest(messages, prompt);
   const actions = [];
   if (
     /\b(?:hostname|host identity)\b/i.test(text) ||
@@ -3889,12 +4096,16 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (broadHostExploration || (hostContext && /\b(?:routes?|routing)\b/i.test(text))) {
     actions.push("host.network-routes");
   }
-  if (broadHostExploration || (hostContext && /\b(?:ports?|listeners?|listening endpoints?)\b/i.test(text))) {
+  if (
+    broadHostExploration ||
+    (!networkPeer && hostContext && /\b(?:ports?|listeners?|listening endpoints?)\b/i.test(text))
+  ) {
     actions.push("host.listening-ports");
   }
   if (broadHostExploration || (hostContext && /\btailscale\b/i.test(text))) {
     actions.push("host.tailscale");
   }
+  if (networkPeer) actions.push("host.network-peer");
   if (broadHostExploration) {
     actions.push("host.identity", "host.kernel", "host.platform", "host.os-release", "host.uptime");
   }
@@ -3922,6 +4133,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ["host.network-routes", "routes?|routing"],
     ["host.listening-ports", "ports?|listeners?"],
     ["host.tailscale", "tailscale"],
+    ["host.network-peer", "LAN|local network|Tailscale|network|reachable|reachability|resolve|ping|probe|connectivity"],
   ]);
   const excludesNetworkLocation = explicitlyExcludesHostObservation(
     text,
@@ -3937,6 +4149,10 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   // names a host facet (for example, "restart Docker and tell me the kernel").
   // The approved command itself must narrowly satisfy the whole request.
   const requestedActions = (hostCommand ? ["raw-shell"] : [...new Set(actions)]).filter((action) => {
+    // This action is already bound to the one positively requested peer and
+    // independently rejects a negation naming that peer. A separate exclusion
+    // for another named host must not erase the requested peer observation.
+    if (action === "host.network-peer") return Boolean(networkPeer);
     if (excludesNetworkLocation && addressBearingActions.has(action)) return false;
     const facetPattern = hostFacetPatterns.get(action);
     return !facetPattern || !explicitlyExcludesHostObservation(text, facetPattern);
@@ -3945,8 +4161,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     required:
       capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
       (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
-      extensionInventory || extensionCatalog || Boolean(extensionLifecycle) || hostCommand,
+      extensionInventory || extensionCatalog || Boolean(extensionLifecycle) || hostCommand || Boolean(networkPeer),
     actions: requestedActions,
+    ...(networkPeer ? { networkPeer } : {}),
   };
 }
 
@@ -4788,6 +5005,7 @@ export function createToolLoopGuard({
         operationsRequiredActions: new Set(),
         operationsHostCommandRequested: false,
         operationsExactHostCommand: undefined,
+        operationsNetworkPeer: undefined,
         operationsInventoryOnly: false,
         operationsInventoryAttempted: false,
         operationsInventory: undefined,
@@ -5817,6 +6035,12 @@ export function createToolLoopGuard({
       }
       const params = {
         actions,
+        ...(actions.includes("host.network-peer") && state.operationsNetworkPeer
+          ? {
+            peer: state.operationsNetworkPeer.peer,
+            ports: state.operationsNetworkPeer.ports,
+          }
+          : {}),
         ...(state.operationsRequiresOdsStatusProjection
           ? { includeOdsStatus: true }
           : {}),
@@ -6770,6 +6994,7 @@ export function createToolLoopGuard({
         state.operationsExactHostCommand = state.operationsHostCommandRequested
           ? userMessageExactHostCommand(event?.messages, event?.prompt)
           : undefined;
+        state.operationsNetworkPeer = operations.networkPeer;
         state.operationsInventoryOnly =
           state.operationsRequired &&
           !operationsContinuation &&
@@ -7488,6 +7713,12 @@ export function createToolLoopGuard({
           `Do not reply yet. Call tool_call now with id ${SYNCHRONOUS_HOST_OBSERVE_TOOL} ` +
           `and args ${JSON.stringify({
             actions: requiredHostActions,
+            ...(requiredHostActions.includes("host.network-peer") && state.operationsNetworkPeer
+              ? {
+                peer: state.operationsNetworkPeer.peer,
+                ports: state.operationsNetworkPeer.ports,
+              }
+              : {}),
             ...(state.operationsRequiresOdsStatusProjection
               ? { includeOdsStatus: true }
               : {}),

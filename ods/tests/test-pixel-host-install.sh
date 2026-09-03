@@ -711,7 +711,7 @@ assert broker["backend"] == "local" and broker["environment"] == "lab"
 assert broker["expectedHostname"] == socket.gethostname() and broker["allowRaw"] is False
 assert broker["allowedRoots"] == ["/var/lib/pixel-ops-broker"]
 assert broker["writableRoots"] == ["/var/lib/pixel-ops-broker/artifacts"]
-host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.gpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports","host.tailscale"}
+host_inventory={"host.uptime","host.processes","host.services","host.cpu","host.gpu","host.memory","host.storage","host.network-addresses","host.network-routes","host.listening-ports","host.tailscale","host.network-peer"}
 assert set(v["actions"]) == {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.list","ods.extensions.inspect","ods.extensions.install","ods.extensions.enable","ods.extensions.disable","ods.extensions.remove"}
 for name in {"host.identity","host.kernel","host.architecture","host.platform","host.os-release",*host_inventory,"ods.extensions.search","ods.extensions.list","ods.extensions.inspect"}:
     assert v["actions"][name]["tier"] == "read" and v["actions"][name]["defaultAuthority"] == "observe"
@@ -732,6 +732,12 @@ assert v["actions"]["host.network-addresses"]["argv"][1:] == ["-j","address","sh
 assert v["actions"]["host.network-routes"]["argv"][1:] == ["-j","route","show"]
 assert v["actions"]["host.listening-ports"]["argv"][1:] == ["-H","-lntu"]
 assert v["actions"]["host.tailscale"]["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "tailscale"]
+network_peer=v["actions"]["host.network-peer"]
+assert network_peer["parameters"] == {
+    "peer":{"pattern":"^[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?$","maxLength":253},
+    "ports":{"pattern":"^[0-9]{1,5}(?:,[0-9]{1,5}){0,7}$","maxLength":47},
+}
+assert network_peer["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "network-peer", "{peer}", "{ports}"]
 extension_search=v["actions"]["ods.extensions.search"]
 assert extension_search["parameters"] == {"query":{"pattern":"^[A-Za-z0-9 _/+:#.-]{1,80}$","maxLength":80}}
 assert extension_search["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()),"/opt/pixel-ops-broker/ods-extension-search.py","/opt/pixel-ops-broker/ods-extension-catalog.json","{query}"]

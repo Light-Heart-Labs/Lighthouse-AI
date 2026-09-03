@@ -153,13 +153,14 @@ itself is unchanged. Installation fails unless the resulting root-owned,
 mode-`0640` broker policy is byte-for-byte equal to the owner-private source;
 an installer success message is never treated as sufficient custody evidence.
 
-The default policy provides fourteen read-only named host actions. Identity
+The default policy provides seventeen read-only named host actions. Identity
 and platform observations use `host.identity`, `host.kernel`,
 `host.architecture`, `host.platform`, and `host.os-release`. Broad machine
 exploration combines identity, kernel, platform, and operating-system evidence
-with `host.uptime`, `host.processes`, `host.services`, `host.cpu`, `host.memory`,
-`host.storage`, `host.network-addresses`, `host.network-routes`, and
-`host.listening-ports`. It does not require the redundant
+with `host.uptime`, `host.processes`, `host.services`, `host.cpu`, `host.gpu`,
+`host.memory`, `host.storage`, `host.network-addresses`,
+`host.network-routes`, `host.listening-ports`, and `host.tailscale`. It does not
+require the redundant
 `host.architecture` action because both platform and CPU observations already
 carry architecture evidence. A narrow architecture-only request still requires
 the dedicated action. In a broad inventory that already contains a structurally
@@ -167,6 +168,15 @@ validated `host.cpu` receipt, the verifier may satisfy an explicit architecture
 facet from that receipt's exact `Architecture:` field instead of discarding the
 otherwise complete report; malformed or absent architecture data still fails
 closed.
+
+The seventeenth action, `host.network-peer`, activates only when the owner
+positively names one private LAN or Tailscale peer and asks for a connectivity
+check. It resolves that one name or private address and performs bounded ICMP
+and TCP checks against at most eight explicit or standard service ports. It
+cannot scan a range, follow a URL, reach a public or loopback address,
+authenticate, execute a remote command, guess credentials, or mutate either
+machine. A separate owner-requested SSH command still uses the immutable,
+externally approved host-command route.
 
 These actions intentionally expose useful host state without exposing a raw
 privileged shell. Process observations omit command arguments and environment
@@ -384,7 +394,7 @@ case, and explicit `--pixel` fails visibly instead of implying provider parity.
 
 ## Bounded ODS tools
 
-The default ODS integration exposes eight narrowly scoped tools to Pixel. They
+The default ODS integration exposes nine narrowly scoped tools to Pixel. They
 remain available to every callable model through the same policy-filtered Tool
 Search catalog; model qualification labels describe observed quality and never
 act as a capability gate:
@@ -398,7 +408,9 @@ act as a capability gate:
   asking small local models to infer it from the array.
 - `pixel_ods_host_observe` runs one exact, read-only host observation through
   the external Operations Broker and returns its terminal receipt. It has no
-  command, target, mutation, approval, or raw-shell input.
+  broker-target, command, mutation, approval, or raw-shell input. Its only
+  optional dynamic inputs are the sanitized one-peer name/private address and
+  bounded port list required by `host.network-peer`.
 - `pixel_ods_host_command_propose` submits one owner-requested command to the
   fixed `ods-host` target and waits internally for the broker's immutable plan
   or terminal receipt. Its only input is the exact command; it cannot approve

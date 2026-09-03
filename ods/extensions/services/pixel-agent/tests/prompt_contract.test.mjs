@@ -302,6 +302,19 @@ test("adds one model-agnostic approval route for local and explicit SSH host com
   assert.match(ODS_HOST_COMMAND_CONTRACT, /every stated target exclusion/);
 });
 
+test("adds exact sanitized peer parameters for read-only private reachability", () => {
+  const prompt =
+    "Strixy is a Windows computer on my local network. Check whether Strixy resolves and is " +
+    "reachable on ports 22 and 3389, and distinguish LAN from Tailscale reachability.";
+  const exact = operationsRequestContract([], prompt);
+  assert.match(exact, /id pixel_ods_host_observe/);
+  assert.ok(exact.includes(
+    'args {"actions":["host.tailscale","host.network-peer"],"peer":"Strixy","ports":[22,3389]}'
+  ));
+  assert.match(exact, /read-only tool returns the terminal broker receipt/);
+  assert.doesNotMatch(exact, /pixel_ods_host_command_propose/);
+});
+
 test("adds owner-requested projections and workspace continuation only after terminal host evidence", () => {
   const prompt =
     "Inspect this ODS laptop hostname and active model, then create /workspace/report.txt and read it back.";
@@ -401,7 +414,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /host\.identity, host\.kernel, host\.architecture/);
   assert.match(result.appendSystemContext, /host\.os-release, host\.uptime, host\.processes/);
   assert.match(result.appendSystemContext, /host\.processes, host\.services, host\.cpu, host\.gpu, host\.memory, host\.storage/);
-  assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, host\.listening-ports, and host\.tailscale/);
+  assert.match(result.appendSystemContext, /host\.network-addresses, host\.network-routes, host\.listening-ports, host\.tailscale, and host\.network-peer/);
+  assert.match(result.appendSystemContext, /one private LAN or Tailscale machine explicitly named by the owner/);
   assert.match(result.appendSystemContext, /Call pixel_ods_host_observe exactly once/);
   assert.match(result.appendSystemContext, /complete requested host\.\* action list/);
   assert.match(result.appendSystemContext, /returns one terminal receipt/);

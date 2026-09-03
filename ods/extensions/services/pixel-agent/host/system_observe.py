@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import socket
 import stat
 import subprocess
 import sys
@@ -19,6 +21,18 @@ SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 INTEROP_NAME = re.compile(r"^[1-9][0-9]{0,19}_interop$")
 INTEROP_ROOT = Path("/run/WSL")
 WINDOWS_POWERSHELL = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+SAFE_PEER_NAME = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
+)
+DEFAULT_PEER_PORTS = (22, 80, 443, 3389, 5985, 5986)
+TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")
+TAILSCALE_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+LAN_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 
 
 def _run(
@@ -216,10 +230,203 @@ def observe_tailscale() -> dict:
     }
 
 
+def _normalized_peer_target(value: str) -> str:
+    target = value.strip().rstrip(".")
+    if not target or len(target) > 253:
+        raise ValueError("invalid peer target")
+    try:
+        return str(ipaddress.ip_address(target))
+    except ValueError:
+        pass
+    if not SAFE_PEER_NAME.fullmatch(target):
+        raise ValueError("invalid peer target")
+    if ".." in target or any(
+        label.startswith("-") or label.endswith("-") for label in target.split(".")
+    ):
+        raise ValueError("invalid peer target")
+    return target
+
+
+def _normalized_peer_ports(value: str) -> tuple[int, ...]:
+    if not value:
+        return DEFAULT_PEER_PORTS
+    raw = value.split(",")
+    if len(raw) > 8 or any(not item.isdigit() for item in raw):
+        raise ValueError("invalid peer ports")
+    ports = tuple(int(item) for item in raw)
+    if (
+        len(set(ports)) != len(ports)
+        or any(port < 1 or port > 65535 for port in ports)
+    ):
+        raise ValueError("invalid peer ports")
+    return ports
+
+
+def _peer_address_scope(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    if address in TAILSCALE_V4 or address in TAILSCALE_V6:
+        return "tailscale"
+    if address.is_loopback or address.is_unspecified or address.is_multicast:
+        raise ValueError("peer target resolved outside the remote private network boundary")
+    if address.is_link_local:
+        return "link-local"
+    if any(address.version == network.version and address in network for network in LAN_NETWORKS):
+        return "lan"
+    raise ValueError("peer target resolved outside the private network boundary")
+
+
+def _resolve_peer(target: str) -> list[tuple[int, str, str]]:
+    try:
+        records = socket.getaddrinfo(target, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return []
+    resolved: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    for family, _socktype, _protocol, _canonical, sockaddr in records:
+        if family not in {socket.AF_INET, socket.AF_INET6}:
+            continue
+        address = str(ipaddress.ip_address(sockaddr[0]))
+        if address in seen:
+            continue
+        seen.add(address)
+        resolved.append((family, address, _peer_address_scope(ipaddress.ip_address(address))))
+        if len(resolved) >= 4:
+            break
+    return resolved
+
+
+def _tailscale_status_json() -> dict | None:
+    executable = _trusted_executable(["/usr/bin/tailscale", "/usr/local/bin/tailscale"])
+    if executable:
+        result = _run([executable, "status", "--json"])
+    else:
+        result = _windows_powershell_result(
+            "$p=Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe'; "
+            "if(Test-Path -LiteralPath $p){& $p status --json}"
+        )
+    if not result or result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _tailscale_peer_status(target: str) -> dict:
+    status = _tailscale_status_json()
+    if status is None:
+        return {"available": False, "found": False, "online": None, "addresses": []}
+    target_key = target.casefold()
+    peers = status.get("Peer")
+    values = peers.values() if isinstance(peers, dict) else []
+    matches = []
+    for peer in values:
+        if not isinstance(peer, dict):
+            continue
+        hostname = str(peer.get("HostName") or "").strip().rstrip(".")
+        dns_name = str(peer.get("DNSName") or "").strip().rstrip(".")
+        names = {hostname.casefold(), dns_name.casefold()}
+        if dns_name:
+            names.add(dns_name.split(".", 1)[0].casefold())
+        addresses = peer.get("TailscaleIPs")
+        address_strings = [str(item) for item in addresses] if isinstance(addresses, list) else []
+        if target_key not in names and target not in address_strings:
+            continue
+        safe_addresses = []
+        for raw in address_strings[:4]:
+            try:
+                parsed = ipaddress.ip_address(raw)
+            except ValueError:
+                continue
+            if parsed in TAILSCALE_V4 or parsed in TAILSCALE_V6:
+                safe_addresses.append(str(parsed))
+        matches.append({"online": peer.get("Online") is True, "addresses": safe_addresses})
+    if len(matches) != 1:
+        return {"available": True, "found": False, "online": None, "addresses": []}
+    return {
+        "available": True,
+        "found": True,
+        "online": matches[0]["online"],
+        "addresses": matches[0]["addresses"],
+    }
+
+
+def _probe_icmp(family: int, address: str) -> bool | None:
+    executable = _trusted_executable(["/usr/bin/ping", "/bin/ping"])
+    if not executable:
+        return None
+    argv = [executable]
+    if family == socket.AF_INET6:
+        argv.append("-6")
+    argv.extend(["-c", "1", "-W", "2", "--", address])
+    result = _run(argv, timeout=4)
+    return result is not None and result.returncode == 0
+
+
+def _probe_tcp(family: int, address: str, port: int) -> bool:
+    endpoint = (address, port) if family == socket.AF_INET else (address, port, 0, 0)
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.4)
+            return connection.connect_ex(endpoint) == 0
+    except OSError:
+        return False
+
+
+def observe_network_peer(target: str, ports: str = "") -> dict:
+    normalized_target = _normalized_peer_target(target)
+    normalized_ports = _normalized_peer_ports(ports)
+    resolved = _resolve_peer(normalized_target)
+    tailscale = _tailscale_peer_status(normalized_target)
+    known = {address for _family, address, _scope in resolved}
+    for raw in tailscale["addresses"]:
+        if len(resolved) >= 4:
+            break
+        if raw in known:
+            continue
+        parsed = ipaddress.ip_address(raw)
+        resolved.append((socket.AF_INET if parsed.version == 4 else socket.AF_INET6, raw, "tailscale"))
+        known.add(raw)
+    observations = []
+    for family, address, scope in resolved:
+        icmp = _probe_icmp(family, address)
+        tcp = [
+            {"port": port, "open": _probe_tcp(family, address, port)}
+            for port in normalized_ports
+        ]
+        observations.append({
+            "address": address,
+            "family": "ipv4" if family == socket.AF_INET else "ipv6",
+            "scope": scope,
+            "icmpReachable": icmp,
+            "tcp": tcp,
+        })
+    reachable = tailscale["online"] is True or any(
+        item["icmpReachable"] is True or any(port["open"] for port in item["tcp"])
+        for item in observations
+    )
+    return {
+        "schemaVersion": 1,
+        "kind": "ods-host-network-peer",
+        "target": normalized_target,
+        "ports": list(normalized_ports),
+        "resolved": bool(resolved),
+        "reachable": reachable,
+        "addresses": observations,
+        "tailscale": tailscale,
+    }
+
+
 def main(argv: Sequence[str]) -> int:
-    if len(argv) != 2 or argv[1] not in {"gpu", "tailscale"}:
+    if len(argv) == 2 and argv[1] in {"gpu", "tailscale"}:
+        value = observe_gpu() if argv[1] == "gpu" else observe_tailscale()
+    elif len(argv) == 4 and argv[1] == "network-peer":
+        try:
+            value = observe_network_peer(argv[2], argv[3])
+        except ValueError:
+            return 2
+    else:
         return 2
-    value = observe_gpu() if argv[1] == "gpu" else observe_tailscale()
     print(json.dumps(value, sort_keys=True, separators=(",", ":")))
     return 0
 

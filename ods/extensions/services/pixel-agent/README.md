@@ -147,8 +147,12 @@ compute nodes needed by the fixed, read-only GPU observer; disks, input
 devices, cameras, and microphones stay unavailable. On WSL, `AF_VSOCK` is
 available only so the fixed Tailscale observer can try root-owned interop
 sockets and return installed/running state. The policy exposes no model-chosen
-PowerShell command or parameter. It never projects addresses, peers, accounts,
-routes, device identifiers, or arbitrary PowerShell output.
+PowerShell command or parameter. The general Tailscale observer never projects
+addresses, peers, accounts, routes, device identifiers, or arbitrary PowerShell
+output. A separate `host.network-peer` action may return only the private
+addresses, ICMP result, and bounded TCP-port results for one owner-named peer;
+it rejects ranges, URLs, public and loopback addresses, authentication, remote
+commands, and mutation.
 
 ## Rollback
 

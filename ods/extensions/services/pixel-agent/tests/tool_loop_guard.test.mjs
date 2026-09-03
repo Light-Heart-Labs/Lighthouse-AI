@@ -104,6 +104,7 @@ import {
   userMessageGitHubRepositoryUrl,
   userMessageOdsToolRequirements,
   userMessageOperationsRequirements,
+  userMessageNetworkPeerRequest,
   userMessageExactHostCommand,
   userMessageRequestsHostCommand,
   userMessageRequestsOperationsCapabilityInventory,
@@ -2707,6 +2708,170 @@ test("classifies explicit local and SSH host commands without capturing guidance
     required: true,
     actions: ["raw-shell"],
   });
+});
+
+test("binds one owner-named private peer to bounded read-only reachability evidence", () => {
+  const prompt =
+    "Strixy is a Windows computer that should be online on my current local network. " +
+    "Without changing anything on Strixy, without guessing credentials, and without contacting " +
+    "Tower1, Tower2, or Tower3, check whether Strixy resolves and is reachable. Inspect only safe " +
+    "read-only network facts you can actually verify, distinguish LAN from Tailscale reachability, " +
+    "and tell me the exact blocker if authenticated inspection is not available.";
+  const networkPeer = {
+    peer: "Strixy",
+    ports: [22, 80, 443, 3389, 5985, 5986],
+  };
+  assert.deepEqual(userMessageNetworkPeerRequest([], prompt), networkPeer);
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true,
+    actions: ["host.tailscale", "host.network-peer"],
+    networkPeer,
+  });
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], "Probe Strixy on the local network ports 22 and 3389."),
+    { peer: "Strixy", ports: [22, 3389] }
+  );
+  for (const text of [
+    "Ping Strixy on the network, but do not contact Strixy.",
+    "Probe 8.8.8.8 on the network.",
+    "Probe 192.168.0.0/24 on the local network.",
+    "Inspect https://strixy.local on the local network.",
+  ]) {
+    assert.equal(userMessageNetworkPeerRequest([], text), undefined, text);
+  }
+
+  const guard = createToolLoopGuard();
+  const jobId = "ops-1234567890123-abcdef123456";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+  const routed = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: { actions: ["host.identity"], peer: "other", ports: [1] },
+      },
+    },
+  });
+  assert.deepEqual(routed, {
+    params: {
+      id: "pixel_ods_host_observe",
+      args: {
+        actions: ["host.tailscale", "host.network-peer"],
+        peer: "Strixy",
+        ports: networkPeer.ports,
+      },
+    },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: routed.params,
+      result: wrappedPluginResult("pixel-ods", "pixel_ods_host_observe", {
+        details: {
+          jobId,
+          status: "succeeded",
+          waitTimedOut: false,
+          steps: [
+            {
+              stepId: "observe-1", target: "ods-host", action: "host.tailscale", exitCode: 0,
+              stdout: JSON.stringify({
+                schemaVersion: 1,
+                kind: "ods-host-tailscale",
+                available: true,
+                state: "service-running",
+                serviceRunning: true,
+              }) + "\n",
+              stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+            },
+            {
+              stepId: "observe-2", target: "ods-host", action: "host.network-peer", exitCode: 0,
+              stdout: JSON.stringify({
+                schemaVersion: 1,
+                kind: "ods-host-network-peer",
+                target: "Strixy",
+                ports: networkPeer.ports,
+                resolved: true,
+                reachable: true,
+                addresses: [{
+                  address: "192.168.0.166",
+                  family: "ipv4",
+                  scope: "lan",
+                  icmpReachable: false,
+                  tcp: networkPeer.ports.map((port) => ({ port, open: port === 22 })),
+                }],
+                tailscale: { available: true, found: false, online: null, addresses: [] },
+              }) + "\n",
+              stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+            },
+          ],
+        },
+      }),
+    },
+  });
+  const evidence = reply(guard)?.payload?.text;
+  assert.match(evidence, /Private network peer `Strixy`: resolved yes/);
+  assert.match(evidence, /192\.168\.0\.166 \(lan; ICMP no reply; open TCP 22\)/);
+  assert.match(evidence, /Tailscale available; exact peer not found/);
+  assert.doesNotMatch(evidence, /Tower1|Tower2|Tower3/);
+});
+
+test("rejects network-peer receipts that escape the exact private target boundary", () => {
+  const prompt = "Probe Strixy on the local network and report whether it is reachable.";
+  const ports = [22, 80, 443, 3389, 5985, 5986];
+  for (const [label, target, address] of [
+    ["different peer", "Tower1", "192.168.0.166"],
+    ["public address", "Strixy", "8.8.8.8"],
+  ]) {
+    const guard = createToolLoopGuard();
+    const jobId = "ops-1234567890123-abcdef123456";
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt }
+    );
+    const params = {
+      id: "pixel_ods_host_observe",
+      args: { actions: ["host.network-peer"], peer: "Strixy", ports },
+    };
+    call(guard, "tool_call", { event: { params } });
+    afterCall(guard, "tool_call", {
+      event: {
+        params,
+        result: wrappedPluginResult("pixel-ods", "pixel_ods_host_observe", {
+          details: {
+            jobId,
+            status: "succeeded",
+            waitTimedOut: false,
+            steps: [{
+              stepId: "observe-1", target: "ods-host", action: "host.network-peer", exitCode: 0,
+              stdout: JSON.stringify({
+                schemaVersion: 1,
+                kind: "ods-host-network-peer",
+                target,
+                ports,
+                resolved: true,
+                reachable: true,
+                addresses: [{
+                  address,
+                  family: "ipv4",
+                  scope: "lan",
+                  icmpReachable: true,
+                  tcp: ports.map((port) => ({ port, open: false })),
+                }],
+                tailscale: { available: true, found: false, online: null, addresses: [] },
+              }) + "\n",
+              stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+            }],
+          },
+        }),
+      },
+    });
+    const verification = guard.verificationForRun("run-1");
+    assert.equal(verification.status, "failed", label);
+    assert.doesNotMatch(reply(guard)?.payload?.text ?? "", /8\.8\.8\.8|Tower1/, label);
+  }
 });
 
 test("binds an exact compound owner command across shell separators", () => {

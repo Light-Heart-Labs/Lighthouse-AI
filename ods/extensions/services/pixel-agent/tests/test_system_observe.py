@@ -1,4 +1,5 @@
 import importlib.util
+import socket
 import pathlib
 import stat
 import tempfile
@@ -108,6 +109,75 @@ class SystemObserveTests(unittest.TestCase):
             root = pathlib.Path(directory)
             with mock.patch.object(pathlib.Path, "lstat", return_value=mock.Mock(st_mode=stat.S_IFDIR | 0o777, st_uid=0)):
                 self.assertEqual(system_observe._trusted_interop_sockets(root), [])
+
+    def test_private_network_peer_reports_only_bounded_exact_peer_evidence(self):
+        records = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.0.166", 0)),
+        ]
+        tailscale = {
+            "available": True,
+            "found": False,
+            "online": None,
+            "addresses": [],
+        }
+        with mock.patch.object(system_observe.socket, "getaddrinfo", return_value=records), \
+             mock.patch.object(system_observe, "_tailscale_peer_status", return_value=tailscale), \
+             mock.patch.object(system_observe, "_probe_icmp", return_value=False), \
+             mock.patch.object(
+                 system_observe,
+                 "_probe_tcp",
+                 side_effect=lambda _family, _address, port: port == 22,
+             ):
+            value = system_observe.observe_network_peer("Strixy", "22,3389")
+        self.assertEqual(value["target"], "Strixy")
+        self.assertEqual(value["ports"], [22, 3389])
+        self.assertTrue(value["resolved"])
+        self.assertTrue(value["reachable"])
+        self.assertEqual(value["tailscale"], tailscale)
+        self.assertEqual(value["addresses"], [{
+            "address": "192.168.0.166",
+            "family": "ipv4",
+            "scope": "lan",
+            "icmpReachable": False,
+            "tcp": [{"port": 22, "open": True}, {"port": 3389, "open": False}],
+        }])
+
+    def test_network_peer_rejects_public_resolution_and_unbounded_ports(self):
+        records = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.7", 0)),
+        ]
+        with mock.patch.object(system_observe.socket, "getaddrinfo", return_value=records), \
+             self.assertRaisesRegex(ValueError, "private network boundary"):
+            system_observe.observe_network_peer("public.example", "443")
+        for ports in ("0", "65536", "22,22", "1,2,3,4,5,6,7,8,9"):
+            with self.subTest(ports=ports), self.assertRaises(ValueError):
+                system_observe._normalized_peer_ports(ports)
+
+    def test_network_peer_adds_only_the_exact_tailscale_peer(self):
+        status = {
+            "Peer": {
+                "one": {
+                    "HostName": "Strixy",
+                    "DNSName": "strixy.example.ts.net.",
+                    "Online": True,
+                    "TailscaleIPs": ["100.100.20.30", "fd7a:115c:a1e0::1234"],
+                },
+                "other": {
+                    "HostName": "unrelated",
+                    "Online": True,
+                    "TailscaleIPs": ["100.90.1.2"],
+                },
+            },
+        }
+        with mock.patch.object(system_observe, "_tailscale_status_json", return_value=status):
+            value = system_observe._tailscale_peer_status("Strixy")
+        self.assertEqual(value, {
+            "available": True,
+            "found": True,
+            "online": True,
+            "addresses": ["100.100.20.30", "fd7a:115c:a1e0::1234"],
+        })
+        self.assertNotIn("unrelated", str(value))
 
 
 if __name__ == "__main__":
