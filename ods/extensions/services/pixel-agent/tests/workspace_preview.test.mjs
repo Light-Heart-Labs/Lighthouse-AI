@@ -186,7 +186,12 @@ test("creates diverse self-contained visual starters with real controls", async 
     {
       template: "voxel",
       marker: /<canvas id="world"/,
-      interactions: [/Shift to night/, /Remix terrain/, /type="range"/],
+      interactions: [
+        /Shift to night/,
+        /Remix terrain/,
+        /Terrain remixed · /,
+        /type="range"/,
+      ],
     },
     {
       template: "animated-svg",
