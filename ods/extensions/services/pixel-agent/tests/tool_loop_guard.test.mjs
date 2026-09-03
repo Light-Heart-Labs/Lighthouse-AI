@@ -2646,6 +2646,8 @@ test("classifies explicit local host commands without capturing guidance or remo
     "Please install htop on this machine.",
     "Delete /tmp/demo from this ODS host.",
     "Can you restart Docker on this ODS host?",
+    "Please run exactly `uname -sr` on this ODS host. Do not run anything else.",
+    "Do not restart Docker on this ODS host. Instead, run `uname -sr` on this ODS host.",
   ]) {
     assert.equal(userMessageRequestsHostCommand([], text), true, text);
   }

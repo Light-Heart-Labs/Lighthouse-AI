@@ -3716,13 +3716,16 @@ export function userMessageRequestsHostCommand(messages, prompt = undefined) {
     /\b(?:(?:how|what)\s+(?:do|should|would|can|could)\s+(?:I|we|you)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:should|can|could|would)\s+(?:I|we)\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change)|(?:tell|show|explain)\s+(?:me\s+)?how\s+to\b[^.!?;\n]{0,96}\b(?:run|execute|install|restart|configure|change))\b/i;
   const explicitlyRejected =
     /\b(?:(?:do\s+not|don't|never|must\s+not|should\s+not)\s+(?:ever\s+|actually\s+|please\s+|now\s+){0,2}(?:run|execute|invoke|launch|start|stop|restart|reload|install|uninstall|remove|update|upgrade|configure|modify|change|create|delete)|without\s+(?:running|executing|invoking|launching|starting|stopping|restarting|reloading|installing|uninstalling|removing|updating|upgrading|configuring|modifying|changing|creating|deleting))\b/i;
-  if (guidanceOnly.test(text) || explicitlyRejected.test(text)) return false;
   return text
     .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
     .some((clause) => {
       const hostMatch = clause.match(localHost);
       const actionMatch = clause.match(action);
       if (!hostMatch || !actionMatch) return false;
+      // Negation and how-to language constrain only their own clause. A later
+      // safety boundary such as "Do not run anything else" must not erase an
+      // earlier exact host command that the owner explicitly requested.
+      if (guidanceOnly.test(clause) || explicitlyRejected.test(clause)) return false;
       if (/\b(?:SSH|remote|Tower[123])\b/i.test(clause)) return false;
       if (/\b(?:workspace|sandbox)\b/i.test(clause) && !/\bODS[- ]host\b/i.test(clause)) {
         return false;

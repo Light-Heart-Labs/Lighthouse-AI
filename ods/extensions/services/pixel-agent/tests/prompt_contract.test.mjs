@@ -176,6 +176,13 @@ test("adds one model-agnostic approval route for a local ODS host command", () =
     ),
     ` ${ODS_HOST_COMMAND_CONTRACT}`
   );
+  assert.equal(
+    operationsRequestContract(
+      [],
+      "Please run exactly `uname -sr` on this ODS host. Do not run anything else."
+    ),
+    ` ${ODS_HOST_COMMAND_CONTRACT}`
+  );
 });
 
 test("adds owner-requested projections and workspace continuation only after terminal host evidence", () => {
