@@ -4435,14 +4435,17 @@ export function userMessageRequestsWorkspaceVisualContinuation(
   const pronounReference =
     /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\s+(?:it|that)\b/i;
   const rejection =
-    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip)\b[^.!?;\n]{0,96}\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
+  const withoutAction =
+    /\bwithout\s+(?:(?:also|any|further)\s+)?(?:adding|animating|changing|continuing|editing|improving|keeping|making|modifying|polishing|refreshing|removing|republishing|restyling|reworking|speeding\s+up|tweaking|updating)\b/i;
   return text
     .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
     .some(
       (clause) =>
         action.test(clause) &&
         (visualReference.test(clause) || pronounReference.test(clause)) &&
-        !rejection.test(clause)
+        !rejection.test(clause) &&
+        !withoutAction.test(clause)
     );
 }
 

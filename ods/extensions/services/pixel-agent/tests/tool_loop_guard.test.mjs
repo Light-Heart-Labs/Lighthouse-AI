@@ -8379,6 +8379,19 @@ test("keeps every visual category on the model-authored write path", () => {
 });
 
 test("recognizes only affirmative natural visual follow-ups", () => {
+  const exactWrappedRepair =
+    "[Chat messages since your last reply - for context]\n" +
+    "User: Build and show me an orbit clock.\n" +
+    "Assistant: Published it.\n\n" +
+    "[Current message - respond to this]\n" +
+    "User: The Reverse orbit button does not work. Investigate your existing artifact, " +
+    "fix that defect without starting over or using a template, republish the same artifact, " +
+    "and report only what the tools verify.\n\n" +
+    "[ODS Pixel delivery requirement: Answer the owner's complete message above.]";
+  assert.equal(
+    userMessageRequestsWorkspaceVisualContinuation([], exactWrappedRepair),
+    true
+  );
   for (const prompt of [
     "Keep that game and make it faster.",
     "Change the previous website to a solar palette.",
@@ -8386,6 +8399,7 @@ test("recognizes only affirmative natural visual follow-ups", () => {
     "Update this animated SVG with a calmer orbit.",
     "Make this form mobile-friendly.",
     "Improve the previous prototype's keyboard navigation.",
+    "The Reverse orbit button does not work. Investigate your existing artifact, fix that defect without starting over or using a template, republish the same artifact, and report only what the tools verify.",
   ]) {
     assert.equal(
       userMessageRequestsWorkspaceVisualContinuation([], prompt),
@@ -8397,6 +8411,7 @@ test("recognizes only affirmative natural visual follow-ups", () => {
     "Make a new Breakout game.",
     "Create a voxel city under the ocean.",
     "Do not change that game.",
+    "Keep the same artifact without changing or republishing it.",
     "Explain how to improve a website.",
   ]) {
     assert.equal(
@@ -8450,7 +8465,17 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   guard.observeRun(
     { agentId: "pixel", runId: "run-2", sessionId: "session-1" },
     "pixel",
-    { prompt: "Keep that website and make it faster." }
+    {
+      prompt:
+        "[Chat messages since your last reply - for context]\n" +
+        "User: Build and show me an interactive website demo.\n" +
+        "Assistant: Published it.\n\n" +
+        "[Current message - respond to this]\n" +
+        "User: The button does not work. Investigate your existing artifact, fix that " +
+        "defect without starting over or using a template, republish the same artifact, " +
+        "and report only what the tools verify.\n\n" +
+        "[ODS Pixel delivery requirement: Answer the owner's complete message above.]",
+    }
   );
   const blindEdit = call(guard, "tool_call", {
     ...run2,

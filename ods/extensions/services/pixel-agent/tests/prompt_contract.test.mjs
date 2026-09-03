@@ -165,6 +165,7 @@ test("routes natural visual follow-ups to a read-edit-republish contract", () =>
     "Polish it and improve the mobile layout.",
     "Make this form mobile-friendly.",
     "Improve the previous prototype's keyboard navigation.",
+    "The Reverse orbit button does not work. Investigate your existing artifact, fix that defect without starting over or using a template, republish the same artifact, and report only what the tools verify.",
   ]) {
     const result = promptContractForAgent(
       { agentId: "pixel", contextTokenBudget: 16384 },
