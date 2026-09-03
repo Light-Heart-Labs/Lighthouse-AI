@@ -64,6 +64,26 @@ echo "[contract] external Lemonade does not pull managed Lemonade image"
 grep -q '_lemonade_external' installers/phases/08-images.sh \
   || { echo "[FAIL] phase 08 must skip managed Lemonade image pulls in external mode"; exit 1; }
 
+echo "[contract] external Lemonade skips every managed inference image"
+phase08_plan="$({
+  SCRIPT_DIR="$ROOT_DIR" \
+  LOG_FILE="${TMPDIR:-/tmp}/ods-external-lemonade-images.log" \
+  DRY_RUN=true GPU_BACKEND=cpu LEMONADE_EXTERNAL=true \
+  ENABLE_COMFYUI=false ENABLE_VOICE=false ENABLE_WORKFLOWS=false \
+  ENABLE_RAG=false ENABLE_QDRANT=false ENABLE_EMBEDDINGS=false \
+  ENABLE_HERMES=false ENABLE_OPENCLAW=false COMPOSE_FLAGS='' \
+  bash -c '
+    ods_progress() { :; }; show_phase() { :; }; ai() { :; }
+    ai_ok() { :; }; ai_warn() { :; }; bootline() { :; }; signal() { :; }
+    source "$SCRIPT_DIR/installers/phases/08-images.sh"
+    printf "%s\n" "${PULL_LIST[@]}"
+  '
+} 2>/dev/null)"
+if grep -qE 'LLAMA-SERVER|LEMONADE .*brain' <<<"$phase08_plan"; then
+  echo "[FAIL] external Lemonade image plan still contains managed inference: $phase08_plan"
+  exit 1
+fi
+
 echo "[contract] external Lemonade install verifies real completion"
 grep -q '_phase12_verify_external_lemonade_completion' installers/phases/12-health.sh \
   || { echo "[FAIL] phase 12 must verify a real external Lemonade completion"; exit 1; }
