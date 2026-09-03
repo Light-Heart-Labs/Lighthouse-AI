@@ -25,6 +25,7 @@ export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
 
 const MAX_COMPARE_SWAP_REPAIR_CHARS = 32_768;
 const MAX_COMPARE_SWAP_REPAIRS_PER_PATH = 3;
+const MAX_TRACKED_WORKSPACE_FILE_BYTES = 4 * 1024 * 1024;
 
 export const WEB_BUDGET_EXHAUSTED_REASON =
   "Pixel's web-research budget is exhausted for this response. Do not call any tool again in this turn. Give the user a visible final answer now using the evidence already collected, clearly stating any uncertainty.";
@@ -1595,6 +1596,29 @@ function synchronousHostObservationOutcome(event, state) {
     new Map([[details.jobId, submission]])
   );
   return outcome ? { submission, outcome } : undefined;
+}
+
+function replayTrackedEdit(content, pairs) {
+  if (typeof content !== "string" || pairs.length === 0) return undefined;
+  let updated = content;
+  for (const { oldText, newText } of pairs) {
+    if (!oldText || oldText === newText) return undefined;
+    const position = updated.indexOf(oldText);
+    if (
+      position < 0 ||
+      updated.indexOf(oldText, position + oldText.length) >= 0
+    ) {
+      return undefined;
+    }
+    updated =
+      updated.slice(0, position) +
+      newText +
+      updated.slice(position + oldText.length);
+    if (Buffer.byteLength(updated, "utf8") > MAX_TRACKED_WORKSPACE_FILE_BYTES) {
+      return undefined;
+    }
+  }
+  return updated;
 }
 
 function synchronousHostCommandOutcome(event, state) {
@@ -6725,7 +6749,7 @@ export function createToolLoopGuard({
       const writtenContent = successfulMutation.event?.params?.content;
       if (
         typeof writtenContent === "string" &&
-        writtenContent.length <= MAX_COMPARE_SWAP_REPAIR_CHARS
+        Buffer.byteLength(writtenContent, "utf8") <= MAX_TRACKED_WORKSPACE_FILE_BYTES
       ) {
         state.successfulWriteContentByPath.set(completedWritePath, writtenContent);
       } else {
@@ -6745,17 +6769,16 @@ export function createToolLoopGuard({
     ) {
       state.workspaceVisualContinuationEdited = true;
     }
-    if (
-      completedEditPath &&
-      completedEditPairs.length === 1 &&
-      state.successfulWriteContentByPath.get(completedEditPath) ===
-        completedEditPairs[0].oldText &&
-      completedEditPairs[0].newText.length <= MAX_COMPARE_SWAP_REPAIR_CHARS
-    ) {
-      state.successfulWriteContentByPath.set(
-        completedEditPath,
-        completedEditPairs[0].newText
+    if (completedEditPath && state.successfulWritePaths.has(completedEditPath)) {
+      const editedContent = replayTrackedEdit(
+        state.successfulWriteContentByPath.get(completedEditPath),
+        completedEditPairs
       );
+      if (editedContent === undefined) {
+        state.successfulWriteContentByPath.delete(completedEditPath);
+      } else {
+        state.successfulWriteContentByPath.set(completedEditPath, editedContent);
+      }
     }
     const completedRead =
       toolName === "read" && event?.result && typeof event.result === "object"
@@ -6792,6 +6815,7 @@ export function createToolLoopGuard({
         state.workspacePreviewDirectory = preview.relativeDirectory;
         state.workspacePreviewModelAuthored = state.workspacePreviewAuthorshipRequired;
         state.workspacePreview = preview;
+        state.successfulWriteContentByPath.clear();
         rememberSessionPreview(state.currentSessionId, preview);
       }
     }

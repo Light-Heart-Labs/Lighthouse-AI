@@ -8628,6 +8628,106 @@ test("accepts a novel multi-file visual only when every published file was writt
   assert.match(verification.text, /active model wrote every published file/);
 });
 
+test("binds a successful focused model edit to the final preview bytes", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me a novel interactive website." }
+  );
+  const initial = {
+    path: "edited-visual/index.html",
+    content: "<!doctype html><button>Draft launch</button>",
+  };
+  call(guard, "write", { event: { params: initial } });
+  afterCall(guard, "write", {
+    event: { params: initial, result: { details: { status: "completed" } } },
+  });
+  const edit = {
+    path: initial.path,
+    edits: [{ oldText: "Draft launch", newText: "Ready to launch" }],
+  };
+  call(guard, "edit", { event: { params: edit } });
+  afterCall(guard, "edit", {
+    event: { params: edit, result: { details: { status: "completed" } } },
+  });
+  const finalWrite = {
+    ...initial,
+    content: initial.content.replace("Draft launch", "Ready to launch"),
+  };
+  const snapshot = workspacePreviewSnapshot("edited-visual", [finalWrite]);
+  const previewParams = { relativeDirectory: "edited-visual" };
+  call(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams },
+  });
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: {
+      params: previewParams,
+      result: {
+        details: {
+          schemaVersion: 1,
+          kind: "ods-pixel-workspace-preview",
+          status: "succeeded",
+          relativeDirectory: "edited-visual",
+          siteId: snapshot.siteId,
+          port: 9437,
+          url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+          ...snapshot,
+          httpStatus: 200,
+          readbackVerified: true,
+          executable: false,
+          overwritten: false,
+        },
+      },
+    },
+  });
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+});
+
+test("tracks a model-authored preview above the repair-loop text threshold", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Build and show me a detailed interactive website." }
+  );
+  const write = {
+    path: "detailed-visual/index.html",
+    content: `<!doctype html><title>Detailed</title><main>${"x".repeat(40_000)}</main>`,
+  };
+  call(guard, "write", { event: { params: write } });
+  afterCall(guard, "write", {
+    event: { params: write, result: { details: { status: "completed" } } },
+  });
+  const snapshot = workspacePreviewSnapshot("detailed-visual", [write]);
+  const previewParams = { relativeDirectory: "detailed-visual" };
+  call(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams },
+  });
+  afterCall(guard, "pixel_ods_workspace_preview", {
+    event: {
+      params: previewParams,
+      result: {
+        details: {
+          schemaVersion: 1,
+          kind: "ods-pixel-workspace-preview",
+          status: "succeeded",
+          relativeDirectory: "detailed-visual",
+          siteId: snapshot.siteId,
+          port: 9437,
+          url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+          ...snapshot,
+          httpStatus: 200,
+          readbackVerified: true,
+          executable: false,
+          overwritten: false,
+        },
+      },
+    },
+  });
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+});
+
 test("blocks every creative scaffold even when a visual was requested", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
