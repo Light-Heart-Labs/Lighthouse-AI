@@ -2538,6 +2538,20 @@ test("classifies explicit host evidence as Operations work", () => {
   );
 });
 
+test("does not turn website file inspection plus host preview verification into Operations", () => {
+  const prompt =
+    "Build a polished, interactive single-page website demo in a new folder under your workspace. " +
+    "Make it visually distinctive and responsive using only HTML, CSS, and JavaScript. " +
+    "Include at least two real interactions, inspect every file you create, run verifiable checks, " +
+    "and make it available through Pixel's native preview side panel. Work autonomously within " +
+    "the workspace and do not claim success until the host can verify the preview.";
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: false,
+    actions: [],
+  });
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), true);
+});
+
 test("classifies broad host exploration into a useful nonredundant typed inventory", () => {
   const result = userMessageOperationsRequirements(
     [],

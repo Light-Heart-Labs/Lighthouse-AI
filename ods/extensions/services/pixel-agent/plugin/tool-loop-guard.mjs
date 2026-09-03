@@ -313,9 +313,9 @@ const MAX_PENDING_EXEC_SESSIONS = 64;
 const ODS_OPENAI_USER = /^ods-[0-9a-f]{64}$/;
 const EXEC_CONTROL_WRAPPER = "/run/pixel-ods-control/cancellable-exec.sh";
 const ARTIFACT_DRAFT_PREFIX =
-  /^\s*(?:please\s+)?(?:write|draft|document|compose|create|edit|update|refactor|implement|generate)\b/i;
+  /^\s*(?:please\s+)?(?:build|write|draft|document|compose|create|edit|update|refactor|implement|generate)\b/i;
 const ARTIFACT_NOUN =
-  /\b(?:code|config(?:uration)?|documentation|example|file|fixture|readme|script|snippet|test)\b/i;
+  /\b(?:app(?:lication)?|code|config(?:uration)?|documentation|example|file|fixture|page|project|readme|script|site|snippet|test|web(?:site|page)?|workspace)\b/i;
 const FOLLOWUP_PRIVATE_ACCESS =
   /\b(?:and\s+)?then\s+(?:access|browse|call|check|connect|download|fetch|inspect|open|query|read|request|retrieve|summari[sz]e|test|visit)\b/i;
 
@@ -3283,7 +3283,8 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i.test(
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
-  const hostContext = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i.test(text);
+  const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i;
+  const hostContext = hostContextPattern.test(text);
   const hostFacetCount = [
     /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro|uptime|load averages?|system load)\b/i,
     /\b(?:process|processes|process inventory)\b/i,
@@ -3295,8 +3296,18 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i,
     /\btailscale\b/i,
   ].filter((pattern) => pattern.test(text)).length;
-  const hostExplorationIntent =
-    /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i.test(text);
+  const hostExplorationPattern =
+    /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i;
+  // Do not combine an artifact instruction such as "inspect every file" with
+  // a later preview phrase such as "the host can verify it". Host exploration
+  // authority requires the host scope and exploration intent in the same
+  // owner-authored clause.
+  const hostExplorationIntent = text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some(
+      (clause) =>
+        hostContextPattern.test(clause) && hostExplorationPattern.test(clause)
+    );
   const naturalHostOverview = hostContext && (
     /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(text) ||
     /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(text) ||
@@ -3496,9 +3507,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const view =
     /\b(?:demo|preview|show|view|open|see|live|browser|localhost|host|serve|publish)\b/i.test(text);
   const rejectsPreview =
-    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:demo|preview|show|view|open|serve|publish)\b/i.test(
-      text
-    );
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip)\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text) ||
+    /\bwithout\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text);
   if (rejectsPreview) return false;
   const directPreview =
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
