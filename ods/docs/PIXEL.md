@@ -635,6 +635,10 @@ head:
 - a real static website build whose host-readback receipt opens the interactive
   Dashboard side panel, with click behavior verified and a model-authored
   localhost URL proven unable to open the panel;
+- the diverse live site, app, game, visualization, animated-SVG, and voxel-art
+  scenarios in `docs/pixel/visual-capability-qualification.md`, including
+  responsive rendering, exact interaction evidence, iterative refinement,
+  malformed-output recovery, cancellation, privacy, and concurrent isolation;
 - a fresh first turn with no workspace-bootstrap truncation warning and a
   visible `Working` state while a tool turn is active;
 - cancellation of a real long-running sandbox command, proving a clean
