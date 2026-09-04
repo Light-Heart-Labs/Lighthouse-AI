@@ -1100,7 +1100,7 @@ ODS_DEVICE_NAME=${ODS_DEVICE_NAME}
 #=== Web UI Settings ===
 # Loopback installs open directly. Network-bound installs require a login.
 WEBUI_AUTH=${WEBUI_AUTH}
-ENABLE_WEB_SEARCH=true
+ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-true}
 WEB_SEARCH_ENGINE=searxng
 
 #=== n8n Settings ===

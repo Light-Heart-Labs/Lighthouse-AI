@@ -14,6 +14,7 @@
 #   $llamaServerImage          -- from phase 02
 #   $whisperCudaSupported      -- from phase 02
 #   $enableOpenClaw            -- from phase 03
+#   $enableRecommended, $enableDeepResearch, $enableHermes -- from phase 03
 #   $openClawConfig            -- from phase 03
 #
 # Writes:
@@ -319,6 +320,11 @@ if ($gpuInfo.Backend -eq "amd" -and -not $cloudMode) {
 if ($amdLemonadeRuntime -and $amdLemonadeRuntime.container_image) {
     $_lemonadeServerImage = $amdLemonadeRuntime.container_image
 }
+$_enableWebSearch = Test-ODSWindowsSearxngNeeded `
+    -EnableRecommended $enableRecommended `
+    -EnableDeepResearch $enableDeepResearch `
+    -EnableHermes $enableHermes `
+    -EnableOpenClaw $enableOpenClaw
 $envResult = New-ODSEnv `
     -InstallDir     $installDir `
     -TierConfig     $tierConfig `
@@ -339,7 +345,8 @@ $envResult = New-ODSEnv `
     -EnableLangfuse $enableLangfuse `
     -SwitchboardMode $env:ODS_MODEL_SWITCHBOARD `
     -EnableLan      $lanFlag `
-    -EnableODSProxy $enableODSProxy
+    -EnableODSProxy $enableODSProxy `
+    -EnableWebSearch $_enableWebSearch
 Write-AISuccess "Generated .env with secure secrets"
 
 # ── Post-generation validation: verify all required keys are present with values ──
