@@ -4438,9 +4438,18 @@ export function userMessageRequestsWorkspaceVisualContinuation(
     /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip)\b[^.!?;\n]{0,96}\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
   const withoutAction =
     /\bwithout\s+(?:(?:also|any|further)\s+)?(?:adding|animating|changing|continuing|editing|improving|keeping|making|modifying|polishing|refreshing|removing|republishing|restyling|reworking|speeding\s+up|tweaking|updating)\b/i;
-  return text
-    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
-    .some(
+  const clauses = text.split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i);
+  // In a creation request, "keep it self-contained" or "make it responsive"
+  // refers to the new artifact, not a missing artifact from an earlier turn.
+  // Stop at relational words so "create a button for this app" stays an edit.
+  const newVisualObject =
+    /\b(?:build|create|develop|design|generate|implement|make|write)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\s+(?:(?!(?:existing|previous|prior|same|for|from|in|inside|into|of|on|onto|to|using|with)\b)[\w-]+\s+){0,8}(?:app|application|artwork|board|dashboard|demo|form|game|illustration|interface|page|prototype|scene|site|svg|visuali[sz]ation|voxel|website)\b/i;
+  const rejectsCreation =
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|design|generate|implement|make|write)\b/i;
+  if (clauses.some((clause) => newVisualObject.test(clause) && !rejectsCreation.test(clause))) {
+    return false;
+  }
+  return clauses.some(
       (clause) =>
         action.test(clause) &&
         (visualReference.test(clause) || pronounReference.test(clause)) &&

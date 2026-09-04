@@ -8352,6 +8352,8 @@ test("requires the model to author a game before publication", () => {
 
 test("keeps every visual category on the model-authored write path", () => {
   for (const prompt of [
+    "Create an interactive SVG artwork called Tidal Atlas from scratch. Keep it self-contained, verify it, and publish it in the preview.",
+    "Build me a browser app for a recipe collection. Make it responsive and keep it self-contained.",
     "Create an interactive voxel landscape with a dramatic day/night change.",
     "Make an intricate animated SVG illustration with pause and color controls.",
     "Create a small task board where I can add, complete, filter, and remove items.",
@@ -8420,6 +8422,10 @@ test("recognizes only affirmative natural visual follow-ups", () => {
     "Update this animated SVG with a calmer orbit.",
     "Make this form mobile-friendly.",
     "Improve the previous prototype's keyboard navigation.",
+    "Add a new button to the existing app.",
+    "Create a new button for this app and make it accessible.",
+    "Do not create a new app. Improve the existing app.",
+    "Create a new color palette for this game, then update the same game.",
     "The Reverse orbit button does not work. Investigate your existing artifact, fix that defect without starting over or using a template, republish the same artifact, and report only what the tools verify.",
   ]) {
     assert.equal(
@@ -8431,6 +8437,9 @@ test("recognizes only affirmative natural visual follow-ups", () => {
   for (const prompt of [
     "Make a new Breakout game.",
     "Create a voxel city under the ocean.",
+    "Create an interactive SVG artwork called Tidal Atlas from scratch: a beautiful layered ocean made of animated contour lines, a small moon controlling the tides, a pause/resume button, a tide-height slider, and day/night colors. Make an original composition, not a built-in demo or template. Keep it self-contained, verify it, and publish it in the preview so I can play with it.",
+    "Build me a browser app for a recipe collection. Make it responsive and keep it self-contained.",
+    "Make a new game. Keep the game small and make it keyboard accessible.",
     "Do not change that game.",
     "Keep the same artifact without changing or republishing it.",
     "Explain how to improve a website.",
