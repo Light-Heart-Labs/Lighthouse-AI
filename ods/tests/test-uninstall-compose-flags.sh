@@ -162,10 +162,26 @@ main() {
     pass "normal uninstall removes compose volumes"
 
     mapfile -t sudo_calls < "$sudo_log"
-    [[ "${sudo_calls[0]:-}" == "-v" ]] \
+    local sudo_credentials_seen=0
+    local sudo_chown_seen=0
+    local sudo_call
+    for sudo_call in "${sudo_calls[@]}"; do
+        if [[ "$sudo_call" == "-v" ]]; then
+            sudo_credentials_seen=1
+            continue
+        fi
+        [[ "$sudo_credentials_seen" -eq 1 ]] \
+            || fail "uninstall must acquire sudo credentials directly before privileged commands"
+        [[ "$sudo_call" == "-n -- "* ]] \
+            || fail "privileged uninstall commands must use cached credentials non-interactively"
+        if [[ "$sudo_call" == "-n -- chown -R "* ]]; then
+            sudo_chown_seen=1
+        fi
+    done
+    [[ "$sudo_credentials_seen" -eq 1 ]] \
         || fail "uninstall must acquire sudo credentials directly before privileged commands"
-    [[ "${sudo_calls[1]:-}" == "-n -- chown -R "* ]] \
-        || fail "privileged uninstall commands must use cached credentials non-interactively"
+    [[ "$sudo_chown_seen" -eq 1 ]] \
+        || fail "privileged uninstall must chown retained data through cached sudo credentials"
     pass "uninstall separates the interactive sudo prompt from privileged commands"
 
     local install_safe="$TMP_DIR/install-safe-env"
