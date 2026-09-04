@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,6 +9,17 @@ import {
   createHostObserveTool,
   testing,
 } from "../plugin/host-observe.mjs";
+
+// Match the external broker's atomic_json contract: a visible result is final,
+// never an empty file between open() and write(). Invalid final bytes still fail.
+async function publishResult(filename, value) {
+  const temporary = `${filename}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value)}\n`, {
+    encoding: "utf8",
+    mode: 0o640,
+  });
+  await rename(temporary, filename);
+}
 
 test("host observation accepts only unique fixed read-only actions", () => {
   assert.deepEqual(
@@ -81,15 +92,14 @@ test("host observation binds one private peer and bounded ports into the workflo
         parameters: { peer: "Strixy", ports: "22,3389" },
       },
     ]);
-    await writeFile(
+    await publishResult(
       join(resultDir, `${request.jobId}.json`),
-      `${JSON.stringify({
+      {
         schemaVersion: 2,
         jobId: request.jobId,
         status: "succeeded",
         steps: [],
-      })}\n`,
-      "utf8"
+      }
     );
     const result = await pending;
     assert.equal(result.details.jobId, request.jobId);
@@ -163,16 +173,15 @@ test("host command adapter publishes exact protocol bytes and returns one approv
     assert.doesNotMatch(request.boundary, /approve/i);
 
     const planHash = "a".repeat(64);
-    await writeFile(
+    await publishResult(
       join(resultDir, `${request.jobId}.json`),
-      `${JSON.stringify({
+      {
         schemaVersion: 2,
         jobId: request.jobId,
         status: "awaiting-approval",
         approvalRequired: true,
         planHash,
-      })}\n`,
-      { encoding: "utf8", mode: 0o640 }
+      }
     );
     const result = await pending;
     assert.equal(result.isError, undefined);
@@ -227,16 +236,15 @@ test("host command adapter rejects a result whose embedded job ID does not match
     }
     assert.equal(names.length, 1);
     const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
-    await writeFile(
+    await publishResult(
       join(resultDir, `${request.jobId}.json`),
-      `${JSON.stringify({
+      {
         schemaVersion: 2,
         jobId: "ops-1234567890123-abcdef123456",
         status: "awaiting-approval",
         approvalRequired: true,
         planHash: "b".repeat(64),
-      })}\n`,
-      "utf8"
+      }
     );
     const result = await pending;
     assert.equal(result.isError, true);
