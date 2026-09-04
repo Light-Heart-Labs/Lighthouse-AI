@@ -80,6 +80,98 @@ def test_host_agent_backlog_handles_dashboard_poll_bursts():
     assert _mod.ThreadedHTTPServer.request_queue_size >= 64
 
 
+def test_external_lemonade_runtime_overrides_wsl_cpu_discovery():
+    env = {
+        "ODS_MODE": "lemonade",
+        "GPU_BACKEND": "cpu",
+        "LLM_BACKEND": "lemonade",
+        "AMD_INFERENCE_RUNTIME": "lemonade",
+        "AMD_INFERENCE_RUNTIME_MODE": "external-lemonade",
+        "AMD_INFERENCE_MANAGED": "false",
+        "LEMONADE_EXTERNAL": "true",
+        "LEMONADE_BASE_URL": "http://172.19.224.1:8080/api/v1",
+        "LEMONADE_MODEL": "Qwen3.6-35B-A3B-GGUF",
+        "LLM_MODEL": "qwen3.5-9b",
+        "GGUF_FILE": "Qwen3.5-9B-Q4_K_M.gguf",
+    }
+
+    assert _mod._external_lemonade_runtime(env) is True
+    assert _mod._uses_lemonade_runtime(env) is True
+    assert _mod._lemonade_runtime_base_url(env) == "http://172.19.224.1:8080"
+    assert _mod._initial_switchboard_backend(env) == (
+        "lemonade",
+        "lemonade-default",
+        "Qwen3.6-35B-A3B-GGUF",
+    )
+    assert _mod._current_runtime_model_inputs(
+        env,
+        {"runtimeModelId": "stale.gguf", "catalogId": "stale"},
+    ) == ("Qwen3.6-35B-A3B-GGUF", "Qwen3.6-35B-A3B-GGUF")
+
+
+def test_external_lemonade_runtime_rejects_credentialed_origin():
+    env = {
+        "LEMONADE_EXTERNAL": "true",
+        "LEMONADE_BASE_URL": "http://user:secret@127.0.0.1:8080",
+    }
+    assert _mod._lemonade_runtime_base_url(env) == ""
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "",
+        "ftp://127.0.0.1:8080",
+        "file:///tmp/lemonade.sock",
+        "http://127.0.0.1:8080/arbitrary",
+        "http://127.0.0.1:8080?model=wrong",
+        "http://127.0.0.1:8080#wrong",
+        "http://127.0.0.1:99999",
+    ],
+)
+def test_external_lemonade_runtime_requires_valid_explicit_origin(
+    configured, monkeypatch
+):
+    monkeypatch.setenv("ODS_HOST_INSTALL_DIR", "/opt/ods")
+    env = {
+        "LEMONADE_EXTERNAL": "true",
+        "LEMONADE_BASE_URL": configured,
+    }
+
+    assert _mod._lemonade_runtime_base_url(env) == ""
+
+
+@pytest.mark.parametrize("managed", ["0", "false", "no", "off"])
+def test_external_lemonade_runtime_accepts_disabled_managed_spellings(managed):
+    assert _mod._external_lemonade_runtime({
+        "LLM_BACKEND": "lemonade",
+        "AMD_INFERENCE_MANAGED": managed,
+    }) is True
+
+
+def test_external_lemonade_catalog_does_not_fall_back_to_stale_local_model(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        _mod,
+        "_load_model_library_records",
+        lambda: [{
+            "id": "qwen3.5-9b",
+            "llm_model_name": "qwen3.5-9b",
+            "gguf_file": "Qwen3.5-9B-Q4_K_M.gguf",
+        }],
+    )
+    model_id, model = _mod._catalog_model_for_current_env({
+        "LEMONADE_EXTERNAL": "true",
+        "LEMONADE_MODEL": "Qwen3.6-35B-A3B-GGUF",
+        "LLM_MODEL": "qwen3.5-9b",
+        "GGUF_FILE": "Qwen3.5-9B-Q4_K_M.gguf",
+    })
+
+    assert model_id == "Qwen3.6-35B-A3B-GGUF"
+    assert model == {}
+
+
 def test_host_agent_keeps_gets_alive_and_closes_posts(monkeypatch):
     class _CountingServer(_mod.ThreadedHTTPServer):
         accepted_connections = 0
@@ -561,6 +653,9 @@ class TestLemonadeCompletionReady:
                     "expected_model_id": "Modern-Model",
                     "expected_gguf_file": "Modern-Model.gguf",
                     "expected_llm_model_name": "model",
+                    "base_url": "http://127.0.0.1:8080",
+                    "disable_thinking": True,
+                    "require_visible_content": True,
                 },
             ),
         ]
@@ -1260,6 +1355,154 @@ class TestPerplexicaModelRoute:
 
 
 class TestDownstreamRouteVerification:
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://172.19.224.1:8080",
+            "https://lemonade.example.test:8443",
+        ],
+    )
+    def test_external_lemonade_readiness_uses_configured_origin_and_visible_output(
+        self, monkeypatch, origin
+    ):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/api/v1/health"):
+                body = {
+                    "status": "ok",
+                    "version": "10.7.0",
+                    "model_loaded": "Qwen3.6-35B-A3B-GGUF",
+                    "all_models_loaded": [{
+                        "model_name": "Qwen3.6-35B-A3B-GGUF",
+                        "checkpoint": (
+                            "unsloth/Qwen3.6-35B-A3B-GGUF:"
+                            "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+                        ),
+                        "recipe_options": {"ctx_size": 65536},
+                    }],
+                }
+            else:
+                body = {
+                    "model": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+                    "choices": [{"message": {"content": "READY"}}],
+                }
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps(body), stderr=""
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "cpu",
+                "LLM_BACKEND": "lemonade",
+                "AMD_INFERENCE_RUNTIME_MODE": "external-lemonade",
+                "LEMONADE_EXTERNAL": "true",
+                "LEMONADE_BASE_URL": origin,
+                "LEMONADE_API_BASE_PATH": "/api/v1",
+                "LEMONADE_MODEL": "Qwen3.6-35B-A3B-GGUF",
+                "CTX_SIZE": "65536",
+            },
+            model_id="Qwen3.6-35B-A3B-GGUF",
+            gguf_file="Qwen3.6-35B-A3B-GGUF",
+            llm_model_name="Qwen3.6-35B-A3B-GGUF",
+            lemonade_model_id="Qwen3.6-35B-A3B-GGUF",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+        )
+
+        assert proof["identity"] == "Qwen3.6-35B-A3B-GGUF"
+        urls = [
+            next((str(part) for part in cmd if str(part).startswith("http")), "")
+            for cmd, _kwargs in calls
+        ]
+        assert urls == [
+            f"{origin}/api/v1/health",
+            f"{origin}/api/v1/chat/completions",
+        ]
+        payload = json.loads(calls[-1][0][calls[-1][0].index("-d") + 1])
+        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+        assert payload["max_tokens"] == 64
+
+    def test_llama_readiness_preserves_plain_v1_probe_contract(self, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = {"data": [{"id": "portable.gguf", "status": "loaded"}]}
+            elif url.endswith("/props"):
+                body = {"default_generation_settings": {"n_ctx": 8192}}
+            else:
+                body = {
+                    "model": "portable.gguf",
+                    "choices": [{"message": {"content": "READY"}}],
+                }
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps(body), stderr=""
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "nvidia",
+                "GGUF_FILE": "portable.gguf",
+                "LLM_MODEL": "portable",
+                "CTX_SIZE": "8192",
+                "OLLAMA_PORT": "8080",
+            },
+            model_id="portable",
+            gguf_file="portable.gguf",
+            llm_model_name="portable",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+        )
+
+        assert proof["identity"] == "portable.gguf"
+        urls = [
+            next((str(part) for part in cmd if str(part).startswith("http")), "")
+            for cmd, _kwargs in calls
+        ]
+        assert urls == [
+            "http://127.0.0.1:8080/v1/models",
+            "http://127.0.0.1:8080/props",
+            "http://127.0.0.1:8080/v1/chat/completions",
+        ]
+        payload = json.loads(calls[-1][0][calls[-1][0].index("-d") + 1])
+        assert "chat_template_kwargs" not in payload
+
+    def test_lemonade_completion_rejects_reasoning_only_output(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({
+                    "model": "Qwen3.5-2B-Q4_K_M",
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "I should answer READY",
+                        }
+                    }],
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        assert not _mod._lemonade_completion_ready(
+            "127.0.0.1",
+            "8080",
+            "Qwen3.5-2B-Q4_K_M",
+            "Qwen3.5-2B-Q4_K_M",
+        )
 
     def test_completion_probe_sends_bearer_key_when_requested(self, monkeypatch):
         calls = []
