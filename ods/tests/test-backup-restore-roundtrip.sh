@@ -25,7 +25,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Create source ODS directory with minimal data
 SRC="$TMP/src"
-mkdir -p "$SRC/data/open-webui"
+mkdir -p "$SRC/data/open-webui" "$SRC/data/hermes/sessions" "$SRC/data/persona"
 mkdir -p "$SRC/data/n8n"
 mkdir -p "$SRC/config"
 mkdir -p "$SRC/models"
@@ -34,12 +34,14 @@ echo "test-env-value" > "$SRC/.env"
 echo "compose-content" > "$SRC/docker-compose.yml"
 echo "config-data" > "$SRC/config/settings.json"
 echo "user-data-file" > "$SRC/data/open-webui/data.txt"
+echo "hermes-session" > "$SRC/data/hermes/sessions/session.jsonl"
+echo "persona-soul" > "$SRC/data/persona/SOUL.md"
 echo "workflow-data-file" > "$SRC/data/n8n/workflow.txt"
 echo "model-cache-file" > "$SRC/models/model.gguf"
 
 # Both scripts source lib/rsync.sh relative to ODS_DIR
 mkdir -p "$SRC/lib"
-cp "$SCRIPT_DIR/../lib/rsync.sh" "$SRC/lib/"
+cp "$SCRIPT_DIR/../lib/rsync.sh" "$SCRIPT_DIR/../lib/backup-paths.sh" "$SRC/lib/"
 
 info "Creating backup from source"
 ODS_DIR="$SRC" bash "$ODS_BACKUP" --type full >/dev/null 2>&1 || fail "Backup failed"
@@ -61,12 +63,22 @@ pass "Backup created: $BACKUP_ID"
 [[ -f "$SRC/.backups/$BACKUP_ID/.env" ]] \
     || fail "Full backup lost its environment config"
 
+BACKUP_DIR="$SRC/.backups/$BACKUP_ID"
+[[ -f "$BACKUP_DIR/data/hermes/sessions/session.jsonl" ]] \
+    || fail "Backup omitted data/hermes"
+[[ -f "$BACKUP_DIR/data/persona/SOUL.md" ]] \
+    || fail "Backup omitted data/persona"
+jq -e '.paths.data_hermes == "data/hermes" and .paths.data_persona == "data/persona"' \
+    "$BACKUP_DIR/manifest.json" >/dev/null \
+    || fail "Manifest omitted Hermes or persona backup paths"
+pass "Hermes and persona data are present in the backup and manifest"
+
 # Create destination ODS directory (empty)
 DST="$TMP/dst"
 mkdir -p "$DST/data"
 mkdir -p "$DST/.backups"
 mkdir -p "$DST/lib"
-cp "$SCRIPT_DIR/../lib/rsync.sh" "$DST/lib/"
+cp "$SCRIPT_DIR/../lib/rsync.sh" "$SCRIPT_DIR/../lib/backup-paths.sh" "$DST/lib/"
 
 info "Restoring backup to destination"
 # Copy backup to destination's backup root
@@ -88,6 +100,8 @@ info "Validating restored contents"
 [[ -f "$DST/config/settings.json" ]] || fail "Missing config/settings.json after restore"
 [[ -d "$DST/data/open-webui" ]] || fail "Missing data/open-webui after restore"
 [[ -f "$DST/data/open-webui/data.txt" ]] || fail "Missing data/open-webui/data.txt after restore"
+[[ -f "$DST/data/hermes/sessions/session.jsonl" ]] || fail "Missing Hermes session after restore"
+[[ -f "$DST/data/persona/SOUL.md" ]] || fail "Missing persona SOUL.md after restore"
 [[ -f "$DST/data/n8n/workflow.txt" ]] || fail "Missing data/n8n/workflow.txt after restore"
 [[ -f "$DST/data/open-webui/local-only.txt" ]] \
     || fail "Restore deleted a file created after the backup"
@@ -100,6 +114,10 @@ pass "All expected files/dirs present after restore"
 [[ "$(cat "$DST/docker-compose.yml")" == "compose-content" ]] || fail "docker-compose.yml content mismatch"
 [[ "$(cat "$DST/config/settings.json")" == "config-data" ]] || fail "config/settings.json content mismatch"
 [[ "$(cat "$DST/data/open-webui/data.txt")" == "user-data-file" ]] || fail "data/open-webui/data.txt content mismatch"
+[[ "$(cat "$DST/data/hermes/sessions/session.jsonl")" == "hermes-session" ]] \
+    || fail "Hermes session content mismatch"
+[[ "$(cat "$DST/data/persona/SOUL.md")" == "persona-soul" ]] \
+    || fail "persona SOUL.md content mismatch"
 
 pass "All file contents match after restore"
 
@@ -145,7 +163,7 @@ pass "Compressed backup created: $CBACKUP_ID.tar.gz"
 
 DST2="$TMP/dst2"
 mkdir -p "$DST2/data" "$DST2/.backups" "$DST2/lib"
-cp "$SCRIPT_DIR/../lib/rsync.sh" "$DST2/lib/"
+cp "$SCRIPT_DIR/../lib/rsync.sh" "$SCRIPT_DIR/../lib/backup-paths.sh" "$DST2/lib/"
 echo "compose-content" > "$DST2/docker-compose.yml"
 cp "$TARBALL" "$DST2/.backups/"
 
