@@ -21,6 +21,9 @@ test: ## Run unit and contract tests
 	@bash tests/test-install-docs.sh
 	@bash tests/test-hosted-bootstrap-verifier.sh
 	@echo ""
+	@echo "=== Hardware detection ==="
+	@bash tests/test-wsl2-gpu-detection.sh
+	@echo ""
 	@echo "=== Tier map tests ==="
 	@bash tests/test-tier-map.sh
 	@bash tests/test-installer-context-parity.sh
