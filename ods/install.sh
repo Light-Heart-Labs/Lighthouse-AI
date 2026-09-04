@@ -154,8 +154,19 @@ if [[ "${1:-}" == "--tui" ]]; then
     _run_configuration_tui
 fi
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    echo "Dispatcher option: --tui  Review and confirm all Unix installer defaults up front."
+if [[ ( "${1:-}" == "--help" || "${1:-}" == "-h" ) && "$target" == *.sh ]]; then
+    # Buffer the delegated help before writing it. Consumers commonly probe this
+    # command with `install.sh --help | grep -q ...`; writing a prefix before the
+    # delegate can make grep close the pipe while install-core.sh is still
+    # rendering help, turning a successful help request into SIGPIPE under
+    # pipefail. Explicitly preserve the delegate's status even if that consumer
+    # stops reading early.
+    help_output=""
+    help_status=0
+    help_output="$(bash "$target" "$@" 2>&1)" || help_status=$?
+    printf '%s\n' "$help_output" || true
+    printf '%s\n' "Dispatcher option: --tui  Review and confirm all Unix installer defaults up front." || true
+    exit "$help_status"
 fi
 
 case "$target" in

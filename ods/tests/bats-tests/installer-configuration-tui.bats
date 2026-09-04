@@ -86,3 +86,15 @@ EOF
     assert_failure 2
     assert_output --partial "--tui cannot be combined"
 }
+
+@test "installer help remains successful when a short reader closes the pipe" {
+    run /bin/bash -o pipefail -c \
+        '"$1" --help 2>&1 | grep -qiE "usage|option|ods"' \
+        help-probe "$TEST_ROOT/install.sh"
+
+    assert_success
+
+    run env ODS_PLATFORM_OVERRIDE=linux /bin/bash "$TEST_ROOT/install.sh" --help
+    assert_success
+    assert_output --partial "Dispatcher option: --tui"
+}
