@@ -35,6 +35,46 @@ _phase06_step() {
     log "Phase 06 step: ${step}"
 }
 
+_phase06_generate_hex_secret() {
+    local bytes="$1" secret expected_length
+    case "$bytes" in
+        ''|*[!0-9]*|0)
+            error "Secret byte count must be a positive integer: $bytes"
+            return 1
+            ;;
+    esac
+
+    if command -v openssl >/dev/null 2>&1; then
+        secret="$(openssl rand -hex "$bytes")" || secret=""
+    elif command -v xxd >/dev/null 2>&1; then
+        secret="$(head -c "$bytes" /dev/urandom | xxd -p | tr -d '\n')" || secret=""
+    elif command -v od >/dev/null 2>&1; then
+        secret="$(od -An -N "$bytes" -tx1 /dev/urandom | tr -d ' \n')" || secret=""
+    else
+        error "Cannot generate installer secrets: install openssl, xxd, or od."
+        return 1
+    fi
+
+    expected_length=$((bytes * 2))
+    if [[ "${#secret}" -ne "$expected_length" || "$secret" == *[!0-9a-fA-F]* ]]; then
+        error "Secret generator returned invalid output; refusing to write .env."
+        return 1
+    fi
+    printf '%s' "$secret"
+}
+
+_phase06_env_hex_secret() {
+    local key="$1" bytes="$2" prefix="${3:-}" value
+    value="$(_env_get "$key" "")"
+    [[ -n "$value" ]] || value="${!key-}"
+    if [[ -n "$value" ]]; then
+        printf '%s' "$value"
+        return 0
+    fi
+    value="$(_phase06_generate_hex_secret "$bytes")" || return 1
+    printf '%s%s' "$prefix" "$value"
+}
+
 if $DRY_RUN; then
     log "[DRY RUN] Would create: $INSTALL_DIR/{config,data,models}"
     log "[DRY RUN] Would copy compose files ($COMPOSE_FLAGS) and source tree"
@@ -268,7 +308,7 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         _sed_i "s|__LITELLM_KEY__|${_oc_key_esc}|g" "$INSTALL_DIR/config/openclaw/openclaw.json"
         log "Installed OpenClaw config: $OPENCLAW_CONFIG -> openclaw.json (model: $OPENCLAW_MODEL)"
         # Generate OPENCLAW_TOKEN (used by compose env and inject-token.js)
-        OPENCLAW_TOKEN=$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)
+        OPENCLAW_TOKEN=$(_phase06_generate_hex_secret 24)
         # Note: inject-token.js regenerates /home/node/.openclaw/openclaw.json
         # on every container start, so that file stays ephemeral. OpenClaw also
         # writes agent, cron, and canvas state under /home/node/.openclaw; those
@@ -428,10 +468,11 @@ raise SystemExit(1)' 2>/dev/null && return 0
     }
 
     # Secrets: reuse existing values, generate only if missing
-    WEBUI_SECRET=$(_env_get WEBUI_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    WEBUI_SECRET=$(_phase06_env_hex_secret WEBUI_SECRET 32)
     N8N_PASS=$(_env_get N8N_PASS "$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)")
-    LITELLM_KEY=$(_env_get LITELLM_KEY "sk-ods-$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LITELLM_LEMONADE_API_KEY=$(_env_get LITELLM_LEMONADE_API_KEY "sk-ods-lemonade-$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
+    LITELLM_KEY=$(_phase06_env_hex_secret LITELLM_KEY 16 "sk-ods-")
+    LITELLM_LEMONADE_API_KEY=$(_phase06_env_hex_secret LITELLM_LEMONADE_API_KEY 16 "sk-ods-lemonade-")
+    OPENCLAW_TOKEN=$(_phase06_env_hex_secret OPENCLAW_TOKEN 24)
     LEMONADE_EXTERNAL_VALUE="${LEMONADE_EXTERNAL:-false}"
     [[ "${LEMONADE_EXTERNAL_VALUE,,}" == "true" ]] && LEMONADE_EXTERNAL_VALUE="true" || LEMONADE_EXTERNAL_VALUE="false"
     if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" && -n "${LEMONADE_API_KEY:-}" ]]; then
@@ -495,49 +536,50 @@ raise SystemExit(1)' 2>/dev/null && return 0
         LEMONADE_MODEL="$LEMONADE_MODEL_VALUE"
     fi
     LIVEKIT_SECRET=$(_env_get LIVEKIT_API_SECRET "$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)")
-    DASHBOARD_API_KEY=$(_env_get DASHBOARD_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    ODS_AGENT_KEY=$(_env_get ODS_AGENT_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    LIVEKIT_API_KEY=$(_phase06_env_hex_secret LIVEKIT_API_KEY 16)
+    DASHBOARD_API_KEY=$(_phase06_env_hex_secret DASHBOARD_API_KEY 32)
+    ODS_AGENT_KEY=$(_phase06_env_hex_secret ODS_AGENT_KEY 32)
     # HMAC key for signing ods-session cookies (magic-link redemption).
     # 32 random bytes hex-encoded. Rotating invalidates every issued cookie —
     # the only revocation mechanism we have today, so don't rotate casually.
-    ODS_SESSION_SECRET=$(_env_get ODS_SESSION_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    ODS_SESSION_SECRET=$(_phase06_env_hex_secret ODS_SESSION_SECRET 32)
     # Upstream Hermes otherwise generates this token at process start. Keep it
     # stable so an already-open dashboard can reconnect after a container
     # restart instead of receiving a bare WebSocket 403.
-    HERMES_DASHBOARD_SESSION_TOKEN=$(_env_get HERMES_DASHBOARD_SESSION_TOKEN "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    SHIELD_API_KEY=$(_env_get SHIELD_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    DIFY_SECRET_KEY=$(_env_get DIFY_SECRET_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    QDRANT_API_KEY=$(_env_get QDRANT_API_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    HERMES_DASHBOARD_SESSION_TOKEN=$(_phase06_env_hex_secret HERMES_DASHBOARD_SESSION_TOKEN 32)
+    SHIELD_API_KEY=$(_phase06_env_hex_secret SHIELD_API_KEY 32)
+    DIFY_SECRET_KEY=$(_phase06_env_hex_secret DIFY_SECRET_KEY 32)
+    QDRANT_API_KEY=$(_phase06_env_hex_secret QDRANT_API_KEY 32)
     _token_spy_key_default=""
     if [[ -f "$INSTALL_DIR/data/token-spy/token-spy-api-key.txt" ]]; then
         _token_spy_key_default=$(tr -d '\r\n' < "$INSTALL_DIR/data/token-spy/token-spy-api-key.txt" 2>/dev/null || true)
     fi
     if [[ -z "$_token_spy_key_default" ]]; then
-        _token_spy_key_default=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')
+        _token_spy_key_default=$(_phase06_generate_hex_secret 32)
     fi
     TOKEN_SPY_API_KEY=$(_env_get TOKEN_SPY_API_KEY "$_token_spy_key_default")
     unset _token_spy_key_default
     OPENCODE_SERVER_PASSWORD=$(_env_get OPENCODE_SERVER_PASSWORD "$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64)")
-    SEARXNG_SECRET=$(_env_get SEARXNG_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
+    SEARXNG_SECRET=$(_phase06_env_hex_secret SEARXNG_SECRET 32)
 
     # Langfuse (LLM Observability). LANGFUSE_ENABLED mirrors the install-time
     # ENABLE_LANGFUSE toggle, falling back to whatever the user had in .env on
     # re-install so manual post-install `ods enable langfuse` edits survive.
     LANGFUSE_PORT=$(_env_get LANGFUSE_PORT "3006")
     LANGFUSE_ENABLED=$(_env_get LANGFUSE_ENABLED "${ENABLE_LANGFUSE:-false}")
-    LANGFUSE_NEXTAUTH_SECRET=$(_env_get LANGFUSE_NEXTAUTH_SECRET "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    LANGFUSE_SALT=$(_env_get LANGFUSE_SALT "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    LANGFUSE_ENCRYPTION_KEY=$(_env_get LANGFUSE_ENCRYPTION_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    LANGFUSE_DB_PASSWORD=$(_env_get LANGFUSE_DB_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_CLICKHOUSE_PASSWORD=$(_env_get LANGFUSE_CLICKHOUSE_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_REDIS_PASSWORD=$(_env_get LANGFUSE_REDIS_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_MINIO_ACCESS_KEY=$(_env_get LANGFUSE_MINIO_ACCESS_KEY "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_MINIO_SECRET_KEY=$(_env_get LANGFUSE_MINIO_SECRET_KEY "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p | tr -d '\n')")
-    LANGFUSE_PROJECT_PUBLIC_KEY=$(_env_get LANGFUSE_PROJECT_PUBLIC_KEY "pk-lf-ods-$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_PROJECT_SECRET_KEY=$(_env_get LANGFUSE_PROJECT_SECRET_KEY "sk-lf-ods-$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
-    LANGFUSE_INIT_PROJECT_ID=$(_env_get LANGFUSE_INIT_PROJECT_ID "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
+    LANGFUSE_NEXTAUTH_SECRET=$(_phase06_env_hex_secret LANGFUSE_NEXTAUTH_SECRET 32)
+    LANGFUSE_SALT=$(_phase06_env_hex_secret LANGFUSE_SALT 32)
+    LANGFUSE_ENCRYPTION_KEY=$(_phase06_env_hex_secret LANGFUSE_ENCRYPTION_KEY 32)
+    LANGFUSE_DB_PASSWORD=$(_phase06_env_hex_secret LANGFUSE_DB_PASSWORD 16)
+    LANGFUSE_CLICKHOUSE_PASSWORD=$(_phase06_env_hex_secret LANGFUSE_CLICKHOUSE_PASSWORD 16)
+    LANGFUSE_REDIS_PASSWORD=$(_phase06_env_hex_secret LANGFUSE_REDIS_PASSWORD 16)
+    LANGFUSE_MINIO_ACCESS_KEY=$(_phase06_env_hex_secret LANGFUSE_MINIO_ACCESS_KEY 16)
+    LANGFUSE_MINIO_SECRET_KEY=$(_phase06_env_hex_secret LANGFUSE_MINIO_SECRET_KEY 32)
+    LANGFUSE_PROJECT_PUBLIC_KEY=$(_phase06_env_hex_secret LANGFUSE_PROJECT_PUBLIC_KEY 16 "pk-lf-ods-")
+    LANGFUSE_PROJECT_SECRET_KEY=$(_phase06_env_hex_secret LANGFUSE_PROJECT_SECRET_KEY 16 "sk-lf-ods-")
+    LANGFUSE_INIT_PROJECT_ID=$(_phase06_env_hex_secret LANGFUSE_INIT_PROJECT_ID 16)
     LANGFUSE_INIT_USER_EMAIL=$(_env_get LANGFUSE_INIT_USER_EMAIL "admin@ods.local")
-    LANGFUSE_INIT_USER_PASSWORD=$(_env_get LANGFUSE_INIT_USER_PASSWORD "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
+    LANGFUSE_INIT_USER_PASSWORD=$(_phase06_env_hex_secret LANGFUSE_INIT_USER_PASSWORD 16)
     MODEL_PROFILE_VALUE=$(_env_get MODEL_PROFILE "${MODEL_PROFILE_REQUESTED:-${MODEL_PROFILE:-qwen}}")
     MODEL_RECOMMENDED_MODEL_VALUE="${LLM_MODEL}"
     MODEL_RECOMMENDED_GGUF_VALUE="${GGUF_FILE}"
@@ -1003,9 +1045,9 @@ SHIELD_API_KEY=${SHIELD_API_KEY}
 N8N_USER=admin@ods.local
 N8N_PASS=${N8N_PASS}
 LITELLM_KEY=${LITELLM_KEY}
-LIVEKIT_API_KEY=$(_env_get LIVEKIT_API_KEY "$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | xxd -p)")
+LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
 LIVEKIT_API_SECRET=${LIVEKIT_SECRET}
-OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)}
+OPENCLAW_TOKEN=${OPENCLAW_TOKEN}
 QDRANT_API_KEY=${QDRANT_API_KEY}
 TOKEN_SPY_API_KEY=${TOKEN_SPY_API_KEY}
 OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
