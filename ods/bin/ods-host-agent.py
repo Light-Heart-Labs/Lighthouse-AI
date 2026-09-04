@@ -2122,6 +2122,27 @@ def _atomic_write_text(
     _atomic_write_bytes(path, text.encode("utf-8"), mode, uid, gid)
 
 
+def _copy_unique_env_backup(env_path: Path, backup_dir: Path) -> Path:
+    """Copy ``.env`` to a collision-resistant, owner-readable backup file."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    fd, raw_backup_path = tempfile.mkstemp(
+        prefix=f".env.backup.{timestamp}.",
+        dir=str(backup_dir),
+    )
+    backup_path = Path(raw_backup_path)
+    try:
+        os.close(fd)
+    except OSError:
+        backup_path.unlink(missing_ok=True)
+        raise
+    try:
+        shutil.copy2(env_path, backup_path)
+        os.chmod(backup_path, 0o600)
+    except OSError:
+        backup_path.unlink(missing_ok=True)
+        raise
+    return backup_path
 def _read_setup_json(path: Path) -> tuple[bool, dict | None]:
     """Read one fixed setup-state file without following a symlink."""
     try:
@@ -5842,10 +5863,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         try:
             if backup and env_path.exists():
                 backup_dir = DATA_DIR / "config-backups"
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-                backup_path = backup_dir / f".env.backup.{timestamp}"
-                shutil.copy2(env_path, backup_path)
+                backup_path = _copy_unique_env_backup(env_path, backup_dir)
                 backup_relative_path = f"data/{backup_path.relative_to(DATA_DIR).as_posix()}"
 
             payload_text = raw_text if raw_text.endswith("\n") else raw_text + "\n"
