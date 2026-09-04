@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -58,9 +59,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import hmac
-import hmac
-from typing import Optional
 from typing import Optional
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
