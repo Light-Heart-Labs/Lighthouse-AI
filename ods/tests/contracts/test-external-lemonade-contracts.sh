@@ -206,6 +206,45 @@ grep -Eq 'extensions[\\/]+services[\\/]+litellm[\\/]+compose.yaml' <<<"$resolved
   || { echo "[FAIL] external Lemonade must keep LiteLLM gateway enabled"; exit 1; }
 
 echo "[contract] external Lemonade resolved compose config is valid"
+echo "[contract] installer hardware profiles cannot override external Lemonade"
+for backend in cpu amd nvidia; do
+  for selector in explicit runtime; do
+    installer_resolved="$(
+      export SCRIPT_DIR="$ROOT_DIR" TIER=1 GPU_BACKEND="$backend" GPU_COUNT=1
+      export ODS_MODE=lemonade
+      export CAP_COMPOSE_OVERLAYS="docker-compose.base.yml,docker-compose.${backend}.yml"
+      export LEMONADE_EXTERNAL=false AMD_INFERENCE_RUNTIME='' AMD_INFERENCE_MANAGED=''
+      if [[ "$selector" == explicit ]]; then
+        export LEMONADE_EXTERNAL=true
+      else
+        export AMD_INFERENCE_RUNTIME=lemonade AMD_INFERENCE_MANAGED=false
+      fi
+      LOG_FILE=/dev/null
+      log() { :; }
+      source installers/lib/compose-select.sh
+      resolve_compose_config
+      printf '%s\n' "$COMPOSE_FLAGS"
+    )"
+    [[ "$installer_resolved" == *docker-compose.cloud.yml* \
+       && "$installer_resolved" == *docker-compose.lemonade-external.yml* \
+       && "$installer_resolved" != *"docker-compose.${backend}.yml"* \
+       && "$installer_resolved" != *compose.local.yaml* ]] \
+      || { echo "[FAIL] $backend profile overrode $selector external Lemonade selection"; exit 1; }
+  done
+done
+
+echo "[contract] local and managed Lemonade retain their hardware profiles"
+for mode in local lemonade; do
+  managed_resolved="$(LEMONADE_EXTERNAL=false AMD_INFERENCE_RUNTIME=lemonade \
+    AMD_INFERENCE_MANAGED=true ODS_MODE="$mode" \
+    ./scripts/resolve-compose-stack.sh --script-dir "$ROOT_DIR" \
+      --ods-mode "$mode" --gpu-backend amd --tier SH_LARGE \
+      --profile-overlays docker-compose.base.yml,docker-compose.amd.yml --env)"
+  [[ "$managed_resolved" == *docker-compose.amd.yml* \
+     && "$managed_resolved" != *docker-compose.lemonade-external.yml* ]] \
+    || { echo "[FAIL] $mode lost its managed hardware profile"; exit 1; }
+done
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   compose_file_list="$(sed -n 's/^COMPOSE_FILE_LIST="\([^"]*\)".*/\1/p' <<<"$resolved")"
   compose_file_list="${compose_file_list//\\//}"

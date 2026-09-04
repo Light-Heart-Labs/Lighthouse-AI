@@ -114,10 +114,9 @@ def existing(overlays):
 resolved = []
 primary = "docker-compose.yml"
 
-if profile_overlays and existing(profile_overlays):
-    resolved = profile_overlays
-    primary = profile_overlays[-1]
-elif lemonade_external and ods_mode == "lemonade":
+# An explicit external runtime owns inference selection, even when hardware
+# detection supplied a local CPU/AMD/NVIDIA profile to the installer.
+if lemonade_external and ods_mode == "lemonade":
     if existing(["docker-compose.base.yml", "docker-compose.cloud.yml", "docker-compose.lemonade-external.yml"]):
         resolved = ["docker-compose.base.yml", "docker-compose.cloud.yml", "docker-compose.lemonade-external.yml"]
         primary = "docker-compose.lemonade-external.yml"
@@ -127,6 +126,9 @@ elif lemonade_external and ods_mode == "lemonade":
     elif existing(["docker-compose.base.yml"]):
         resolved = ["docker-compose.base.yml"]
         primary = "docker-compose.base.yml"
+elif profile_overlays and existing(profile_overlays):
+    resolved = profile_overlays
+    primary = profile_overlays[-1]
 elif ods_mode == "cloud" or tier == "CLOUD":
     if existing(["docker-compose.base.yml", "docker-compose.cloud.yml"]):
         resolved = ["docker-compose.base.yml", "docker-compose.cloud.yml"]
