@@ -371,10 +371,11 @@ import sys
 
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 assert "_phase06_repair_host_path" in text
-assert "Hermes requires data/hermes ownership 10000:10000 and mode 700" in text
+assert "Hermes requires data/hermes ownership $_phase06_compose_uid:$_phase06_compose_gid and mode 700" in text
+assert 'ods_sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid"' in text
 assert not re.search(r"(?m)^\s*sudo\s+(?:chown|chmod)\s+", text)
 PY
-pass "rootful ownership repair fails clearly instead of bypassing no-sudo mode"
+pass "rootful ownership repair uses persisted IDs and fails clearly without sudo"
 
 if grep -q 'Ignoring placeholder .* from environment' \
     "$ROOT_DIR/installers/phases/06-directories.sh"; then

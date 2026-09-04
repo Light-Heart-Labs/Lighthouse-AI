@@ -106,6 +106,38 @@ else
         esac
     fi
 
+    _env_existing=""
+    [[ -f "$INSTALL_DIR/.env" ]] && _env_existing="$INSTALL_DIR/.env"
+
+    # Safe reader: extract a value from existing .env without sourcing it.
+    _env_get() {
+        local key="$1" default="${2:-}"
+        if [[ -n "$_env_existing" ]]; then
+            local val
+            val=$(grep -m1 "^${key}=" "$_env_existing" 2>/dev/null | cut -d= -f2- || true)
+            val="${val%\"}" && val="${val#\"}"
+            val="${val%\'}" && val="${val#\'}"
+            if [[ -n "$val" ]]; then
+                echo "$val"
+                return
+            fi
+        fi
+        echo "$default"
+    }
+
+    _phase06_compose_uid=$(_env_get ODS_UID "")
+    _phase06_compose_gid=$(_env_get ODS_GID "")
+    # Migrate the old Compose-only UID/GID keys without writing Bash's
+    # readonly UID variable back into the generated dotenv file.
+    [[ -n "$_phase06_compose_uid" ]] \
+        || _phase06_compose_uid=$(_env_get UID "${SUDO_UID:-$(id -u)}")
+    [[ -n "$_phase06_compose_gid" ]] \
+        || _phase06_compose_gid=$(_env_get GID "${SUDO_GID:-$(id -g)}")
+    [[ "$_phase06_compose_uid" =~ ^[0-9]+$ ]] \
+        || error "ODS_UID must be a non-negative integer, got: $_phase06_compose_uid"
+    [[ "$_phase06_compose_gid" =~ ^[0-9]+$ ]] \
+        || error "ODS_GID must be a non-negative integer, got: $_phase06_compose_gid"
+
     # Create directories
     _phase06_step "create-directories"
     ods_progress 38 "directories" "Creating directory structure"
@@ -137,21 +169,21 @@ else
         fi
     }
 
-    # Hermes runs its gateway/dashboard as the in-container `hermes` user
-    # (uid 10000) and keeps HERMES_HOME at data/hermes mounted as /opt/data.
+    # Hermes remaps its in-container user to the persisted host UID/GID and
+    # keeps HERMES_HOME at data/hermes mounted as /opt/data.
     # Upstream intentionally makes that directory 0700. A reinstall running
     # as the host user must not "repair" it back to uid 1000, or Hermes's web
     # status and ODS Talk JSON-RPC paths fail with PermissionError.
     if ! $_phase06_rootless \
         && [[ "${ENABLE_HERMES:-false}" == "true" && -d "$INSTALL_DIR/data/hermes" ]]; then
         _hermes_metadata=$(stat -c '%u:%g:%a' "$INSTALL_DIR/data/hermes" 2>/dev/null || true)
-        if [[ "$_hermes_metadata" != "10000:10000:700" ]]; then
+        if [[ "$_hermes_metadata" != "$_phase06_compose_uid:$_phase06_compose_gid:700" ]]; then
             if ! ods_sudo_available; then
-                error "Hermes requires data/hermes ownership 10000:10000 and mode 700 with a rootful runtime. Grant privileged access or disable Hermes, then re-run ODS."
+                error "Hermes requires data/hermes ownership $_phase06_compose_uid:$_phase06_compose_gid and mode 700 with a rootful runtime. Grant privileged access or disable Hermes, then re-run ODS."
                 return 1
             fi
-            ods_sudo chown -R 10000:10000 "$INSTALL_DIR/data/hermes" 2>/dev/null || {
-                error "Failed to restore data/hermes ownership to Hermes uid 10000"
+            ods_sudo chown -R "$_phase06_compose_uid:$_phase06_compose_gid" "$INSTALL_DIR/data/hermes" 2>/dev/null || {
+                error "Failed to restore data/hermes ownership to $_phase06_compose_uid:$_phase06_compose_gid"
                 return 1
             }
             ods_sudo chmod 700 "$INSTALL_DIR/data/hermes" 2>/dev/null || {
@@ -351,28 +383,9 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     ods_progress 40 "directories" "Generating secrets and configuration"
     # If an existing .env exists, read user-editable values so we don't
     # destroy API keys, custom ports, or manually-set secrets.
-    _env_existing=""
     if [[ -f "$INSTALL_DIR/.env" ]]; then
-        _env_existing="$INSTALL_DIR/.env"
         log "Found existing .env — preserving user-configured values"
     fi
-
-    # Safe reader: extract a value from existing .env without sourcing it
-    _env_get() {
-        local key="$1" default="${2:-}"
-        if [[ -n "$_env_existing" ]]; then
-            local val
-            val=$(grep -m1 "^${key}=" "$_env_existing" 2>/dev/null | cut -d= -f2- || true)
-            # Strip surrounding quotes
-            val="${val%\"}" && val="${val#\"}"
-            val="${val%\'}" && val="${val#\'}"
-            if [[ -n "$val" ]]; then
-                echo "$val"
-                return
-            fi
-        fi
-        echo "$default"
-    }
 
     # Optional overrides use an empty value to mean "inherit the bundled
     # provider". Preserve that explicit state across reruns; _env_get treats
@@ -943,6 +956,11 @@ HERMES_CPU_LIMIT=${HERMES_CPU_LIMIT}
 HERMES_CPU_RESERVATION=${HERMES_CPU_RESERVATION}
 COMFYUI_CPU_LIMIT=${COMFYUI_CPU_LIMIT}
 COMFYUI_CPU_RESERVATION=${COMFYUI_CPU_RESERVATION}
+
+#=== Host File Ownership ===
+# Docker Compose reads these from .env without colliding with Bash's readonly UID.
+ODS_UID=${_phase06_compose_uid}
+ODS_GID=${_phase06_compose_gid}
 
 $(if [[ "$GPU_BACKEND" == "amd" ]]; then
     # Read gfx target from topology detection. Falls back to gfx1151 (Strix Halo)
