@@ -37,7 +37,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from socketserver import ThreadingMixIn
 from urllib import error as urllib_error, request as urllib_request
 from urllib.parse import parse_qs, unquote, urlparse
@@ -312,7 +312,7 @@ def _windows_whisper_cuda_supported(env: dict) -> bool:
 
 
 def _find_usable_bash() -> str | None:
-    """Return a Bash executable that can run shell scripts on this host."""
+    """Return a Bash executable compatible with this host's path contract."""
     global _usable_bash
     if isinstance(_usable_bash, str):
         return _usable_bash
@@ -320,11 +320,24 @@ def _find_usable_bash() -> str | None:
         return None
 
     candidates: list[str] = []
-    found = shutil.which("bash")
-    if found:
-        candidates.append(found)
-
     if platform.system() == "Windows":
+        # The host agent passes MSYS-style paths (``/c/...``) to every bundled
+        # shell script.  A WSL launcher can successfully run ``bash -lc`` but
+        # expects ``/mnt/c/...`` instead, so a generic PATH probe is not enough.
+        # Prefer Bash shipped with Git for Windows, which is also the runtime
+        # required by the Windows installer.
+        git = shutil.which("git")
+        if git and PureWindowsPath(git).name.lower() in {"git", "git.exe"}:
+            git_path = PureWindowsPath(git)
+            git_root = (
+                git_path.parent.parent
+                if git_path.parent.name.lower() in {"bin", "cmd"}
+                else git_path.parent
+            )
+            candidates.extend([
+                str(git_root / "bin" / "bash.exe"),
+                str(git_root / "usr" / "bin" / "bash.exe"),
+            ])
         candidates.extend([
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files\Git\usr\bin\bash.exe",
@@ -337,17 +350,52 @@ def _find_usable_bash() -> str | None:
                 str(Path(local_appdata) / "Programs" / "Git" / "bin" / "bash.exe"),
                 str(Path(local_appdata) / "Programs" / "Git" / "usr" / "bin" / "bash.exe"),
             ])
+        found = shutil.which("bash")
+        if found:
+            candidates.append(found)
+    else:
+        found = shutil.which("bash")
+        if found:
+            candidates.append(found)
 
     seen: set[str] = set()
     for bash in candidates:
-        if not bash or bash in seen:
+        identity = os.path.normcase(os.path.normpath(bash)) if platform.system() == "Windows" else bash
+        if not bash or identity in seen:
             continue
-        seen.add(bash)
-        if not Path(bash).exists() and shutil.which(bash) is None:
+        seen.add(identity)
+        bash_path = Path(bash)
+        is_absolute = (
+            PureWindowsPath(bash).is_absolute()
+            if platform.system() == "Windows"
+            else bash_path.is_absolute()
+        )
+        if is_absolute:
+            if not bash_path.exists():
+                continue
+        elif shutil.which(bash) is None:
             continue
         try:
+            if platform.system() == "Windows":
+                # Validate both the shell dialect and the exact path syntax the
+                # resolver will receive.  This rejects a working WSL bash.exe
+                # instead of discovering the mismatch during model rollback.
+                command = (
+                    'case "$(uname -s 2>/dev/null)" in '
+                    'MINGW*|MSYS*) test -d "$1" && printf ok ;; '
+                    '*) exit 64 ;; esac'
+                )
+                probe = [
+                    bash,
+                    "-lc",
+                    command,
+                    "ods-bash-probe",
+                    _to_bash_path(INSTALL_DIR.resolve()),
+                ]
+            else:
+                probe = [bash, "-lc", "printf ok"]
             result = subprocess.run(
-                [bash, "-lc", "printf ok"],
+                probe,
                 capture_output=True, text=True, timeout=5,
             )
         except (OSError, subprocess.SubprocessError):
