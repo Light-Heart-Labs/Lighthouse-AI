@@ -994,6 +994,23 @@ _install_opencode() {
     rm -f "$tmpfile"
 }
 
+# Pre-flight the docker daemon's CPU allocation.
+#
+# This is a viability floor, NOT a compose-validity guard. Two reasons it
+# cannot be the latter:
+#
+#   1. Docker enforces `deploy.resources.limits.cpus` per service, never as a
+#      sum across the stack. The `range of CPUs is from 0.01 to N` error fires
+#      only when a *single* service pins more CPUs than the daemon exposes, so
+#      the relevant comparison is `max_pin <= N` — not `max_pin + headroom`.
+#   2. Even that can't be violated: the env generator clamps every generated
+#      *_CPU_LIMIT to the daemon's CPU count (`cap_cpu_value` in
+#      lib/env-generator.sh), which is why .env.example documents them as
+#      "capped to CPUs actually exposed by Docker". An over-large pin never
+#      reaches compose.
+#
+# So: hard-fail only when the daemon is too small to run the stack at all, and
+# warn — don't exit — when the workload's largest single pin will be clamped.
 _require_docker_cpu_budget() {
     local min_cpus="${1:-6}"
     local max_pin="${2:-4}"
@@ -1006,7 +1023,7 @@ _require_docker_cpu_budget() {
 
     docker_ncpu=$(get_docker_available_cpus)
     if [[ "$docker_ncpu" =~ ^[0-9]+$ ]] && [[ "$docker_ncpu" -lt "$min_cpus" ]]; then
-        ai_err "Docker daemon only has ${docker_ncpu} CPU(s); ODS's ${workload} pins limits up to ${max_pin} CPUs per service and needs at least ${min_cpus} to avoid 'range of CPUs is from 0.01 to N' compose failures."
+        ai_err "Docker daemon only has ${docker_ncpu} CPU(s); ODS's ${workload} needs at least ${min_cpus} to run."
         case "${DOCKER_BACKEND:-unknown}" in
             colima)
                 ai "Stop and re-create the Colima VM with more CPUs:"
@@ -1028,6 +1045,11 @@ _require_docker_cpu_budget() {
         esac
         exit 1
     fi
+
+    if [[ "$docker_ncpu" =~ ^[0-9]+$ ]] && [[ "$docker_ncpu" -lt "$max_pin" ]]; then
+        ai_warn "Docker daemon has ${docker_ncpu} CPU(s) and ODS's ${workload} pins up to ${max_pin} CPUs for a single service; those limits are clamped to ${docker_ncpu}. Expect slower voice responses under load."
+    fi
+
     ai_ok "Docker CPU budget: ${docker_ncpu} (>=${min_cpus} required for ${workload})"
 }
 
@@ -1180,21 +1202,19 @@ if ! _ensure_colima_private_network; then
     exit 1
 fi
 
-# Pre-flight the docker daemon's CPU allocation. Trip early with a clear
-# message rather than letting compose fail after pulls/builds. If the user
-# already requested voice from CLI flags (for example --all), account for
-# Kokoro's 8-CPU pin now; interactive feature selection is checked again
-# after the user picks features.
+# Check the daemon's CPU allocation early so an unusably small VM is caught
+# before pulls and builds. Voice raises the largest single-service pin to 8
+# (Kokoro/TTS) but not the floor — that pin is clamped to whatever Docker
+# exposes, so 8 CPUs runs the voice stack fine. Interactive feature selection
+# is re-checked after the user picks features.
 _docker_cpu_override="${ODS_MIN_DOCKER_CPUS:-}"
 _docker_cpu_min="${_docker_cpu_override:-6}"
 _docker_cpu_max_pin=4
 _docker_cpu_workload="base compose stack"
-if $ENABLE_VOICE && [[ -z "$_docker_cpu_override" ]]; then
-    _docker_cpu_min=10
+if $ENABLE_VOICE; then
     _docker_cpu_max_pin=8
     _docker_cpu_workload="voice-enabled compose stack"
 fi
-_docker_cpu_preflight_min="$_docker_cpu_min"
 _require_docker_cpu_budget "$_docker_cpu_min" "$_docker_cpu_max_pin" "$_docker_cpu_workload"
 
 # Catch a common Colima-after-DockerDesktop config bomb: when a prior
@@ -1547,8 +1567,11 @@ info_box "  Langfuse:" "$(if $ENABLE_LANGFUSE; then echo enabled; else echo disa
 # why the dashboard shows no image-gen tile after install.
 info_box "  ComfyUI:" "not available on macOS (no MPS Docker image upstream)"
 
-if $ENABLE_VOICE && [[ -z "$_docker_cpu_override" ]] && [[ "${_docker_cpu_preflight_min:-0}" -lt 10 ]]; then
-    _require_docker_cpu_budget 10 8 "voice-enabled compose stack"
+# Voice may have been turned on during interactive feature selection, after
+# the preflight above already ran with base-stack pins. Re-check so the
+# operator still gets the clamp advisory for Kokoro's 8-CPU pin.
+if $ENABLE_VOICE && [[ "$_docker_cpu_max_pin" -lt 8 ]]; then
+    _require_docker_cpu_budget "$_docker_cpu_min" 8 "voice-enabled compose stack"
 fi
 
 # ============================================================================
