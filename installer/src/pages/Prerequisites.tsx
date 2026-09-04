@@ -50,6 +50,13 @@ export default function Prerequisites({ onNext, onError }: Props) {
             <StatusIcon status="pass" />
             <span className="text-gray-300">Docker</span>
           </div>
+          <div className="flex items-center gap-3">
+            <StatusIcon status="pass" />
+            <span className="text-gray-300">
+              Docker Compose
+              {prereqs.compose_version ? ` (${prereqs.compose_version})` : ""}
+            </span>
+          </div>
           {prereqs.wsl2_needed && (
             <div className="flex items-center gap-3">
               <StatusIcon status="pass" />
@@ -155,7 +162,9 @@ export default function Prerequisites({ onNext, onError }: Props) {
           <div className="flex items-center gap-3">
             <StatusIcon
               status={
-                prereqs.docker_installed && prereqs.docker_running
+                prereqs.docker_installed &&
+                prereqs.docker_running &&
+                prereqs.compose_installed
                   ? "pass"
                   : dockerStatus === "installing"
                     ? "loading"
@@ -169,6 +178,13 @@ export default function Prerequisites({ onNext, onError }: Props) {
                   Docker is installed but not running. Please start it.
                 </p>
               )}
+              {prereqs.docker_installed &&
+                prereqs.docker_running &&
+                !prereqs.compose_installed && (
+                  <p className="text-xs text-yellow-500">
+                    Docker Compose is not available. Install it, then re-check.
+                  </p>
+                )}
             </div>
           </div>
           {!prereqs.docker_installed && dockerStatus === "idle" && (
@@ -200,14 +216,7 @@ export default function Prerequisites({ onNext, onError }: Props) {
           <Button variant="ghost" onClick={handleRecheck}>
             Re-check
           </Button>
-          <Button
-            onClick={onNext}
-            disabled={
-              !prereqs.git_installed ||
-              !prereqs.docker_installed ||
-              !prereqs.docker_running
-            }
-          >
+          <Button onClick={onNext} disabled={!prereqs.all_met}>
             Continue
           </Button>
         </div>

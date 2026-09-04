@@ -34,9 +34,26 @@ pub struct PrerequisiteStatus {
     pub git_installed: bool,
     pub docker_installed: bool,
     pub docker_running: bool,
+    pub compose_installed: bool,
+    pub compose_version: Option<String>,
     pub wsl2_needed: bool,
     pub wsl2_installed: bool,
     pub all_met: bool,
+}
+
+fn prerequisites_met(
+    git_installed: bool,
+    docker_installed: bool,
+    docker_running: bool,
+    compose_installed: bool,
+    wsl2_needed: bool,
+    wsl2_installed: bool,
+) -> bool {
+    git_installed
+        && docker_installed
+        && docker_running
+        && compose_installed
+        && (!wsl2_needed || wsl2_installed)
 }
 
 #[tauri::command]
@@ -54,16 +71,21 @@ pub fn check_prerequisites() -> PrerequisiteStatus {
         true
     };
 
-    let all_met = git
-        && docker_status.installed
-        && docker_status.running
-        && docker_status.compose_installed
-        && (!wsl2_needed || wsl2_installed);
+    let all_met = prerequisites_met(
+        git,
+        docker_status.installed,
+        docker_status.running,
+        docker_status.compose_installed,
+        wsl2_needed,
+        wsl2_installed,
+    );
 
     PrerequisiteStatus {
         git_installed: git,
         docker_installed: docker_status.installed,
         docker_running: docker_status.running,
+        compose_installed: docker_status.compose_installed,
+        compose_version: docker_status.compose_version,
         wsl2_needed,
         wsl2_installed,
         all_met,
@@ -297,5 +319,34 @@ fn state_file_path() -> std::path::PathBuf {
         std::path::PathBuf::from(base)
             .join("ods")
             .join("installer-state.json")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_is_required_before_installation_can_continue() {
+        assert!(!prerequisites_met(true, true, true, false, false, true));
+        assert!(prerequisites_met(true, true, true, true, false, true));
+    }
+
+    #[test]
+    fn prerequisite_payload_exposes_compose_status() {
+        let payload = serde_json::to_value(PrerequisiteStatus {
+            git_installed: true,
+            docker_installed: true,
+            docker_running: true,
+            compose_installed: false,
+            compose_version: None,
+            wsl2_needed: false,
+            wsl2_installed: true,
+            all_met: false,
+        })
+        .unwrap();
+
+        assert_eq!(payload["compose_installed"], false);
+        assert!(payload["compose_version"].is_null());
     }
 }
