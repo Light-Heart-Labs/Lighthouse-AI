@@ -153,20 +153,48 @@ _phase12_verify_external_lemonade_completion() {
     [[ -n "$model" ]] || model="default"
     local auth_header=()
     [[ -n "$litellm_key" ]] && auth_header=(-H "Authorization: Bearer ${litellm_key}")
-    local body response
-    body='{"model":"default","messages":[{"role":"user","content":"Reply with exactly OK. /no_think"}],"max_tokens":16,"temperature":0,"stream":false}'
+    local body response response_file error_file http_status curl_rc curl_error
+    body='{"model":"default","messages":[{"role":"user","content":"Reply with exactly OK."}],"max_tokens":16,"temperature":0,"stream":false,"chat_template_kwargs":{"enable_thinking":false}}'
 
     ai "Verifying external Lemonade completion route through LiteLLM..."
-    response="$(curl -sS --max-time 180 -X POST "http://127.0.0.1:${litellm_port}/v1/chat/completions" \
+    response_file="$(mktemp "${TMPDIR:-/tmp}/ods-lemonade-response.XXXXXX")"
+    error_file="$(mktemp "${TMPDIR:-/tmp}/ods-lemonade-error.XXXXXX")"
+    if http_status="$(curl -sS --max-time 180 \
+        -o "$response_file" \
+        -w '%{http_code}' \
+        -X POST "http://127.0.0.1:${litellm_port}/v1/chat/completions" \
         "${auth_header[@]}" \
         -H "Content-Type: application/json" \
-        -d "$body" 2>&1)" || {
+        -d "$body" 2>"$error_file")"; then
+        curl_rc=0
+    else
+        curl_rc=$?
+    fi
+    response="$(cat "$response_file" 2>/dev/null || true)"
+    curl_error="$(cat "$error_file" 2>/dev/null || true)"
+    rm -f -- "$response_file" "$error_file"
+
+    if (( curl_rc != 0 )); then
         printf "  ${RED}ERR${NC} External Lemonade completion failed\n"
-        ai_warn "LiteLLM could not complete through external Lemonade (model: ${model})."
+        ai_warn "LiteLLM request failed before an HTTP response (curl exit ${curl_rc}, model: ${model})."
         ai_warn "Check that Lemonade is reachable from Docker containers, is bound to 0.0.0.0 on trusted hosts, and that LEMONADE_MODEL matches /api/v1/models."
-        printf '%s\n' "$response" >> "$LOG_FILE"
+        printf 'External Lemonade curl failure (exit %s):\n%s\n' "$curl_rc" "$curl_error" >> "$LOG_FILE"
         return 1
-    }
+    fi
+
+    case "$http_status" in
+        2??) ;;
+        *)
+            printf "  ${RED}ERR${NC} External Lemonade completion route returned HTTP %s\n" "$http_status"
+            ai_warn "LiteLLM rejected the external Lemonade completion (HTTP ${http_status}, model: ${model})."
+            ai_warn "Inspect the bounded response recorded in ${LOG_FILE}; restore the active model route, then rerun the installer."
+            {
+                printf 'External Lemonade completion HTTP %s:\n' "$http_status"
+                printf '%.*s\n' 4096 "$response"
+            } >> "$LOG_FILE"
+            return 1
+            ;;
+    esac
 
     if printf '%s\n' "$response" | grep -Eq '"content"[[:space:]]*:[[:space:]]*"[^"]+'; then
         printf "  ${BGRN}OK${NC} External Lemonade completion route healthy\n"
@@ -174,7 +202,7 @@ _phase12_verify_external_lemonade_completion() {
     fi
 
     printf "  ${RED}ERR${NC} External Lemonade returned no assistant content\n"
-    ai_warn "LiteLLM reached external Lemonade but did not receive non-empty assistant content (model: ${model})."
+    ai_warn "LiteLLM returned HTTP ${http_status} but did not provide non-empty assistant content (model: ${model})."
     if _phase12_model_looks_non_chat "$model"; then
         ai_warn "The selected Lemonade model looks like an image/non-chat model. ODS needs a text/chat model for the LLM route."
     fi

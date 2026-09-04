@@ -96,6 +96,83 @@ grep -q 'bash install-core.sh --use-existing-lemonade' installers/phases/12-heal
 grep -q 'LEMONADE_MODEL=<chat-model-id>' installers/phases/12-health.sh \
   || { echo "[FAIL] phase 12 Lemonade recovery hint must show inline LEMONADE_MODEL assignment"; exit 1; }
 
+echo "[contract] external Lemonade completion reports HTTP failures honestly"
+health_functions="$(awk '
+  /^_phase12_env_get\(\)/ { emit=1 }
+  /^_phase12_verify_external_llm_completion\(\)/ { emit=0 }
+  emit { print }
+' installers/phases/12-health.sh)"
+[[ "$health_functions" == *'-w '\''%{http_code}'\'''* ]] \
+  || { echo "[FAIL] phase 12 Lemonade completion must capture HTTP status"; exit 1; }
+[[ "$health_functions" == *'External Lemonade completion route returned HTTP %s'* ]] \
+  || { echo "[FAIL] phase 12 Lemonade completion must identify HTTP rejection"; exit 1; }
+[[ "$health_functions" == *'"chat_template_kwargs":{"enable_thinking":false}'* ]] \
+  || { echo "[FAIL] phase 12 Lemonade readiness must disable reasoning-token exhaustion"; exit 1; }
+
+declare -A SERVICE_PORTS=([litellm]=4000)
+INSTALL_DIR="${TMPDIR:-/tmp}/ods-lemonade-health-test"
+SCRIPT_DIR="$ROOT_DIR"
+LOG_FILE="$(mktemp "${TMPDIR:-/tmp}/ods-lemonade-health.XXXXXX")"
+RED='' BGRN='' NC=''
+ai() { :; }
+ai_warn() { printf 'WARN:%s\n' "$*"; }
+eval "$health_functions"
+
+STUB_CURL_STATUS=503
+STUB_CURL_RC=0
+STUB_CURL_BODY='{"error":{"message":"No verified active model route is available yet","code":503}}'
+curl() {
+  local output_file=""
+  while (( $# > 0 )); do
+    case "$1" in
+      -o) output_file="$2"; shift 2 ;;
+      -w) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf '%s' "$STUB_CURL_BODY" > "$output_file"
+  printf '%s' "$STUB_CURL_STATUS"
+  return "$STUB_CURL_RC"
+}
+
+set +e
+health_output="$(_phase12_verify_external_lemonade_completion 2>&1)"
+health_rc=$?
+set -e
+[[ "$health_rc" -ne 0 ]] \
+  || { echo "[FAIL] phase 12 accepted a LiteLLM HTTP 503"; exit 1; }
+[[ "$health_output" == *'returned HTTP 503'* ]] \
+  || { echo "[FAIL] phase 12 did not surface the LiteLLM HTTP 503"; exit 1; }
+[[ "$health_output" != *'returned no assistant content'* ]] \
+  || { echo "[FAIL] phase 12 mislabeled an HTTP 503 as empty assistant content"; exit 1; }
+grep -q 'No verified active model route is available yet' "$LOG_FILE" \
+  || { echo "[FAIL] phase 12 did not retain the bounded HTTP error for diagnosis"; exit 1; }
+
+STUB_CURL_STATUS=000
+STUB_CURL_RC=28
+STUB_CURL_BODY=''
+set +e
+transport_output="$(_phase12_verify_external_lemonade_completion 2>&1)"
+transport_rc=$?
+set -e
+[[ "$transport_rc" -ne 0 ]] \
+  || { echo "[FAIL] phase 12 accepted a failed Lemonade transport"; exit 1; }
+[[ "$transport_output" == *'curl exit 28'* ]] \
+  || { echo "[FAIL] phase 12 did not identify the curl transport failure"; exit 1; }
+
+STUB_CURL_STATUS=200
+STUB_CURL_RC=0
+STUB_CURL_BODY='{"choices":[{"message":{"content":"OK"}}]}'
+if ! success_output="$(_phase12_verify_external_lemonade_completion 2>&1)"; then
+  echo "[FAIL] phase 12 rejected a valid external Lemonade completion: $success_output"
+  exit 1
+fi
+[[ "$success_output" == *'completion route healthy'* ]] \
+  || { echo "[FAIL] phase 12 did not report the valid completion as healthy"; exit 1; }
+
+rm -f -- "$LOG_FILE"
+unset -f curl
+
 echo "[contract] external Lemonade preflight checks LiteLLM instead of managed llama-server"
 grep -q 'is_external_lemonade()' ods-preflight.sh \
   || { echo "[FAIL] ods-preflight must detect external Lemonade mode"; exit 1; }
