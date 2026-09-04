@@ -76,7 +76,9 @@ in_container() {
 
 # Detect if inside WSL2
 is_wsl() {
-    [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null
+    # ODS_PROC_VERSION can be overridden in tests to point at a fixture.
+    local _proc_version="${ODS_PROC_VERSION:-/proc/version}"
+    [[ -f "$_proc_version" ]] && grep -qi microsoft "$_proc_version" 2>/dev/null
 }
 
 # Colors
@@ -135,10 +137,18 @@ detect_nvidia() {
     # Validate NVIDIA hardware present in sysfs before trusting nvidia-smi,
     # which may be installed without NVIDIA hardware (e.g. nvidia-container-toolkit
     # on AMD-only systems).
+    # ODS_DRM_SYS can be overridden in tests to point at a mock sysfs tree.
+    local _drm_sys="${ODS_DRM_SYS:-/sys/class/drm}"
     local _has_nvidia=false
-    for _v in /sys/class/drm/card*/device/vendor; do
+    for _v in "$_drm_sys"/card*/device/vendor; do
         [[ "$(cat "$_v" 2>/dev/null)" == "0x10de" ]] && _has_nvidia=true && break
     done
+    # WSL2 exposes no /sys/class/drm/card* entries, so sysfs cannot witness the GPU there even
+    # though CUDA works and nvidia-smi reports it. Fall back to nvidia-smi as the sole hardware
+    # witness on WSL2 -- the same fallback installers/lib/detection.sh already applies.
+    if ! $_has_nvidia && is_wsl; then
+        command -v nvidia-smi &>/dev/null && _has_nvidia=true
+    fi
     $_has_nvidia || return 1
 
     # Works on bare metal Linux; on WSL2 it may be present via Docker Desktop GPU integration.
