@@ -47,6 +47,33 @@ ods_pixel_run_as_owner_with_umask() {
     ' sh "$requested_umask" "$@"
 }
 
+_ods_pixel_prepare_attempt_log() {
+    local owner="$1" home="$2" path="$3" parent temporary parent_kind parent_uid
+    [[ "$path" == /* && "$path" != / && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
+    parent="${path%/*}"
+    if [[ -e "$parent" || -L "$parent" ]]; then
+        [[ -d "$parent" && ! -L "$parent" ]] || return 1
+        parent_kind="$(stat -c '%F' -- "$parent")" || return 1
+        parent_uid="$(stat -c '%u' -- "$parent")" || return 1
+        [[ "$parent_kind" == directory && "$parent_uid" == "$(id -u "$owner")" ]] || return 1
+    else
+        ods_pixel_run_as_owner "$owner" "$home" install -d -m 0700 -- "$parent" || return 1
+    fi
+    temporary="$(ods_pixel_run_as_owner "$owner" "$home" mktemp "$parent/.pixel-install.XXXXXX")" || return 1
+    [[ "$temporary" == "$parent"/.pixel-install.* && -f "$temporary" && ! -L "$temporary" ]] || {
+        if [[ -n "$temporary" ]]; then
+            ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$temporary" >/dev/null 2>&1 || true
+        fi
+        return 1
+    }
+    if ! ods_pixel_run_as_owner "$owner" "$home" chmod 0600 -- "$temporary" \
+        || ! ods_pixel_run_as_owner "$owner" "$home" mv -fT -- "$temporary" "$path"; then
+        ods_pixel_run_as_owner "$owner" "$home" rm -f -- "$temporary" >/dev/null 2>&1 || true
+        return 1
+    fi
+    printf '%s\n' "$path"
+}
+
 _ods_pixel_assert_managed_state() {
     local owner="$1" home="$2" marker marker_dir pixel_install
     marker="$home/.config/ods/pixel-managed.json"
@@ -2999,11 +3026,11 @@ payload = {
             "targets": ["ods-host"],
             "parameters": {
                 "peer": {
-                    "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?$",
+                    "pattern": "^[A-Za-z0-9.:-]{1,253}$",
                     "maxLength": 253,
                 },
                 "ports": {
-                    "pattern": "^[0-9]{1,5}(?:,[0-9]{1,5}){0,7}$",
+                    "pattern": "^[0-9,]{1,47}$",
                     "maxLength": 47,
                 },
             },
@@ -3726,11 +3753,15 @@ PY
 
 ods_pixel_install_default_agent() {
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == true ]] || return 0
-    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog extension_manager_unit artifact_promoter_unit workspace_preview_unit openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias
+    local owner home source_root pixel_root plugin_root answers operations_policy extension_catalog extension_manager_unit artifact_promoter_unit workspace_preview_unit openclaw_bin plugin_digest contract_sha256 runtime_budget_status gateway_alias pixel_log
     local candidate_runtime_status reuse_active=false same_verified_source=false same_source_resume=false
     owner="${PIXEL_SERVICE_USER:-$(ods_pixel_install_owner)}" || return 1
     home="$(ods_pixel_owner_home "$owner")" || return 1
     _ods_pixel_assert_managed_state "$owner" "$home" || return 1
+    pixel_log="$(_ods_pixel_prepare_attempt_log "$owner" "$home" "$INSTALL_DIR/logs/pixel-install.log")" || {
+        ai_bad "Could not create Pixel's owner-private persistent install log."
+        return 1
+    }
     source_root="${INSTALL_DIR:?}/data/pixel/source-${PIXEL_SOURCE_REF:?}"
     pixel_root="$(_ods_pixel_source_checkout "$owner" "$home" "$source_root")" || {
         ai_bad "Pixel source checkout is absent, changed, or not at the configured exact commit."
@@ -3787,8 +3818,8 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel requires Linux Node.js 20+ and Linux npm; Windows-mounted WSL tools are not accepted."
         return 1
     fi
-    if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel bootstrap failed. See $LOG_FILE for the exact Pixel error."
+    if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" bootstrap --apply >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel bootstrap failed. See $pixel_log for the exact Pixel error."
         return 1
     fi
     openclaw_bin="$(_ods_pixel_openclaw_bin "$owner" "$home")"
@@ -3845,8 +3876,8 @@ ods_pixel_install_default_agent() {
     fi
     if [[ "$reuse_active" == true ]]; then
         ai "The exact ODS-managed Pixel contract is already active; verifying it without reapplying the same release..."
-        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
-            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$pixel_log" 2>&1; then
+            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $pixel_log."
             return 1
         fi
         if ! _ods_pixel_harden_operations_state_profiles; then
@@ -3857,18 +3888,21 @@ ods_pixel_install_default_agent() {
             ai_bad "Pixel's root-custodied Operations policy does not match the ODS-managed policy."
             return 1
         fi
-        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$LOG_FILE" 2>&1; then
-            ai_bad "The existing ODS-managed Pixel contract failed exact-source verification. See $LOG_FILE."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify >>"$pixel_log" 2>&1; then
+            ai_bad "The existing ODS-managed Pixel contract failed exact-source verification. See $pixel_log."
             return 1
         fi
     else
-        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force >>"$LOG_FILE" 2>&1 \
-            || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan >>"$LOG_FILE" 2>&1; then
-            ai_bad "Pixel configure or plan failed. See $LOG_FILE for the exact Pixel error."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force >>"$pixel_log" 2>&1; then
+            ai_bad "Pixel configure failed. See $pixel_log for the exact Pixel error."
             return 1
         fi
-        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$LOG_FILE" 2>&1; then
-            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $LOG_FILE."
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan >>"$pixel_log" 2>&1; then
+            ai_bad "Pixel plan failed. See $pixel_log for the exact Pixel error."
+            return 1
+        fi
+        if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" ops-broker --confirm >>"$pixel_log" 2>&1; then
+            ai_bad "Pixel could not install and verify the isolated Operations Broker. See $pixel_log."
             return 1
         fi
         if ! _ods_pixel_harden_operations_state_profiles; then
@@ -3910,38 +3944,38 @@ ods_pixel_install_default_agent() {
             if [[ "$same_source_resume" == true ]]; then
                 # Quiesce the gateway so a concurrent tool turn cannot create
                 # a sandbox between retirement and the Docker postcondition.
-                if ! ods_sudo systemctl stop openclaw-gateway.service >>"$LOG_FILE" 2>&1; then
-                    ai_bad "The ODS-managed Pixel gateway could not enter maintenance mode. See $LOG_FILE."
+                if ! ods_sudo systemctl stop openclaw-gateway.service >>"$pixel_log" 2>&1; then
+                    ai_bad "The ODS-managed Pixel gateway could not enter maintenance mode. See $pixel_log."
                     return 1
                 fi
                 if ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
-                    >>"$LOG_FILE" 2>&1; then
+                    >>"$pixel_log" 2>&1; then
                     # Restore the previously configured service when cleanup
                     # fails; the installer still fails closed and does not
                     # claim that the sandbox boundary was refreshed.
-                    ods_sudo systemctl start openclaw-gateway.service >>"$LOG_FILE" 2>&1 || true
-                    ai_bad "Pixel could not retire its stale agent sandbox during recovery. See $LOG_FILE."
+                    ods_sudo systemctl start openclaw-gateway.service >>"$pixel_log" 2>&1 || true
+                    ai_bad "Pixel could not retire its stale agent sandbox during recovery. See $pixel_log."
                     return 1
                 fi
-                if ! ods_sudo systemctl start openclaw-gateway.service >>"$LOG_FILE" 2>&1; then
-                    ai_bad "The ODS-managed Pixel gateway could not restart after sandbox recovery. See $LOG_FILE."
+                if ! ods_sudo systemctl start openclaw-gateway.service >>"$pixel_log" 2>&1; then
+                    ai_bad "The ODS-managed Pixel gateway could not restart after sandbox recovery. See $pixel_log."
                     return 1
                 fi
                 if ! _ods_pixel_wait_http "Pixel gateway" "http://127.0.0.1:18789/health" \
                     60 '.ok == true and .status == "live"'; then
-                    ai_bad "The ODS-managed Pixel gateway did not become healthy after sandbox recovery. See $LOG_FILE."
+                    ai_bad "The ODS-managed Pixel gateway did not become healthy after sandbox recovery. See $pixel_log."
                     return 1
                 fi
                 if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify \
-                    >>"$LOG_FILE" 2>&1; then
-                    ai_bad "The recovered ODS-managed Pixel contract failed verification. See $LOG_FILE."
+                    >>"$pixel_log" 2>&1; then
+                    ai_bad "The recovered ODS-managed Pixel contract failed verification. See $pixel_log."
                     return 1
                 fi
             else
                 ai "The exact Pixel release is active with an older ODS route; reconciling the reviewed model/runtime policy..."
                 if ! ods_pixel_reconcile_promoted_model "$owner" "$home" \
-                    "$(_ods_pixel_runtime_model_identity)" installing >>"$LOG_FILE" 2>&1; then
-                    ai_bad "The ODS-managed Pixel model route could not be reconciled safely. See $LOG_FILE."
+                    "$(_ods_pixel_runtime_model_identity)" installing >>"$pixel_log" 2>&1; then
+                    ai_bad "The ODS-managed Pixel model route could not be reconciled safely. See $pixel_log."
                     return 1
                 fi
             fi
@@ -3950,8 +3984,8 @@ ods_pixel_install_default_agent() {
                 PATH="$home/.openclaw/.ods-exec-control:$PATH" \
                 "$pixel_root/pixel" apply --confirm </dev/null &&
             ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" verify
-        } >>"$LOG_FILE" 2>&1; then
-            ai_bad "Pixel apply or verify failed. See $LOG_FILE for the exact Pixel error."
+        } >>"$pixel_log" 2>&1; then
+            ai_bad "Pixel apply or verify failed. See $pixel_log for the exact Pixel error."
             return 1
         fi
     fi
@@ -3991,18 +4025,18 @@ ods_pixel_install_default_agent() {
     # the final ODS runtime policy. A plain service restart can otherwise keep
     # stale tool descriptors across same-release extension refreshes.
     if ! _ods_pixel_refresh_plugin_registry "$owner" "$home" "$openclaw_bin" "$plugin_root/plugin" \
-        >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel could not refresh the exact ODS plugin registry. See $LOG_FILE."
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel could not refresh the exact ODS plugin registry. See $pixel_log."
         return 1
     fi
     if ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
-        >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel could not recreate its agent sandbox for the reviewed ODS runtime. See $LOG_FILE."
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel could not recreate its agent sandbox for the reviewed ODS runtime. See $pixel_log."
         return 1
     fi
     if ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" \
-        >>"$LOG_FILE" 2>&1; then
-        ai_bad "Pixel could not restart and verify its gateway after the ODS runtime update. See $LOG_FILE."
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel could not restart and verify its gateway after the ODS runtime update. See $pixel_log."
         return 1
     fi
     # Reconfirm the exact verified contract and canonical live config after the

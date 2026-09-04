@@ -113,6 +113,28 @@ mkdir -p "$home/.openclaw"
 printf '%s\n' '{"gateway":{"bind":"loopback"},"preserve":{"value":7}}' > "$home/.openclaw/openclaw.json"
 chmod 0644 "$home/.openclaw/openclaw.json"
 
+attempt_log="$TEST_ROOT/attempt-logs/pixel-install.log"
+check test "$(_ods_pixel_prepare_attempt_log "$owner" "$home" "$attempt_log")" = "$attempt_log"
+check test -f "$attempt_log"
+check test ! -L "$attempt_log"
+check test "$(stat -c '%a' "$attempt_log")" = 600
+printf '%s\n' keep > "$TEST_ROOT/attempt-log-target"
+rm -f -- "$attempt_log"
+ln -s "$TEST_ROOT/attempt-log-target" "$attempt_log"
+check test "$(_ods_pixel_prepare_attempt_log "$owner" "$home" "$attempt_log")" = "$attempt_log"
+check test -f "$attempt_log"
+check test ! -L "$attempt_log"
+check test "$(cat "$TEST_ROOT/attempt-log-target")" = keep
+rm -rf -- "$TEST_ROOT/attempt-logs"
+mkdir -p "$TEST_ROOT/attempt-log-link-target"
+ln -s "$TEST_ROOT/attempt-log-link-target" "$TEST_ROOT/attempt-logs"
+if _ods_pixel_prepare_attempt_log "$owner" "$home" "$attempt_log" >/dev/null 2>&1; then
+    fail "symlink Pixel attempt-log directory rejected"
+else
+    pass "symlink Pixel attempt-log directory rejected"
+fi
+rm -f -- "$TEST_ROOT/attempt-logs"
+
 _ods_pixel_enable_chat_endpoint "$owner" "$home"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["gateway"]["http"]["endpoints"]["chatCompletions"]["enabled"] is True; assert v["preserve"]["value"] == 7' "$home/.openclaw/openclaw.json"
 check test "$(stat -c '%a' "$home/.openclaw/openclaw.json")" = 600
@@ -736,8 +758,8 @@ assert v["actions"]["host.listening-ports"]["argv"][1:] == ["-H","-lntu"]
 assert v["actions"]["host.tailscale"]["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "tailscale"]
 network_peer=v["actions"]["host.network-peer"]
 assert network_peer["parameters"] == {
-    "peer":{"pattern":"^[A-Za-z0-9](?:[A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?$","maxLength":253},
-    "ports":{"pattern":"^[0-9]{1,5}(?:,[0-9]{1,5}){0,7}$","maxLength":47},
+    "peer":{"pattern":"^[A-Za-z0-9.:-]{1,253}$","maxLength":253},
+    "ports":{"pattern":"^[0-9,]{1,47}$","maxLength":47},
 }
 assert network_peer["argv"] == [str(pathlib.Path("/usr/bin/python3").resolve()), "/usr/local/libexec/ods-pixel-system-observe.py", "network-peer", "{peer}", "{ports}"]
 extension_search=v["actions"]["ods.extensions.search"]
@@ -1830,6 +1852,9 @@ assert "_ods_pixel_wait_ingress \"$owner\" \"$home\"" in installer
 assert installer.index("_ods_pixel_wait_ingress \"$owner\" \"$home\"") < installer.index("_ods_pixel_mark_ready \"$owner\" \"$home\"")
 assert "pixel\" configure --answers \"$answers\" --force" in text
 assert "pixel\" plan" in text
+assert "Pixel configure failed. See $pixel_log" in text
+assert "Pixel plan failed. See $pixel_log" in text
+assert "Pixel configure or plan failed" not in text
 assert text.count("pixel\" ops-broker --confirm") == 2
 assert "Pixel could not install and verify the isolated Operations Broker" in text
 assert text.count("_ods_pixel_verify_operations_policy_custody \"$owner\" \"$home\" \"$operations_policy\"") == 2
@@ -1926,7 +1951,7 @@ for diagnostic in (
     "failed verification",
 ):
     assert diagnostic in resume
-assert "pixel\" verify >>\"$LOG_FILE\"" in text
+assert "pixel\" verify >>\"$pixel_log\"" in text
 assert "if ! _ods_pixel_install_ingress" in text
 assert "systemctl restart pixel-ingress.service" in text
 assert "if ! _ods_pixel_mark_verified_installing" in text
