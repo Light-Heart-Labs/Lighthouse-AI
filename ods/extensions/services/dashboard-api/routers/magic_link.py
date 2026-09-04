@@ -58,6 +58,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import hmac
+import hmac
+from typing import Optional
+from typing import Optional
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -332,10 +336,10 @@ def _prune(store: dict) -> dict:
 
 def _find_by_hash(store: dict, token_hash: str) -> Optional[dict]:
     for record in store.get("tokens", []):
-        if record["token_hash"] == token_hash:
+        # Use constant-time comparison to mitigate timing side-channel attacks
+        if hmac.compare_digest(record["token_hash"], token_hash):
             return record
     return None
-
 
 # --- Rate limiting ---
 
