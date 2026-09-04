@@ -80,6 +80,9 @@ test: ## Run unit and contract tests
 	@echo "=== config migration (version check under set -e) ==="
 	@bash tests/test-migrate-config.sh
 	@echo ""
+	@echo "=== restore refuses empty backup config ==="
+	@bash tests/test-restore-empty-config.sh
+	@echo ""
 	@echo "=== atomic .env writes ==="
 	@bash tests/test-atomic-env-writes.sh
 	@echo ""
