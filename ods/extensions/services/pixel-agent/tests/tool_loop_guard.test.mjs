@@ -8378,6 +8378,27 @@ test("keeps every visual category on the model-authored write path", () => {
   }
 });
 
+test("recognizes SVG artwork and explicit preview publication without widening nonvisual intent", () => {
+  for (const prompt of [
+    "Create a novel interactive SVG artwork called Orbital Garden from scratch and publish it in the preview.",
+    "Make a detailed SVG illustration of a floating greenhouse.",
+    "Publish the existing preview.",
+    "Serve this in the live preview.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+  }
+  for (const prompt of [
+    "Create SVG artwork but do not publish it.",
+    "Make an SVG illustration without showing a preview.",
+    "Explain SVG animation.",
+    "Create an SVG parser library only.",
+    "Write an SVG serializer service.",
+    "Do not publish the existing preview.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+  }
+});
+
 test("recognizes only affirmative natural visual follow-ups", () => {
   const exactWrappedRepair =
     "[Chat messages since your last reply - for context]\n" +

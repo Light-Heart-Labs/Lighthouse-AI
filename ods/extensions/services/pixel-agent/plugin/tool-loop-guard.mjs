@@ -4356,7 +4356,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const revise =
     /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
   const browserVisual =
-    /\b(?:animated\s+svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|svg\s+animations?|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
+    /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
     /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*games?\b/i.test(text);
   const explicitBrowser =
     website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
@@ -4387,7 +4387,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const directPreview =
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
     /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
-    /\b(?:open|refresh|republish|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(text);
+    /\b(?:open|publish|refresh|republish|serve|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(text);
   const unreachableLocalPreview =
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);

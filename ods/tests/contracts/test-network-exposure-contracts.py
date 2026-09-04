@@ -197,8 +197,9 @@ def test_dashboard_csp_allows_only_verified_pixel_preview_routes() -> None:
 
     assert_true(
         "frame-src 'self' http://localhost:__PIXEL_PREVIEW_PORT__ "
-        "http://127.0.0.1:__PIXEL_PREVIEW_PORT__;" in nginx_conf,
-        "dashboard CSP must permit same-route remote previews and configured loopback previews",
+        "http://127.0.0.1:__PIXEL_PREVIEW_PORT__ "
+        "http://*.localhost:__PIXEL_PREVIEW_PORT__;" in nginx_conf,
+        "dashboard CSP must permit same-route remote previews and per-artifact loopback origins",
     )
     assert_true(
         "location ^~ /pixel-preview/" in nginx_conf
