@@ -5074,6 +5074,7 @@ export function createToolLoopGuard({
         workspacePreviewAttempted: false,
         workspacePreview: undefined,
         workspaceToolSearchRouted: false,
+        workspaceToolSearchQueries: new Set(),
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
         failedTestReadCorrections: 0,
@@ -5788,11 +5789,24 @@ export function createToolLoopGuard({
       );
     };
     if (state?.workspaceTaskRequested && toolName === "tool_search") {
+      const query = typeof event?.params?.query === "string"
+        ? event.params.query.trim().replace(/\s+/g, " ").toLowerCase()
+        : "";
       if (!state.workspaceToolSearchRouted) {
         state.workspaceToolSearchRouted = true;
+        if (query) state.workspaceToolSearchQueries.add(query);
+        state.workspaceToolSearchQueries.add(WORKSPACE_TOOL_SEARCH_QUERY);
         return {
           params: { query: WORKSPACE_TOOL_SEARCH_QUERY, limit: 6 },
         };
+      }
+      // Resolving core file tools does not resolve every capability a task may
+      // need. Let the model discover a different capability (for example the
+      // preview publisher after writing a site). Discovery grants no execution
+      // authority; normal tool permissions and turn limits still apply.
+      if (query && !state.workspaceToolSearchQueries.has(query)) {
+        state.workspaceToolSearchQueries.add(query);
+        return undefined;
       }
       if (state.workspaceInspectionRouted) {
         if (state.workspaceInspectionPollCorrections === 0) {
@@ -6986,6 +7000,7 @@ export function createToolLoopGuard({
             currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
           );
         state.workspaceToolSearchRouted = false;
+        state.workspaceToolSearchQueries.clear();
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
           event?.prompt

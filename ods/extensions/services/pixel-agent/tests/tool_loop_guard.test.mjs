@@ -758,6 +758,27 @@ test("turns bounded post-failure rewrites of run-created files into compare-and-
   );
 });
 
+test("workspace discovery permits new capabilities without authorizing their effects", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt: "Create a beautiful interactive website in my workspace." }
+  );
+  assert.deepEqual(call(guard, "tool_search", {
+    event: { params: { query: "write read edit apply_patch exec process" } },
+  }), { params: { query: "write read edit apply_patch exec process", limit: 6 } });
+  for (const query of ["pixel_ods_workspace_preview", "browser verification", "pixel_ods_host_observe"]) {
+    assert.equal(call(guard, "tool_search", { event: { params: { query } } }), undefined);
+    assert.deepEqual(call(guard, "tool_search", {
+      event: { params: { query: `  ${query.toUpperCase().replaceAll(" ", "   ")}  ` } },
+    }), { block: true, blockReason: WORKSPACE_TOOL_SEARCH_COMPLETE_REASON });
+  }
+  assert.equal(call(guard, "pixel_ops_shell_propose", {
+    event: { params: { target: "ods-host", command: "pwd" } },
+  }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+});
+
 test("routes a compact workspace task to core tools and blocks unrequested Operations", () => {
   const prepared = [];
   const guard = createToolLoopGuard({
