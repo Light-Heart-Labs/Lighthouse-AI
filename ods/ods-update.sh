@@ -24,6 +24,8 @@ INSTALL_DIR="${SCRIPT_DIR}"
 VERSION_FILE="${INSTALL_DIR}/.version"
 BACKUP_DIR="${HOME}/.ods/backups"
 ROLLBACK_DIR="${INSTALL_DIR}/data/backups"   # pre-update rollback snapshots live here
+UPDATE_JOURNAL="${INSTALL_DIR}/data/update-transaction.json"
+UPDATE_LOCK_DIR="${INSTALL_DIR}/data/.update.lock"
 MAX_BACKUPS="${MAX_BACKUPS:-10}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-stable}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
@@ -183,6 +185,248 @@ ensure_source_checkout_for_update() {
         log_info "No files, services, or rollback snapshots were changed."
         return 1
     fi
+
+    local tracked_changes
+    tracked_changes=$(git -C "${INSTALL_DIR}" status --porcelain --untracked-files=no)
+    if [[ -n "$tracked_changes" ]]; then
+        log_error "ods-update.sh update requires a clean tracked working tree."
+        log_info "Commit or restore tracked changes before pulling source updates."
+        log_info "Untracked runtime data is left untouched."
+        return 1
+    fi
+}
+
+_release_update_lock() {
+    [[ "${UPDATE_LOCK_HELD:-false}" == true ]] || return 0
+
+    local owner_file="${UPDATE_LOCK_DIR}/owner.json"
+    local owner_pid=""
+    if [[ -f "$owner_file" ]]; then
+        owner_pid=$(jq -r '.pid // empty' "$owner_file" 2>/dev/null || true)
+    fi
+    if [[ "$owner_pid" == "$$" ]]; then
+        rm -f "$owner_file"
+        rmdir "$UPDATE_LOCK_DIR" 2>/dev/null \
+            || log_warn "Could not remove update lock directory: ${UPDATE_LOCK_DIR}"
+    fi
+    UPDATE_LOCK_HELD=false
+}
+
+_write_update_lock_owner() {
+    local owner_file="${UPDATE_LOCK_DIR}/owner.json"
+    local tmp_file
+    tmp_file=$(mktemp "${UPDATE_LOCK_DIR}/owner.json.tmp.XXXXXX")
+    jq -n \
+        --argjson pid "$$" \
+        --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg install_dir "$INSTALL_DIR" \
+        '{pid:$pid, started_at:$started_at, install_dir:$install_dir}' \
+        > "$tmp_file"
+    chmod 600 "$tmp_file"
+    mv -f "$tmp_file" "$owner_file"
+}
+
+_install_update_lock_traps() {
+    trap '_release_update_lock' EXIT
+    trap '_release_update_lock; exit 130' INT
+    trap '_release_update_lock; exit 143' TERM
+    trap '_release_update_lock; exit 129' HUP
+}
+
+_acquire_update_lock() {
+    local lock_parent
+    lock_parent=$(dirname "$UPDATE_LOCK_DIR")
+    mkdir -p "$lock_parent"
+
+    if (umask 077 && mkdir "$UPDATE_LOCK_DIR") 2>/dev/null; then
+        UPDATE_LOCK_HELD=true
+        _install_update_lock_traps
+        _write_update_lock_owner
+        return 0
+    fi
+
+    local owner_pid=""
+    if [[ -f "${UPDATE_LOCK_DIR}/owner.json" ]]; then
+        owner_pid=$(jq -r '.pid // empty' "${UPDATE_LOCK_DIR}/owner.json" 2>/dev/null || true)
+    fi
+    if [[ ! "$owner_pid" =~ ^[0-9]+$ ]]; then
+        log_error "Update lock has no valid owner metadata: ${UPDATE_LOCK_DIR}"
+        log_error "Inspect the lock before removing it; automatic takeover was refused."
+        return 1
+    fi
+    if kill -0 "$owner_pid" 2>/dev/null; then
+        log_error "Another ODS update is already running (PID ${owner_pid})."
+        return 1
+    fi
+
+    local reclaimed="${UPDATE_LOCK_DIR}.stale.$$"
+    if ! mv "$UPDATE_LOCK_DIR" "$reclaimed" 2>/dev/null; then
+        log_error "Another process changed the update lock; retry the update."
+        return 1
+    fi
+    log_warn "Reclaimed stale update lock${owner_pid:+ from PID ${owner_pid}}."
+
+    if [[ -f "${reclaimed}/owner.json" ]]; then
+        rm -f "${reclaimed}/owner.json"
+    fi
+    rmdir "$reclaimed" 2>/dev/null \
+        || log_warn "Stale update lock retained for inspection: ${reclaimed}"
+
+    if ! (umask 077 && mkdir "$UPDATE_LOCK_DIR") 2>/dev/null; then
+        log_error "Another ODS update acquired the lock first; retry later."
+        return 1
+    fi
+    UPDATE_LOCK_HELD=true
+    _install_update_lock_traps
+    _write_update_lock_owner
+}
+
+_update_journal_write() {
+    local state="$1"
+    local source_revision="$2"
+    local snap_dir="$3"
+    local compose_flags="$4"
+    local reason="${5:-}"
+    local started_at
+    started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local previous='{}'
+
+    mkdir -p "$(dirname "$UPDATE_JOURNAL")"
+    if [[ "$state" != "prepared" && -f "$UPDATE_JOURNAL" ]] \
+        && jq -e 'type == "object"' "$UPDATE_JOURNAL" >/dev/null 2>&1; then
+        previous=$(cat "$UPDATE_JOURNAL")
+        started_at=$(jq -r '.started_at // empty' "$UPDATE_JOURNAL")
+        [[ -n "$started_at" ]] || started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+
+    local tmp_file
+    tmp_file=$(mktemp "${UPDATE_JOURNAL}.tmp.XXXXXX")
+    echo "$previous" | jq \
+        --arg schema "ods.update-transaction.v1" \
+        --arg state "$state" \
+        --arg source_revision "$source_revision" \
+        --arg snapshot "$snap_dir" \
+        --arg compose_flags "$compose_flags" \
+        --arg started_at "$started_at" \
+        --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg reason "$reason" \
+        '.schema = $schema
+         | .state = $state
+         | .source_revision = $source_revision
+         | .snapshot = $snapshot
+         | .compose_flags = $compose_flags
+         | .started_at = $started_at
+         | .updated_at = $updated_at
+         | if $reason == "" then del(.reason) else .reason = $reason end' \
+        > "$tmp_file"
+    chmod 600 "$tmp_file"
+    mv -f "$tmp_file" "$UPDATE_JOURNAL"
+}
+
+_update_journal_set_state() {
+    local state="$1"
+    local reason="${2:-}"
+    [[ -f "$UPDATE_JOURNAL" ]] || return 0
+
+    local source_revision snap_dir compose_flags
+    source_revision=$(jq -r '.source_revision // empty' "$UPDATE_JOURNAL")
+    snap_dir=$(jq -r '.snapshot // empty' "$UPDATE_JOURNAL")
+    compose_flags=$(jq -r '.compose_flags // empty' "$UPDATE_JOURNAL")
+    _update_journal_write "$state" "$source_revision" "$snap_dir" "$compose_flags" "$reason"
+}
+
+_update_journal_is_pending() {
+    [[ -f "$UPDATE_JOURNAL" ]] || return 1
+    jq -e '
+        .schema == "ods.update-transaction.v1"
+        and (.state | type == "string")
+        and (.state as $state
+             | ["committed", "rolled_back", "recovered", "abandoned"]
+             | index($state)
+             | not)
+    ' "$UPDATE_JOURNAL" >/dev/null 2>&1
+}
+
+_validate_update_journal() {
+    if ! jq -e '
+        .schema == "ods.update-transaction.v1"
+        and (.state | type == "string")
+        and (.source_revision | type == "string" and length >= 7)
+        and (.snapshot | type == "string" and length > 0)
+        and (.compose_flags | type == "string")
+    ' "$UPDATE_JOURNAL" >/dev/null 2>&1; then
+        log_error "Interrupted update journal is invalid: ${UPDATE_JOURNAL}"
+        return 1
+    fi
+
+    local snap_dir source_revision
+    snap_dir=$(jq -r '.snapshot' "$UPDATE_JOURNAL")
+    source_revision=$(jq -r '.source_revision' "$UPDATE_JOURNAL")
+    if [[ "$(dirname "$snap_dir")" != "$ROLLBACK_DIR" \
+        || ! "$(basename "$snap_dir")" =~ ^pre-update-[0-9]{8}-[0-9]{6}$ ]]; then
+        log_error "Interrupted update journal references an unsafe snapshot path: ${snap_dir}"
+        return 1
+    fi
+    if [[ ! -d "$snap_dir" || -L "$snap_dir" ]]; then
+        log_error "Interrupted update snapshot is unavailable: ${snap_dir}"
+        return 1
+    fi
+    if ! git -C "$INSTALL_DIR" cat-file -e "${source_revision}^{commit}" 2>/dev/null; then
+        log_error "Interrupted update source revision is unavailable: ${source_revision}"
+        return 1
+    fi
+}
+
+_recover_interrupted_update() {
+    if [[ ! -f "$UPDATE_JOURNAL" ]]; then
+        return 0
+    fi
+    if ! jq -e '.schema == "ods.update-transaction.v1"' "$UPDATE_JOURNAL" >/dev/null 2>&1; then
+        log_error "Update journal exists but cannot be trusted: ${UPDATE_JOURNAL}"
+        return 1
+    fi
+    if ! _update_journal_is_pending; then
+        return 0
+    fi
+    if ! _validate_update_journal; then
+        return 1
+    fi
+
+    local state source_revision snap_dir compose_flags current_revision tracked_changes
+    state=$(jq -r '.state' "$UPDATE_JOURNAL")
+    source_revision=$(jq -r '.source_revision' "$UPDATE_JOURNAL")
+    snap_dir=$(jq -r '.snapshot' "$UPDATE_JOURNAL")
+    compose_flags=$(jq -r '.compose_flags' "$UPDATE_JOURNAL")
+    current_revision=$(git -C "$INSTALL_DIR" rev-parse HEAD)
+    tracked_changes=$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)
+
+    if [[ -n "$tracked_changes" ]]; then
+        _update_journal_set_state "recovery_required" \
+            "Tracked files changed after the interrupted update; automatic reset refused."
+        log_error "An interrupted update needs recovery, but tracked files now contain changes."
+        log_error "Preserve or restore those changes, then rerun the update."
+        return 1
+    fi
+
+    if [[ "$state" == "prepared" && "$current_revision" == "$source_revision" ]]; then
+        _update_journal_set_state "abandoned" \
+            "Interrupted before the source or runtime changed."
+        log_warn "Cleared an update interrupted before source mutation. Rerun the update."
+        return 1
+    fi
+
+    log_warn "Recovering interrupted ODS update from phase '${state}'..."
+    _update_journal_set_state "recovering" "Automatic recovery started."
+    if _update_rollback \
+        "The previous update process exited before committing." \
+        "$snap_dir" "$compose_flags" "$source_revision"; then
+        _update_journal_set_state "recovered" "Previous source and runtime snapshot restored."
+        log_warn "Interrupted update recovered. Rerun the update when ready."
+    else
+        _update_journal_set_state "recovery_failed" "Automatic recovery did not complete."
+        log_error "Interrupted update recovery is incomplete; manual intervention is required."
+    fi
+    return 1
 }
 
 # Semver compare: returns 0 if equal, 1 if v1 > v2, 2 if v1 < v2
@@ -406,16 +650,80 @@ wait_for_healthy() {
     return 1
 }
 
-# _update_rollback <reason> <snap_dir> [compose_flags]
-#   Restores the given snapshot and restarts services.
+# _restore_source_revision <revision>
+#   Restores the tracked source tree to the revision captured before git pull.
+_restore_source_revision() {
+    local revision="$1"
+
+    if ! git -C "${INSTALL_DIR}" reset --hard "$revision"; then
+        log_error "CRITICAL: Could not restore source revision ${revision}."
+        return 1
+    fi
+
+    local restored_revision
+    restored_revision=$(git -C "${INSTALL_DIR}" rev-parse HEAD)
+    if [[ "$restored_revision" != "$revision" ]]; then
+        log_error "CRITICAL: Source rollback ended at ${restored_revision}, expected ${revision}."
+        return 1
+    fi
+
+    log_ok "Source restored to ${revision}."
+}
+
+_restart_compose_stack() {
+    local compose_flags_arg="${1:-}"
+
+    cd "$INSTALL_DIR"
+    if [[ -n "$compose_flags_arg" ]]; then
+        if ! docker compose ${compose_flags_arg} down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            if ! docker-compose ${compose_flags_arg} down --remove-orphans; then
+                log_error "Both Docker Compose implementations failed to stop the stack."
+                return 1
+            fi
+        fi
+        if ! docker compose ${compose_flags_arg} up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            if ! docker-compose ${compose_flags_arg} up -d; then
+                log_error "Both Docker Compose implementations failed to start the stack."
+                return 1
+            fi
+        fi
+    else
+        if ! docker compose down --remove-orphans; then
+            log_warn "docker compose v2 down failed, trying v1..."
+            if ! docker-compose down --remove-orphans; then
+                log_error "Both Docker Compose implementations failed to stop the stack."
+                return 1
+            fi
+        fi
+        if ! docker compose up -d; then
+            log_warn "docker compose v2 up failed, trying v1..."
+            if ! docker-compose up -d; then
+                log_error "Both Docker Compose implementations failed to start the stack."
+                return 1
+            fi
+        fi
+    fi
+}
+
+# _update_rollback <reason> <snap_dir> [compose_flags] [source_revision]
+#   Restores the tracked source revision and runtime snapshot, then restarts services.
 #   Called when cmd_update encounters a non-zero exit at any step.
 _update_rollback() {
     local reason="$1"
     local snap_dir_arg="$2"
     local compose_flags_arg="${3:-}"
+    local source_revision_arg="${4:-}"
 
     log_error "${reason}"
-    log_warn "Auto-restoring rollback snapshot and restarting services..."
+    log_warn "Auto-restoring source and rollback snapshot before restarting services..."
+
+    local source_restore_failed=false
+    if [[ -n "$source_revision_arg" ]] \
+        && ! _restore_source_revision "$source_revision_arg"; then
+        source_restore_failed=true
+    fi
 
     if ! _restore_snapshot "$snap_dir_arg"; then
         log_error "CRITICAL: Snapshot restore failed. Manual recovery required."
@@ -426,27 +734,32 @@ _update_rollback() {
         return 1
     fi
 
-    cd "$INSTALL_DIR"
-    if [[ -n "${compose_flags_arg}" ]]; then
-        if ! docker compose ${compose_flags_arg} down --remove-orphans; then
-            log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose ${compose_flags_arg} down --remove-orphans
-        fi
-        if ! docker compose ${compose_flags_arg} up -d; then
-            log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose ${compose_flags_arg} up -d
-        fi
-    else
-        if ! docker compose down --remove-orphans; then
-            log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose down --remove-orphans
-        fi
-        if ! docker compose up -d; then
-            log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose up -d
-        fi
+    if [[ "$source_restore_failed" == true ]]; then
+        log_error "CRITICAL: Runtime config was restored, but source rollback failed."
+        log_error "  Expected source revision: ${source_revision_arg}"
+        log_error "  Services were not restarted with an inconsistent source tree."
+        return 1
+    fi
+
+    if ! _restart_compose_stack "$compose_flags_arg"; then
+        log_error "CRITICAL: Snapshot restored, but the previous stack did not restart."
+        return 1
     fi
     log_warn "Rollback complete. Run 'ods-update.sh health' to verify."
+}
+
+_rollback_update_transaction() {
+    local reason="$1"
+    local snap_dir="$2"
+    local compose_flags="${3:-}"
+    local source_revision="${4:-}"
+
+    if _update_rollback "$reason" "$snap_dir" "$compose_flags" "$source_revision"; then
+        _update_journal_set_state "rolled_back" "$reason"
+    else
+        _update_journal_set_state "recovery_failed" "$reason"
+    fi
+    return 0
 }
 
 #==============================================================================
@@ -572,6 +885,15 @@ cmd_status() {
     else
         echo "General backups: 0 (max: ${MAX_BACKUPS})"
     fi
+
+    if [[ -f "$UPDATE_JOURNAL" ]]; then
+        local transaction_state transaction_updated
+        transaction_state=$(jq -r '.state // "unknown"' "$UPDATE_JOURNAL" 2>/dev/null || echo "unknown")
+        transaction_updated=$(jq -r '.updated_at // "unknown"' "$UPDATE_JOURNAL" 2>/dev/null || echo "unknown")
+        echo "Update transaction: ${transaction_state} (${transaction_updated})"
+    else
+        echo "Update transaction: none"
+    fi
 }
 
 #==============================================================================
@@ -647,12 +969,22 @@ cmd_backup() {
 cmd_update() {
     log_info "Starting ODS update..."
 
+    if ! _acquire_update_lock; then
+        return 1
+    fi
+    if ! _recover_interrupted_update; then
+        return 1
+    fi
+
     local current_version
     current_version=$(get_current_version)
 
     if ! ensure_source_checkout_for_update; then
         return 1
     fi
+
+    local source_revision
+    source_revision=$(git -C "${INSTALL_DIR}" rev-parse HEAD)
 
     # ── Step 1: rollback snapshot ─────────────────────────────────────────────
     local timestamp
@@ -664,14 +996,22 @@ cmd_update() {
     local compose_flags=""
     compose_flags=$(resolve_compose_flags 2>/dev/null || true)
 
+    _update_journal_write "prepared" "$source_revision" "$snap_dir" "$compose_flags"
+
     # ── Step 2: pull latest changes ───────────────────────────────────────────
     log_info "Pulling latest changes..."
     cd "$INSTALL_DIR"
-    git fetch origin
-    if ! git pull origin main && ! git pull origin master; then
-        _update_rollback "Git pull failed." "$snap_dir" "$compose_flags"
+    if ! git fetch origin; then
+        _rollback_update_transaction \
+            "Git fetch failed." "$snap_dir" "$compose_flags" "$source_revision"
         return 1
     fi
+    if ! git pull origin main && ! git pull origin master; then
+        _rollback_update_transaction \
+            "Git pull failed." "$snap_dir" "$compose_flags" "$source_revision"
+        return 1
+    fi
+    _update_journal_set_state "source_updated"
 
     # ── Step 3: migrations ────────────────────────────────────────────────────
     local migrations_dir="${INSTALL_DIR}/migrations"
@@ -681,46 +1021,37 @@ cmd_update() {
             if [[ -f "$migration" && -x "$migration" ]]; then
                 log_info "Running: $(basename "$migration")"
                 if ! bash "$migration"; then
-                    _update_rollback "Migration failed: $(basename "$migration")." \
-                        "$snap_dir" "$compose_flags"
+                    _rollback_update_transaction "Migration failed: $(basename "$migration")." \
+                        "$snap_dir" "$compose_flags" "$source_revision"
                     return 1
                 fi
             fi
         done
     fi
+    _update_journal_set_state "migrations_complete"
 
     # ── Step 4: restart services ──────────────────────────────────────────────
     log_info "Restarting services..."
-    cd "$INSTALL_DIR"
-    if [[ -n "${compose_flags}" ]]; then
-        if ! docker compose ${compose_flags} down --remove-orphans; then
-            log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose ${compose_flags} down --remove-orphans
-        fi
-        if ! docker compose ${compose_flags} up -d; then
-            log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose ${compose_flags} up -d
-        fi
-    elif [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
-        if ! docker compose down --remove-orphans; then
-            log_warn "docker compose v2 down failed, trying v1..."
-            docker-compose down --remove-orphans
-        fi
-        if ! docker compose up -d; then
-            log_warn "docker compose v2 up failed, trying v1..."
-            docker-compose up -d
+    if [[ -n "${compose_flags}" || -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+        if ! _restart_compose_stack "$compose_flags"; then
+            _rollback_update_transaction \
+                "Updated services failed to restart." \
+                "$snap_dir" "$compose_flags" "$source_revision"
+            return 1
         fi
     else
         log_warn "No compose files found. Skipping container restart."
     fi
+    _update_journal_set_state "runtime_restarted"
 
     # ── Step 5: health-check with timeout ────────────────────────────────────
     if ! wait_for_healthy; then
-        _update_rollback \
+        _rollback_update_transaction \
             "Services failed to become healthy after update (timeout: ${HEALTH_TIMEOUT}s)." \
-            "$snap_dir" "$compose_flags"
+            "$snap_dir" "$compose_flags" "$source_revision"
         return 1
     fi
+    _update_journal_set_state "verified"
 
     # ── Step 6: record new version ────────────────────────────────────────────
     local new_version
@@ -736,6 +1067,7 @@ cmd_update() {
         '.version = $v | .last_update = $ts | .last_rollback_point = $snap' \
         > "$tmp_version_file"
     mv -f "$tmp_version_file" "$VERSION_FILE"
+    _update_journal_set_state "committed"
 
     log_ok "Update complete! Version: ${new_version}"
     log_info "Rollback point retained at: ${snap_dir}"
