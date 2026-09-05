@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Box,
@@ -352,6 +352,7 @@ export default function Usage({ status }) {
   const [rangeAnchor, setRangeAnchor] = useState(() => monthRange().anchor)
   const [reloadToken, setReloadToken] = useState(0)
   const [actionState, setActionState] = useState(null)
+  const actionInFlightRef = useRef(false)
   const range = useMemo(() => monthRange(rangeAnchor), [rangeAnchor])
   const { report, previousReport, readiness, history, loading, error } = useUsageReport(range, reloadToken)
   const summary = report.summary || EMPTY_SUMMARY
@@ -375,7 +376,8 @@ export default function Usage({ status }) {
 
   async function runUsageAction(kind) {
     const action = readiness.actions?.[kind]
-    if (!action?.url) return
+    if (!action?.url || actionInFlightRef.current) return
+    actionInFlightRef.current = true
     setActionState({ status: 'running', kind, message: action.label })
     try {
       const response = await fetch(action.url, { method: action.method || 'POST' })
@@ -391,6 +393,8 @@ export default function Usage({ status }) {
       window.setTimeout(() => setReloadToken(value => value + 1), 1200)
     } catch (err) {
       setActionState({ status: 'error', kind, message: err.message })
+    } finally {
+      actionInFlightRef.current = false
     }
   }
 
