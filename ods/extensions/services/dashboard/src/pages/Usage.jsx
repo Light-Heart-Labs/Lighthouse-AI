@@ -114,7 +114,7 @@ function addMonths(date, delta) {
   return new Date(date.getFullYear(), date.getMonth() + delta, 1)
 }
 
-function emptyReport(start, end, detail = null) {
+export function emptyReport(start, end, detail = null) {
   const startDate = new Date(`${start}T00:00:00`)
   const endDate = new Date(`${end}T00:00:00`)
   const daily = []
