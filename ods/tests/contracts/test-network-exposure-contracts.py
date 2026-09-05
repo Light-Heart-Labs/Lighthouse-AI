@@ -153,12 +153,17 @@ def test_dashboard_csp_allows_ods_talk_tts_blob_audio() -> None:
     assert_true("media-src 'self' blob:" in nginx_conf, "ODS Talk TTS playback uses blob: audio URLs")
 
 
-def test_dashboard_csp_allows_huggingface_author_avatars_only_as_images() -> None:
+def test_dashboard_csp_allows_local_previews_and_huggingface_images() -> None:
     nginx_conf = read(SERVICES / "dashboard" / "nginx.conf")
+    talk_page = read(SERVICES / "dashboard" / "src" / "pages" / "ODSTalk.jsx")
 
     assert_true(
-        "img-src 'self' data: https://huggingface.co https://cdn-avatars.huggingface.co;" in nginx_conf,
-        "the Models library renders Hugging Face author avatars",
+        "URL.createObjectURL(file)" in talk_page,
+        "ODS Talk must keep creating local attachment previews",
+    )
+    assert_true(
+        "img-src 'self' data: blob: https://huggingface.co https://cdn-avatars.huggingface.co;" in nginx_conf,
+        "the CSP must admit ODS Talk blob previews and Hugging Face images",
     )
     assert_true(
         "connect-src 'self';" in nginx_conf,
