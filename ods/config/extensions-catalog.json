@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:06:35Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -1146,6 +1146,63 @@
       ],
       "tags": [],
       "features": []
+    },
+    {
+      "id": "gotenberg",
+      "name": "Gotenberg",
+      "description": "Convert web pages and office documents to PDF with Chromium and LibreOffice.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 3000,
+      "external_port_default": 3000,
+      "health_endpoint": "/health",
+      "env_vars": [
+        {
+          "key": "GOTENBERG_DENY_PRIVATE_IPS",
+          "required": false,
+          "default": "true",
+          "description": "Reject remote input URLs that resolve to loopback or private networks"
+        }
+      ],
+      "tags": [
+        "pdf",
+        "document",
+        "chromium",
+        "libreoffice",
+        "conversion"
+      ],
+      "features": [
+        {
+          "id": "gotenberg-pdf-conversion",
+          "name": "Document-to-PDF API",
+          "description": "Render URLs, HTML, Markdown, and office documents to PDF through a local API",
+          "icon": "FileOutput",
+          "category": "productivity",
+          "requirements": {
+            "services": [
+              "gotenberg"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 2
+          },
+          "enabled_services_all": [
+            "gotenberg"
+          ],
+          "setup_time": "~2 minutes",
+          "priority": 32,
+          "launch": {
+            "type": "none"
+          },
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 120
     },
     {
       "id": "immich",
