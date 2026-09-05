@@ -250,4 +250,38 @@ describe('Invites', () => {
     expect(screen.getByRole('button', { name: 'Print owner card' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Create owner card' })).toBeDisabled()
   })
+
+  test('keeps listed invites when owner-card status is unreachable', async () => {
+    const fetchMock = vi.fn(async (url) => {
+      if (url === '/api/auth/magic-link/list') {
+        return response({
+          tokens: [{
+            token_hash_prefix: 'guest123',
+            target_username: 'guest-user',
+            scope: 'chat',
+            reusable: false,
+            token_type: 'guest',
+            url_mode: 'auto',
+            created_at: new Date().toISOString(),
+            expires_at: future,
+            redemption_count: 0,
+            last_redeemed_at: null,
+            revoked_at: null,
+            note: 'support session',
+          }],
+        })
+      }
+      if (url === '/api/auth/magic-link/owner-card/status') {
+        throw new TypeError('owner status connection failed')
+      }
+      throw new Error(`unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<Invites />)
+
+    expect(await screen.findByText('guest-user')).toBeInTheDocument()
+    expect(screen.getByText('Owner-card status unavailable.')).toBeInTheDocument()
+    expect(screen.queryByText('owner status connection failed')).not.toBeInTheDocument()
+  })
 })

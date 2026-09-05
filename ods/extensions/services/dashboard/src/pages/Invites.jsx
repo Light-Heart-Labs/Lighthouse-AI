@@ -83,18 +83,24 @@ export default function Invites() {
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [resp, ownerStatusResp] = await Promise.all([
+      const [listResult, ownerStatusResult] = await Promise.allSettled([
         fetchJson('/api/auth/magic-link/list'),
         fetchJson('/api/auth/magic-link/owner-card/status'),
       ])
+      if (listResult.status === 'rejected') throw listResult.reason
+      const resp = listResult.value
       if (!resp.ok) throw new Error(`list failed: ${resp.status}`)
       const data = await resp.json()
-      if (ownerStatusResp.ok) {
+      if (ownerStatusResult.status === 'fulfilled' && ownerStatusResult.value.ok) {
+        const ownerStatusResp = ownerStatusResult.value
         setOwnerCardStatus(await ownerStatusResp.json())
       } else {
+        const reason = ownerStatusResult.status === 'fulfilled'
+          ? `Owner-card status unavailable (${ownerStatusResult.value.status})`
+          : 'Owner-card status unavailable.'
         setOwnerCardStatus({
           ready: false,
-          reason: `Owner-card status unavailable (${ownerStatusResp.status})`,
+          reason,
         })
       }
       setTokens(data.tokens || [])
