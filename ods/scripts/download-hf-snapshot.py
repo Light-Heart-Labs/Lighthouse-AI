@@ -15,6 +15,10 @@ def download_snapshot(
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
 ) -> Path:
+    # Expand ~ to the user's home directory.  Python's Path("~/…") treats the
+    # tilde literally, so a shell caller passing ~/models without quoting would
+    # create a directory literally named "~" instead of expanding to $HOME.
+    cache_dir = cache_dir.expanduser()
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
