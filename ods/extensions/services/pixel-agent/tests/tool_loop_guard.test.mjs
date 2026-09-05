@@ -8711,6 +8711,35 @@ test("fresh-chat repair of an explicitly named workspace project can inspect and
   }
 });
 
+test("a post-verification repetition stop preserves a partial tool receipt, not task success", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+    { prompt: "Create a utility in /workspace/expenses and run its tests." }
+  );
+  const written = { path: "expenses/summary.py", content: "print('sample')" };
+  call(guard, "write", { event: { params: written } });
+  afterCall(guard, "write", { event: { params: written, result: { details: { status: "completed" } } } });
+  const command = { command: "python3 -m unittest", workdir: "/workspace/expenses" };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.equal(call(guard, "exec", { event: { params: command } })?.block, undefined);
+    afterCall(guard, "exec", { event: { params: command, result: {
+      details: { status: "completed", exitCode: 0, aggregated: "Ran 3 tests in 0.001s\n\nOK" },
+    } } });
+  }
+  call(guard, "exec", { event: { params: command } });
+  call(guard, "exec", { event: { params: command } });
+  const receipt = guard.verificationForRun("run-1");
+  assert.equal(receipt.status, "passed");
+  assert.match(receipt.text, /File written: `\/workspace\/expenses\/summary.py`/);
+  assert.match(receipt.text, /does not establish complete test coverage or completion/);
+  // A subsequent failed verification must never be replaced with old success.
+  afterCall(guard, "exec", { event: { params: command, result: {
+    details: { status: "completed", exitCode: 1, aggregated: "FAILED (failures=1)" },
+  } } });
+  assert.equal(guard.verificationForRun("run-1").status, "failed");
+});
+
 test("negated workspace repairs do not grant continuation intent", () => {
   for (const prompt of ["Do not repair the game in my workspace.", "Never fix /workspace/moon-garden."]) {
     assert.equal(userMessageRequestsWorkspaceContinuation([], prompt), false);

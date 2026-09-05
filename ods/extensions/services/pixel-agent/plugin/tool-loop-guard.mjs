@@ -8243,6 +8243,27 @@ export function createToolLoopGuard({
           ...staleExecWarningSuppression,
         };
       }
+      if (state.codingExhausted && state.workspaceTaskRequested && state.pendingExecSessions.size === 0) {
+        const writtenFiles = [...state.successfulWritePaths].filter((file) =>
+          typeof file === "string" && file.split("/").every((part) => WORKSPACE_PATH_COMPONENT.test(part))
+        ).sort();
+        if (writtenFiles.length > 0) {
+          // Preserve real work when the model repeats a completed command and
+          // cannot produce a final reply. This is a partial tool receipt, not
+          // a fabricated model answer or a claim that every requirement passed.
+          return {
+            status: "passed",
+            text: "Pixel stopped repeating completed work before it could finish its explanation. " +
+              "The following results were recorded by its tools:\n" +
+              writtenFiles.slice(0, 20).map((file) => `- File written: \`/workspace/${file}\`.`).join("\n") +
+              (writtenFiles.length > 20 ? `\n- ${writtenFiles.length - 20} additional files were written.` : "") +
+              "\n- The latest recognized test command completed successfully.\n" +
+              "This does not establish complete test coverage or completion of every requested step. " +
+              "The workspace is preserved; ask Pixel to continue from these files.",
+            ...staleExecWarningSuppression,
+          };
+        }
+      }
       return { status: "passed", ...staleExecWarningSuppression };
     }
     return { status: "none", ...staleExecWarningSuppression };
