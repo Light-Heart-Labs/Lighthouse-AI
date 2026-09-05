@@ -384,11 +384,15 @@ if [[ $GPU_COUNT -gt 1 && "$GPU_BACKEND" == "nvidia" ]]; then
             log "Multi-GPU topology: NVLink=$GPU_HAS_NVLINK, Total VRAM=${GPU_TOTAL_VRAM}MB"
         else
             log "topology detection returned empty, using basic GPU info"
-            GPU_TOTAL_VRAM=$((GPU_VRAM * GPU_COUNT))
+            # GPU_VRAM is already the summed total across all GPUs (see
+            # detection.sh:358), so do not multiply by GPU_COUNT again.
+            GPU_TOTAL_VRAM=$GPU_VRAM
         fi
     else
         log "NVIDIA topology detection script not found, skipping detailed topology analysis"
-        GPU_TOTAL_VRAM=$((GPU_VRAM * GPU_COUNT))
+        # GPU_VRAM is already the summed total across all GPUs (see
+        # detection.sh:358), so do not multiply by GPU_COUNT again.
+        GPU_TOTAL_VRAM=$GPU_VRAM
     fi
 fi
 
