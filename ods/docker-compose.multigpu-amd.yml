@@ -35,7 +35,14 @@ services:
       - /models
     environment:
       LEMONADE_LLAMACPP: "${LEMONADE_LLAMACPP:-auto}"
-      ROCR_VISIBLE_DEVICES: "${LLAMA_SERVER_GPU_INDICES:-}"
+      # LLAMA_SERVER_GPU_INDICES is normally computed by the installer from
+      # the detected GPU assignment (e.g. "0,1,2"). If it's ever unset — a
+      # failed assignment computation, or the overlay enabled manually — an
+      # empty ROCR_VISIBLE_DEVICES means zero GPUs visible to ROCm, not "all
+      # GPUs": llama-server would silently lose GPU acceleration entirely.
+      # Fail safe to GPU 0, matching every sibling multigpu-amd service
+      # (comfyui/embeddings/whisper all default their GPU index to 0).
+      ROCR_VISIBLE_DEVICES: "${LLAMA_SERVER_GPU_INDICES:-0}"
       # Tensor split ratio (e.g. "0.5,0.5") — passed via env var because it may
       # be empty (auto-split). Inherited by inner llama-server via fork()+execv().
       LLAMA_ARG_TENSOR_SPLIT: "${LLAMA_ARG_TENSOR_SPLIT:-}"
