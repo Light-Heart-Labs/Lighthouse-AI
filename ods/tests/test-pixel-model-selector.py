@@ -181,7 +181,9 @@ def main() -> int:
     assert '"$_pixel_model_route_class" == "unmanaged-external"' in features
     assert '"${ENABLE_PIXEL_RUNTIME:-false}" == "true"' in features
     assert '_sync_extension_compose "$_pixel_support_services" litellm' in features
-    assert '_sync_extension_compose "$_pixel_support_services" searxng' in features
+    # Search is shared with other installed consumers as well as Pixel.
+    # Execute every consumer combination instead of pinning its old variable name.
+    subprocess.run(["bash", str(ROOT / "tests" / "test-pixel-support-services.sh")], check=True)
 
     print("Pixel model selector tests passed: 7")
     return 0
