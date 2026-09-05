@@ -1,0 +1,37 @@
+services:
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cpu:v1.30.0
+    container_name: ods-docling-serve
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "${DOCLING_SERVE_ENABLE_UI:-1}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${DOCLING_SERVE_PORT:-5001}:5001"
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/readyz', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+networks:
+  ods-network:
+    external: true

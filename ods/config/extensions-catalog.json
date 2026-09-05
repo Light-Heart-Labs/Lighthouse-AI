@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:02:03Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -677,6 +677,65 @@
           ]
         }
       ]
+    },
+    {
+      "id": "docling-serve",
+      "name": "Docling Serve",
+      "description": "Local document conversion, OCR, layout analysis, and structured chunking API.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 5001,
+      "external_port_default": 5001,
+      "health_endpoint": "/readyz",
+      "env_vars": [
+        {
+          "key": "DOCLING_SERVE_ENABLE_UI",
+          "required": false,
+          "default": "1",
+          "description": "Enable the browser conversion playground at /ui"
+        }
+      ],
+      "tags": [
+        "document",
+        "ocr",
+        "parsing",
+        "rag",
+        "pdf"
+      ],
+      "features": [
+        {
+          "id": "docling-document-intelligence",
+          "name": "Document Intelligence",
+          "description": "Convert PDFs and office documents into Markdown, JSON, HTML, or chunks locally",
+          "icon": "FileSearch",
+          "category": "productivity",
+          "requirements": {
+            "services": [
+              "docling-serve"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 12
+          },
+          "enabled_services_all": [
+            "docling-serve"
+          ],
+          "setup_time": "~5 minutes",
+          "priority": 30,
+          "launch": {
+            "type": "service",
+            "service": "docling-serve",
+            "path": "/ui"
+          },
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 300
     },
     {
       "id": "flowise",

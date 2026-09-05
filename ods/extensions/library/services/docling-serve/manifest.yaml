@@ -1,0 +1,53 @@
+schema_version: ods.services.v1
+
+service:
+  id: docling-serve
+  name: Docling Serve
+  aliases: [docling, document-parser]
+  container_name: ods-docling-serve
+  host_env: DOCLING_SERVE_HOST
+  default_host: docling-serve
+  port: 5001
+  external_port_env: DOCLING_SERVE_PORT
+  external_port_default: 5001
+  health: /readyz
+  ui_path: /ui
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 300
+  description: "Local document conversion, OCR, layout analysis, and structured chunking API."
+  env_vars:
+    - key: DOCLING_SERVE_ENABLE_UI
+      required: false
+      secret: false
+      default: "1"
+      description: Enable the browser conversion playground at /ui
+
+features:
+  - id: docling-document-intelligence
+    name: Document Intelligence
+    description: Convert PDFs and office documents into Markdown, JSON, HTML, or chunks locally
+    icon: FileSearch
+    category: productivity
+    requirements:
+      services: [docling-serve]
+      vram_gb: 0
+      disk_gb: 12
+    enabled_services_all: [docling-serve]
+    setup_time: ~5 minutes
+    priority: 30
+    launch:
+      type: service
+      service: docling-serve
+      path: /ui
+    gpu_backends: [all]
+
+tags:
+  - document
+  - ocr
+  - parsing
+  - rag
+  - pdf
