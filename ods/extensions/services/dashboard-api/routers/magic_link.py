@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -58,10 +59,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from typing import Optional
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -332,10 +333,10 @@ def _prune(store: dict) -> dict:
 
 def _find_by_hash(store: dict, token_hash: str) -> Optional[dict]:
     for record in store.get("tokens", []):
-        if record["token_hash"] == token_hash:
+        # Use constant-time comparison to mitigate timing side-channel attacks
+        if hmac.compare_digest(record["token_hash"], token_hash):
             return record
     return None
-
 
 # --- Rate limiting ---
 
