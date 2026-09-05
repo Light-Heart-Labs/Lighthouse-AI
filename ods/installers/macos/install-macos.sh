@@ -1941,6 +1941,12 @@ else
     _BOOTSTRAP_ACTIVE=false
     if bootstrap_needed "$SELECTED_TIER" "$INSTALL_DIR" "$GGUF_FILE"; then
         _BOOTSTRAP_ACTIVE=true
+
+        # Calculate appropriate bootstrap context based on GPU/memory constraints
+        if type calculate_bootstrap_context &>/dev/null; then
+            calculate_bootstrap_context
+        fi
+
         FULL_GGUF_FILE="$GGUF_FILE"
         FULL_GGUF_URL="$GGUF_URL"
         FULL_GGUF_SHA256="$GGUF_SHA256"
