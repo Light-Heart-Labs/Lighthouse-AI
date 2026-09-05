@@ -425,6 +425,7 @@ function UserStep({ username, setUsername, onNext, onBack }) {
       <div className="flex gap-3">
         <button
           onClick={onBack}
+          aria-label="Back"
           className="flex items-center justify-center gap-2 bg-theme-card border border-theme-border text-theme-text py-4 px-5 rounded-xl"
         >
           <ChevronLeft size={18} />
@@ -491,6 +492,7 @@ function StackStep({ stack, setStack, onNext, onBack }) {
       <div className="flex gap-3">
         <button
           onClick={onBack}
+          aria-label="Back"
           className="flex items-center justify-center gap-2 bg-theme-card border border-theme-border text-theme-text py-4 px-5 rounded-xl"
         >
           <ChevronLeft size={18} />
@@ -565,6 +567,7 @@ function ConfirmStep({
         <button
           onClick={onBack}
           disabled={finishing}
+          aria-label="Back"
           className="flex items-center justify-center gap-2 bg-theme-card border border-theme-border text-theme-text py-4 px-5 rounded-xl disabled:opacity-50"
         >
           <ChevronLeft size={18} />
