@@ -116,7 +116,7 @@ done
 
 echo ""
 echo -e "${RED}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║         ODS UNINSTALLER                ║${NC}"
+echo -e "${RED}║              ODS UNINSTALLER                     ║${NC}"
 echo -e "${RED}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
