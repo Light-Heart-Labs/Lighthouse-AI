@@ -15,6 +15,7 @@
 #   ./ods-macos.sh config edit         # Open .env in $EDITOR
 #   ./ods-macos.sh chat "message"      # Quick chat via API
 #   ./ods-macos.sh update              # Pull latest images and restart
+#   ./ods-macos.sh repair hermes       # Restore pinned Hermes containers
 #   ./ods-macos.sh version             # Show version
 #   ./ods-macos.sh help                # Show help
 #
@@ -878,6 +879,69 @@ cmd_restart() {
     fi
 }
 
+cmd_repair_hermes() {
+    test_install
+    cd "$INSTALL_DIR"
+
+    local flags services required_service
+    flags=$(get_compose_flags)
+    # shellcheck disable=SC2086
+    services=$(docker compose $flags config --services)
+    for required_service in hermes hermes-proxy; do
+        if ! grep -Fxq "$required_service" <<< "$services"; then
+            ai_err "Hermes recovery requires '$required_service' in the active Compose stack."
+            return 1
+        fi
+    done
+
+    ai "Restoring pinned Hermes containers..."
+    # Recreate only the runtime and its proxy. Named volumes and bind mounts
+    # remain intact; --pull never restores exactly the image pinned by ODS.
+    # shellcheck disable=SC2086
+    docker compose $flags up -d --no-deps --force-recreate --pull never hermes hermes-proxy
+
+    local health_status="" _i
+    for _i in $(seq 1 60); do
+        if ! health_status=$(docker inspect --format \
+            '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+            ods-hermes); then
+            ai_err "Could not inspect restored Hermes container 'ods-hermes'."
+            return 1
+        fi
+        if [[ "$health_status" == "healthy" ]]; then
+            break
+        fi
+        if [[ "$health_status" == "unhealthy" ]]; then
+            ai_err "Restored Hermes container is unhealthy. Check: ./ods-macos.sh logs hermes"
+            return 1
+        fi
+        sleep 2
+    done
+    if [[ "$health_status" != "healthy" ]]; then
+        ai_err "Timed out waiting for restored Hermes. Check: ./ods-macos.sh logs hermes"
+        return 1
+    fi
+
+    if ! docker exec ods-hermes-proxy \
+        wget -qO- -T 5 http://ods-hermes:9119/api/status >/dev/null; then
+        ai_err "Hermes is healthy, but its proxy cannot reach the restored runtime. Check: ./ods-macos.sh logs hermes-proxy"
+        return 1
+    fi
+    ai_ok "Hermes container recovery complete"
+}
+
+cmd_repair() {
+    local target="${1:-}"
+    case "$target" in
+        hermes|hermes-recover) cmd_repair_hermes ;;
+        *)
+            ai "Usage: ./ods-macos.sh repair hermes"
+            ai_warn "Unknown repair target: ${target:-<missing>}"
+            return 1
+            ;;
+    esac
+}
+
 cmd_logs() {
     local service="${1:-}"
     local lines="${2:-100}"
@@ -1042,6 +1106,7 @@ show_help() {
     echo -e "  ${GRN}  config edit${NC}         ${DGRN}Open .env in \$EDITOR${NC}"
     echo -e "  ${GRN}  chat \"message\"${NC}      ${DGRN}Quick chat via API${NC}"
     echo -e "  ${GRN}  update${NC}              ${DGRN}Pull latest images and restart${NC}"
+    echo -e "  ${GRN}  repair hermes${NC}       ${DGRN}Restore pinned Hermes containers${NC}"
     echo -e "  ${GRN}  version${NC}             ${DGRN}Show version${NC}"
     echo -e "  ${GRN}  help${NC}                ${DGRN}Show this help${NC}"
     echo ""
@@ -1049,6 +1114,7 @@ show_help() {
     echo -e "  ${DGRN}  ./ods-macos.sh status${NC}"
     echo -e "  ${DGRN}  ./ods-macos.sh logs llama-server 50${NC}"
     echo -e "  ${DGRN}  ./ods-macos.sh restart open-webui${NC}"
+    echo -e "  ${DGRN}  ./ods-macos.sh repair hermes${NC}"
     echo -e "  ${DGRN}  ./ods-macos.sh chat \"What is quantum computing?\"${NC}"
     echo ""
 }
@@ -1080,6 +1146,7 @@ case "$COMMAND" in
         ;;
     chat)       cmd_chat "$*" ;;
     update)     cmd_update ;;
+    repair)     cmd_repair "${1:-}" ;;
     version)    cmd_version ;;
     help)       show_help ;;
     *)
