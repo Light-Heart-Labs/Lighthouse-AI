@@ -44,7 +44,9 @@ for function_name in \
     _macos_compose_external_images \
     _macos_normalize_image_platform \
     _macos_cached_image_platform \
-    _macos_pull_image_with_retry; do
+    _macos_pull_error_is_permanent \
+    _macos_pull_image_with_retry \
+    _macos_pre_pull_compose_images; do
     function_body="$(extract_installer_function "$function_name")"
     [[ -n "$function_body" ]] || fail "could not extract $function_name"
     eval "$function_body"
@@ -59,7 +61,9 @@ MOCK_DOCKER_CALLS="$TMP_DIR/docker-calls.log"
 MOCK_INSPECT_EXIT=1
 MOCK_INSPECT_OUTPUT=""
 MOCK_PULL_EXIT=0
+MOCK_PULL_STDERR=""
 MOCK_COMPOSE_JSON=""
+MOCK_COMPOSE_CONFIG_EXIT=0
 
 ai() { :; }
 ai_ok() { :; }
@@ -76,9 +80,11 @@ docker() {
         return 0
     fi
     if [[ "$1" == "pull" ]]; then
+        [[ -n "$MOCK_PULL_STDERR" ]] && printf '%s\n' "$MOCK_PULL_STDERR" >&2
         return "$MOCK_PULL_EXIT"
     fi
     if [[ "$1" == "compose" && "$*" == *"config --format json"* ]]; then
+        [[ "$MOCK_COMPOSE_CONFIG_EXIT" -eq 0 ]] || return "$MOCK_COMPOSE_CONFIG_EXIT"
         printf '%s\n' "$MOCK_COMPOSE_JSON"
         return 0
     fi
@@ -90,6 +96,8 @@ reset_docker_mock() {
     MOCK_INSPECT_EXIT=1
     MOCK_INSPECT_OUTPUT=""
     MOCK_PULL_EXIT=0
+    MOCK_PULL_STDERR=""
+    MOCK_COMPOSE_CONFIG_EXIT=0
 }
 
 assert_call_count() {
@@ -137,6 +145,41 @@ grep -Fqx "$expected_unpinned" <<< "$compose_images" \
     || fail "local or built image leaked into external pre-pull set"
 pass "Compose JSON parsing preserves platform pins and filters local builds"
 
+# Regression: the resolver used to fall back to `config --images`, which has no
+# platform column. That silently degraded every pinned image to a host-arch pull
+# and made text-embeddings-inference unpullable on Apple Silicon. Unresolvable
+# compose config must now be a hard failure, never a platform-blind image list.
+reset_docker_mock
+MOCK_COMPOSE_CONFIG_EXIT=1
+if compose_images="$(_macos_compose_external_images)"; then
+    fail "unresolvable compose config did not fail the image resolver"
+fi
+[[ -z "${compose_images:-}" ]] || fail "failed resolver still emitted images: $compose_images"
+assert_call_count "config --images" 0
+MOCK_COMPOSE_CONFIG_EXIT=0
+pass "unresolvable compose config fails loudly instead of dropping platform pins"
+
+manifest_error_log="$TMP_DIR/manifest-error.log"
+printf '%s\n' \
+    'no matching manifest for linux/arm64/v8 in the manifest list entries: no match for platform in manifest: not found' \
+    > "$manifest_error_log"
+_macos_pull_error_is_permanent "$manifest_error_log" \
+    || fail "missing arm64 manifest was not classified as permanent"
+printf '%s\n' 'error pulling image: net/http: TLS handshake timeout' > "$manifest_error_log"
+if _macos_pull_error_is_permanent "$manifest_error_log"; then
+    fail "transient network error was misclassified as permanent"
+fi
+pass "permanent manifest errors are distinguished from transient pull failures"
+
+reset_docker_mock
+MOCK_PULL_EXIT=1
+MOCK_PULL_STDERR='no matching manifest for linux/arm64/v8 in the manifest list entries: no match for platform in manifest: not found'
+if _macos_pull_image_with_retry "ghcr.io/example/tei:latest" "linux/amd64"; then
+    fail "unpullable manifest unexpectedly reported success"
+fi
+assert_call_count "^pull --platform linux/amd64 ghcr.io/example/tei:latest$" 1
+pass "missing manifest aborts on the first attempt instead of burning the retry budget"
+
 reset_docker_mock
 _macos_pull_image_with_retry "ghcr.io/example/tei:latest" "linux/amd64" \
     || fail "absent cache did not pull the requested platform"
@@ -180,5 +223,30 @@ if _macos_pull_image_with_retry "ghcr.io/example/tei:latest" "linux/amd64"; then
 fi
 assert_call_count "^pull --platform linux/amd64 ghcr.io/example/tei:latest$" 2
 pass "pull failure remains fatal when the cached platform is wrong"
+
+# End-to-end wiring for the real Apple Silicon failure in #3257: the embeddings
+# extension pins text-embeddings-inference to linux/amd64 because the image has
+# no arm64 manifest. The preflight must carry that pin all the way from
+# `compose config` into the docker pull argv.
+reset_docker_mock
+# Used by the installer function loaded with eval below.
+# shellcheck disable=SC2034
+INSTALL_DIR="$TMP_DIR"
+MOCK_COMPOSE_JSON='{
+  "services": {
+    "embeddings": {
+      "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.1",
+      "platform": "linux/amd64"
+    },
+    "open-webui": {"image": "ghcr.io/open-webui/open-webui:main"}
+  }
+}'
+_macos_pre_pull_compose_images \
+    || fail "preflight failed for a healthy platform-pinned stack"
+assert_call_count \
+    "^pull --platform linux/amd64 ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.1$" 1
+assert_call_count "^pull ghcr.io/open-webui/open-webui:main$" 1
+assert_call_count "^pull ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.1$" 0
+pass "preflight carries the compose platform pin into docker pull for TEI"
 
 echo "[OK] macOS Compose image cache preflight passed"

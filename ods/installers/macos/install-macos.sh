@@ -2420,17 +2420,34 @@ else
         return 1
     }
 
+    # Emits one "<image>\t<platform>" line per external Compose service.
+    #
+    # The platform column carries the per-service `platform:` pin that Compose
+    # already merged across every compose file (e.g. the embeddings extension
+    # pins linux/amd64 because text-embeddings-inference publishes no arm64
+    # manifest). `config --format json` is the only Compose output that exposes
+    # it, so it is the single authoritative source here.
+    #
+    # There is deliberately no `config --images` fallback: that command prints
+    # bare image refs with no platform column, so falling back to it silently
+    # downgrades every pinned image to a host-arch pull. On Apple Silicon that
+    # turns into an unfixable `no matching manifest for linux/arm64/v8` that
+    # burns the whole retry budget. A resolver that cannot report platforms is
+    # worse than no resolver -- fail loudly instead.
     _macos_compose_external_images() {
-        local config_json
-        if config_json="$(docker compose "${COMPOSE_FLAGS[@]}" config --format json 2>>"$ODS_LOG_FILE")"; then
-            if printf '%s' "$config_json" | python3 -c '
+        local config_json python_cmd
+        # Same interpreter the compose resolver proved out in _ensure_macos_pyyaml;
+        # a bare `python3` can be a different (or absent) PATH entry.
+        python_cmd="${ODS_PYTHON_CMD:-python3}"
+
+        config_json="$(docker compose "${COMPOSE_FLAGS[@]}" config --format json 2>>"$ODS_LOG_FILE")" || return 1
+        [[ -n "$config_json" ]] || return 1
+
+        printf '%s' "$config_json" | "$python_cmd" -c '
 import json
 import sys
 
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
+data = json.load(sys.stdin)
 
 for service in (data.get("services") or {}).values():
     if service.get("build") is not None:
@@ -2441,16 +2458,8 @@ for service in (data.get("services") or {}).values():
     platform = str(service.get("platform") or "").strip()
     print(image + "\t" + platform)
 ' | while IFS=$'\t' read -r _image _platform; do
-                _macos_is_local_image "$_image" && continue
-                printf '%s\t%s\n' "$_image" "$_platform"
-            done | awk '!seen[$0]++'; then
-                return 0
-            fi
-        fi
-
-        docker compose "${COMPOSE_FLAGS[@]}" config --images 2>>"$ODS_LOG_FILE" | while IFS= read -r _image; do
             _macos_is_local_image "$_image" && continue
-            printf '%s\n' "$_image"
+            printf '%s\t%s\n' "$_image" "$_platform"
         done | awk '!seen[$0]++'
     }
 
@@ -2508,12 +2517,22 @@ for service in (data.get("services") or {}).values():
         _macos_normalize_image_platform "$inspected"
     }
 
+    # True when the registry error is a property of the published image rather
+    # than of the network. No amount of backoff makes a missing manifest appear,
+    # so retrying one only delays the abort by 5s+15s+30s.
+    _macos_pull_error_is_permanent() {
+        grep -Eqi \
+            'no matching manifest for|no match for platform in manifest|manifest unknown|manifest for .* not found' \
+            "$1"
+    }
+
     _macos_pull_image_with_retry() {
         # $2 is the compose service's platform pin (may be empty). Without it,
         # docker pull resolves the host platform (linux/arm64 on Apple
         # Silicon), which hard-fails for amd64-only images like TEI even
         # though compose would run them pinned under emulation.
         local image="$1" platform="${2:-}" attempt max_attempts delay cached_platform requested_platform
+        local attempt_log
         local -a delays=(5 15 30)
         local -a pull_cmd=(docker pull "$image")
         [[ -n "$platform" ]] && pull_cmd=(docker pull --platform "$platform" "$image")
@@ -2536,18 +2555,37 @@ for service in (data.get("services") or {}).values():
         fi
 
         max_attempts="${ODS_DOCKER_PULL_MAX_ATTEMPTS:-4}"
+        attempt_log="$(mktemp "${TMPDIR:-/tmp}/ods-compose-pull.XXXXXX")"
         for ((attempt=1; attempt<=max_attempts; attempt++)); do
             ai "Pulling Compose image ($attempt/$max_attempts): $image${platform:+ [$platform]}"
-            if "${pull_cmd[@]}" >>"$ODS_LOG_FILE" 2>&1; then
+            if "${pull_cmd[@]}" >"$attempt_log" 2>&1; then
+                cat "$attempt_log" >>"$ODS_LOG_FILE"
+                rm -f "$attempt_log"
                 ai_ok "Pulled $image"
                 return 0
             fi
+            cat "$attempt_log" >>"$ODS_LOG_FILE"
+
+            if _macos_pull_error_is_permanent "$attempt_log"; then
+                rm -f "$attempt_log"
+                ai_err "No ${platform:-host-architecture} manifest published for $image"
+                if [[ -n "$platform" ]]; then
+                    ai "Compose pins this service to $platform but the registry has no such manifest."
+                    ai "Check the image tag in the owning extension's compose.yaml."
+                else
+                    ai "This image is not published for the host architecture and Compose has no platform pin for it."
+                    ai "Add a 'platform:' key to the owning service (e.g. platform: linux/amd64) to run it under Rosetta 2."
+                fi
+                return 1
+            fi
+
             if (( attempt < max_attempts )); then
                 delay="${delays[$((attempt - 1))]:-30}"
                 ai_warn "Pull failed for $image; retrying in ${delay}s"
                 sleep "$delay"
             fi
         done
+        rm -f "$attempt_log"
 
         ai_err "Failed to pull Compose image after retries: $image"
         return 1
@@ -2556,8 +2594,8 @@ for service in (data.get("services") or {}).values():
     _macos_pre_pull_compose_images() {
         local image_output image platform failed
         image_output="$(_macos_compose_external_images)" || {
-            ai_err "Could not resolve macOS Docker Compose images before service launch"
-            ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --images"
+            ai_err "Could not resolve macOS Docker Compose images and platform pins before service launch"
+            ai "Inspect compose config with: cd '$INSTALL_DIR' && docker compose ${COMPOSE_FLAGS[*]} config --format json"
             return 1
         }
         [[ -n "$image_output" ]] || return 0
