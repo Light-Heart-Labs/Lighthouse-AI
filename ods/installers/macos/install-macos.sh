@@ -39,16 +39,24 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
   # Default candidate paths cover standard Apple Silicon and Intel Homebrew
   # prefixes. If brew is already on PATH we also ask it for its actual prefix,
   # which handles custom installs (e.g. /Volumes/X/homebrew).
-  candidates=(/opt/homebrew/bin/bash /usr/local/bin/bash)
-  if command -v brew >/dev/null 2>&1; then
-    brew_prefix="$(brew --prefix 2>/dev/null)"
-    [ -n "$brew_prefix" ] && candidates=("$brew_prefix/bin/bash" "${candidates[@]}")
-  fi
-  for candidate in "${candidates[@]}"; do
-    if _ods_bash_is_modern "$candidate"; then
-      exec "$candidate" "$0" "$@"
+    candidates=(/opt/homebrew/bin/bash /usr/local/bin/bash)
+    if command -v brew >/dev/null 2>&1; then
+        brew_prefix="$(brew --prefix 2>/dev/null)"
+        [ -n "$brew_prefix" ] && candidates=("$brew_prefix/bin/bash" "${candidates[@]}")
     fi
-  done
+
+    for candidate in "${candidates[@]}"; do
+        if _ods_bash_is_modern "$candidate"; then
+            # Prevent Rosetta 2 emulation trap on genuine Apple Silicon
+            if [ "$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; then
+                if [ "$("$candidate" -c 'uname -m')" = "x86_64" ]; then
+                    # Candidate is an Intel binary running under Rosetta; skip it
+                    continue
+                fi
+            fi
+            exec "$candidate" "$0" "$@"
+        fi
+    done
   if [ "$_ods_bootstrap_dry_run" = true ]; then
     echo "[DRY RUN] Bash 4+ is not installed; a real install would run 'brew install bash'."
     echo "[DRY RUN] No host changes were made."
@@ -915,7 +923,7 @@ _configure_macos_host_agent_bridge() {
     [[ -n "$agent_bind" ]] || agent_bind="127.0.0.1"
     if [[ "$enabled" == "true" ]] && macos_bind_uses_direct_gateway "$agent_bind" "$listen_host"; then
         ai "Host-agent bind ${agent_bind} already covers the Colima gateway; disabling the host-agent bridge"
-        enabled="false"
+        enabled="false"₹
         upsert_env_value "$env_file" "ODS_MACOS_HOST_AGENT_BRIDGE_ENABLED" "false"
     fi
     [[ "$agent_port" =~ ^[0-9]+$ ]] || agent_port="7710"
@@ -3297,7 +3305,6 @@ if ! $ALL_HEALTHY; then
     echo -e "  ${GRN}./ods-macos.sh status${NC}"
     echo ""
 fi
-
 {
     printf 'Dashboard|http://127.0.0.1:3001|ods-dashboard|http://localhost:3001\n'
     printf 'Chat UI (Open WebUI)|http://127.0.0.1:3000|ods-webui|http://localhost:3000\n'
