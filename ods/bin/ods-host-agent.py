@@ -42,6 +42,8 @@ from socketserver import ThreadingMixIn
 from urllib import error as urllib_error, request as urllib_request
 from urllib.parse import parse_qs, unquote, urlparse
 
+logger = logging.getLogger("ods-host-agent")
+
 # Model Switchboard (PR 1, observe mode): stdlib-only sibling package. The
 # import is fail-open — a missing/broken package disables state recording but
 # never the agent itself.
@@ -51,11 +53,19 @@ if _SWITCHBOARD_BIN_DIR not in sys.path:
 try:
     from model_switchboard import state as _switchboard_state
 except Exception:  # pragma: no cover - import environment dependent
+    logger.warning(
+        "Model switchboard state import failed; state recording is disabled",
+        exc_info=True,
+    )
     _switchboard_state = None
 try:
     from model_switchboard import adapters as _switchboard_adapters
     from model_switchboard import reconciler as _switchboard_reconciler
 except Exception:  # pragma: no cover - import environment dependent
+    logger.warning(
+        "Model switchboard reconciler import failed; reconciliation is disabled",
+        exc_info=True,
+    )
     _switchboard_adapters = None
     _switchboard_reconciler = None
 try:
@@ -78,6 +88,10 @@ try:
         ssh_supervisor_plan as _remote_provider_ssh_supervisor_plan,
     )
 except Exception:  # pragma: no cover - import environment dependent
+    logger.warning(
+        "Remote-provider import failed; remote-provider operations are disabled",
+        exc_info=True,
+    )
     _RemoteProviderLifecycleError = ValueError
     _RemoteProviderPolicyError = ValueError
     _RemoteProviderProbeError = RuntimeError
@@ -122,8 +136,6 @@ VALID_HOOK_NAMES = frozenset({
     "pre_install", "post_install", "pre_start", "post_start",
     "pre_uninstall", "post_uninstall",
 })
-logger = logging.getLogger("ods-host-agent")
-
 _MACOS_LLM_BRIDGE_LABEL = "com.ods.llm-bridge"
 _MACOS_HOST_AGENT_BRIDGE_LABEL = "com.ods.host-agent-bridge"
 
