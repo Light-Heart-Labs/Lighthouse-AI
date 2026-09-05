@@ -7,7 +7,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,7 +33,14 @@ _GITHUB_RELEASES_API = f"https://api.github.com/repos/{_GITHUB_REPOSITORY}/relea
 _GITHUB_RELEASES_PAGE = f"https://github.com/{_GITHUB_REPOSITORY}/releases"
 _GITHUB_HEADERS = {"Accept": "application/vnd.github.v3+json"}
 _VERSION_CACHE_TTL = 300.0
-_version_cache: dict[str, object] = {"expires_at": 0.0, "payload": None}
+
+
+class _VersionCache(TypedDict):
+    expires_at: float
+    payload: Optional[dict]
+
+
+_version_cache: _VersionCache = {"expires_at": 0.0, "payload": None}
 _version_refresh_task: Optional[asyncio.Task] = None
 
 
@@ -128,8 +135,8 @@ def _get_cached_release_payload(allow_stale: bool = False) -> Optional[dict]:
     payload = _version_cache.get("payload")
     if payload is None:
         return None
-    if allow_stale or time.monotonic() < float(_version_cache.get("expires_at", 0.0)):
-        return payload  # type: ignore[return-value]
+    if allow_stale or time.monotonic() < _version_cache["expires_at"]:
+        return payload
     return None
 
 
@@ -141,6 +148,72 @@ def _normalize_version(value: Optional[str]) -> str:
     ``current`` and ``latest`` on the same footing.
     """
     return (value or "").strip().lstrip("v")
+
+
+def _parse_latest_release_response(response: httpx.Response) -> dict[str, Optional[str]]:
+    """Validate GitHub's latest-release contract before consumers use it."""
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise httpx.HTTPError(
+            f"unexpected release response: {type(data).__name__}"
+        )
+
+    tag = data.get("tag_name")
+    if not isinstance(tag, str) or not _normalize_version(tag):
+        raise httpx.HTTPError("release response carried no valid tag_name")
+
+    changelog_url = data.get("html_url")
+    if changelog_url is not None and not isinstance(changelog_url, str):
+        raise httpx.HTTPError("release response carried an invalid html_url")
+
+    return {
+        "latest": _normalize_version(tag),
+        "changelog_url": changelog_url or None,
+    }
+
+
+def _parse_release_manifest_response(response: httpx.Response) -> list[dict]:
+    """Validate and normalize GitHub's release-list response."""
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list):
+        raise httpx.HTTPError(
+            f"unexpected releases response: {type(data).__name__}"
+        )
+
+    releases = []
+    for index, release in enumerate(data):
+        if not isinstance(release, dict):
+            raise httpx.HTTPError(f"release {index} was not an object")
+
+        tag = release.get("tag_name")
+        if not isinstance(tag, str) or not _normalize_version(tag):
+            raise httpx.HTTPError(f"release {index} carried no valid tag_name")
+
+        text = {}
+        for field in ("published_at", "name", "body", "html_url"):
+            value = release.get(field)
+            if value is not None and not isinstance(value, str):
+                raise httpx.HTTPError(f"release {index} carried an invalid {field}")
+            text[field] = value or ""
+
+        prerelease = release.get("prerelease", False)
+        if not isinstance(prerelease, bool):
+            raise httpx.HTTPError(f"release {index} carried an invalid prerelease")
+
+        body = text["body"]
+        releases.append(
+            {
+                "version": _normalize_version(tag),
+                "date": text["published_at"],
+                "title": text["name"],
+                "changelog": body[:500] + "..." if len(body) > 500 else body,
+                "url": text["html_url"],
+                "prerelease": prerelease,
+            }
+        )
+    return releases
 
 
 def _build_version_result(current: str, payload: Optional[dict]) -> dict:
@@ -179,10 +252,9 @@ async def _refresh_release_cache() -> Optional[dict]:
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
-        data = response.json()
+        release = _parse_latest_release_response(response)
         payload = {
-            "latest": data.get("tag_name", "").lstrip("v"),
-            "changelog_url": data.get("html_url"),
+            **release,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
         _version_cache = {
@@ -232,14 +304,9 @@ async def get_release_manifest():
                 f"{_GITHUB_RELEASES_API}?per_page=5",
                 headers=_GITHUB_HEADERS,
             )
-        releases = resp.json()
-        if not isinstance(releases, list):
-            raise httpx.HTTPError(f"unexpected releases response: {type(releases).__name__}")
+        releases = _parse_release_manifest_response(resp)
         return {
-            "releases": [
-                {"version": r.get("tag_name", "").lstrip("v"), "date": r.get("published_at", ""), "title": r.get("name", ""), "changelog": r.get("body", "")[:500] + "..." if len(r.get("body", "")) > 500 else r.get("body", ""), "url": r.get("html_url", ""), "prerelease": r.get("prerelease", False)}
-                for r in releases
-            ],
+            "releases": releases,
             "checked_at": datetime.now(timezone.utc).isoformat()
         }
     except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, OSError):
@@ -298,9 +365,9 @@ async def get_update_dry_run():
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
-        data = resp.json()
-        latest = _normalize_version(data.get("tag_name")) or None
-        changelog_url = data.get("html_url") or None
+        release = _parse_latest_release_response(resp)
+        latest = release["latest"]
+        changelog_url = release["changelog_url"]
         if latest:
             def _parts(v: str) -> list[int]:
                 return ([int(x) for x in v.split(".") if x.isdigit()][:3] + [0, 0, 0])[:3]
