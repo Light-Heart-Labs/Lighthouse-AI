@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from types import ModuleType
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "render-runtime-configs.py"
@@ -261,8 +263,8 @@ def test_native_local_projection_uses_host_route_and_concrete_model() -> None:
         "http://host.docker.internal:13306/v1",
     )
     content = file_by_surface(payload, "litellm-local-native")["content"]
-    assert "model: openai/Native-Model.gguf" in content
-    assert "api_base: http://host.docker.internal:13306/v1" in content
+    assert 'model: "openai/Native-Model.gguf"' in content
+    assert 'api_base: "http://host.docker.internal:13306/v1"' in content
     assert "enable_thinking: false" in content
     assert "request_timeout: 900" in content
     assert "stream_timeout: 900" in content
@@ -376,8 +378,8 @@ def test_lemonade_disables_thinking_and_uses_extra_alias() -> None:
         "sk-test",
     )
     content = file_by_surface(payload, "litellm-lemonade")["content"]
-    assert "model: openai/extra.Model.gguf" in content
-    assert "api_key: sk-test" in content
+    assert 'model: "openai/extra.Model.gguf"' in content
+    assert 'api_key: "sk-test"' in content
     assert "enable_thinking: false" in content
 
 
@@ -397,9 +399,42 @@ def test_external_lemonade_uses_supplied_model_and_api_base() -> None:
         "lemonade-secret",
     )
     content = file_by_surface(payload, "litellm-lemonade")["content"]
-    assert "model: openai/Qwen3-0.6B-GGUF" in content
-    assert "api_base: http://host.docker.internal:13305/api/v1" in content
-    assert "api_key: lemonade-secret" in content
+    assert 'model: "openai/Qwen3-0.6B-GGUF"' in content
+    assert 'api_base: "http://host.docker.internal:13305/api/v1"' in content
+    assert 'api_key: "lemonade-secret"' in content
+
+
+def test_dynamic_yaml_values_round_trip_as_scalars() -> None:
+    model = 'vendor/model"quoted'
+    api_base = "http://[::1]:13305/api/v1?route=blue#primary"
+    api_key = "1234567890"
+    payload = run_renderer(
+        "--surface",
+        "all",
+        "--ods-mode",
+        "lemonade",
+        "--gpu-backend",
+        "amd",
+        "--lemonade-model-id",
+        model,
+        "--lemonade-api-base",
+        api_base,
+        "--llm-base-url",
+        api_base,
+        "--litellm-key",
+        api_key,
+    )
+
+    litellm = yaml.safe_load(file_by_surface(payload, "litellm-lemonade")["content"])
+    for route in litellm["model_list"]:
+        params = route["litellm_params"]
+        assert params["model"] == f"openai/{model}"
+        assert params["api_base"] == api_base
+        assert params["api_key"] == api_key
+
+    hermes = yaml.safe_load(file_by_surface(payload, "hermes")["content"])
+    assert hermes["model"]["default"] == model
+    assert hermes["model"]["base_url"] == api_base
 
 
 def test_exact_lemonade_id_propagates_to_every_runtime_surface() -> None:
@@ -423,7 +458,7 @@ def test_exact_lemonade_id_propagates_to_every_runtime_surface() -> None:
     perplexica = json.loads(file_by_surface(payload, "perplexica")["content"])
 
     assert "LEMONADE_MODEL=Modern-Model" in env_content
-    assert "model: openai/Modern-Model" in litellm_content
+    assert 'model: "openai/Modern-Model"' in litellm_content
     assert 'default: "Modern-Model"' in hermes_content
     assert opencode["model"] == "Modern-Model"
     assert perplexica["preferences"]["defaultChatModel"] == "Modern-Model"
@@ -566,6 +601,7 @@ def main() -> int:
         test_enabled_opencode_uses_stable_switchboard_alias,
         test_lemonade_disables_thinking_and_uses_extra_alias,
         test_external_lemonade_uses_supplied_model_and_api_base,
+        test_dynamic_yaml_values_round_trip_as_scalars,
         test_exact_lemonade_id_propagates_to_every_runtime_surface,
         test_amd_local_env_does_not_invent_a_lemonade_model,
         test_hermes_uses_lemonade_model_id_for_amd,

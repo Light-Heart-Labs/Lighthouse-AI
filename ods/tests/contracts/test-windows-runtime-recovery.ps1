@@ -174,7 +174,7 @@ try {
         }
     }
     $lemonadeConfig = Get-Content -LiteralPath (Join-Path $generatedInstall "config/litellm/lemonade.yaml") -Raw
-    if (-not $lemonadeConfig.Contains("api_base: http://host.docker.internal:18080/api/v1")) {
+    if (-not $lemonadeConfig.Contains('api_base: "http://host.docker.internal:18080/api/v1"')) {
         throw "LiteLLM Lemonade config ignored AMD_INFERENCE_PORT"
     }
     $routerConfig = Get-Content -LiteralPath (Join-Path $generatedInstall "config/model-router/endpoints.json") -Raw
