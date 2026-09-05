@@ -33,6 +33,12 @@ rsync_with_progress() {
         echo "[INFO] $label..."
     fi
 
+    # If rsync is not installed, fall back to cp -a (no incremental/delta)
+    if ! command -v rsync >/dev/null 2>&1; then
+        cp -a "$src" "$dest"
+        return
+    fi
+
     # Use --info=progress2 for compact single-line progress updates
     # Fallback to basic rsync if progress2 not supported
     if rsync --help 2>/dev/null | grep -q "info=progress2"; then
