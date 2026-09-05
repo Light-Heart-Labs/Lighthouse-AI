@@ -83,6 +83,10 @@ export default function ODSTalk() {
   const recorderRef = useRef(null)
   const recordingChunksRef = useRef([])
   const streamControllerRef = useRef(null)
+  // Browser-created attachment previews survive React state removal unless
+  // their object URLs are revoked explicitly. Track every live preview so a
+  // route change can release sent-message images as well as the pending one.
+  const attachmentPreviewUrlsRef = useRef(new Set())
   // Track the currently-playing TTS state so we can shut down whatever
   // is in flight before starting the next reply's audio.
   const activeSpeechRef = useRef(null)
@@ -217,6 +221,22 @@ export default function ODSTalk() {
       try { URL.revokeObjectURL(prev.objectUrl) } catch { /* ignore */ }
     }
   }, [])
+
+  useEffect(() => {
+    return () => {
+      stopActiveSpeech()
+      const audio = audioElementRef.current
+      if (audio) {
+        try { audio.removeAttribute?.('src') } catch { /* already detached */ }
+        try { audio.load?.() } catch { /* already detached */ }
+      }
+      audioElementRef.current = null
+      for (const previewUrl of attachmentPreviewUrlsRef.current) {
+        try { URL.revokeObjectURL(previewUrl) } catch { /* already revoked */ }
+      }
+      attachmentPreviewUrlsRef.current.clear()
+    }
+  }, [stopActiveSpeech])
 
   const speak = useCallback(async (text) => {
     if (!spokenReplies || !voiceState.tts || !text.trim()) return
@@ -611,17 +631,24 @@ export default function ODSTalk() {
     if (!file || sending || status === 'expired') return
     const isImage = (file.type || '').startsWith('image/')
     const previewUrl = isImage ? URL.createObjectURL(file) : null
+    if (previewUrl) attachmentPreviewUrlsRef.current.add(previewUrl)
     setPendingAttachment(prev => {
       // Revoke a previous blob URL before swapping in a new one so the
       // browser can GC the old image bytes.
-      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl)
+      if (prev?.previewUrl) {
+        URL.revokeObjectURL(prev.previewUrl)
+        attachmentPreviewUrlsRef.current.delete(prev.previewUrl)
+      }
       return { file, previewUrl, kind: isImage ? 'image' : 'text', name: file.name || 'attachment' }
     })
   }, [sending, status])
 
   const clearPendingAttachment = useCallback(() => {
     setPendingAttachment(prev => {
-      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl)
+      if (prev?.previewUrl) {
+        URL.revokeObjectURL(prev.previewUrl)
+        attachmentPreviewUrlsRef.current.delete(prev.previewUrl)
+      }
       return null
     })
   }, [])
