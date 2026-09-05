@@ -1954,7 +1954,7 @@ function formatNumber(value) {
   return numeric.toFixed(1)
 }
 
-function hashString(value) {
+export function hashString(value) {
   return String(value).split('').reduce((hash, char) => {
     return ((hash << 5) - hash + char.charCodeAt(0)) >>> 0
   }, 2166136261)
