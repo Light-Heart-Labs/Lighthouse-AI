@@ -186,7 +186,12 @@ else
             _opencode_key="no-key"
         fi
         if [[ -z "${_opencode_key:-}" ]]; then
-            ai_err "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
+            # ai_err is the macOS UI vocabulary; the Linux ui.sh (sourced by
+            # this installer path) defines ai_bad as the equivalent
+            # error-level function. Calling ai_err here previously crashed
+            # under set -euo pipefail with a raw "command not found: ai_err"
+            # instead of showing this message.
+            ai_bad "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
             exit 1
         fi
 
