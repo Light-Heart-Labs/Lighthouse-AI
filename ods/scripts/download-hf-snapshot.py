@@ -14,6 +14,8 @@ def download_snapshot(
     *,
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
+    max_retries: int = 3,
+    timeout_seconds: int = 3600,
 ) -> Path:
     try:
         from huggingface_hub import snapshot_download
@@ -33,10 +35,25 @@ def download_snapshot(
     if allow_patterns:
         kwargs["allow_patterns"] = allow_patterns
 
-    snapshot_path = Path(snapshot_download(**kwargs))
-    if not snapshot_path.exists():
-        raise RuntimeError(f"snapshot path was not created: {snapshot_path}")
-    return snapshot_path
+    # PR #38: Retry with exponential backoff for network resilience
+    import time
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            snapshot_path = Path(snapshot_download(**kwargs))
+            if not snapshot_path.exists():
+                raise RuntimeError(f"snapshot path was not created: {snapshot_path}")
+            return snapshot_path
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                wait = min(2 ** attempt, 60)
+                print(f"Attempt {attempt}/{max_retries} failed: {exc}", file=sys.stderr)
+                print(f"Retrying in {wait}s...", file=sys.stderr)
+                time.sleep(wait)
+    raise RuntimeError(
+        f"Download failed after {max_retries} attempts: {last_exc}"
+    ) from last_exc
 
 
 def main(argv: list[str]) -> int:
