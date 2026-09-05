@@ -102,7 +102,7 @@ test_llm() {
     # running instead of failing on every Lemonade install.
     local base_path="${LLM_API_BASE_PATH:-/v1}"
     local response
-    response=$(curl -sf --max-time $TIMEOUT \
+    response=$(curl -sf --max-time "$TIMEOUT" \
         -H "Content-Type: application/json" \
         -d '{"model":"default","prompt":"Hi","max_tokens":1}' \
         "http://${LLM_HOST}:${LLM_PORT}${base_path}/completions" 2>/dev/null)
