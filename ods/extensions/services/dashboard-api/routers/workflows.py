@@ -26,6 +26,15 @@ def _validate_workflow_id(workflow_id: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid workflow ID format")
 
 
+def _n8n_data_items(data: object) -> list[dict]:
+    if not isinstance(data, dict):
+        raise ValueError("n8n response must be a JSON object")
+    items = data.get("data", [])
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ValueError("n8n response data must be an array of objects")
+    return items
+
+
 def load_workflow_catalog() -> dict:
     """Load workflow catalog from JSON file."""
     if not WORKFLOW_CATALOG_FILE.exists():
@@ -58,8 +67,14 @@ async def get_n8n_workflows() -> list[dict]:
             async with session.get(f"{N8N_URL}/api/v1/workflows", headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("data", [])
-    except (aiohttp.ClientError, OSError, json.JSONDecodeError) as e:
+                    return _n8n_data_items(data)
+    except (
+        asyncio.TimeoutError,
+        aiohttp.ClientError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as e:
         logger.warning(f"Failed to fetch workflows from n8n: {e}")
     return []
 
@@ -299,9 +314,19 @@ async def workflow_executions(workflow_id: str, limit: int = 20, api_key: str = 
             async with session.get(f"{N8N_URL}/api/v1/executions", headers=headers, params={"workflowId": n8n_wf["id"], "limit": limit}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return {"workflowId": workflow_id, "n8nId": n8n_wf["id"], "executions": data.get("data", [])}
+                    return {
+                        "workflowId": workflow_id,
+                        "n8nId": n8n_wf["id"],
+                        "executions": _n8n_data_items(data),
+                    }
                 else:
                     return {"executions": [], "error": "Failed to fetch executions"}
-    except (aiohttp.ClientError, OSError, json.JSONDecodeError):
+    except (
+        asyncio.TimeoutError,
+        aiohttp.ClientError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
         logger.exception("Failed to fetch workflow executions")
         return {"executions": [], "error": "Failed to fetch executions"}
