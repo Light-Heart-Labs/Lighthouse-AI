@@ -556,16 +556,31 @@ ALWAYS_ON_SERVICES: frozenset = frozenset({
 
 
 def load_extension_catalog() -> list[dict]:
-    """Load the static extensions catalog JSON. Returns empty list on failure."""
+    """Load the static extensions catalog JSON. Returns empty list on failure.
+
+    Entries missing required fields (notably ``id``) are skipped so a single
+    malformed catalog entry cannot crash the catalog response downstream
+    (upstream issue #3236).
+    """
     if not CATALOG_PATH.exists():
         logger.info("Extensions catalog not found at %s", CATALOG_PATH)
         return []
     try:
         data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-        return data.get("extensions", [])
+        extensions = data.get("extensions", [])
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to load extensions catalog: %s", e)
         return []
+    validated: list[dict] = []
+    for ext in extensions:
+        if not isinstance(ext, dict):
+            logger.warning("Skipping extension catalog entry that is not an object")
+            continue
+        if not ext.get("id"):
+            logger.warning("Skipping extension catalog entry missing required 'id'")
+            continue
+        validated.append(ext)
+    return validated
 
 
 EXTENSION_CATALOG = load_extension_catalog()
