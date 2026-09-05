@@ -5,7 +5,7 @@ import os
 import secrets
 from pathlib import Path
 
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Request, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,15 @@ if not DASHBOARD_API_KEY:
     )
 
 security_scheme = HTTPBearer(auto_error=False)
+
+
+def request_uses_https(request: Request) -> bool:
+    """Return the original client scheme across the supported proxy hops."""
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto:
+        original_proto = forwarded_proto.split(",", 1)[0].strip().lower()
+        return original_proto == "https"
+    return request.url.scheme.lower() == "https"
 
 
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security_scheme)):
