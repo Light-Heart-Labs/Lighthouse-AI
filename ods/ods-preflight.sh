@@ -309,6 +309,69 @@ if [ "$DASHBOARD_FOUND" = false ]; then
 fi
 log ""
 
+# 9. Memory pressure check (PR #10)
+log "[9/10] Checking memory pressure..."
+if [[ "$(uname -s)" == "Linux" ]] && [[ -f /proc/meminfo ]]; then
+    _mem_total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    _mem_avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+    _swap_total_kb=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+    _swap_used_kb=$(awk '/^SwapFree:/ {v=$2} END{print '"$_swap_total_kb"'-v}' /proc/meminfo 2>/dev/null || echo 0)
+    if [[ -n "$_mem_avail_kb" && -n "$_mem_total_kb" && "$_mem_total_kb" -gt 0 ]]; then
+        _mem_used_pct=$(( (_mem_total_kb - _mem_avail_kb) * 100 / _mem_total_kb ))
+        _mem_avail_gb=$(( _mem_avail_kb / 1048576 ))
+        if [[ "$_mem_used_pct" -gt 90 ]]; then
+            warn "Memory pressure HIGH: ${_mem_used_pct}% used, ${_mem_avail_gb}GB available"
+        elif [[ "$_mem_used_pct" -gt 75 ]]; then
+            warn "Memory usage elevated: ${_mem_used_pct}% used, ${_mem_avail_gb}GB available"
+        else
+            pass "Memory OK: ${_mem_used_pct}% used, ${_mem_avail_gb}GB available"
+        fi
+        if [[ -n "$_swap_used_kb" && "$_swap_used_kb" -gt 1048576 ]]; then
+            warn "Active swap: $(( _swap_used_kb / 1048576 ))GB — OOM risk during inference"
+        fi
+    else
+        warn "Could not parse /proc/meminfo"
+    fi
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    _mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+    _mem_gb=$(( _mem_bytes / 1073741824 ))
+    pass "Total RAM: ${_mem_gb}GB (macOS — detailed pressure info via Activity Monitor)"
+else
+    warn "Cannot check memory on this platform"
+fi
+log ""
+
+# 10. Docker image availability (PR #40)
+log "[10/10] Checking Docker images..."
+if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    _images_missing=0
+    _images_checked=0
+    # Check compose images if compose flags available
+    if [[ -f "$ODS_DIR/.compose-flags" ]]; then
+        _compose_flags=$(tr '\n' ' ' < "$ODS_DIR/.compose-flags" | xargs 2>/dev/null || true)
+        if [[ -n "$_compose_flags" ]]; then
+            # shellcheck disable=SC2086
+            _required_images=$(docker compose $_compose_flags config 2>/dev/null | grep -oP 'image:\s*\K\S+' | sort -u || true)
+            for _img in $_required_images; do
+                _images_checked=$(( _images_checked + 1 ))
+                if ! docker image inspect "$_img" &>/dev/null 2>&1; then
+                    _images_missing=$(( _images_missing + 1 ))
+                fi
+            done
+        fi
+    fi
+    if [[ "$_images_checked" -gt 0 && "$_images_missing" -gt 0 ]]; then
+        warn "$_images_missing of $_images_checked required images not pulled yet (will pull on first 'docker compose up')"
+    elif [[ "$_images_checked" -gt 0 ]]; then
+        pass "All $_images_checked required Docker images present"
+    else
+        pass "Docker available (no compose flags to verify images)"
+    fi
+else
+    warn "Docker not available — skipping image check"
+fi
+log ""
+
 # Summary
 log "========================================"
 log "Pre-flight Summary"
