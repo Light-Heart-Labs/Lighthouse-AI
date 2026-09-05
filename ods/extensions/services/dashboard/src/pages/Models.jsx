@@ -232,7 +232,10 @@ export default function Models() {
   }
 
   const pendingModelActions = actionLoadingModels ?? (actionLoading ? [actionLoading] : [])
-  const visibleDownloadProgress = downloadProgress.progress || (downloadStartFailure && {
+  const visibleDownloadProgress = downloadProgress.progress || (downloadProgress.statusError && {
+    status: 'error',
+    error: downloadProgress.statusError,
+  }) || (downloadStartFailure && {
     status: 'error',
     model: downloadStartFailure.modelId,
     error: downloadStartFailure.error,
@@ -1310,7 +1313,7 @@ function MobileMetricLabel({ children }) {
 }
 
 function DownloadProgressBar({ progress, helpers, onRetry }) {
-  const { formatBytes, formatEta, cancelDownload, cancelError, isCancelling } = helpers
+  const { formatBytes, formatEta, cancelDownload, cancelError, statusError, isCancelling } = helpers
 
   if (progress.error) {
     const cancelled = progress.status === 'cancelled'
@@ -1377,6 +1380,12 @@ function DownloadProgressBar({ progress, helpers, onRetry }) {
       {cancelError && (
         <p role="alert" className="mb-3 text-sm text-red-300">
           {cancelError}
+        </p>
+      )}
+
+      {statusError && (
+        <p role="alert" className="mb-3 text-sm text-amber-300">
+          {statusError}
         </p>
       )}
 

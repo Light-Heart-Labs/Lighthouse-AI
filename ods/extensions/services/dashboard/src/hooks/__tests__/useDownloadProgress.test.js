@@ -168,6 +168,51 @@ describe('useDownloadProgress', () => {
     })
   })
 
+  test('keeps the last progress snapshot and exposes an HTTP polling error', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          status: 'downloading',
+          model: 'test-model',
+          bytesDownloaded: 5,
+          bytesTotal: 10,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve({ detail: 'Download worker is restarting.' }),
+      })
+
+    const { result } = renderHook(() => useDownloadProgress())
+    await waitFor(() => expect(result.current.progress?.percent).toBe(50))
+
+    await act(async () => {
+      await result.current.refresh()
+    })
+
+    expect(result.current.statusError).toBe('Download worker is restarting.')
+    expect(result.current.progress).toMatchObject({
+      model: 'test-model',
+      status: 'downloading',
+      percent: 50,
+    })
+  })
+
+  test('surfaces a transport failure from the initial status request', async () => {
+    fetch.mockRejectedValue(new Error('connection refused'))
+
+    const { result } = renderHook(() => useDownloadProgress())
+
+    await waitFor(() => {
+      expect(result.current.statusError).toBe(
+        'Download status unavailable: connection refused',
+      )
+    })
+    expect(result.current.progress).toBeNull()
+  })
+
   test('cancelDownload posts to the cancel endpoint and refreshes terminal status', async () => {
     let cancelled = false
     fetch.mockImplementation((url, options) => {
