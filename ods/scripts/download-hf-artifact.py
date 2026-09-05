@@ -34,6 +34,10 @@ def parse_huggingface_resolve_url(url: str) -> tuple[str, str, str]:
 
 
 def download_artifact(url: str, destination: Path) -> Path:
+    if destination.is_dir():
+        raise ValueError(
+            f"destination must be a file path, not an existing directory: {destination}"
+        )
     repo_id, revision, filename = parse_huggingface_resolve_url(url)
     try:
         from huggingface_hub import hf_hub_download
