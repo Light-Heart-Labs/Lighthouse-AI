@@ -36,18 +36,18 @@ FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/ods-update-backup.XXXXXX")"
 trap 'rm -rf "$FIXTURE"' EXIT
 
 # INSTALL_DIR is the script's own directory; BACKUP_DIR is $HOME/.ods/backups
-mkdir -p "$FIXTURE/home"
+mkdir -p "$FIXTURE/home with space"
 cp "$ROOT_DIR/ods-update.sh" "$FIXTURE/ods-update.sh"
 : > "$FIXTURE/docker-compose.base.yml"
 : > "$FIXTURE/docker-compose.nvidia.yml"
 echo "GPU_BACKEND=nvidia" > "$FIXTURE/.env"
 echo '{"version": "2.0.0"}' > "$FIXTURE/.version"
 
-BACKUPS="$FIXTURE/home/.ods/backups"
+BACKUPS="$FIXTURE/home with space/.ods/backups"
 
 run_backup() {
     # Never let a non-zero exit kill the test; callers assert on output/state
-    HOME="$FIXTURE/home" bash "$FIXTURE/ods-update.sh" backup "$@" 2>&1 || true
+    HOME="$FIXTURE/home with space" bash "$FIXTURE/ods-update.sh" backup "$@" 2>&1 || true
 }
 
 echo ""
