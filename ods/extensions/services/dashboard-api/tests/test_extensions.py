@@ -4265,14 +4265,11 @@ class TestUpdateHardening(TestUpdateExtension):
             "my-ext", preserve_existing=True,
         ) is True
 
-
-# --- Compute Extension Status ---
-
 class TestComputeExtensionStatus:
     def test_unknown_gpu_backend_returns_unknown_for_specific_hardware(self, monkeypatch, tmp_path):
         """When GPU_BACKEND is unknown, extensions requiring specific hardware return 'unknown'."""
         from routers.extensions import _compute_extension_status
-        
+
         ext = _make_catalog_ext("tensor-plugin", gpu_backends=["nvidia"])
         # Patch the environment to simulate the unknown backend
         _patch_extensions_config(monkeypatch, [ext], gpu_backend="unknown", tmp_path=tmp_path)
@@ -4283,12 +4280,10 @@ class TestComputeExtensionStatus:
     def test_unknown_gpu_backend_allows_universal_extensions(self, monkeypatch, tmp_path):
         """When GPU_BACKEND is unknown, extensions supporting 'all' bypass the hardware gate."""
         from routers.extensions import _compute_extension_status
-        
+
         ext = _make_catalog_ext("universal-plugin", gpu_backends=["all"])
         _patch_extensions_config(monkeypatch, [ext], gpu_backend="unknown", tmp_path=tmp_path)
 
         # Should pass the GPU gate and fall through to standard installation checks
         status = _compute_extension_status(ext, {})
         assert status == "not_installed"
-
-
