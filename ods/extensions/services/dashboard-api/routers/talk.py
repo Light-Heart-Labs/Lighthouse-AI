@@ -127,9 +127,11 @@ async def _require_hermes_talk_compatible() -> dict[str, Any]:
 
 
 def _vision_model_name() -> str:
-    """Lemonade name of the vision-capable model. Defaults match the strix
-    user.* registration we ship; operators can override per-host via env."""
-    return os.environ.get("ODS_TALK_VISION_MODEL", "user.Qwen3.6-35B-A3B-Vision")
+    """Model id of the vision-capable variant. No built-in fallback here —
+    the user.* Lemonade naming convention only resolves on AMD/Lemonade
+    hosts, which set ODS_TALK_VISION_MODEL themselves in
+    docker-compose.amd.yml. Other backends must configure this explicitly."""
+    return os.environ.get("ODS_TALK_VISION_MODEL", "")
 
 
 def _vision_backend_base_url() -> str:
@@ -727,6 +729,11 @@ async def talk_attachment(
         raise HTTPException(status_code=413, detail="Caption is too long.")
 
     if kind == "image":
+        if not _vision_model_name():
+            raise HTTPException(
+                status_code=409,
+                detail="Image attachments require ODS_TALK_VISION_MODEL to be set for this backend.",
+            )
         data = await file.read(MAX_IMAGE_BYTES + 1)
         if len(data) > MAX_IMAGE_BYTES:
             raise HTTPException(status_code=413, detail=f"Image is too large (max {MAX_IMAGE_BYTES // (1024 * 1024)} MB).")

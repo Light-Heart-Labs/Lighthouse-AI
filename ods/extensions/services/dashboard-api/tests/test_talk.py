@@ -1061,6 +1061,7 @@ def test_talk_attachment_image_routes_to_vision_endpoint_bypassing_hermes(talk_c
         yield _sse_event("complete", {"session_id": "vision", "text": "Red.", "status": "ok", "warning": None})
         yield _sse_event("done", {})
 
+    monkeypatch.setenv("ODS_TALK_VISION_MODEL", "user.Qwen3.6-35B-A3B-Vision")
     monkeypatch.setattr("hermes_bridge.stream_prompt", fake_hermes_stream)
     monkeypatch.setattr("routers.talk._stream_vision_chat", fake_vision_stream)
 
@@ -1093,6 +1094,7 @@ def test_talk_attachment_image_uses_filename_when_mobile_uploads_octet_stream(ta
         yield _sse_event("complete", {"session_id": "vision", "text": "Red.", "status": "ok", "warning": None})
         yield _sse_event("done", {})
 
+    monkeypatch.setenv("ODS_TALK_VISION_MODEL", "user.Qwen3.6-35B-A3B-Vision")
     monkeypatch.setattr("routers.talk._stream_vision_chat", fake_vision_stream)
 
     png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -1107,14 +1109,40 @@ def test_talk_attachment_image_uses_filename_when_mobile_uploads_octet_stream(ta
     assert any(f.get("type") == "complete" and f.get("text") == "Red." for f in frames)
 
 
-def test_talk_attachment_image_too_large_returns_413(talk_client):
+def test_talk_attachment_image_too_large_returns_413(talk_client, monkeypatch):
     """Image size cap is enforced at the multipart boundary."""
+    monkeypatch.setenv("ODS_TALK_VISION_MODEL", "user.Qwen3.6-35B-A3B-Vision")
     big = b"\x89PNG\r\n\x1a\n" + b"x" * (11 * 1024 * 1024)
     resp = talk_client.post(
         "/api/talk/attachment",
         files={"file": ("huge.png", big, "image/png")},
     )
     assert resp.status_code == 413
+
+
+def test_talk_attachment_image_without_vision_model_returns_409(talk_client, monkeypatch):
+    """docker-compose.base.yml no longer ships an AMD/Lemonade-specific
+    ODS_TALK_VISION_MODEL default to every backend (it only makes sense on
+    Lemonade hosts, which set it themselves in docker-compose.amd.yml). On a
+    backend where it's genuinely unset, image attachments must fail with a
+    clear, actionable error instead of silently sending an empty/wrong model
+    id upstream and surfacing a confusing provider error."""
+    monkeypatch.delenv("ODS_TALK_VISION_MODEL", raising=False)
+
+    async def fake_vision_stream(image_bytes, content_type, prompt_text):
+        raise AssertionError("must not attempt a vision request with no model configured")
+        yield  # pragma: no cover - unreachable, keeps this an async generator
+
+    monkeypatch.setattr("routers.talk._stream_vision_chat", fake_vision_stream)
+
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    resp = talk_client.post(
+        "/api/talk/attachment",
+        files={"file": ("photo.png", png_bytes, "image/png")},
+        data={"text": "what color?"},
+    )
+    assert resp.status_code == 409
+    assert "ODS_TALK_VISION_MODEL" in resp.json()["detail"]
 
 
 def test_talk_vision_url_defaults_to_openai_v1(monkeypatch):

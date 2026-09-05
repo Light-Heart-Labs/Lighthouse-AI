@@ -110,6 +110,10 @@ services:
       - AMD_INFERENCE_RUNTIME_MODE=${AMD_INFERENCE_RUNTIME_MODE:-linux-container}
       - AMD_INFERENCE_MANAGED=${AMD_INFERENCE_MANAGED:-true}
       - LLAMA_METRICS_PORT=8001
+      # Restores the Lemonade-specific default (user.* naming convention
+      # registered on AMD install) that docker-compose.base.yml no longer
+      # ships to every backend.
+      - ODS_TALK_VISION_MODEL=${ODS_TALK_VISION_MODEL:-user.Qwen3.6-35B-A3B-Vision}
     volumes:
       - /sys/class/drm:/sys/class/drm:ro
       - /sys/class/hwmon:/sys/class/hwmon:ro
