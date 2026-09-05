@@ -8,6 +8,7 @@ injects provider credentials from a private file at the final egress boundary.
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
@@ -66,7 +67,11 @@ PROBE_TIMEOUT_SECONDS = float(
         str(DEFAULT_PROBE_TIMEOUT_SECONDS),
     )
 )
-app = FastAPI(title="ODS Remote Provider Egress", docs_url=None, redoc_url=None, openapi_url=None)
+MAX_CLIENTS = 50
+
+app = FastAPI(
+    title="ODS Remote Provider Egress", docs_url=None, redoc_url=None, openapi_url=None
+)
 
 _HOP_BY_HOP_RESPONSE_HEADERS = {
     "connection",
@@ -97,17 +102,31 @@ def _load_route() -> dict[str, Any]:
     return route_from_state(load_route_state(ROUTE_PATH), policy=policy)
 
 
-def _http_client(connection_key: str = "") -> httpx.AsyncClient:
+async def _http_client(connection_key: str = "") -> httpx.AsyncClient:
     if connection_key:
         clients = getattr(app.state, "direct_http_clients", None)
         if clients is None:
-            clients = {}
+            clients = OrderedDict()
             app.state.direct_http_clients = clients
-        client = clients.get(connection_key)
-        if client is None or client.is_closed:
+
+        if connection_key in clients:
+            client = clients[connection_key]
+            clients.move_to_end(connection_key)
+        else:
+            if len(clients) >= MAX_CLIENTS:
+                oldest_key, oldest_client = clients.popitem(last=False)
+                await oldest_client.aclose()
+
             client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
             clients[connection_key] = client
+
+        if client.is_closed:
+            # Client was closed but still in map, replace it
+            client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
+            clients[connection_key] = client
+
         return client
+
     client = getattr(app.state, "http", None)
     if client is None or client.is_closed:
         client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
@@ -162,7 +181,8 @@ def _safe_tunnel_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
         "ok": ready,
         "ready": ready,
         "status": payload.get("status"),
-        "reason": payload.get("reason") or ("ready" if ready else "ssh_tunnel_not_ready"),
+        "reason": payload.get("reason")
+        or ("ready" if ready else "ssh_tunnel_not_ready"),
         "process": {
             "status": process.get("status"),
             "pid": process.get("pid"),
@@ -171,12 +191,13 @@ def _safe_tunnel_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 async def _ssh_tunnel_status() -> dict[str, Any]:
-    client = _http_client()
+    client = await _http_client()
     try:
         response = await client.get(
             SSH_TUNNEL_HEALTH_URL,
             timeout=SSH_TUNNEL_HEALTH_TIMEOUT_SECONDS,
         )
+
     except httpx.TimeoutException:
         return {
             "ok": False,
@@ -293,7 +314,9 @@ async def list_models() -> Response:
         return _error_response(exc)
     if route.get("enabled") is not True:
         return _error_response(
-            EgressError(503, "remote_route_disabled", "remote provider route is disabled")
+            EgressError(
+                503, "remote_route_disabled", "remote provider route is disabled"
+            )
         )
     provider = route["provider"]
     data = [
@@ -301,7 +324,9 @@ async def list_models() -> Response:
         {"id": "default", "object": "model", "owned_by": "ods"},
         {"id": provider["model"], "object": "model", "owned_by": "remote-provider"},
     ]
-    return JSONResponse({"object": "list", "data": data, "ods": _safe_route_summary(route)})
+    return JSONResponse(
+        {"object": "list", "data": data, "ods": _safe_route_summary(route)}
+    )
 
 
 @app.post("/probe")
@@ -356,7 +381,7 @@ async def forward(full_path: str, request: Request) -> Response:
     except EgressError as exc:
         return _error_response(exc)
 
-    client = _http_client(upstream_request.connection_key)
+    client = await _http_client(upstream_request.connection_key)
     headers = dict(upstream_request.headers)
     extensions = {}
     if upstream_request.tls_server_name:
@@ -426,7 +451,7 @@ async def forward(full_path: str, request: Request) -> Response:
 @app.on_event("startup")
 async def _startup() -> None:
     app.state.http = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-    app.state.direct_http_clients = {}
+    app.state.direct_http_clients = OrderedDict()
 
 
 @app.on_event("shutdown")
