@@ -1817,7 +1817,7 @@ function extractTokensPerSecond(label) {
   return match ? toNumber(match[1]) : null
 }
 
-function buildSpeedProfilePoints(model, speed) {
+export function buildSpeedProfilePoints(model, speed) {
   if (!speed) return []
   const seed = hashString(`${model?.id || model?.name || 'model'}:${model?.contextLength || 0}`)
   const count = 14
