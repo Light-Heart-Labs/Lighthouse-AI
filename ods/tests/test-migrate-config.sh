@@ -227,6 +227,16 @@ else
     fail "Behavioral test: check missed pending migration (exit $check_exit): $check_output"
 fi
 
+json_exit=0
+json_output=$(bash "$MIGRATE_CONFIG_SCRIPT" check --json) || json_exit=$?
+json_needed=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["migration_needed"]).lower())' <<< "$json_output")
+json_pending=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["pending_migrations"]))' <<< "$json_output")
+if [[ $json_exit -eq 2 && "$json_needed" == "true" && "$json_pending" -ge 1 ]]; then
+    pass "Behavioral test: JSON check reports the pending migration plan"
+else
+    fail "Behavioral test: JSON pending plan is invalid" "exit $json_exit: $json_output"
+fi
+
 # Test 12: with last-migrated equal to current, no migration is reported.
 echo "2.4.1" > "$DATA_DIR/.migration-state"
 check_exit=0
@@ -235,6 +245,15 @@ if [[ $check_exit -eq 0 ]] && echo "$check_output" | grep -q "No migration neede
     pass "Behavioral test: check reports up-to-date when versions match"
 else
     fail "Behavioral test: check misreported up-to-date state (exit $check_exit): $check_output"
+fi
+
+json_exit=0
+json_output=$(bash "$MIGRATE_CONFIG_SCRIPT" check --json) || json_exit=$?
+json_needed=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["migration_needed"]).lower())' <<< "$json_output")
+if [[ $json_exit -eq 0 && "$json_needed" == "false" ]]; then
+    pass "Behavioral test: JSON check reports an up-to-date installation"
+else
+    fail "Behavioral test: JSON current plan is invalid" "exit $json_exit: $json_output"
 fi
 
 # ============================================================================
