@@ -9531,7 +9531,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                 _restore_text_file(activation_receipt, activation_receipt_snapshot)
             if hermes_template_snapshot is not None:
                 _restore_text_file(hermes_template_config, hermes_template_snapshot)
-            if hermes_live_snapshot and hermes_live_snapshot.get("exists"):
+            if hermes_live_snapshot and hermes_live_snapshot.get("source") == "deferred_absent":
+                pass  # No snapshot of these private bytes exists; never remove or restore them.
+            elif hermes_live_snapshot and hermes_live_snapshot.get("exists"):
                 if hermes_live_snapshot.get("source") == "host":
                     _restore_text_file(hermes_live_config, hermes_live_snapshot)
                 else:
@@ -9540,7 +9542,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                         str(hermes_live_snapshot.get("text") or ""),
                         hermes_live_snapshot.get("source"),
                     )
-            elif hermes_live_snapshot is not None:
+            elif hermes_live_snapshot is not None and hermes_live_snapshot.get("exists") is False:
                 _remove_hermes_live_config(hermes_live_config)
             if opencode_snapshot is not None:
                 _restore_opencode_config(opencode_snapshot)
@@ -9614,6 +9616,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     (hermes_restart_attempted or hermes_config_mutated)
                     and hermes_live_snapshot
                     and hermes_live_snapshot.get("exists")
+                    and hermes_live_snapshot.get("source") != "deferred_absent"
                 ):
                     restored_live = _capture_hermes_live_config(hermes_live_config)
                     repaired_live, repaired = _patch_hermes_config_text(
@@ -9946,6 +9949,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                     hermes_live_config,
                     hermes_live_snapshot,
                 )
+            elif hermes_live_snapshot.get("source") == "deferred_absent":
+                if _container_exists("ods-hermes"):
+                    raise RuntimeError("Hermes appeared while its private config update was deferred")
             if opencode_snapshot is not None:
                 for path, snapshot in opencode_snapshot["files"].items():
                     _assert_text_file_matches_snapshot(path, snapshot)
@@ -10235,6 +10241,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
                 hermes_live_exists = bool(
                     hermes_live_snapshot and hermes_live_snapshot.get("exists")
+                    and hermes_live_snapshot.get("source") != "deferred_absent"
                 )
                 hermes_live_patched = False
                 hermes_live_verified = False
@@ -10386,7 +10393,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                         else "not_installed"
                     ),
                     "hermes": (
-                        "restarted"
+                        "deferred_absent"
+                        if hermes_live_snapshot.get("source") == "deferred_absent"
+                        else "restarted"
                         if hermes_restart_attempted
                         else "updated_for_next_start"
                         if hermes_config_mutated
@@ -13679,6 +13688,31 @@ def _write_hermes_container_config(text: str) -> None:
         raise RuntimeError(f"Could not write Hermes live config in container: {detail[:300]}")
 
 
+def _capture_inaccessible_hermes_config(*, exists: bool | None = None) -> dict:
+    # An absent extension can leave private UID-owned data behind. Preserve
+    # those bytes without pretending they are missing or were reconciled.
+    # Docker errors remain errors; a stopped-but-present consumer still needs
+    # its persisted route updated and cannot take this deferral path.
+    if not _container_exists("ods-hermes"):
+        logger.info("Deferring inaccessible Hermes config: optional container is absent")
+        return {
+            "exists": exists,
+            "text": None,
+            "bytes": None,
+            "mode": None,
+            "source": "deferred_absent",
+        }
+    return {
+        "exists": True,
+        "text": _read_hermes_container_config(),
+        "bytes": None,
+        "mode": None,
+        "uid": None,
+        "gid": None,
+        "source": "container",
+    }
+
+
 def _capture_hermes_live_config(path: Path) -> dict:
     """Capture persisted Hermes config, falling back through its running container."""
     try:
@@ -13693,15 +13727,7 @@ def _capture_hermes_live_config(path: Path) -> dict:
         }
     except PermissionError as exc:
         logger.info("Inspecting container-owned Hermes config through ods-hermes: %s", exc)
-        return {
-            "exists": True,
-            "text": _read_hermes_container_config(),
-            "bytes": None,
-            "mode": None,
-            "uid": None,
-            "gid": None,
-            "source": "container",
-        }
+        return _capture_inaccessible_hermes_config()
     except OSError as exc:
         raise RuntimeError(f"Could not inspect Hermes config {path}: {exc}") from exc
     if stat_mod.S_ISLNK(metadata.st_mode):
@@ -13721,15 +13747,7 @@ def _capture_hermes_live_config(path: Path) -> dict:
         }
     except PermissionError as exc:
         logger.info("Reading container-owned Hermes config through ods-hermes: %s", exc)
-        return {
-            "exists": True,
-            "text": _read_hermes_container_config(),
-            "bytes": None,
-            "mode": None,
-            "uid": None,
-            "gid": None,
-            "source": "container",
-        }
+        return _capture_inaccessible_hermes_config(exists=True)
     except (OSError, UnicodeError) as exc:
         raise RuntimeError(f"Could not read Hermes config {path}: {exc}") from exc
 

@@ -6103,6 +6103,7 @@ class TestModelActivateRollback:
             return original_lstat(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, "lstat", fake_lstat)
+        monkeypatch.setattr(_mod, "_container_exists", lambda name: name == "ods-hermes")
         monkeypatch.setattr(_mod, "_container_running", lambda name: name == "ods-hermes")
         monkeypatch.setattr(_mod, "_read_hermes_container_config", lambda: container_text)
 
@@ -6111,6 +6112,96 @@ class TestModelActivateRollback:
         assert snapshot["exists"] is True
         assert snapshot["source"] == "container"
         assert snapshot["text"] == container_text
+
+    @pytest.mark.parametrize("denied_method", ["lstat", "read_bytes"])
+    @pytest.mark.parametrize("outcome", ["success", "rollback", "appeared"])
+    def test_absent_hermes_private_state_does_not_block_pixel_activation(
+        self, tmp_path, monkeypatch, denied_method, outcome,
+    ):
+        install_dir, env_path, env_before, *_ = _write_model_activation_fixture(tmp_path)
+        env_before = env_before.replace("CTX_SIZE=2048", "CTX_SIZE=4096")
+        env_path.write_text(env_before, encoding="utf-8")
+        private_file = install_dir / "data" / "hermes" / "config.yaml"
+        private_file.parent.mkdir(parents=True)
+        private_file.write_text('model:\n  default: "old-private"\n', encoding="utf-8")
+        private_file.chmod(0o600)
+        original_bytes = private_file.read_bytes()
+        original_stat = private_file.stat()
+        original_method = getattr(Path, denied_method)
+
+        def deny_private(path, *args, **kwargs):
+            if path == private_file:
+                raise PermissionError("container-owned private data")
+            return original_method(path, *args, **kwargs)
+
+        probes = []
+
+        def exists(name):
+            probes.append(name)
+            return outcome == "appeared" and name == "ods-hermes" and len(probes) > 1
+
+        def reconcile(model, _context, **_options):
+            if outcome == "rollback" and model == "new-model.gguf":
+                raise RuntimeError("injected Pixel reconciliation failure")
+            return "reconciled"
+
+        monkeypatch.setattr(Path, denied_method, deny_private)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_container_exists", exists)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda _name: {
+            "exists": False, "running": False,
+        })
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
+        monkeypatch.setattr(_mod, "_reconcile_ods_managed_pixel_model", reconcile)
+        monkeypatch.setattr(_mod, "_remove_hermes_live_config", lambda _path: pytest.fail(
+            "must not remove unobservable private state on rollback"
+        ))
+        monkeypatch.setattr(_mod, "_write_hermes_live_config", lambda *_args: pytest.fail(
+            "must not mutate unobservable private state"
+        ))
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+        response = handler.parse_response()
+        if outcome == "success":
+            assert handler.response_code == 200, response
+            assert response["consumers"]["hermes"] == "deferred_absent"
+            assert response["consumers"]["openclaw"] == "host_gateway_reconciled"
+        else:
+            assert handler.response_code == 500, response
+            assert env_path.read_text(encoding="utf-8") == env_before
+            if outcome == "rollback":
+                assert response["rolled_back"] is True
+            else:
+                assert "Hermes appeared" in response["error"]
+        monkeypatch.setattr(Path, denied_method, original_method)
+        assert private_file.read_bytes() == original_bytes
+        after = private_file.stat()
+        assert (after.st_mode, after.st_uid, after.st_gid) == (
+            original_stat.st_mode, original_stat.st_uid, original_stat.st_gid,
+        )
+
+    @pytest.mark.parametrize("exists", [True, False])
+    def test_inaccessible_hermes_snapshot_records_deferred_state_only_when_absent(
+        self, monkeypatch, exists,
+    ):
+        monkeypatch.setattr(_mod, "_container_exists", lambda _name: exists)
+        monkeypatch.setattr(_mod, "_container_running", lambda _name: False)
+        if exists:
+            with pytest.raises(RuntimeError, match="not running"):
+                _mod._capture_inaccessible_hermes_config(exists=True)
+        else:
+            snapshot = _mod._capture_inaccessible_hermes_config(exists=True)
+            assert snapshot["exists"] is True
+            assert snapshot["source"] == "deferred_absent"
+            assert snapshot["bytes"] is None
+
+    def test_inaccessible_hermes_docker_probe_error_is_not_absence(self, monkeypatch):
+        def probe(_name):
+            raise RuntimeError("Docker daemon unavailable")
+        monkeypatch.setattr(_mod, "_container_exists", probe)
+        with pytest.raises(RuntimeError, match="Docker daemon unavailable"):
+            _mod._capture_inaccessible_hermes_config()
 
     def test_activation_repairs_malformed_models_ini_directory(
         self, tmp_path, monkeypatch,
