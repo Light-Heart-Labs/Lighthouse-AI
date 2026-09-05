@@ -88,20 +88,29 @@ if ($_sourceDrive -and $_installDrive -and $_sourceDrive -ne $_installDrive) {
 $preflight_docker = Test-DockerDesktop
 
 if (-not $preflight_docker.Installed) {
-    Write-AIError "Docker Desktop is not installed."
-    Write-AI "  Download: https://docs.docker.com/desktop/install/windows-install/"
-    Write-AI "  After installing, enable WSL2: Docker Desktop > Settings > General > Use WSL 2 based engine"
+    Write-AIError "A container engine CLI (`docker`) was not found on PATH."
+    Write-AI "  Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
+    Write-AI "  Podman Desktop: https://podman-desktop.io/"
     throw "ODS_INSTALL_ABORTED"
 }
-Write-AISuccess "Docker CLI found"
+Write-AISuccess "Container engine CLI found ($($preflight_docker.Engine))"
 
 if (-not $preflight_docker.Running) {
+    if ($preflight_docker.Engine -eq "podman") {
+        Write-AIError "Podman is installed but the machine is not responding."
+        Write-AI "  Start Podman Desktop, or run: podman machine start"
+        throw "ODS_INSTALL_ABORTED"
+    }
     Write-AIError "Docker Desktop is not running."
     Write-AI "  Start it from the Start Menu, then re-run this installer."
     Write-Host "  & 'C:\Program Files\Docker\Docker\Docker Desktop.exe'" -ForegroundColor Cyan
     throw "ODS_INSTALL_ABORTED"
 }
-Write-AISuccess "Docker Desktop running (v$($preflight_docker.Version))"
+if ($preflight_docker.Engine -eq "podman") {
+    Write-AISuccess "Podman engine running (v$($preflight_docker.Version))"
+} else {
+    Write-AISuccess "Docker Desktop running (v$($preflight_docker.Version))"
+}
 
 if (-not $preflight_docker.WSL2Backend) {
     Write-AIWarn "WSL2 backend not detected. GPU passthrough requires WSL2."

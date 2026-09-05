@@ -329,7 +329,7 @@ function Test-DockerDesktop {
     .SYNOPSIS
         Verify Docker Desktop is installed, running, and using the WSL2 backend.
     .OUTPUTS
-        @{ Installed; Running; Version; WSL2Backend; GpuSupport }
+        @{ Installed; Running; Version; WSL2Backend; GpuSupport; Engine }
     #>
     $result = @{
         Installed   = $false
@@ -337,6 +337,7 @@ function Test-DockerDesktop {
         Version     = ""
         WSL2Backend = $false
         GpuSupport  = $false
+        Engine      = "unknown"  # docker-desktop | podman | other
     }
 
     # Check if docker CLI is available
@@ -344,19 +345,29 @@ function Test-DockerDesktop {
     if (-not $dockerCmd) { return $result }
     $result.Installed = $true
 
-    # Check if Docker daemon is responsive
+    try {
+        $clientVersion = docker --version 2>$null
+        if ($clientVersion -match '(?i)podman') {
+            $result.Engine = "podman"
+        } else {
+            $result.Engine = "docker-desktop"
+        }
+    } catch {
+        $result.Engine = "other"
+    }
+
+    # Engine is up only when the *server* answers. Client-only JSON (Podman /
+    # a stopped machine) used to count as Running=true and then the installer
+    # told people to start Docker Desktop.
     try {
         $versionJson = docker version --format "{{json .}}" 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
-        if ($LASTEXITCODE -eq 0 -and $versionJson) {
+        if ($LASTEXITCODE -eq 0 -and $versionJson -and $versionJson.Server) {
             $result.Running = $true
-            if ($versionJson.Server) {
+            if ($versionJson.Server.Version) {
                 $result.Version = $versionJson.Server.Version
-            } elseif ($versionJson.Client) {
-                $result.Version = $versionJson.Client.Version
             }
         }
     } catch {
-        # Docker not responding
         return $result
     }
 
