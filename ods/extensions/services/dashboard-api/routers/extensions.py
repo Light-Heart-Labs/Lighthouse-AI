@@ -195,6 +195,15 @@ def _is_stale(iso_timestamp: str, max_age_seconds: int) -> bool:
         return True
 
 
+def _load_progress_document(progress_file: Path) -> dict | None:
+    """Load one host-agent progress receipt when it has the object shape."""
+    try:
+        data = json.loads(progress_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _progress_blocks_mutation(progress: dict | None) -> bool:
     """True while an in-flight operation should block update/rollback.
 
@@ -221,14 +230,16 @@ def _read_progress(service_id: str) -> dict | None:
     if not progress_file.exists():
         return None
     try:
-        data = json.loads(progress_file.read_text(encoding="utf-8"))
-        updated = data.get("updated_at", "")
-        if updated and _is_stale(updated, max_age_seconds=3600):
-            if data.get("status") not in ("error",):
-                return None
-        return data
-    except (json.JSONDecodeError, OSError):
+        data = _load_progress_document(progress_file)
+    except OSError:
         return None
+    if data is None:
+        return None
+    updated = data.get("updated_at", "")
+    if updated and _is_stale(updated, max_age_seconds=3600):
+        if data.get("status") not in ("error",):
+            return None
+    return data
 
 
 def _cleanup_stale_progress() -> None:
@@ -238,12 +249,14 @@ def _cleanup_stale_progress() -> None:
         return
     for f in progress_dir.glob("*.json"):
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
+            data = _load_progress_document(f)
+            if data is None:
+                continue
             if data.get("status") == "started" and _is_stale(data.get("updated_at", ""), 900):
                 f.unlink(missing_ok=True)
             elif _is_stale(data.get("updated_at", ""), 3600):
                 f.unlink(missing_ok=True)
-        except (json.JSONDecodeError, OSError):
+        except OSError:
             pass
 
 
@@ -270,11 +283,14 @@ def _write_error_progress(service_id: str, error_msg: str) -> None:
     now = datetime.now(timezone.utc).isoformat()
     data = {"service_id": service_id, "status": "pulling", "error": None,
             "phase_label": "", "started_at": now, "updated_at": now}
+    existing = None
     try:
         if progress_file.exists():
-            data = json.loads(progress_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+            existing = _load_progress_document(progress_file)
+    except OSError as exc:
         logger.warning("Failed to read progress file for %s: %s", service_id, exc)
+    if existing is not None:
+        data = existing
     data["status"] = "error"
     data["error"] = error_msg
     data["updated_at"] = now
@@ -1266,13 +1282,13 @@ def extension_progress(service_id: str, api_key: str = Depends(verify_api_key)):
     if not progress_file.exists():
         return {"service_id": service_id, "status": "idle"}
     try:
-        data = json.loads(progress_file.read_text(encoding="utf-8"))
-        return data
-    except json.JSONDecodeError:
-        return {"service_id": service_id, "status": "idle"}
+        data = _load_progress_document(progress_file)
     except OSError as exc:
         logger.warning("Failed to read progress file for %s: %s", service_id, exc)
         return {"service_id": service_id, "status": "idle"}
+    if data is None:
+        return {"service_id": service_id, "status": "idle"}
+    return data
 
 
 @router.get("/api/extensions/{service_id}")
