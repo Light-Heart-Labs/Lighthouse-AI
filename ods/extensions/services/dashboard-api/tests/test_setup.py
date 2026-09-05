@@ -125,6 +125,36 @@ def test_setup_status_tolerates_corrupt_progress_file(test_client, setup_config_
     assert resp.json()["step"] == 0
 
 
+def test_get_active_persona_prompt_tolerates_corrupt_file(test_client, setup_config_dir):
+    """get_active_persona_prompt() falls back to the default persona's prompt
+    when persona.json exists but is not valid JSON, instead of raising."""
+    import routers.setup as setup_router
+
+    (setup_config_dir / "persona.json").write_text("{not valid json")
+    prompt = setup_router.get_active_persona_prompt()
+    assert prompt == setup_router.PERSONAS["general"]["system_prompt"]
+
+
+def test_get_active_persona_prompt_returns_default_when_no_file(test_client, setup_config_dir):
+    """get_active_persona_prompt() returns the default prompt when persona.json
+    has never been written."""
+    import routers.setup as setup_router
+
+    prompt = setup_router.get_active_persona_prompt()
+    assert prompt == setup_router.PERSONAS["general"]["system_prompt"]
+
+
+def test_get_active_persona_prompt_reads_selected_persona(test_client, setup_config_dir):
+    """get_active_persona_prompt() returns the stored system_prompt for a
+    non-default persona."""
+    import routers.setup as setup_router
+
+    (setup_config_dir / "persona.json").write_text(
+        json.dumps({"persona": "coding", "system_prompt": "You are a coding buddy."})
+    )
+    assert setup_router.get_active_persona_prompt() == "You are a coding buddy."
+
+
 # ---------------------------------------------------------------------------
 # POST /api/setup/persona
 # ---------------------------------------------------------------------------
