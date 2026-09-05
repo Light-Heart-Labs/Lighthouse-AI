@@ -171,6 +171,21 @@ class _RecordingTelemetry:
 
 
 class TestForwarding:
+    @pytest.mark.parametrize("model", ["Concrete.gguf", "unknown", 42, True, []])
+    def test_rejects_models_outside_public_alias_contract(self, router, model):
+        mod, client, write_state, calls = router
+        write_state()
+
+        response = client.post("/v1/chat/completions", json={
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
+        assert "ods/current, default" in response.json()["error"]["message"]
+        assert calls == []
+
     def test_alias_rewritten_in_and_out(self, router):
         mod, client, write_state, calls = router
         write_state()
