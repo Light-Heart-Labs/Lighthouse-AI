@@ -144,7 +144,7 @@ function normalizeFeatureStatus(featureStatus) {
 }
 
 // Format large token counts: 1234 → "1.2k", 1500000 → "1.5M", 1500000000 → "1.5B"
-function formatTokenCount(n) {
+export function formatTokenCount(n) {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
@@ -152,7 +152,7 @@ function formatTokenCount(n) {
 }
 
 // Format uptime: 90061 → "1d 1h 1m"
-function formatUptime(seconds) {
+export function formatUptime(seconds) {
   if (!seconds) return '—'
   const d = Math.floor(seconds / 86400)
   const h = Math.floor((seconds % 86400) / 3600)
@@ -162,7 +162,7 @@ function formatUptime(seconds) {
   return `${m}m`
 }
 
-function clamp(value, min, max) {
+export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
