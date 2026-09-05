@@ -139,6 +139,9 @@ jobs:
       - name: Uninstall Compose Flags Tests
         run: bash tests/test-uninstall-compose-flags.sh
 
+      - name: Disk Space Preflight Tests
+        run: bash tests/test-disk-space-preflight.sh
+
       - name: Windows Compose Failure Report Tests
         run: bash tests/test-windows-compose-failure-report.sh
 
