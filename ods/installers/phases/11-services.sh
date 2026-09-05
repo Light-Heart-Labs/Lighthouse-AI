@@ -251,13 +251,18 @@ else
     _phase11_env_set() {
         local key="$1" value="$2" env_file="$INSTALL_DIR/.env" tmp_file
         [[ -f "$env_file" ]] || return 0
-        tmp_file="${env_file}.tmp.$$"
-        awk -v k="$key" -v v="$value" '
+        tmp_file="$(mktemp "${env_file}.XXXXXX")"
+        if awk -v k="$key" -v v="$value" '
             BEGIN { found = 0 }
             index($0, k "=") == 1 { print k "=" v; found = 1; next }
             { print }
             END { if (!found) print k "=" v }
-        ' "$env_file" > "$tmp_file" && cat "$tmp_file" > "$env_file" && rm -f "$tmp_file"
+        ' "$env_file" > "$tmp_file"; then
+            mv "$tmp_file" "$env_file"
+        else
+            rm -f "$tmp_file"
+            error "Failed to write ${key} to $env_file"
+        fi
     }
 
     _phase11_env_get() {
