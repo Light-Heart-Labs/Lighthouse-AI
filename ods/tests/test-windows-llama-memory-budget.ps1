@@ -12,9 +12,9 @@ function Assert-Equal {
 
 Assert-Equal (Get-ODSEffectiveContainerMemoryGB -SystemRamGB 64 -DockerRamGB 8) 8 "Docker VM lower bound"
 Assert-Equal (Get-ODSEffectiveContainerMemoryGB -SystemRamGB 8 -DockerRamGB 64) 8 "Host lower bound"
-Assert-Equal (Get-ODSEffectiveContainerMemoryGB -SystemRamGB 32 -DockerRamGB 0) 32 "Host fallback"
+Assert-Equal (Get-ODSEffectiveContainerMemoryGB -SystemRamGB 32 -DockerRamGB 0) 0 "Unknown Docker RAM does not inherit host"
 
-Assert-Equal (Get-ODSDefaultNvidiaLlamaMemoryLimit -AvailableRamGB 0) "64G" "Unknown RAM"
+Assert-Equal (Get-ODSDefaultNvidiaLlamaMemoryLimit -AvailableRamGB 0) "8G" "Unknown RAM conservative"
 Assert-Equal (Get-ODSDefaultNvidiaLlamaMemoryLimit -AvailableRamGB 2) "1G" "Minimum"
 Assert-Equal (Get-ODSDefaultNvidiaLlamaMemoryLimit -AvailableRamGB 8) "5G" "8 GiB"
 Assert-Equal (Get-ODSDefaultNvidiaLlamaMemoryLimit -AvailableRamGB 16) "12G" "16 GiB"
