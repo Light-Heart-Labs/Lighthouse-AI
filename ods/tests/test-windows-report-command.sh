@@ -44,6 +44,16 @@ if grep -q 'http://localhost:8080/health' "$REPORT_LIB"; then
 else
     pass "report lib does not hardcode localhost:8080/health"
 fi
+if grep -qE 'compose_config = Invoke-OptionalCommand.*composeConfigArgs' "$REPORT_LIB"; then
+    fail "report.json still dumps docker compose config (interpolated .env secrets)"
+else
+    pass "report.json does not dump docker compose config"
+fi
+if grep -q 'omitted: compose config interpolates .env secrets' "$REPORT_LIB"; then
+    pass "compose_config omission is explicit in the JSON payload"
+else
+    fail "compose_config omission reason missing"
+fi
 
 echo ""
 echo "Result: $PASS passed, $FAIL failed"

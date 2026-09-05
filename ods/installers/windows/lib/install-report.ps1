@@ -87,7 +87,6 @@ function New-ODSInstallReport {
     $dashboardPort = Get-WindowsODSEnvPort -EnvMap $envMap -Name "DASHBOARD_PORT" -DefaultPort 3001
     $dashboardApiPort = Get-WindowsODSEnvPort -EnvMap $envMap -Name "DASHBOARD_API_PORT" -DefaultPort 3002
 
-    $composeConfigArgs = @("compose") + $ComposeFlags + @("config")
     $composePsArgs = @("compose") + $ComposeFlags + @("ps", "-a")
 
     $whisperPort = if ($envMap.ContainsKey("WHISPER_PORT") -and $envMap["WHISPER_PORT"]) { $envMap["WHISPER_PORT"] } else { "9000" }
@@ -118,7 +117,12 @@ function New-ODSInstallReport {
             flags = @($ComposeFlags)
             docker_version = Invoke-OptionalCommand -Command "docker" -CommandArgs @("version") -MaxLines 40
             docker_info = Invoke-OptionalCommand -Command "docker" -CommandArgs @("info") -MaxLines 80
-            compose_config = Invoke-OptionalCommand -Command "docker" -CommandArgs $composeConfigArgs
+            # `docker compose config` interpolates .env (API keys, tokens).
+            # Never persist it in report.json — operators attach this file to GitHub.
+            compose_config = [ordered]@{
+                omitted = $true
+                reason  = "omitted: compose config interpolates .env secrets"
+            }
             compose_ps = Invoke-OptionalCommand -Command "docker" -CommandArgs $composePsArgs -MaxLines 80
         }
         health = [ordered]@{
@@ -163,7 +167,7 @@ function Write-ODSInstallReport {
     $lines += "Generated: $($report.generated_at)"
     $lines += ""
     $lines += "Privacy"
-    $lines += "- docker compose config output (inside report.json) can include interpolated env values from .env -- API keys, tokens, or other secrets. Review and redact before sharing publicly."
+    $lines += "- report.json does not store `docker compose config` output (it interpolates .env secrets)."
     $lines += ""
     $lines += "Platform"
     $lines += "- OS: $($report.platform.os_caption) ($($report.platform.os_version), build $($report.platform.os_build))"
