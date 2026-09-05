@@ -1400,6 +1400,7 @@ function Pagination({ page, pageCount, onChange }) {
         disabled={page <= 1}
         className="flex h-7 w-7 items-center justify-center rounded-md border border-theme-border text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
         title="Previous page"
+        aria-label="Previous page"
       >
         <ChevronLeft size={14} />
       </button>
@@ -1426,6 +1427,7 @@ function Pagination({ page, pageCount, onChange }) {
         disabled={page >= pageCount}
         className="flex h-7 w-7 items-center justify-center rounded-md border border-theme-border text-theme-text-muted transition-colors hover:text-theme-text disabled:opacity-35"
         title="Next page"
+        aria-label="Next page"
       >
         <ChevronRight size={14} />
       </button>
