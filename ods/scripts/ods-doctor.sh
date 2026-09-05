@@ -402,8 +402,7 @@ collect_extension_diagnostics() {
         # Check container state
         if [[ "$DOCKER_DAEMON" == "true" && -n "$container" ]]; then
             local inspect_output
-            inspect_output=$(docker inspect --format '{{.State.Status}}' "$container" 2>&1)
-            if [[ $? -eq 0 ]]; then
+            if inspect_output=$(docker inspect --format '{{.State.Status}}' "$container" 2>&1); then
                 container_state="$inspect_output"
             else
                 container_state="not_found"
