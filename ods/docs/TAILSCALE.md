@@ -51,7 +51,7 @@ Joining the tailnet only gets the device a `100.x.y.z` IP and a `ods.tail-xxxxx.
 1. **`ods-proxy` is enabled.** It listens on port 80 and routes `/chat`, `/api/*`, `/auth/*` to the right backend. With it, tailnet clients browse to `http://ods.tail-xxxxx.ts.net` (no port). Without it, only the per-service ports work (`:3000`, `:3001`, `:3002`) and only if those are LAN-bound.
 2. **`BIND_ADDRESS=0.0.0.0` in `.env`.** The default `127.0.0.1` means the proxy / dashboard / chat only accept loopback connections — even though tailscaled is in the same namespace, an incoming tailnet packet looks like any other LAN packet, not loopback. Set `BIND_ADDRESS=0.0.0.0` so the host's listen sockets accept those connections.
 
-If you ship a fresh install with Tailscale enabled but neither of the above, `tailscale status` will show the device authed but `http://ods.tail-xxxxx.ts.net` will hang or refuse. Until the dashboard gets a dedicated Remote Access UI, verify those prerequisites with `.env`, `ods list`, and the status endpoint below.
+If you ship a fresh install with Tailscale enabled but neither of the above, `tailscale status` will show the device authed but `http://ods.tail-xxxxx.ts.net` will hang or refuse. Settings â†’ Remote Access shows the joined device, tailnet DNS name, and IP address; verify the proxy and bind prerequisites there before testing from another device.
 
 ## Setup
 

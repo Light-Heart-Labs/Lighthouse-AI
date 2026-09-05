@@ -68,6 +68,15 @@ const payloadByUrl = (url) => {
     }
   }
   if (url === '/api/setup/status') return { first_run: false, persona: null }
+  if (url === '/api/tailscale/status') {
+    return {
+      running: true,
+      authenticated: true,
+      self: { hostname: 'ods-box', dns_name: 'ods-box.example.ts.net.', ips: ['100.64.0.42'], online: true },
+      magic_dns_suffix: 'example.ts.net',
+      tailnet_name: 'example.com',
+    }
+  }
   if (url === '/api/version') {
     return { current: '2.6.0', latest: '2.6.0', update_available: false, checked_at: '2026-07-23T12:00:00Z' }
   }
@@ -109,6 +118,30 @@ describe('Settings', () => {
     expect(within(accountCard).getByText('16.4k')).toBeInTheDocument()
     expect(within(accountCard).getByText('42')).toBeInTheDocument()
     expect(within(accountCard).getByText('2')).toBeInTheDocument()
+  })
+
+  test('renders authenticated Tailscale connection details from the status API', async () => {
+    const { fetchMock } = renderSettings()
+
+    const card = (await screen.findByRole('heading', { name: 'Remote Access' })).closest('.settings-premium-card')
+    expect(within(card).getByText('Connected')).toBeInTheDocument()
+    expect(within(card).getByText('ods-box.example.ts.net')).toBeInTheDocument()
+    expect(within(card).getByText('100.64.0.42')).toBeInTheDocument()
+    expect(within(card).getByText('example.com')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/tailscale/status', expect.objectContaining({ signal: expect.anything() }))
+  })
+
+  test('keeps Settings usable when optional Tailscale status is unavailable', async () => {
+    renderSettings((url) => (
+      url === '/api/tailscale/status'
+        ? response({ detail: 'host agent unavailable' }, 503)
+        : null
+    ))
+
+    const card = (await screen.findByRole('heading', { name: 'Remote Access' })).closest('.settings-premium-card')
+    expect(within(card).getByText('Status unavailable')).toBeInTheDocument()
+    expect(within(card).getByText(/Other Settings data remains usable/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument()
   })
 
   test('clamps malformed storage values without rendering invalid widths', async () => {
