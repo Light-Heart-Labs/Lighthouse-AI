@@ -42,8 +42,10 @@ _TEXTUAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Bodies larger than this are passed through untouched even if textual, so a
-# pathological response cannot pin the box buffering a hold-back window.
+# Bodies with a declared length larger than this are passed through untouched
+# even if textual. Unknown-length streams stay in their initial mode: changing
+# from restored to raw bytes after a prefix has been emitted would leak PII
+# placeholders from the remainder. StreamRestorer is independently bounded.
 RESTORE_MAX_BYTES = int(os.getenv("SHIELD_RESTORE_MAX_BYTES", str(8 * 1024 * 1024)))
 
 
@@ -377,33 +379,16 @@ async def proxy(request: Request, path: str):
                 yield raw
 
     async def body_iter():
-        # One iterator for the whole response. httpx response streams are
-        # single-consumption, so the oversized-text cutover must keep draining
-        # *this same* generator (switching mode to raw passthrough and
-        # re-emitting the chunk that crossed the cap) rather than calling
-        # raw_chunks() a second time — re-iterating the httpx response would
-        # drop the remainder of a large text body.
+        # One iterator and one transform mode for the whole response. httpx
+        # streams are single-consumption, and switching from restored to raw
+        # bytes mid-response would leak any placeholders in the remainder.
         chunks = raw_chunks()
         try:
             if do_restore:
                 # do_restore is only true when the body is uncompressed text,
                 # so raw bytes == decoded bytes here and stay byte-exact.
                 restorer = StreamRestorer(shield.detector, charset)
-                seen = 0
                 async for chunk in chunks:
-                    seen += len(chunk)
-                    if seen > RESTORE_MAX_BYTES:
-                        # Exceeded cap mid-stream: stop restoring, flush what
-                        # we held, then pass the rest through untouched.
-                        # Continue draining the SAME iterator — do NOT
-                        # re-iterate the upstream response.
-                        tail = restorer.finalize()
-                        if tail:
-                            yield tail.encode(charset, "replace")
-                        yield chunk
-                        async for rest in chunks:
-                            yield rest
-                        return
                     out = restorer.feed(chunk)
                     if out:
                         yield out.encode(charset, "replace")
