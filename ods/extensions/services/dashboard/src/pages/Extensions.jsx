@@ -36,7 +36,7 @@ const ICON_MAP = {
   FileText, Shield, Globe, Music, Video, Search, Puzzle, Box,
 }
 
-const friendlyError = (detail) => {
+export const friendlyError = (detail) => {
   if (!detail || typeof detail !== 'string') return detail
   if (detail.includes('build context') || detail.includes('local build'))
     return 'This extension requires a local build and cannot be installed through the portal yet.'
