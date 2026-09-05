@@ -1990,10 +1990,15 @@ else
     if [[ "$_BOOTSTRAP_ACTIVE" == "true" ]]; then
         _env_file="$INSTALL_DIR/.env"
         if [[ -f "$_env_file" ]]; then
-            sed -i '' "s|^GGUF_FILE=.*|GGUF_FILE=${GGUF_FILE}|" "$_env_file"
-            sed -i '' "s|^LLM_MODEL=.*|LLM_MODEL=${LLM_MODEL}|" "$_env_file"
-            sed -i '' "s|^MAX_CONTEXT=.*|MAX_CONTEXT=${MAX_CONTEXT}|" "$_env_file"
-            sed -i '' "s|^CTX_SIZE=.*|CTX_SIZE=${MAX_CONTEXT}|" "$_env_file"
+            _set_env_val() {
+                local _k="$1" _v="$2"
+                sed -i '' "/^${_k}=/d" "$_env_file"
+                echo "$_k=$_v" >> "$_env_file"
+            }
+            _set_env_val GGUF_FILE "$GGUF_FILE"
+            _set_env_val LLM_MODEL "$LLM_MODEL"
+            _set_env_val MAX_CONTEXT "$MAX_CONTEXT"
+            _set_env_val CTX_SIZE "$MAX_CONTEXT"
             ai_ok "Patched .env for bootstrap model ($GGUF_FILE)"
         fi
 
