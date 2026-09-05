@@ -62,9 +62,9 @@ print_banner() {
     echo -e "${CYAN}"
     cat << 'EOF'
     ╔═══════════════════════════════════════════════════════════╗
-    ║         ODS — Model Pre-Download                 ║
-    ║                                                           ║
-    ║  Download models before installation for faster setup.    ║
+    ║              ODS — Model Pre-Download                    ║
+    ║                                                          ║
+    ║  Download models before installation for faster setup.   ║
     ╚═══════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
