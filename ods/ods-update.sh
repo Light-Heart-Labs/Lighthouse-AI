@@ -956,10 +956,25 @@ cmd_health() {
         compose_args=("${COMPOSE_PARSED_ARGS[@]}")
     fi
     
-    local services
-    services=$("${compose_cmd[@]}" "${compose_args[@]}" ps --services 2>/dev/null || echo "")
-    
-    if [[ -z "$services" ]]; then
+    # `ps --services` prints one service name per line, and Compose allows
+    # spaces in a service name. Collecting that into a scalar and iterating it
+    # unquoted word-splits such a name into fragments, so the per-service `ps`
+    # below queries a fragment, matches nothing, and reports "unknown" -- which
+    # fails the health check for a stack that is actually running. Read whole
+    # lines into an array and iterate them quoted.
+    #
+    # A while-read loop rather than mapfile: this script is still bash 3.2
+    # clean, and macOS ships /bin/bash 3.2, where mapfile does not exist.
+    local -a services=()
+    local service
+    while IFS= read -r service; do
+        [[ -n "$service" ]] || continue
+        services+=("$service")
+    done < <("${compose_cmd[@]}" "${compose_args[@]}" ps --services 2>/dev/null)
+
+    # Covers both a failed `ps` and a stack that resolved to no services, so a
+    # failure can never fall through and iterate one empty service name.
+    if [[ ${#services[@]} -eq 0 ]]; then
         if [[ -n "$compose_flags" ]]; then
             log_warn "No services found for resolved compose stack: ${compose_flags}"
         else
@@ -967,8 +982,8 @@ cmd_health() {
         fi
         return 1
     fi
-    
-    for service in $services; do
+
+    for service in "${services[@]}"; do
         local status
         status=$("${compose_cmd[@]}" "${compose_args[@]}" ps --format json "$service" 2>/dev/null \
             | jq -r 'if type == "array" then (.[0].State // "unknown") else (.State // "unknown") end' 2>/dev/null \

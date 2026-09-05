@@ -81,6 +81,9 @@ test: ## Run unit and contract tests
 	@echo "=== config migration (version check under set -e) ==="
 	@bash tests/test-migrate-config.sh
 	@echo ""
+	@echo "=== ods-update runtime compose + health ==="
+	@bash tests/test-ods-update-runtime-compose.sh
+	@echo ""
 	@echo "=== restore refuses empty backup config ==="
 	@bash tests/test-restore-empty-config.sh
 	@echo ""
