@@ -307,7 +307,7 @@ Applying a template only enables services — it doesn't disable anything you've
 
 ---
 
-### Can ODS reuse a model already running in Ollama or LM Studio?
+### Can ODS reuse a model already running in Ollama, LM Studio, or Docker Model Runner?
 
 The Linux installer can reuse a host-managed text/chat model instead of
 downloading and starting a duplicate GGUF with ODS's llama-server.
@@ -328,6 +328,21 @@ Or configure the endpoint and exact provider model directly:
   --external-llm-model qwen3.5:9b
 ```
 
+Docker Model Runner uses a different OpenAI-compatible base path. Enable its
+host TCP endpoint first, pull a model, then select the exact namespaced id:
+
+```bash
+docker model pull ai/qwen2.5-coder
+./install.sh \
+  --external-llm-url http://127.0.0.1:12434 \
+  --external-llm-provider docker-model-runner \
+  --external-llm-model ai/qwen2.5-coder
+```
+
+Docker Desktop requires host-side TCP support for port 12434. Docker Engine
+enables that port by default. Keep the endpoint local: Docker Model Runner's
+API does not authenticate callers.
+
 The installer verifies the model and a real completion before changing the
 Compose topology. Open WebUI, ODS Talk, Hermes, Perplexica, Privacy Shield, and
 Token Spy then use the container-safe external endpoint. ODS does not stop the
@@ -341,7 +356,7 @@ To return an existing installation to ODS-managed llama-server:
 ```
 
 This integration routes text/chat inference; it does not import or synchronize
-Ollama/LM Studio model files, VLMs, embedding models, or rerankers. The
+external provider's model files, VLMs, embedding models, or rerankers. The
 installer flags in this release are Linux-only. Windows Lemonade and macOS
 native llama-server keep their existing platform lifecycle.
 

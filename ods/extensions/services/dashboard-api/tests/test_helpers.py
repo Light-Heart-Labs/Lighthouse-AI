@@ -736,6 +736,28 @@ class TestGetLoadedModel:
         assert result == "only-model"
 
     @pytest.mark.asyncio
+    async def test_uses_configured_external_provider_api_prefix(self, monkeypatch):
+        fake_services = {
+            "llama-server": {"host": "host.docker.internal", "port": 12434, "health": "/engines/v1/models"},
+        }
+        monkeypatch.setattr("helpers.SERVICES", fake_services)
+        monkeypatch.setattr("helpers.LLM_BACKEND", "external")
+        monkeypatch.setenv("LLM_API_BASE_PATH", "/engines/v1")
+
+        mock_response = MagicMock()
+        mock_response.json = MagicMock(return_value={"data": [{"id": "ai/qwen2.5-coder"}]})
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        monkeypatch.setattr("helpers._get_httpx_client", AsyncMock(return_value=mock_client))
+
+        result = await get_loaded_model()
+
+        assert result == "ai/qwen2.5-coder"
+        mock_client.get.assert_awaited_once_with(
+            "http://host.docker.internal:12434/engines/v1/models",
+        )
+
+    @pytest.mark.asyncio
     async def test_returns_none_on_failure(self, monkeypatch):
         fake_services = {
             "llama-server": {"host": "localhost", "port": 8080, "health": "/health", "name": "llama-server"},

@@ -190,6 +190,13 @@ class TestExternalLlmResolution:
         [
             ("ollama", "http://host.docker.internal:11434", 11434, "/api/tags", "Ollama (External LLM)"),
             ("lmstudio", "http://host.docker.internal:1234", 1234, "/v1/models", "LM Studio (External LLM)"),
+            (
+                "docker-model-runner",
+                "http://host.docker.internal:12434",
+                12434,
+                "/engines/v1/models",
+                "Docker Model Runner (External LLM)",
+            ),
             ("", "https://llm.example.test", 443, "/v1/models", "External LLM"),
         ],
     )

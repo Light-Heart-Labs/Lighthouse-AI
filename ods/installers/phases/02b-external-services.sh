@@ -1,5 +1,5 @@
 #!/bin/bash
-# Detect or validate an explicitly selected host Ollama / LM Studio runtime.
+# Detect or validate an explicitly selected host local model runtime.
 
 ods_progress 15 "detection" "Checking external LLM services"
 
@@ -34,7 +34,10 @@ if [[ -z "$_external_url" && "${ODS_MODE:-local}" == "local" && "${LEMONADE_EXTE
     _detected_provider=""
     _detected_url=""
     _detected_model=""
-    for _candidate in "ollama|http://127.0.0.1:11434" "lmstudio|http://127.0.0.1:1234"; do
+    for _candidate in \
+        "ollama|http://127.0.0.1:11434" \
+        "lmstudio|http://127.0.0.1:1234" \
+        "docker-model-runner|http://127.0.0.1:12434"; do
         _candidate_provider="${_candidate%%|*}"
         _candidate_url="${_candidate#*|}"
         _candidate_model="$(external_llm_resolve_model \
@@ -80,12 +83,12 @@ if [[ -z "$_external_url" ]]; then
 fi
 
 if [[ "${ODS_MODE:-local}" != "local" ]]; then
-    ai_bad "External Ollama / LM Studio reuse is only supported in local mode."
+    ai_bad "External local model reuse is only supported in local mode."
     ai "Use --no-external-llm before selecting cloud or hybrid mode."
     return 1
 fi
 if [[ "${LEMONADE_EXTERNAL:-false}" == "true" ]]; then
-    ai_bad "External Ollama / LM Studio reuse cannot be combined with external Lemonade."
+    ai_bad "External local model reuse cannot be combined with external Lemonade."
     ai "Select one host-managed inference backend, or use --no-external-llm."
     return 1
 fi
@@ -100,10 +103,10 @@ if [[ -z "$_external_provider" || "$_external_provider" == "auto" ]]; then
     _external_provider="$(external_llm_detect_provider "$_external_url" || true)"
 fi
 case "$_external_provider" in
-    ollama|lmstudio) ;;
+    ollama|lmstudio|docker-model-runner) ;;
     *)
         ai_bad "Could not identify the external LLM provider at ${_external_url}"
-        ai "Use --external-llm-provider ollama|lmstudio and verify the service is running."
+        ai "Use --external-llm-provider ollama|lmstudio|docker-model-runner and verify the service is running."
         return 1
         ;;
 esac

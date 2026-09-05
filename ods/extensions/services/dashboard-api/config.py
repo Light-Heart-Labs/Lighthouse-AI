@@ -159,7 +159,7 @@ def _apply_external_llm_service_override(
     services: dict[str, dict[str, Any]],
     environment: Mapping[str, str] | None = None,
 ) -> None:
-    """Route dashboard LLM probes to a validated external Ollama/LM Studio endpoint."""
+    """Route dashboard LLM probes to a validated external model endpoint."""
     env = environment if environment is not None else os.environ
     if str(env.get("LLM_BACKEND", "")).strip().lower() != "external":
         return
@@ -186,6 +186,7 @@ def _apply_external_llm_service_override(
     health_paths = {
         "ollama": "/api/tags",
         "lmstudio": "/v1/models",
+        "docker-model-runner": "/engines/v1/models",
     }
     service["host"] = parsed.hostname
     service["port"] = port
@@ -193,6 +194,7 @@ def _apply_external_llm_service_override(
     service["name"] = {
         "ollama": "Ollama (External LLM)",
         "lmstudio": "LM Studio (External LLM)",
+        "docker-model-runner": "Docker Model Runner (External LLM)",
     }.get(provider, "External LLM")
     logger.info(
         "External %s inference detected; routing LLM probes to %s:%d%s",

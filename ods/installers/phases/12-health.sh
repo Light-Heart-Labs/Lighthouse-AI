@@ -210,7 +210,7 @@ _phase12_verify_external_llm_completion() {
         ai "Restore the model/service, or re-run the installer with --no-external-llm."
         return 1
     fi
-    if ! external_llm_probe_completion "$host_url" "$model"; then
+    if ! external_llm_probe_completion "$host_url" "$model" "$provider"; then
         ai_bad "External ${provider} accepted discovery but failed a real completion for ${model}."
         ai "Check the provider logs and model readiness, then re-run the installer."
         return 1
@@ -225,6 +225,7 @@ import urllib.request
 
 base = sys.argv[1].rstrip("/")
 model = sys.argv[2]
+api_base_path = sys.argv[3]
 payload = json.dumps({
     "model": model,
     "messages": [{"role": "user", "content": "Reply with OK."}],
@@ -233,7 +234,7 @@ payload = json.dumps({
     "stream": False,
 }).encode()
 request = urllib.request.Request(
-    base + "/v1/chat/completions",
+    base + api_base_path + "/chat/completions",
     data=payload,
     headers={"Content-Type": "application/json"},
 )
@@ -242,7 +243,7 @@ with urllib.request.urlopen(request, timeout=90) as result:
 content = body.get("choices", [{}])[0].get("message", {}).get("content")
 if content is None:
     raise SystemExit("completion response did not contain assistant content")
-' "$container_url" "$model" 2>&1
+' "$container_url" "$model" "$(external_llm_api_base_path "$provider")" 2>&1
     )" || {
         ai_bad "ODS containers cannot use external ${provider} at ${container_url}."
         ai "On Linux, bind the provider to a container-reachable interface (for example 0.0.0.0 on a trusted host) and allow the ODS Docker subnet through the firewall."

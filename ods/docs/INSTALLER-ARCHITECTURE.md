@@ -35,7 +35,7 @@ installers/
   phases/                     # Sequential install steps — execute on source
     01-preflight.sh           #   Root/OS/tools checks, existing installation check
     02-detection.sh           #   Hardware detection → tier assignment → compose config
-    02b-external-services.sh  #   Validate/offer host Ollama or LM Studio reuse
+    02b-external-services.sh  #   Validate/offer host model runtime reuse
     03-features.sh            #   Interactive feature selection menu
     04-requirements.sh        #   RAM, disk, GPU, and port availability checks
     05-docker.sh              #   Install Docker, Docker Compose, NVIDIA Container Toolkit
@@ -137,7 +137,8 @@ Perplexica's persisted `defaultChatModel` must be refreshed after bootstrap
 hot-swap.
 
 Linux external-LLM reuse is an explicit topology choice, not ambient discovery
-state. Interactive installs may offer a matching Ollama or LM Studio model;
+state. Interactive installs may offer a matching Ollama, LM Studio, or Docker
+Model Runner model;
 non-interactive installs adopt one only with `--reuse-external-llm` or an
 explicit URL/provider/model tuple. Phase 02b validates the host endpoint, phase
 06 writes both host-facing and container-facing routes, phase 11 omits managed

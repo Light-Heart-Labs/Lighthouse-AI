@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# External Ollama / LM Studio discovery and installer-selection contracts.
+# External host-managed model discovery and installer-selection contracts.
 
 set -euo pipefail
 
@@ -47,10 +47,18 @@ assert_eq "$(external_llm_container_url 'http://localhost:11434/v1')" \
     "http://host.docker.internal:11434" "normalizes localhost for containers"
 assert_eq "$(external_llm_container_url 'http://[::1]:1234/api/v1')" \
     "http://host.docker.internal:1234" "normalizes IPv6 loopback for containers"
+assert_eq "$(external_llm_strip_url 'http://127.0.0.1:12434/engines/v1')" \
+    "http://127.0.0.1:12434" "strips the Docker Model Runner OpenAI base path"
+assert_eq "$(external_llm_api_base_path docker-model-runner)" \
+    "/engines/v1" "selects the Docker Model Runner OpenAI base path"
+assert_eq "$(external_llm_api_base_path lmstudio)" \
+    "/v1" "keeps the standard OpenAI base path for LM Studio"
 assert_eq "$(external_llm_host_url 'http://host.docker.internal:11434/v1')" \
     "http://127.0.0.1:11434" "normalizes the Docker host alias for host probes"
 assert_true "accepts a supported external base URL" \
     external_llm_validate_url "http://127.0.0.1:11434/v1"
+assert_true "accepts a Docker Model Runner OpenAI base URL" \
+    external_llm_validate_url "http://127.0.0.1:12434/engines/v1"
 if external_llm_validate_url "file:///tmp/models"; then
     fail "rejects non-HTTP external URLs"
 else
@@ -74,6 +82,16 @@ else
     pass "rejects unrelated model families"
 fi
 
+probe_docker_model_runner_completion() (
+    curl() {
+        [[ "${*: -1}" == "http://127.0.0.1:12434/engines/v1/chat/completions" ]]
+    }
+    external_llm_probe_completion \
+        "http://127.0.0.1:12434" "ai/qwen3.5-9b" "docker-model-runner"
+)
+assert_true "probes Docker Model Runner through its OpenAI completion path" \
+    probe_docker_model_runner_completion
+
 run_phase_case() {
     set -euo pipefail
 
@@ -94,11 +112,15 @@ run_phase_case() {
                 [[ "${MOCK_OLLAMA:-down}" == "up" ]] || return 22
                 printf '{"models":[{"name":"qwen3.5:9b"},{"name":"llama3.2:3b"}]}'
                 ;;
+            */engines/v1/models)
+                [[ "${MOCK_DOCKER_MODEL_RUNNER:-down}" == "up" ]] || return 22
+                printf '{"data":[{"id":"ai/qwen3.5-9b"},{"id":"ai/smollm2"}]}'
+                ;;
             */v1/models)
                 [[ "${MOCK_LMSTUDIO:-down}" == "up" ]] || return 22
                 printf '{"data":[{"id":"qwen3.5-9b"},{"id":"local-model"}]}'
                 ;;
-            */v1/chat/completions)
+            */v1/chat/completions|*/engines/v1/chat/completions)
                 printf '{"choices":[{"message":{"content":"OK"}}]}'
                 ;;
             *)
@@ -141,6 +163,12 @@ run_phase_case() {
             EXTERNAL_LLM_URL="http://127.0.0.1:11434"
             EXTERNAL_LLM_PROVIDER="ollama"
             EXTERNAL_LLM_MODEL="qwen3.5:9b"
+            ;;
+        docker-model-runner)
+            MOCK_DOCKER_MODEL_RUNNER=up
+            EXTERNAL_LLM_URL="http://127.0.0.1:12434/engines/v1"
+            EXTERNAL_LLM_PROVIDER="docker-model-runner"
+            EXTERNAL_LLM_MODEL="ai/qwen3.5-9b"
             ;;
         explicit-cloud)
             MOCK_OLLAMA=up
@@ -189,6 +217,17 @@ if output="$(run_phase_case auto "$TEMP_DIR/auto"; printf '%s|%s|%s|%s\n' \
         "explicit auto-reuse validates and persists an exact external route"
 else
     fail "opt-in auto-reuse phase completes"
+fi
+
+if output="$(run_phase_case docker-model-runner "$TEMP_DIR/docker-model-runner"; printf '%s|%s|%s|%s|%s\n' \
+    "${EXTERNAL_LLM_PROVIDER:-}" "${EXTERNAL_LLM_MODEL:-}" \
+    "${EXTERNAL_LLM_URL:-}" "${EXTERNAL_LLM_CONTAINER_URL:-}" \
+    "$(external_llm_api_base_path "${EXTERNAL_LLM_PROVIDER:-}")")"; then
+    assert_eq "$output" \
+        "docker-model-runner|ai/qwen3.5-9b|http://127.0.0.1:12434|http://host.docker.internal:12434|/engines/v1" \
+        "explicit Docker Model Runner selection preserves its provider API contract"
+else
+    fail "Docker Model Runner selection phase completes"
 fi
 
 mkdir -p "$TEMP_DIR/persisted"
@@ -323,6 +362,20 @@ run_phase06_env_cycle() (
     grep -qx 'EXTERNAL_LLM_PROVIDER=ollama' "$install_dir/.env"
     grep -qx 'SKIP_MODEL_DOWNLOAD=true' "$install_dir/.env"
     grep -qx 'MODEL_RECOMMENDED_MODEL=qwen3-1.7b' "$install_dir/.env"
+
+    export LLM_MODEL=qwen3-1.7b
+    export EXTERNAL_LLM_URL=http://127.0.0.1:12434
+    export EXTERNAL_LLM_CONTAINER_URL=http://host.docker.internal:12434
+    export EXTERNAL_LLM_PROVIDER=docker-model-runner
+    export EXTERNAL_LLM_MODEL=ai/qwen3.5-9b
+
+    source "$install_dir/installers/phases/06-directories.sh"
+
+    grep -qx 'LLM_API_BASE_PATH=/engines/v1' "$install_dir/.env"
+    grep -qx 'LLM_MODEL=ai/qwen3.5-9b' "$install_dir/.env"
+    grep -qx 'OPEN_WEBUI_LLM_BASE_URL=http://host.docker.internal:12434/engines/v1' "$install_dir/.env"
+    grep -qx 'HERMES_LLM_BASE_URL=http://host.docker.internal:12434/engines/v1' "$install_dir/.env"
+    grep -qx 'EXTERNAL_LLM_PROVIDER=docker-model-runner' "$install_dir/.env"
 
     export LLM_MODEL=qwen3-1.7b
     export GGUF_FILE=Qwen3-1.7B-Q4_K_M.gguf

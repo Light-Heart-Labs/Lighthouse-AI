@@ -175,7 +175,7 @@ describe('useModels', () => {
 
     const activationPosts = fetch.mock.calls.filter(([, options]) => options?.method === 'POST')
     expect(activationPosts).toHaveLength(0)
-    expect(result.current.error).toContain('external Ollama or LM Studio backend')
+    expect(result.current.error).toContain('external host-managed model backend')
   })
 
   test('does not activate when effective and configured modes differ', async () => {

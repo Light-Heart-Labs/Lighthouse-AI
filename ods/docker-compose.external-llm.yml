@@ -1,4 +1,4 @@
-# Host-managed Ollama / LM Studio overlay.
+# Host-managed Ollama, LM Studio, or Docker Model Runner overlay.
 #
 # The selected endpoint is reached through host.docker.internal. The explicit
 # host-gateway mappings make that name available on plain Linux Docker Engine
@@ -25,8 +25,8 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       LLM_BACKEND: external
-      LLM_API_BASE_PATH: /v1
-      ODS_TALK_VISION_URL: "${EXTERNAL_LLM_CONTAINER_URL}/v1"
+      LLM_API_BASE_PATH: "${LLM_API_BASE_PATH:-/v1}"
+      ODS_TALK_VISION_URL: "${EXTERNAL_LLM_CONTAINER_URL}${LLM_API_BASE_PATH:-/v1}"
       AMD_INFERENCE_RUNTIME: ""
       AMD_INFERENCE_BACKEND: ""
       AMD_INFERENCE_LOCATION: ""
