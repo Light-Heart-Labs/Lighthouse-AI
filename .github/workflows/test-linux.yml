@@ -238,6 +238,27 @@ jobs:
       - name: Update Rollback Contract
         run: bash tests/test-update-rollback-contract.sh
 
+      - name: Run Backup and Restore Integration Tests
+        working-directory: ./ods
+        run: |
+          echo "Running Backup/Restore CLI tests..."
+          ./tests/test-backup-restore-cli.sh
+          
+          echo "Running Backup/Restore Roundtrip tests..."
+          ./tests/test-backup-restore-roundtrip.sh
+          
+          echo "Running Backup Integrity tests..."
+          ./tests/test-backup-integrity.sh
+          
+          echo "Running Restore Safety UX tests..."
+          ./tests/test-restore-safety-ux.sh
+          
+          echo "Running CLI Preset Restore User Extensions tests..."
+          ./tests/test-cli-preset-restore-user-extensions.sh
+          
+          echo "Running Update Script Backup tests..."
+          ./tests/test-update-script-backup.sh
+
       - name: Backup Data Coverage Contract
         run: bash tests/test-backup-data-coverage.sh
 
