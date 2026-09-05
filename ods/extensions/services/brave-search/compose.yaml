@@ -10,6 +10,10 @@ services:
       - no-new-privileges:true
     environment:
       - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
+      # Caller credential for the native /v1/search route. Falls back to
+      # DASHBOARD_API_KEY so an existing install needs no new secret.
+      - BRAVE_SEARCH_INTERNAL_KEY=${BRAVE_SEARCH_INTERNAL_KEY:-}
+      - DASHBOARD_API_KEY=${DASHBOARD_API_KEY:-}
       - BRAVE_SEARCH_PORT_INTERNAL=8585
       - BRAVE_SEARCH_SEARXNG_COMPAT=${BRAVE_SEARCH_SEARXNG_COMPAT:-0}
       - BRAVE_SEARCH_TIMEOUT_MS=${BRAVE_SEARCH_TIMEOUT_MS:-8000}

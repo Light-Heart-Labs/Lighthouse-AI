@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PROXY_SCRIPT = path.join(ROOT, "extensions", "services", "brave-search", "proxy.mjs");
 const STUB_API_KEY = "test-subscription-token";
+const STUB_INTERNAL_KEY = "stub-internal-caller-key";
 const PROXY_TIMEOUT_MS = 1000;
 const SLOW_UPSTREAM_DELAY_MS = 3000;
 
@@ -123,6 +124,7 @@ async function startProxy(port, stubPort, extraEnv) {
       BRAVE_SEARCH_PORT_INTERNAL: String(port),
       BRAVE_SEARCH_UPSTREAM_URL: `http://127.0.0.1:${stubPort}/res/v1/web/search`,
       BRAVE_SEARCH_TIMEOUT_MS: String(PROXY_TIMEOUT_MS),
+      BRAVE_SEARCH_INTERNAL_KEY: STUB_INTERNAL_KEY,
       ...extraEnv,
     },
     stdio: ["ignore", "inherit", "inherit"],
@@ -142,8 +144,13 @@ async function startProxy(port, stubPort, extraEnv) {
   throw new Error(`proxy on :${port} did not become healthy`);
 }
 
-async function getJson(base, pathAndQuery) {
-  const res = await fetch(`${base}${pathAndQuery}`);
+async function getJson(base, pathAndQuery, { authenticated = true } = {}) {
+  // /v1/search authenticates its caller; the searxng-compat /search route
+  // deliberately does not, because its consumers are third-party images.
+  const headers = authenticated
+    ? { Authorization: `Bearer ${STUB_INTERNAL_KEY}` }
+    : {};
+  const res = await fetch(`${base}${pathAndQuery}`, { headers });
   return { status: res.status, body: await res.json() };
 }
 
@@ -241,6 +248,21 @@ function checkEnvelope(body) {
 
 async function testCompatEnabled(base) {
   console.log("searxng compat enabled:");
+
+  // The two routes authenticate differently, on purpose. /v1/search is the
+  // native ODS route and spends a paid subscription token, so it requires the
+  // caller key. /search exists so third-party images (Perplexica, per the
+  // README) can use this service as a drop-in SearXNG, and those cannot
+  // present an ODS bearer — so it must keep working without one.
+  const compatAnon = await getJson(base, "/search?format=json&q=ok", { authenticated: false });
+  check("searxng-compat /search stays open to unauthenticated consumers",
+    compatAnon.status === 200, `got ${compatAnon.status}`);
+
+  const nativeAnon = await getJson(base, "/v1/search?q=ok", { authenticated: false });
+  check("native /v1/search rejects an unauthenticated caller",
+    nativeAnon.status === 401, `got ${nativeAnon.status}`);
+  check("native /v1/search rejection does not leak the subscription token",
+    !JSON.stringify(nativeAnon.body).includes(STUB_API_KEY));
 
   const ok = await getJson(base, "/search?format=json&q=ok");
   check("200 on success", ok.status === 200, `got ${ok.status}`);
