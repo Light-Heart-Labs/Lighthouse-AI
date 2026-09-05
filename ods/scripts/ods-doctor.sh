@@ -436,9 +436,10 @@ collect_extension_diagnostics() {
         # manifest-level concern, not a runtime doctor warning.
         if [[ "$backend" != "apple" ]] && declare -p SERVICE_GPU_BACKENDS &>/dev/null; then
             local gpu_backends="${SERVICE_GPU_BACKENDS[$sid]:-}"
+            local backend_re=" $backend "
             if [[ -n "$gpu_backends" \
                 && ! " $gpu_backends " =~ " all " \
-                && ! " $gpu_backends " =~ " $backend " ]]; then
+                && ! " $gpu_backends " =~ $backend_re ]]; then
                 issues+=("gpu_backend_incompatible")
             fi
         fi
