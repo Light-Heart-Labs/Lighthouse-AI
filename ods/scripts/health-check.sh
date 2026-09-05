@@ -222,6 +222,44 @@ test_gpu() {
     return 1
 }
 
+# System-level: RAM
+test_ram() {
+    local total_kb=0 avail_kb=0 used_kb=0 pct
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        local total_bytes
+        total_bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+        total_kb=$(( total_bytes / 1024 ))
+        # MemAvailable equivalent: approximate from vm_stat free + inactive pages
+        local page_size free_pages inactive_pages
+        page_size="$(sysctl -n hw.pagesize 2>/dev/null || echo 4096)"
+        free_pages="$(vm_stat 2>/dev/null | awk '/Pages free/ {gsub(/\./, "", $3); print $3}')"
+        inactive_pages="$(vm_stat 2>/dev/null | awk '/Pages inactive/ {gsub(/\./, "", $3); print $3}')"
+        avail_kb=$(( ( (${free_pages:-0} + ${inactive_pages:-0}) * page_size) / 1024 ))
+        used_kb=$(( total_kb - avail_kb ))
+    elif [[ -f /proc/meminfo ]]; then
+        total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+        avail_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+        used_kb=$(( total_kb - avail_kb ))
+    else
+        result_set "ram" "unavailable"
+        return 1
+    fi
+
+    if [[ "$total_kb" =~ ^[0-9]+$ && "$total_kb" -gt 0 ]]; then
+        pct=$(( used_kb * 100 / total_kb ))
+        result_set "ram" "ok"
+        result_set "ram_used_mb" "$(( used_kb / 1024 ))"
+        result_set "ram_total_mb" "$(( total_kb / 1024 ))"
+        result_set "ram_pct" "$pct"
+        if [ "$pct" -gt 90 ]; then
+            result_set "ram" "warn"
+        fi
+        return 0
+    fi
+    result_set "ram" "unavailable"
+    return 1
+}
+
 # System-level: Disk
 test_disk() {
     local usage
@@ -430,6 +468,15 @@ if test_gpu 2>/dev/null; then
     log "  ${status_icon} GPU - $(result_get "gpu_mem_used")/$(result_get "gpu_mem_total") MiB, $(result_get "gpu_util")% util, $(result_get "gpu_temp")°C"
 else
     log "  ${YELLOW}?${NC} GPU - status unavailable"
+fi
+
+# RAM
+if test_ram 2>/dev/null; then
+    status_icon="${GREEN}✓${NC}"
+    [ "$(result_get "ram")" = "warn" ] && status_icon="${YELLOW}!${NC}"
+    log "  ${status_icon} RAM - $(result_get "ram_used_mb")/$(result_get "ram_total_mb") MiB ($(result_get "ram_pct")%)"
+else
+    log "  ${YELLOW}?${NC} RAM - status unavailable"
 fi
 
 # Disk
