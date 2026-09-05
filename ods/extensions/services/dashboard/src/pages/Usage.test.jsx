@@ -291,6 +291,29 @@ describe('Usage page', () => {
     expect(screen.queryByText('359,573,723')).not.toBeInTheDocument()
   })
 
+  it('keeps the current report when comparison and readiness requests fail', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const text = String(url)
+      if (text.includes('/api/usage/readiness')) {
+        throw new TypeError('readiness connection failed')
+      }
+      if (text.includes('start=2026-04-01')) {
+        throw new TypeError('comparison connection failed')
+      }
+      return {
+        ok: true,
+        json: async () => currentReport,
+      }
+    }))
+
+    render(<Usage status={{}} />)
+
+    expect(await screen.findByText('gpt-4o')).toBeInTheDocument()
+    expect(screen.getAllByText('$3.75')[0]).toBeInTheDocument()
+    expect(screen.getByText('Usage readiness API is unavailable.')).toBeInTheDocument()
+    expect(screen.queryByText('comparison connection failed')).not.toBeInTheDocument()
+  })
+
   it('filters the model table locally by query, provider, service, and source', async () => {
     installFetchMock()
     render(<Usage status={{}} />)
