@@ -28,14 +28,16 @@ chmod +x "${FAKEBIN}/curl"
 cd "$ROOT_DIR"
 
 # 1) Linux installer dry-run simulation
-LINUX_EXIT=0
-if ! PATH="${FAKEBIN}:$PATH" bash install-core.sh --dry-run --non-interactive --skip-docker --force --summary-json "$LINUX_SUMMARY_JSON" >"$LINUX_LOG" 2>&1; then
+if PATH="${FAKEBIN}:$PATH" bash install-core.sh --dry-run --non-interactive --skip-docker --force --summary-json "$LINUX_SUMMARY_JSON" >"$LINUX_LOG" 2>&1; then
+  LINUX_EXIT=0
+else
   LINUX_EXIT=$?
 fi
 
 # 2) macOS installer MVP simulation
-MACOS_EXIT=0
-if ! bash installers/macos.sh --no-delegate --report "$MACOS_PREFLIGHT_JSON" --doctor-report "$MACOS_DOCTOR_JSON" >"$MACOS_LOG" 2>&1; then
+if bash installers/macos.sh --no-delegate --report "$MACOS_PREFLIGHT_JSON" --doctor-report "$MACOS_DOCTOR_JSON" >"$MACOS_LOG" 2>&1; then
+  MACOS_EXIT=0
+else
   MACOS_EXIT=$?
 fi
 
@@ -54,8 +56,9 @@ scripts/preflight-engine.sh \
   --env >/dev/null
 
 # 4) Doctor snapshot for current machine context
-DOCTOR_EXIT=0
-if ! scripts/ods-doctor.sh "$DOCTOR_JSON" >/dev/null 2>&1; then
+if scripts/ods-doctor.sh "$DOCTOR_JSON" >/dev/null 2>&1; then
+  DOCTOR_EXIT=0
+else
   DOCTOR_EXIT=$?
 fi
 

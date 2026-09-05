@@ -115,6 +115,12 @@ def _require_type(v: Validator, value: Any, path: str, expected: str) -> None:
         v.add(path, f"expected {expected}, got {_type_name(value)}")
 
 
+def _require_zero(v: Validator, value: Any, path: str) -> None:
+    _require_type(v, value, path, "int")
+    if _is_int(value) and value != 0:
+        v.add(path, "must be 0")
+
+
 def _optional_type(v: Validator, value: Any, path: str, expected: str) -> None:
     if value is None:
         return
@@ -158,7 +164,7 @@ def _require_iso8601ish(v: Validator, value: Any, path: str) -> None:
 
 def validate_linux_dryrun(v: Validator, linux: Mapping[str, Any], path: str) -> None:
     exit_code = _require_key(v, linux, path, "exit_code")
-    _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_zero(v, exit_code, f"{path}.exit_code")
 
     signals = _require_key(v, linux, path, "signals")
     _require_type(v, signals, f"{path}.signals", "object")
@@ -182,12 +188,15 @@ def validate_linux_dryrun(v: Validator, linux: Mapping[str, Any], path: str) -> 
             if s not in signals:
                 v.add(f"{path}.signals", f"missing required signal '{s}'")
             else:
-                _require_type(v, signals.get(s), f"{path}.signals.{s}", "bool")
+                signal = signals.get(s)
+                _require_type(v, signal, f"{path}.signals.{s}", "bool")
+                if isinstance(signal, bool) and not signal:
+                    v.add(f"{path}.signals.{s}", "must be true")
 
 
 def validate_macos_installer(v: Validator, mac: Mapping[str, Any], path: str) -> None:
     exit_code = _require_key(v, mac, path, "exit_code")
-    _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_zero(v, exit_code, f"{path}.exit_code")
 
     log_path = _require_key(v, mac, path, "log")
     _require_path_like(v, log_path, f"{path}.log")
@@ -205,7 +214,7 @@ def validate_macos_installer(v: Validator, mac: Mapping[str, Any], path: str) ->
         if isinstance(summary, Mapping):
             blockers = summary.get("blockers")
             warnings = summary.get("warnings")
-            _require_type(v, blockers, f"{path}.preflight.summary.blockers", "int")
+            _require_zero(v, blockers, f"{path}.preflight.summary.blockers")
             _require_type(v, warnings, f"{path}.preflight.summary.warnings", "int")
 
 
@@ -221,13 +230,13 @@ def validate_windows_scenario(v: Validator, win: Mapping[str, Any], path: str) -
     if isinstance(summary, Mapping):
         blockers = summary.get("blockers")
         warnings = summary.get("warnings")
-        _require_type(v, blockers, f"{path}.report.summary.blockers", "int")
+        _require_zero(v, blockers, f"{path}.report.summary.blockers")
         _require_type(v, warnings, f"{path}.report.summary.warnings", "int")
 
 
 def validate_doctor_snapshot(v: Validator, doctor: Mapping[str, Any], path: str) -> None:
     exit_code = _require_key(v, doctor, path, "exit_code")
-    _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_zero(v, exit_code, f"{path}.exit_code")
 
     report = _require_key(v, doctor, path, "report")
     _require_type(v, report, f"{path}.report", "object")
@@ -265,6 +274,8 @@ def validate_golden_paths(v: Validator, golden: Mapping[str, Any], path: str) ->
         v.add(f"{path}.scenario_count", "must be greater than zero")
     if _is_int(pass_count) and _is_int(scenario_count) and pass_count > scenario_count:
         v.add(f"{path}.pass_count", "must be less than or equal to scenario_count")
+    if _is_int(pass_count) and _is_int(scenario_count) and pass_count < scenario_count:
+        v.add(f"{path}.pass_count", "must equal scenario_count")
 
 
 def validate_summary(v: Validator, data: Mapping[str, Any]) -> None:
