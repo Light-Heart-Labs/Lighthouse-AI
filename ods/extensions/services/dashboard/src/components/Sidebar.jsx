@@ -31,17 +31,42 @@ export default function Sidebar({ status, collapsed, onToggle }) {
   const [apiLinks, setApiLinks] = useState([])
   const [showAllQuickLinks, setShowAllQuickLinks] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/service-tokens')
-      .then(r => r.ok ? r.json() : {})
-      .then(setServiceTokens)
-      .catch(() => {})
+  // Link metadata only needs refreshing when services are added, removed, or
+  // move across the deployed/not-deployed boundary. Health changes are already
+  // reflected from `status` below and must not create an extra request every
+  // five-second status poll.
+  const serviceTopology = useMemo(() => (status?.services || [])
+    .map(service => {
+      const id = service.id || service.name || ''
+      const deployed = service.status === 'not_deployed' ? 'absent' : 'present'
+      return `${id}:${deployed}`
+    })
+    .sort()
+    .join('|'), [status?.services])
 
-    fetch('/api/external-links')
-      .then(r => r.ok ? r.json() : [])
-      .then(setApiLinks)
-      .catch(() => {})
-  }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+
+    const refreshLinks = async () => {
+      const [tokensResponse, linksResponse] = await Promise.all([
+        fetch('/api/service-tokens', { signal: controller.signal }),
+        fetch('/api/external-links', { signal: controller.signal }),
+      ])
+
+      // Preserve the last known-good launcher data during a transient API
+      // failure; replacing it with empty data makes healthy links disappear.
+      if (tokensResponse.ok) setServiceTokens(await tokensResponse.json())
+      if (linksResponse.ok) setApiLinks(await linksResponse.json())
+    }
+
+    refreshLinks().catch(error => {
+      if (error.name !== 'AbortError') {
+        console.warn('Sidebar quick-link refresh failed:', error)
+      }
+    })
+
+    return () => controller.abort()
+  }, [serviceTopology])
 
   const navItems = useMemo(
     () => getSidebarNavItems({ status }),

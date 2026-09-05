@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { render } from '../../test/test-utils'
 import Sidebar from '../Sidebar' // eslint-disable-line no-unused-vars
 import { getSidebarExternalLinks } from '../../plugins/registry'
@@ -85,5 +85,51 @@ describe('Sidebar', () => {
     expect(screen.getByText('OpenCode')).toBeInTheDocument()
     expect(screen.getByText('OFFLINE')).toBeInTheDocument()
     expect(screen.getByText('OpenCode').closest('a')).not.toHaveAttribute('href')
+  })
+
+  test('refreshes quick-link metadata when the deployed service topology changes', async () => {
+    const { rerender } = render(
+      <Sidebar status={defaultStatus} collapsed={false} onToggle={() => {}} />
+    )
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2)
+    })
+
+    const enabledStatus = {
+      ...defaultStatus,
+      services: [
+        ...defaultStatus.services,
+        { id: 'perplexica', name: 'Perplexica', status: 'healthy', port: 3001 },
+      ],
+    }
+    rerender(<Sidebar status={enabledStatus} collapsed={false} onToggle={() => {}} />)
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(4)
+    })
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/external-links')).toHaveLength(2)
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/service-tokens')).toHaveLength(2)
+  })
+
+  test('does not refetch link metadata for an ordinary health transition', async () => {
+    const { rerender } = render(
+      <Sidebar status={defaultStatus} collapsed={false} onToggle={() => {}} />
+    )
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2)
+    })
+
+    const unhealthyStatus = {
+      ...defaultStatus,
+      services: defaultStatus.services.map(service => (
+        service.name === 'n8n' ? { ...service, status: 'healthy' } : service
+      )),
+    }
+    rerender(<Sidebar status={unhealthyStatus} collapsed={false} onToggle={() => {}} />)
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 })
