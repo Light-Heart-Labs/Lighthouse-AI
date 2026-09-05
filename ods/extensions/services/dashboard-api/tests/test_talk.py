@@ -481,6 +481,62 @@ def _run_with_one_loop(coro_factory):
         loop.close()
 
 
+def test_hermes_bridge_ensure_session_uses_managed_pool(monkeypatch):
+    """The session bootstrap endpoint must not keep a second, unbounded cache.
+
+    Its session ID should come from the same idle-evicted connection that later
+    chat prompts reuse, and normal pool shutdown must close that connection.
+    """
+    import hermes_bridge
+
+    hermes_bridge._CONNECTION_POOL.clear()
+    hermes_bridge._OPENING_LOCKS.clear()
+    hermes_bridge._SWEEPER_TASK = None
+
+    class FakeWS:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeHTTP:
+        async def close(self):
+            pass
+
+    opened: list[hermes_bridge._HermesConnection] = []
+
+    async def fake_open(session_key):
+        conn = hermes_bridge._HermesConnection(
+            http_session=FakeHTTP(),
+            ws=FakeWS(),
+            session_id=f"sid-{session_key}",
+        )
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr("hermes_bridge._open_connection", fake_open)
+
+    async def main():
+        first = await hermes_bridge.ensure_session("phone-key")
+        second = await hermes_bridge.ensure_session("phone-key")
+        return (
+            first,
+            second,
+            hermes_bridge._CONNECTION_POOL["phone-key"],
+            hermes_bridge._SWEEPER_TASK is not None,
+        )
+
+    first, second, pooled, sweeper_started = _run_with_one_loop(main)
+
+    assert first == second == "sid-phone-key"
+    assert opened == [pooled]
+    assert sweeper_started is True
+    assert hermes_bridge._CONNECTION_POOL == {}
+    assert pooled.closed is True
+    assert pooled.ws.closed is True
+
+
 def test_hermes_bridge_pool_serializes_same_key_parallels_different_keys(monkeypatch):
     """Connection-pool contract:
 
