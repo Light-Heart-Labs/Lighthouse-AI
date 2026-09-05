@@ -111,7 +111,7 @@ if (-not $env:MODEL_PROFILE) {
     }
 }
 
-$tierConfig = Resolve-TierConfig -Tier $selectedTier
+$tierConfig = Resolve-TierConfig -Tier $selectedTier -VramMB ([int]$gpuInfo.VramMB)
 $tierConfig = Resolve-CatalogModelRecommendation `
     -TierConfig $tierConfig `
     -Tier $selectedTier `

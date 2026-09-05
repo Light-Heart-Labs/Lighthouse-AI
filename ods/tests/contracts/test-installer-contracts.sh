@@ -35,10 +35,20 @@ python3 tests/test-install-footprint-contract.py
 bash tests/contracts/test-install-footprint-macos.sh
 
 echo "[contract] AMD phase-06 env keys exist in schema"
-for key in HSA_XNACK AMDGPU_TARGET LLAMA_CPP_REF; do
+for key in HSA_XNACK AMDGPU_TARGET LLAMA_CPP_REF LEMONADE_LLAMACPP_BACKEND LEMONADE_RUNTIME_IMAGE; do
   jq -e --arg key "$key" '.properties[$key]' .env.schema.json >/dev/null \
     || { echo "[FAIL] .env.schema.json missing AMD installer key: $key"; exit 1; }
 done
+
+echo "[contract] RDNA1/2 Vulkan path is wired"
+grep -q 'GPU_COUNT -ge 1 && "$GPU_BACKEND" == "amd"' installers/phases/02-detection.sh \
+  || { echo "[FAIL] AMD topology must run for single-GPU gfx detection"; exit 1; }
+grep -q 'amd_lemonade_inference_backend' installers/phases/06-directories.sh \
+  || { echo "[FAIL] phase 06 must select Lemonade backend from gfx"; exit 1; }
+grep -q 'LEMONADE_LLAMACPP_BACKEND=\${LEMONADE_LLAMACPP_BACKEND:-auto}' docker-compose.amd.yml \
+  || { echo "[FAIL] docker-compose.amd.yml must honor LEMONADE_LLAMACPP_BACKEND"; exit 1; }
+grep -q 'AMD_INFERENCE_BACKEND:-rocm}" != "vulkan"' installers/phases/11-services.sh \
+  || { echo "[FAIL] phase 11 must skip HIP llama-server build on Vulkan AMD"; exit 1; }
 
 echo "[contract] canonical port contract parity"
 test -x tests/contracts/test-port-contracts.sh || { echo "[FAIL] script not executable: tests/contracts/test-port-contracts.sh"; exit 1; }
@@ -744,6 +754,25 @@ _classify_bw()   { _classify "$@" | jq -r '.bandwidth_gbps'; }
   || { echo "[FAIL] 0x7480 empty name + 16GB → 7800 XT"; exit 1; }
 [[ "$(_classify_id 0x7480 "" amd 12288)" == "rx_7700_xt" ]] \
   || { echo "[FAIL] 0x7480 empty name + 12GB → 7700 XT"; exit 1; }
+
+# --- 0x731f: Navi 10 XL (RX 5600 XT / 5700 XT share the die) ---
+
+[[ "$(_classify_id 0x731f "AMD Radeon RX 5600 XT" amd 6144)" == "rx_5600_xt" ]] \
+  || { echo "[FAIL] 5600 XT with name"; exit 1; }
+[[ "$(_classify_id 0x731f "AMD Radeon RX 5700 XT" amd 8192)" == "rx_5700_xt" ]] \
+  || { echo "[FAIL] 5700 XT with name"; exit 1; }
+[[ "$(_classify_id 0x731f "AMD Radeon RX 5700" amd 8192)" == "rx_5700" ]] \
+  || { echo "[FAIL] 5700 with name must not match 5700 XT"; exit 1; }
+[[ "$(_classify_id 0x731f "AMD Radeon RX 5600" amd 6144)" == "rx_5600" ]] \
+  || { echo "[FAIL] 5600 with name must not match 5600 XT"; exit 1; }
+[[ "$(_classify_tier 0x731f "AMD Radeon RX 5600 XT" amd 6144)" == "T1" ]] \
+  || { echo "[FAIL] 5600 XT tier"; exit 1; }
+[[ "$(_classify_bw 0x731f "AMD Radeon RX 5600 XT" amd 6144)" == "336" ]] \
+  || { echo "[FAIL] 5600 XT bandwidth"; exit 1; }
+[[ "$(_classify_id 0x731f "" amd 6144)" == "rx_5600_xt" ]] \
+  || { echo "[FAIL] empty name + 6GB → 5600 XT"; exit 1; }
+[[ "$(_classify_id 0x731f "" amd 8192)" == "rx_5700_xt" ]] \
+  || { echo "[FAIL] empty name + 8GB → 5700 XT"; exit 1; }
 
 # --- Name-only match (no device_id) ---
 

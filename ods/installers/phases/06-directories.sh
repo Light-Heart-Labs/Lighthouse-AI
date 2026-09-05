@@ -848,6 +848,43 @@ raise SystemExit(1)' 2>/dev/null && return 0
         GPU_ASSIGNMENT_JSON_B64=""
     fi
 
+    # AMD gfx / Lemonade backend: Vulkan for RDNA1/2 (gfx10*, RX 5600 XT),
+    # ROCm for RDNA3+ / CDNA. Compute before .env write so inference metadata
+    # and the gfx block stay in lockstep.
+    _amd_gfx_detected=""
+    _amd_inference_backend=""
+    _amd_lemonade_llamacpp=""
+    _amd_hsa_override=""
+    _amd_custom_bin=""
+    _amd_runtime_image=""
+    if [[ "$GPU_BACKEND" == "amd" ]]; then
+        if ! declare -F amd_lemonade_inference_backend >/dev/null 2>&1; then
+            # shellcheck source=/dev/null
+            source "$SCRIPT_DIR/installers/lib/amd-topo.sh"
+        fi
+        _amd_gfx_detected=$(echo "${GPU_TOPOLOGY_JSON:-{\}}" | jq -r '[.gpus[]?.gfx_version] | unique | .[0] // "unknown"' 2>/dev/null || echo "unknown")
+        _amd_gfx_detected="$(amd_gfx_fallback "$_amd_gfx_detected" "${GPU_MEMORY_TYPE:-discrete}")"
+        _amd_inference_backend="$(amd_lemonade_inference_backend "$_amd_gfx_detected" "${GPU_MEMORY_TYPE:-discrete}")"
+        if [[ "$_amd_inference_backend" == "vulkan" ]]; then
+            _amd_lemonade_llamacpp="vulkan"
+            _amd_runtime_image="${LEMONADE_SERVER_IMAGE:-${BACKEND_LEMONADE_CONTAINER_IMAGE:-ghcr.io/lemonade-sdk/lemonade-server:v10.2.0}}"
+            _amd_hsa_override="# HSA_OVERRIDE_GFX_VERSION unset — $_amd_gfx_detected uses Vulkan, not ROCm"
+            _amd_custom_bin="# LEMONADE_LLAMACPP_ROCM_BIN unset — Vulkan path uses Lemonade bundled binary"
+        else
+            _amd_lemonade_llamacpp="auto"
+            _amd_runtime_image="ods-lemonade-server:latest"
+            case "$_amd_gfx_detected" in
+                gfx1151) _amd_hsa_override="HSA_OVERRIDE_GFX_VERSION=11.5.1" ;;
+                *)       _amd_hsa_override="# HSA_OVERRIDE_GFX_VERSION unset — $_amd_gfx_detected is natively supported" ;;
+            esac
+            if [[ "$_amd_gfx_detected" == "gfx1151" ]]; then
+                _amd_custom_bin="LEMONADE_LLAMACPP_ROCM_BIN=/opt/llama-custom/llama-server"
+            else
+                _amd_custom_bin="# LEMONADE_LLAMACPP_ROCM_BIN unset — custom binary is gfx1151-only; Lemonade uses bundled binary on $_amd_gfx_detected"
+            fi
+        fi
+    fi
+
     # Generate .env file
     # Subshell-scope a tighter umask so the file is created 0600 from the start
     # (closes a brief window on systems where $HOME is world-readable, e.g.
@@ -887,10 +924,10 @@ EXTERNAL_LLM_PROVIDER=${EXTERNAL_LLM_PROVIDER_VALUE}
 EXTERNAL_LLM_MODEL=${EXTERNAL_SELECTED_MODEL}
 SKIP_MODEL_DOWNLOAD=${EXTERNAL_LLM_ACTIVE}
 AMD_INFERENCE_RUNTIME=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" || ( "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ) ]]; then echo "lemonade"; else echo ""; fi)
-AMD_INFERENCE_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_BACKEND:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
+AMD_INFERENCE_BACKEND=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_BACKEND:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${_amd_inference_backend:-${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}}"; else echo ""; fi)
 AMD_INFERENCE_LOCATION=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "host"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "container"; else echo ""; fi)
 AMD_INFERENCE_PORT=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${LEMONADE_PORT_VALUE}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_API_PORT:-8080}"; else echo ""; fi)
-AMD_INFERENCE_SUPPORTED_BACKENDS=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_SUPPORTED_BACKENDS:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}"; else echo ""; fi)
+AMD_INFERENCE_SUPPORTED_BACKENDS=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "${AMD_INFERENCE_SUPPORTED_BACKENDS:-auto}"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "${_amd_inference_backend:-${BACKEND_LEMONADE_LINUX_BACKEND:-rocm}}"; else echo ""; fi)
 AMD_INFERENCE_RUNTIME_MODE=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "external-lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "linux-container"; else echo ""; fi)
 AMD_INFERENCE_MANAGED=$(if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then echo ""; elif [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "false"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "true"; else echo ""; fi)
 LEMONADE_EXTERNAL=${LEMONADE_EXTERNAL_VALUE}
@@ -963,42 +1000,15 @@ ODS_UID=${_phase06_compose_uid}
 ODS_GID=${_phase06_compose_gid}
 
 $(if [[ "$GPU_BACKEND" == "amd" ]]; then
-    # Read gfx target from topology detection. Falls back to gfx1151 (Strix Halo)
-    # if the topology probe failed — preserves prior behavior for the OG target.
-    _amd_gfx_detected=$(echo "${GPU_TOPOLOGY_JSON:-{\}}" | jq -r '[.gpus[]?.gfx_version] | unique | .[0] // "gfx1151"' 2>/dev/null || echo "gfx1151")
-    [[ -z "$_amd_gfx_detected" || "$_amd_gfx_detected" == "null" || "$_amd_gfx_detected" == "unknown" ]] && _amd_gfx_detected="gfx1151"
-
-    # HSA_OVERRIDE_GFX_VERSION is a Strix Halo (gfx1151) workaround — that target
-    # is not in ROCm 7.x's official support list, so we coerce HSA to load
-    # gfx1151 kernels by reporting "11.5.1". For natively-supported parts
-    # (gfx942 / MI300X, gfx90a / MI250, gfx1100 / RX 7900, etc.) we MUST NOT set
-    # this — doing so reports the wrong ISA and triggers
-    # HSA_STATUS_ERROR_INVALID_ISA at model-load.
-    case "$_amd_gfx_detected" in
-        gfx1151) _amd_hsa_override="HSA_OVERRIDE_GFX_VERSION=11.5.1" ;;
-        *)       _amd_hsa_override="# HSA_OVERRIDE_GFX_VERSION unset — $_amd_gfx_detected is natively supported" ;;
-    esac
-
-    # The custom llama-server binary at /opt/llama-custom is built with Strix
-    # Halo-specific patches (MMQ tile size reduced from 64 to 48 for gfx1151's
-    # register file). Pointing Lemonade at it from any other architecture either
-    # ISA-faults (kernels compiled for gfx1151) or runs a perf-regressed binary.
-    # Only opt-in when the host is actually Strix Halo; otherwise leave unset so
-    # docker-compose.amd.yml's empty default lets Lemonade use its bundled
-    # ROCm-aware binary.
-    if [[ "$_amd_gfx_detected" == "gfx1151" ]]; then
-        _amd_custom_bin="LEMONADE_LLAMACPP_ROCM_BIN=/opt/llama-custom/llama-server"
-    else
-        _amd_custom_bin="# LEMONADE_LLAMACPP_ROCM_BIN unset — custom binary is gfx1151-only; Lemonade uses bundled binary on $_amd_gfx_detected"
-    fi
-
     cat << AMD_ENV
 #=== GPU Group IDs (for container device access) ===
 VIDEO_GID=$(getent group video 2>/dev/null | cut -d: -f3 || echo 44)
 RENDER_GID=$(getent group render 2>/dev/null | cut -d: -f3 || echo 992)
 
-#=== AMD ROCm Settings (gfx target detected from topology) ===
+#=== AMD GPU Settings (gfx target detected from topology) ===
 LEMONADE_SERVER_IMAGE=${LEMONADE_SERVER_IMAGE:-${BACKEND_LEMONADE_CONTAINER_IMAGE:-ghcr.io/lemonade-sdk/lemonade-server:v10.2.0}}
+LEMONADE_RUNTIME_IMAGE=${_amd_runtime_image}
+LEMONADE_LLAMACPP_BACKEND=${_amd_lemonade_llamacpp}
 ${_amd_hsa_override}
 HSA_XNACK=1
 ROCBLAS_USE_HIPBLASLT=1
@@ -1009,7 +1019,7 @@ ${_amd_custom_bin}
 #=== LiteLLM → Lemonade outbound key (AMD only) ===
 LITELLM_LEMONADE_API_KEY=${LITELLM_LEMONADE_API_KEY}
 AMD_ENV
-    unset _amd_gfx_detected _amd_hsa_override _amd_custom_bin
+    unset _amd_gfx_detected _amd_hsa_override _amd_custom_bin _amd_inference_backend _amd_lemonade_llamacpp _amd_runtime_image
 fi)
 $(if [[ "$GPU_BACKEND" == "sycl" ]]; then cat << INTEL_ENV
 #=== GPU Group IDs (for container device access) ===
@@ -1148,6 +1158,10 @@ fi)
 
 ENV_EOF
     )
+
+    if [[ -n "${_amd_inference_backend:-}" ]]; then
+        export AMD_INFERENCE_BACKEND="$_amd_inference_backend"
+    fi
 
     chmod 600 "$INSTALL_DIR/.env"  # Secure secrets file
     ai_ok "Created $INSTALL_DIR"

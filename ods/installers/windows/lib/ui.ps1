@@ -205,8 +205,18 @@ function Invoke-ODSHuggingFaceDownloadFallback {
 
     Write-AI "Retrying with Hugging Face client..."
     $downloadArgs = @($python.PrefixArgs) + @($helper, $Url, $Destination)
-    & $python.FilePath @downloadArgs
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $Destination) -and ((Get-Item $Destination).Length -gt 0)) {
+    $prevEAP = $ErrorActionPreference
+    $hfExit = 1
+    try {
+        # huggingface_hub prints progress and warnings on stderr; PS 5.1
+        # promotes that to a terminating NativeCommandError under Stop.
+        $ErrorActionPreference = "Continue"
+        & $python.FilePath @downloadArgs
+        $hfExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    if ($hfExit -eq 0 -and (Test-Path $Destination) -and ((Get-Item $Destination).Length -gt 0)) {
         return $true
     }
     return $false
@@ -235,8 +245,17 @@ function Show-ProgressDownload {
     )
     $curlArgs += Get-ODSCurlDownloadHttpArgs
     $curlArgs += @("-o", $partFile, $Url)
-    & curl.exe @curlArgs
-    $curlExit = $LASTEXITCODE
+    # Windows PowerShell 5.1 promotes native stderr (curl's progress bar) to
+    # NativeCommandError when ErrorActionPreference is Stop.
+    $prevEAP = $ErrorActionPreference
+    $curlExit = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & curl.exe @curlArgs
+        $curlExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
     if ($curlExit -eq 0 -and (Test-Path $partFile)) {
         Move-Item -Path $partFile -Destination $Destination -Force
         Write-AISuccess "$Label complete"

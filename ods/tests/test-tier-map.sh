@@ -66,6 +66,16 @@ assert_eq "GGUF_FILE"   "Qwen3.5-9B-Q4_K_M.gguf"             "$GGUF_FILE"
 assert_eq "MAX_CONTEXT"  "16384"                                "$MAX_CONTEXT"
 echo ""
 
+echo "Tier 1 with 6GB VRAM (RX 5600 XT / qwen must not select 9B):"
+GPU_VRAM=6144
+run_tier 1
+assert_eq "TIER_NAME"   "Entry Level (6GB)"                    "$TIER_NAME"
+assert_eq "LLM_MODEL"   "qwen3.5-4b"                           "$LLM_MODEL"
+assert_eq "GGUF_FILE"   "Qwen3.5-4B-Q4_K_M.gguf"              "$GGUF_FILE"
+assert_eq "LLM_MODEL_SIZE_MB" "2870"                           "$LLM_MODEL_SIZE_MB"
+unset GPU_VRAM
+echo ""
+
 # --- Tier 2: Prosumer ---
 echo "Tier 2 (Prosumer):"
 run_tier 2
@@ -438,6 +448,37 @@ assert_eq "SELECTOR_RUNTIME_PROFILE" "" "$MODEL_RUNTIME_PROFILE"
 assert_eq "SELECTOR_N_CPU_MOE" "" "$LLAMA_ARG_N_CPU_MOE"
 assert_eq "SELECTOR_CACHE_V" "" "$LLAMA_ARG_CACHE_TYPE_V"
 assert_eq "SELECTOR_CHECKPOINTS" "" "$LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS"
+echo ""
+
+echo "Catalog selector (6GB AMD qwen stays under the 4B size ceiling, not 9B):"
+_selector_env="$(python3 "$SCRIPT_DIR/scripts/select-model.py" \
+    --catalog "$SCRIPT_DIR/config/model-library.json" \
+    --backend amd \
+    --memory-type discrete \
+    --vram-mb 6144 \
+    --ram-gb 16 \
+    --profile qwen \
+    --tier 1 \
+    --max-size-mb 2870 \
+    --host-arch amd64 \
+    --installable-only \
+    --env)"
+LLM_MODEL="" GGUF_FILE="" LLM_MODEL_SIZE_MB=""
+load_selector_env "$_selector_env"
+if [[ "$LLM_MODEL" == "qwen3.5-9b" || "$GGUF_FILE" == "Qwen3.5-9B-Q4_K_M.gguf" ]]; then
+    echo "  FAIL: 6GB AMD selected 9B ($LLM_MODEL / $GGUF_FILE)"
+    ((FAIL++))
+else
+    echo "  PASS: SELECTOR_LLM_MODEL is not 9B ($LLM_MODEL)"
+    ((PASS++))
+fi
+if [[ "${LLM_MODEL_SIZE_MB:-0}" -gt 0 && "${LLM_MODEL_SIZE_MB:-0}" -le 2870 ]]; then
+    echo "  PASS: SELECTOR_SIZE_MB=$LLM_MODEL_SIZE_MB <= 2870"
+    ((PASS++))
+else
+    echo "  FAIL: SELECTOR_SIZE_MB=$LLM_MODEL_SIZE_MB exceeded 6GB ceiling"
+    ((FAIL++))
+fi
 echo ""
 
 echo "Catalog selector (8GB NVIDIA gemma uses upstream catalog fit):"

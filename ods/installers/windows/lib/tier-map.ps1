@@ -94,7 +94,10 @@ function Resolve-EffectiveModelProfile {
 }
 
 function Resolve-QwenTierConfig {
-    param([string]$Tier)
+    param(
+        [string]$Tier,
+        [int]$VramMB = 0
+    )
 
     switch ($Tier) {
         "CLOUD" {
@@ -172,6 +175,22 @@ function Resolve-QwenTierConfig {
             }
         }
         "1" {
+            $useLite = $VramMB -gt 0 -and $VramMB -lt 8192
+            if ($useLite) {
+                return @{
+                    TierName   = "Entry Level (6GB)"
+                    LlmModel   = "qwen3.5-4b"
+                    GgufFile   = "Qwen3.5-4B-Q4_K_M.gguf"
+                    GgufUrl    = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+                    GgufSha256 = "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+                    MaxContext = 16384
+                    ModelSizeMB = 2870
+                    ModelProfileRequested = "qwen"
+                    ModelProfileEffective = "qwen"
+                    LlamaServerImage = ""
+                    LlamaCppReleaseTag = ""
+                }
+            }
             return @{
                 TierName   = "Entry Level"
                 LlmModel   = "qwen3.5-9b"
@@ -380,7 +399,8 @@ function Resolve-GemmaTierConfig {
 function Resolve-TierConfig {
     param(
         [string]$Tier,
-        [string]$ModelProfile = $env:MODEL_PROFILE
+        [string]$ModelProfile = $env:MODEL_PROFILE,
+        [int]$VramMB = 0
     )
 
     $requestedProfile = Normalize-ModelProfile -ModelProfile $ModelProfile
@@ -388,7 +408,7 @@ function Resolve-TierConfig {
 
     switch ($effectiveProfile) {
         "gemma4" { return Resolve-GemmaTierConfig -Tier $Tier -RequestedProfile $requestedProfile }
-        default { return Resolve-QwenTierConfig -Tier $Tier }
+        default { return Resolve-QwenTierConfig -Tier $Tier -VramMB $VramMB }
     }
 }
 

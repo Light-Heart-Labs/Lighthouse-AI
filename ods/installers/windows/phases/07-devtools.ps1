@@ -246,7 +246,15 @@ if (-not $_npmCmd -or -not $_nodeCmd) {
 }
 
 if ($_npmCmd) {
-    $_npmVer = & npm --version 2>$null
+    $prevEAP = $ErrorActionPreference
+    try {
+        # npm prints config warnings on stderr; PS 5.1 treats that as a
+        # terminating NativeCommandError when ErrorActionPreference is Stop.
+        $ErrorActionPreference = "SilentlyContinue"
+        $_npmVer = (& npm --version 2>$null | Select-Object -First 1)
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
     Write-AISuccess "Node.js / npm $_npmVer available"
 
     # Install Claude Code (Anthropic's terminal agent)

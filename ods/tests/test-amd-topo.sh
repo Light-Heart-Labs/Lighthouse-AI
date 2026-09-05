@@ -283,6 +283,27 @@ test_gfx_version_mixed() {
     assert_eq "GPU[1] gfx1101" "gfx1101" "$gfx1"
 }
 
+# ── Test: gfx fallback + Lemonade backend selection ────────────────────────
+
+test_amd_lemonade_backend_selection() {
+    echo -e "${BLU}Testing: amd_gfx_fallback and amd_lemonade_inference_backend${NC}"
+
+    source "$TOPO_SCRIPT"
+
+    assert_eq "unknown discrete gfx stays unknown" "unknown" "$(amd_gfx_fallback unknown discrete)"
+    assert_eq "unknown unified gfx falls back to gfx1151" "gfx1151" "$(amd_gfx_fallback unknown unified)"
+    assert_eq "empty discrete gfx stays unknown" "unknown" "$(amd_gfx_fallback "" discrete)"
+    assert_eq "detected gfx1010 is preserved" "gfx1010" "$(amd_gfx_fallback gfx1010 discrete)"
+
+    assert_eq "gfx1010 → vulkan" "vulkan" "$(amd_lemonade_inference_backend gfx1010 discrete)"
+    assert_eq "gfx1030 → vulkan" "vulkan" "$(amd_lemonade_inference_backend gfx1030 discrete)"
+    assert_eq "gfx1100 → rocm" "rocm" "$(amd_lemonade_inference_backend gfx1100 discrete)"
+    assert_eq "gfx1151 → rocm" "rocm" "$(amd_lemonade_inference_backend gfx1151 unified)"
+    assert_eq "gfx942 → rocm" "rocm" "$(amd_lemonade_inference_backend gfx942 discrete)"
+    assert_eq "unknown discrete → vulkan" "vulkan" "$(amd_lemonade_inference_backend unknown discrete)"
+    assert_eq "unknown unified → rocm" "rocm" "$(amd_lemonade_inference_backend unknown unified)"
+}
+
 # ── Main test runner ───────────────────────────────────────────────────────
 
 echo -e "${MAG}=== AMD Topology Detection Tests ===${NC}\n"
@@ -302,6 +323,8 @@ echo
 test_gfx_version_parsing
 echo
 test_gfx_version_mixed
+echo
+test_amd_lemonade_backend_selection
 
 echo -e "\n${MAG}=== Test Summary ===${NC}"
 echo -e "Tests run:    $TESTS_RUN"

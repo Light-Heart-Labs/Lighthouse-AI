@@ -393,22 +393,26 @@ if [[ $GPU_COUNT -gt 1 && "$GPU_BACKEND" == "nvidia" ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# AMD Multi-GPU Topology Detection
+# AMD Topology Detection (single GPU included — gfx target drives Vulkan vs ROCm)
 # -----------------------------------------------------------------------------
-if [[ $GPU_COUNT -gt 1 && "$GPU_BACKEND" == "amd" ]]; then
-    ai "Detecting AMD multi-GPU topology..."
+if [[ $GPU_COUNT -ge 1 && "$GPU_BACKEND" == "amd" ]]; then
+    if [[ $GPU_COUNT -gt 1 ]]; then
+        ai "Detecting AMD multi-GPU topology..."
+    else
+        log "Detecting AMD GPU gfx target..."
+    fi
     if [[ -f "$SCRIPT_DIR/installers/lib/amd-topo.sh" ]]; then
         source "$SCRIPT_DIR/installers/lib/amd-topo.sh"
 
         GPU_TOPOLOGY_JSON=$(detect_amd_topo 2>>"$LOG_FILE") || {
-            warn "AMD multi-GPU topology detection failed — using fallback"
-            ai_warn "Could not detect AMD GPU topology. Using default PCIe configuration."
+            warn "AMD topology detection failed — using fallback"
+            ai_warn "Could not detect AMD GPU topology. Using conservative backend defaults."
             GPU_TOPOLOGY_JSON="{}"
         }
 
         if [[ -n "$GPU_TOPOLOGY_JSON" && "$GPU_TOPOLOGY_JSON" != "{}" ]]; then
             GPU_TOTAL_VRAM=$(echo "$GPU_TOPOLOGY_JSON" | jq -r '[.gpus[].memory_gb] | add * 1024 | floor')
-            log "AMD multi-GPU topology: Total VRAM=${GPU_TOTAL_VRAM}MB"
+            log "AMD topology: GPUs=$GPU_COUNT, Total VRAM=${GPU_TOTAL_VRAM}MB, gfx=$(echo "$GPU_TOPOLOGY_JSON" | jq -r '[.gpus[]?.gfx_version] | unique | join(",")')"
         else
             log "AMD topology detection returned empty, using basic GPU info"
             GPU_TOTAL_VRAM=$GPU_VRAM

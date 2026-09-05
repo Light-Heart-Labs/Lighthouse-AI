@@ -9,7 +9,8 @@
 #
 # Expects: jq, warn(), log()
 # Provides: detect_amd_topo(), amd_gpu_id(), amd_gfx_version(),
-#           amd_render_node()
+#           amd_render_node(), amd_gfx_fallback(),
+#           amd_lemonade_inference_backend()
 #
 # Modder notes:
 #   Detection fallback chain:
@@ -145,6 +146,46 @@ amd_gfx_version() {
     fi
 
     echo "unknown"
+}
+
+# When topology did not report a gfx target: Strix Halo (unified) still needs
+# the gfx1151 default so the custom ROCm binary path keeps working. Discrete
+# cards must not inherit that default — gfx1151 kernels ISA-fault on Navi 10.
+amd_gfx_fallback() {
+    local gfx="${1:-unknown}"
+    local memory_type="${2:-discrete}"
+    case "$gfx" in
+        ""|null|unknown)
+            if [[ "$memory_type" == "unified" ]]; then
+                echo "gfx1151"
+            else
+                echo "unknown"
+            fi
+            ;;
+        *) echo "$gfx" ;;
+    esac
+}
+
+# Lemonade on Linux: ROCm 7.x supports RDNA3+ / CDNA. RDNA1/2 (gfx10*) need
+# Vulkan. Unknown discrete also uses Vulkan so a missed probe cannot point a
+# 6GB Navi card at the Strix Halo HIP binary.
+# Prints: rocm | vulkan
+amd_lemonade_inference_backend() {
+    local gfx="${1:-unknown}"
+    local memory_type="${2:-discrete}"
+    gfx="$(printf '%s' "$gfx" | tr '[:upper:]' '[:lower:]')"
+    case "$gfx" in
+        gfx10*) echo "vulkan" ;;
+        gfx110*|gfx115*|gfx12*|gfx90*|gfx94*) echo "rocm" ;;
+        unknown|"")
+            if [[ "$memory_type" == "unified" ]]; then
+                echo "rocm"
+            else
+                echo "vulkan"
+            fi
+            ;;
+        *) echo "vulkan" ;;
+    esac
 }
 
 # Get render node for an AMD GPU card by matching PCI device paths

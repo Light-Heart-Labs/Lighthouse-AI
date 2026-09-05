@@ -1165,7 +1165,7 @@ MODELS_INI_EOF
     # installer refuses to launch any potentially stale image.
     _candidate_build_services=(dashboard dashboard-api model-router remote-provider-egress remote-provider-ssh-tunnel ape token-spy privacy-shield brave-search)
     [[ "$ENABLE_COMFYUI" == "true" ]] && _candidate_build_services+=(comfyui)
-    [[ "$GPU_BACKEND" == "amd" ]] && _candidate_build_services+=(llama-server)
+    [[ "$GPU_BACKEND" == "amd" && "${AMD_INFERENCE_BACKEND:-rocm}" != "vulkan" ]] && _candidate_build_services+=(llama-server)
     if ! _enabled_compose_services="$($DOCKER_COMPOSE_CMD "${COMPOSE_FLAGS_ARR[@]}" config --services 2>>"$LOG_FILE")"; then
         ai_bad "Could not resolve compose services before local image builds."
         ai "Inspect compose config with: $(_phase11_compose_command_text) config --services"

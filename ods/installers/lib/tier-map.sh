@@ -162,6 +162,16 @@ set_qwen_tier_config() {
             GGUF_SHA256="03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
             MAX_CONTEXT=16384
             LLM_MODEL_SIZE_MB=5760    # Qwen3.5-9B-Q4_K_M (5.68 GB)
+            # 6GB cards (RX 5600 XT, Arc A380-class) cannot hold 9B Q4 plus KV.
+            # Reuse the Arc Lite 4B assignment when VRAM is known and under 8GB.
+            if [[ "${GPU_VRAM:-0}" -gt 0 && "${GPU_VRAM:-0}" -lt 8192 ]]; then
+                TIER_NAME="Entry Level (6GB)"
+                LLM_MODEL="qwen3.5-4b"
+                GGUF_FILE="Qwen3.5-4B-Q4_K_M.gguf"
+                GGUF_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+                GGUF_SHA256="00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+                LLM_MODEL_SIZE_MB=2870    # Qwen3.5-4B-Q4_K_M (2.74 GB)
+            fi
             ;;
         2)
             TIER_NAME="Prosumer"
@@ -374,7 +384,13 @@ tier_to_model() {
                 ARC)            model="qwen3.5-9b" ;;
                 ARC_LITE)       model="qwen3.5-4b" ;;
                 0|T0)           model="qwen3.5-2b" ;;
-                1|T1)           model="qwen3.5-9b" ;;
+                1|T1)
+                    if [[ "${GPU_VRAM:-0}" -gt 0 && "${GPU_VRAM:-0}" -lt 8192 ]]; then
+                        model="qwen3.5-4b"
+                    else
+                        model="qwen3.5-9b"
+                    fi
+                    ;;
                 2|T2)           model="qwen3.5-9b" ;;
                 3|T3)           model="qwen3-30b-a3b" ;;
                 4|T4)           model="qwen3-30b-a3b" ;;
