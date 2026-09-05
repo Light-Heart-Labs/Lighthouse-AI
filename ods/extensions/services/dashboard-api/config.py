@@ -26,7 +26,7 @@ EXTENSIONS_DIR = Path(
 )
 
 DEFAULT_SERVICE_HOST = os.environ.get("SERVICE_HOST", "host.docker.internal")
-GPU_BACKEND = os.environ.get("GPU_BACKEND", "nvidia")
+GPU_BACKEND: str = os.getenv("GPU_BACKEND", "unknown")
 ODS_MODES = frozenset({"local", "cloud", "hybrid", "lemonade"})
 LOCAL_MODEL_MODES = frozenset({"local", "hybrid", "lemonade"})
 LLM_CONTRACT_ROUTES = frozenset({"gateway", "direct"})

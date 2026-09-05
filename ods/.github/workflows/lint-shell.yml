@@ -36,4 +36,33 @@ jobs:
             exit 0
           fi
           shellcheck -x -S warning "${files[@]}"
+      
+      - name: Verify Dashboard API GPU_BACKEND Fallback
+        run: |
+          echo "Testing dashboard-api with unset GPU_BACKEND..."
+          
+          # 1. Temporarily strip GPU_BACKEND from the .env file to simulate a missing variable
+          sed -i '/GPU_BACKEND=/d' ods/.env 2>/dev/null || true
+          
+          # 2. Bring up the dashboard API
+          docker compose -f ods/docker-compose.base.yml up -d dashboard-api
+          
+          # 3. Wait for the service to become responsive (assumes default port 3002)
+          timeout 30 bash -c 'while ! curl -s http://localhost:3002/api/extensions/catalog > /dev/null; do sleep 2; done' || true
+          
+          # 4. Fetch the catalog and verify the backend state
+          API_RESPONSE=$(curl -s http://localhost:3002/api/extensions/catalog)
+          
+          if echo "$API_RESPONSE" | grep -q '"gpu_backend":"nvidia"'; then
+              echo "FAIL: dashboard-api incorrectly defaulted to 'nvidia' instead of 'unknown'."
+              docker compose -f ods/docker-compose.base.yml logs dashboard-api
+              exit 1
+          fi
+          
+          if echo "$API_RESPONSE" | grep -q '"gpu_backend":"unknown"'; then
+              echo "SUCCESS: dashboard-api correctly fell back to 'unknown' sentinel."
+          else
+              echo "FAIL: GPU_BACKEND was not 'unknown' or the response was malformed."
+              exit 1
+          fi
 

@@ -1,5 +1,5 @@
 """Tests for config.py — manifest loading and service discovery."""
-
+import importlib
 import logging
 from pathlib import Path
 
@@ -48,7 +48,6 @@ features:
 def test_normalize_ods_mode(value, expected):
     assert config.normalize_ods_mode(value) == expected
 
-
 def test_live_env_value_prefers_last_persisted_value(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text(
         "LLM_MODEL=old-model\nLLM_MODEL=new-model\n",
@@ -59,14 +58,12 @@ def test_live_env_value_prefers_last_persisted_value(monkeypatch, tmp_path):
 
     assert config.read_live_env_value("LLM_MODEL") == "new-model"
 
-
 def test_live_env_value_preserves_explicit_empty_value(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text("LEMONADE_MODEL=\n", encoding="utf-8")
     monkeypatch.setattr(config, "INSTALL_DIR", str(tmp_path))
     monkeypatch.setenv("LEMONADE_MODEL", "stale-process-model")
 
     assert config.read_live_env_value("LEMONADE_MODEL", "fallback") == ""
-
 
 def test_live_env_value_strips_one_pair_and_preserves_unmatched_quotes(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text(
@@ -81,6 +78,13 @@ def test_live_env_value_strips_one_pair_and_preserves_unmatched_quotes(monkeypat
     assert config.read_live_env_value("UNMATCHED") == "model-v2'"
     assert config.read_live_env_value("REPEATED") == "'model-v2'"
 
+def test_gpu_backend_defaults_to_unknown_when_unset(monkeypatch):
+    """Ensure that if GPU_BACKEND is not present in the environment, it falls back to 'unknown'."""
+    monkeypatch.delenv("GPU_BACKEND", raising=False)
+
+    importlib.reload(config)
+
+    assert config.GPU_BACKEND == "unknown"
 
 class TestReadManifestFile:
 

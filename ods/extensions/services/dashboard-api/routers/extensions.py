@@ -396,8 +396,11 @@ def _compute_extension_status(ext: dict, services_by_id: dict) -> str:
 
     # GPU incompatibility
     gpu_backends = ext.get("gpu_backends", [])
-    if gpu_backends and "all" not in gpu_backends and GPU_BACKEND not in gpu_backends:
-        return "incompatible"
+    if gpu_backends and "all" not in gpu_backends:
+        if GPU_BACKEND == "unknown":
+            return "unknown"
+        if GPU_BACKEND not in gpu_backends:
+            return "incompatible"
 
     return "not_installed"
 
