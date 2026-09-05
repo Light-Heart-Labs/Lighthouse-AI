@@ -68,6 +68,9 @@ test: ## Run unit and contract tests
 	@bash tests/test-safe-env.sh
 	@bash tests/test-phase06-secret-generation.sh
 	@echo ""
+	@echo "=== service dependency validation ==="
+	@bash tests/test-validate-dependencies.sh
+	@echo ""
 	@echo "=== QR code helper LAN detection ==="
 	@bash tests/test-qrcode-helper.sh
 	@echo ""
