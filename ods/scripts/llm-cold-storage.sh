@@ -200,8 +200,8 @@ show_status() {
             local size idle_days status=""
             size="$(du -sh "$model_dir" 2>/dev/null | cut -f1)"
             idle_days="$(get_last_access_days "$model_dir")"
-            is_protected "$name" && status=" [protected]"
-            is_model_in_use "$name" && status=" [in use]"
+            is_protected "$name" && status+=" [protected]"
+            is_model_in_use "$name" && status+=" [in use]"
             echo "  [HOT] $name ($size, idle ${idle_days}d)${status}"
         fi
     done
