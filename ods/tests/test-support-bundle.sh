@@ -247,11 +247,66 @@ assert isinstance(manifest["files"], list) and manifest["files"]
 assert isinstance(manifest["commands"], list) and manifest["commands"]
 assert any(command["label"] == "docker-version" for command in manifest["commands"])
 assert any(item["path"] == "manifest/evidence.json" for item in manifest["files"])
+assert manifest["log_tail"] == 200
+assert manifest["logs_since"] is None
 PY
 then
     pass "manifest records files and command exit codes"
 else
     fail "manifest is missing expected file/command metadata"
+fi
+
+MOCK_DOCKER="$TMP_DIR/mock-docker"
+MOCK_DOCKER_LOG="$TMP_DIR/mock-docker.log"
+cat > "$MOCK_DOCKER" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_DOCKER_LOG"
+if [[ "$1" == "ps" && "$*" != *" -a "* && "$*" != *" -a"* ]]; then
+    printf '%s\n' 'ods-window-test'
+fi
+EOF
+chmod +x "$MOCK_DOCKER"
+
+WINDOW_OUTPUT="$TMP_DIR/window-out"
+WINDOW_JSON="$TMP_DIR/window-result.json"
+if MOCK_DOCKER_LOG="$MOCK_DOCKER_LOG" ODS_SUPPORT_BUNDLE_DOCKER="$MOCK_DOCKER" \
+    ODS_SUPPORT_BUNDLE_BASH="$BASH_WRAPPER" \
+    bash "$SUPPORT_SCRIPT" --output "$WINDOW_OUTPUT" --logs-since 45m --log-tail 750 --json > "$WINDOW_JSON"; then
+    pass "support bundle accepts a bounded Docker log window"
+else
+    fail "support bundle rejected a valid Docker log window"
+fi
+
+WINDOW_MANIFEST="$(python3 - "$WINDOW_JSON" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["manifest"])
+PY
+)"
+if grep -q 'logs --tail 750 --since 45m ods-window-test' "$MOCK_DOCKER_LOG"; then
+    pass "bounded log options reach Docker as distinct arguments"
+else
+    fail "bounded log options were not forwarded to Docker"
+fi
+
+if python3 - "$WINDOW_MANIFEST" <<'PY'
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+assert manifest["logs_included"] is True
+assert manifest["log_tail"] == 750
+assert manifest["logs_since"] == "45m"
+PY
+then
+    pass "manifest records the selected Docker log window"
+else
+    fail "manifest omitted the selected Docker log window"
+fi
+
+if bash "$SUPPORT_SCRIPT" --log-tail invalid >/dev/null 2>&1; then
+    fail "support bundle accepted an invalid log tail"
+else
+    pass "support bundle rejects invalid log tail values"
 fi
 
 echo ""

@@ -5,6 +5,8 @@ TOOL_VERSION="1"
 REDACTION_VERSION="1"
 DEFAULT_LOG_TAIL=200
 MAX_LOG_CONTAINERS=25
+LOG_TAIL="$DEFAULT_LOG_TAIL"
+LOG_SINCE=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -24,6 +26,8 @@ Options:
   --output DIR   Write bundle directory/archive under DIR
   --json         Print machine-readable result JSON
   --no-logs      Skip Docker container log collection
+  --log-tail N   Include the last N lines per container (default: 200)
+  --logs-since T Include only logs since an RFC3339 timestamp or duration (for example 30m)
   -h, --help     Show this help
 
 The generated archive is safe-by-default, but review it before posting to a
@@ -45,6 +49,16 @@ while [[ $# -gt 0 ]]; do
         --no-logs)
             INCLUDE_LOGS=false
             shift
+            ;;
+        --log-tail)
+            LOG_TAIL="${2:-}"
+            [[ "$LOG_TAIL" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --log-tail requires a positive integer" >&2; exit 2; }
+            shift 2
+            ;;
+        --logs-since)
+            LOG_SINCE="${2:-}"
+            [[ -n "$LOG_SINCE" ]] || { echo "ERROR: --logs-since requires a timestamp or duration" >&2; exit 2; }
+            shift 2
             ;;
         -h|--help)
             usage
@@ -511,7 +525,11 @@ collect_docker() {
         [[ "$count" -le "$MAX_LOG_CONTAINERS" ]] || break
         local safe
         safe="$(safe_filename "$container")"
-        collect_shell "logs/${safe}.log" "docker-logs:${container}" "$(shell_quote "$DOCKER_BIN") logs --tail ${DEFAULT_LOG_TAIL} $(shell_quote "$container")"
+        local log_command
+        log_command="$(shell_quote "$DOCKER_BIN") logs --tail $(shell_quote "$LOG_TAIL")"
+        [[ -z "$LOG_SINCE" ]] || log_command="${log_command} --since $(shell_quote "$LOG_SINCE")"
+        log_command="${log_command} $(shell_quote "$container")"
+        collect_shell "logs/${safe}.log" "docker-logs:${container}" "$log_command"
     done < "$names_file"
 
     if [[ "$count" -eq 0 ]]; then
@@ -520,7 +538,7 @@ collect_docker() {
 }
 
 write_manifest() {
-    "$PYTHON_CMD" - "$BUNDLE_DIR" "$ARCHIVE_PATH" "$TOOL_VERSION" "$REDACTION_VERSION" "$INCLUDE_LOGS" <<'PY'
+    "$PYTHON_CMD" - "$BUNDLE_DIR" "$ARCHIVE_PATH" "$TOOL_VERSION" "$REDACTION_VERSION" "$INCLUDE_LOGS" "$LOG_TAIL" "$LOG_SINCE" <<'PY'
 import json
 import os
 import sys
@@ -532,6 +550,8 @@ archive_path = sys.argv[2]
 tool_version = sys.argv[3]
 redaction_version = sys.argv[4]
 include_logs = sys.argv[5].lower() == "true"
+log_tail = int(sys.argv[6])
+logs_since = sys.argv[7] or None
 status_path = bundle_dir / "manifest" / "command-status.tsv"
 
 commands = []
@@ -567,6 +587,8 @@ manifest = {
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "archive_path": archive_path,
     "logs_included": include_logs,
+    "log_tail": log_tail,
+    "logs_since": logs_since,
     "files": files,
     "commands": commands,
 }
