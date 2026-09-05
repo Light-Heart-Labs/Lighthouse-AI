@@ -41,6 +41,7 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== Linux install preflight ==="
 	@bash tests/test-linux-install-preflight.sh
+	@bash tests/test-linux-preflight-atomic-report.sh
 	@bash tests/test-linux-host-agent-stop.sh
 	@bash tests/test-preflight-dashboard-port.sh
 	@echo ""

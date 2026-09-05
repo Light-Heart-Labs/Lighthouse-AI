@@ -72,6 +72,35 @@ print(json.dumps({
 ' >>"$CHECKS_JSONL"
 }
 
+write_json_report() {
+    local target="$1"
+    local content="$2"
+    local link target_dir temporary hops=0
+
+    # Preserve the existing behavior for operator-provided symlink paths.
+    while [[ -L "$target" ]]; do
+        hops=$((hops + 1))
+        [[ "$hops" -le 40 ]] || return 1
+        link="$(readlink "$target")" || return 1
+        case "$link" in
+            /*) target="$link" ;;
+            *) target="$(dirname "$target")/$link" ;;
+        esac
+    done
+
+    target_dir="$(cd -P "$(dirname "$target")" && pwd)" || return 1
+    target="$target_dir/$(basename "$target")"
+    temporary="$(mktemp "$target_dir/.$(basename "$target").XXXXXX")" || return 1
+    if ! printf '%s\n' "$content" > "$temporary"; then
+        rm -f "$temporary"
+        return 1
+    fi
+    if ! mv -f "$temporary" "$target"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
 docker_cli_looks_like_podman() {
     local docker_version=""
     docker_version="$(docker --version 2>/dev/null || true)"
@@ -400,7 +429,7 @@ fi
 if [[ "$OUTPUT_MODE" == "json" ]]; then
     echo "$REPORT_JSON"
     if [[ -n "$JSON_FILE" ]]; then
-        printf '%s\n' "$REPORT_JSON" >"$JSON_FILE"
+        write_json_report "$JSON_FILE" "$REPORT_JSON"
     fi
     exit "$EXIT_CODE"
 fi
@@ -449,7 +478,7 @@ else
 fi
 
 if [[ -n "$JSON_FILE" ]]; then
-    printf '%s\n' "$REPORT_JSON" >"$JSON_FILE"
+    write_json_report "$JSON_FILE" "$REPORT_JSON"
     echo "JSON written to: $JSON_FILE"
 fi
 
