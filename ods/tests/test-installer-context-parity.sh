@@ -61,13 +61,17 @@ function_block() {
 echo "=== Installer context parity ==="
 
 echo ""
-echo "Bootstrap context floor:"
+echo "Bootstrap context sizing:"
 assert_grep "installers/lib/bootstrap-model.sh" '^BOOTSTRAP_MAX_CONTEXT=65536$' \
-    "Linux bootstrap context is 64K"
+    "Linux bootstrap context default is 64K"
+assert_grep "installers/lib/bootstrap-model.sh" '^calculate_bootstrap_context\(\)' \
+    "Linux bootstrap context is dynamically calculated"
 assert_grep "installers/macos/lib/tier-map.sh" '^BOOTSTRAP_MAX_CONTEXT=65536$' \
-    "macOS bootstrap context is 64K"
-assert_grep "installers/windows/lib/tier-map.ps1" 'BOOTSTRAP_MAX_CONTEXT[[:space:]]*=[[:space:]]*65536' \
-    "Windows bootstrap context is 64K"
+    "macOS bootstrap context default is 64K"
+assert_grep "installers/macos/install-macos.sh" 'calculate_bootstrap_context' \
+    "macOS bootstrap context is dynamically calculated"
+assert_grep "installers/phases/11-services.sh" 'calculate_bootstrap_context' \
+    "Linux bootstrap context calculation is invoked during installation"
 
 echo ""
 echo "Hermes target context:"

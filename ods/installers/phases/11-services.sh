@@ -674,6 +674,12 @@ else
     _BOOTSTRAP_ACTIVE=false
     if ! _phase11_external_llm && type bootstrap_needed &>/dev/null && bootstrap_needed; then
         _BOOTSTRAP_ACTIVE=true
+
+        # Calculate appropriate bootstrap context based on GPU/memory constraints
+        if type calculate_bootstrap_context &>/dev/null; then
+            calculate_bootstrap_context
+        fi
+
         # Save full model config for the background upgrade
         FULL_GGUF_FILE="$GGUF_FILE"
         FULL_GGUF_URL="$GGUF_URL"
