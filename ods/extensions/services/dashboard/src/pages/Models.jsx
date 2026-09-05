@@ -1890,7 +1890,7 @@ function ModelPublisherIcon({ model, tone, size = 'row' }) {
   )
 }
 
-function buildPageList(page, pageCount) {
+export function buildPageList(page, pageCount) {
   if (pageCount <= 5) return Array.from({ length: pageCount }, (_, index) => index + 1)
   if (page <= 3) return [1, 2, 3, 'gap', pageCount]
   if (page >= pageCount - 2) return [1, 'gap', pageCount - 2, pageCount - 1, pageCount]
