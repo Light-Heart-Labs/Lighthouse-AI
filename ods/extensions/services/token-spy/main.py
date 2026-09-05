@@ -1223,8 +1223,17 @@ def _get_local_accumulated_turns(agent: str) -> int:
     acc = {"total": total, "last_file_turns": current_file_turns}
     try:
         os.makedirs(os.path.dirname(acc_path), exist_ok=True)
-        with open(acc_path, "w") as f:
-            json.dump(acc, f)
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(acc_path), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(acc, f)
+            os.replace(tmp_path, acc_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception:
         log.warning(f"[SESSION] Failed to save accumulated turns for {agent}")
 
