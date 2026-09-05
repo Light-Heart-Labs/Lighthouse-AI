@@ -18,6 +18,45 @@ def test_current_version_reader_preserves_unmatched_quote(monkeypatch, tmp_path)
     assert updates_mod._read_current_version() == "2.6.0'"
 
 
+def test_current_version_reader_falls_back_to_manifest_release_version(monkeypatch, tmp_path):
+    """No .env, no .version -> reads manifest.json's release.version."""
+    import routers.updates as updates_mod
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"release": {"version": "4.5.6"}}), encoding="utf-8",
+    )
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+
+    assert updates_mod._read_current_version() == "4.5.6"
+
+
+def test_current_version_reader_manifest_falls_back_through_keys(monkeypatch, tmp_path):
+    """release.version takes priority, then ods_version, then manifestVersion."""
+    import routers.updates as updates_mod
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"ods_version": "7.8.9", "manifestVersion": "1.0.0"}), encoding="utf-8",
+    )
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+
+    assert updates_mod._read_current_version() == "7.8.9"
+
+
+def test_current_version_reader_ignores_malformed_manifest(monkeypatch, tmp_path):
+    """Invalid JSON in manifest.json must degrade to the next fallback
+    (main.py's version string), not raise json.JSONDecodeError."""
+    import routers.updates as updates_mod
+
+    (tmp_path / "manifest.json").write_text("{not valid json", encoding="utf-8")
+    monkeypatch.setattr(updates_mod, "INSTALL_DIR", str(tmp_path))
+
+    # No .env, no .version, malformed manifest.json -> falls through to
+    # main.py's version string (or "0.0.0" if that's also unavailable), never
+    # raises.
+    result = updates_mod._read_current_version()
+    assert isinstance(result, str) and result
+
+
 def test_github_release_urls_use_canonical_repository():
     import routers.updates as updates_mod
 
