@@ -560,6 +560,7 @@ echo "[contract] optional extension compose files are installer-gated"
 # Bundled optional/recommended services that ship compose.yaml must not enter
 # a Core Only install just because their compose file exists in the source tree.
 for spec in \
+  'ENABLE_SEARXNG:searxng' \
   'ENABLE_RECOMMENDED:token-spy' \
   'ENABLE_HERMES:hermes' \
   'ENABLE_HERMES:hermes-proxy' \
@@ -578,17 +579,43 @@ do
 done
 
 # Pixel is installed as the default agent independently of the Recommended
-# preset, but it requires LiteLLM and SearXNG. Protect the composite gate so a
-# Core Only install still excludes both services while either supported path
-# includes them.
+# preset, but it requires LiteLLM. Search is shared with other consumers below.
+# An install with neither Pixel nor Recommended services excludes LiteLLM.
 grep -Fq '_pixel_support_services="${ENABLE_RECOMMENDED:-false}"' "$features_phase" \
   || { echo "[FAIL] Pixel support gate must inherit ENABLE_RECOMMENDED"; exit 1; }
 grep -Fq '[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && _pixel_support_services=true' "$features_phase" \
   || { echo "[FAIL] Pixel support gate must include ENABLE_PIXEL_RUNTIME"; exit 1; }
-for svc in litellm searxng; do
+for svc in litellm; do
   grep -qE "_sync_extension_compose +\"\\\$_pixel_support_services\" +$svc\\b" "$features_phase" \
     || { echo "[FAIL] $svc compose is not gated by Pixel or Recommended services in $features_phase"; exit 1; }
 done
+
+echo "[contract] SearXNG follows web search consumers, not only --recommended"
+bash tests/test-pixel-support-services.sh
+grep -qE 'ENABLE_RECOMMENDED:-false' "$features_phase" \
+  || { echo "[FAIL] ENABLE_SEARXNG derivation must consult ENABLE_RECOMMENDED"; exit 1; }
+grep -qE 'ENABLE_PIXEL_RUNTIME:-false' "$features_phase" \
+  || { echo "[FAIL] ENABLE_SEARXNG derivation must consult ENABLE_PIXEL_RUNTIME"; exit 1; }
+grep -qE 'ENABLE_PERPLEXICA:-false' "$features_phase" \
+  || { echo "[FAIL] ENABLE_SEARXNG derivation must consult ENABLE_PERPLEXICA"; exit 1; }
+grep -qE 'ENABLE_HERMES:-false' "$features_phase" \
+  || { echo "[FAIL] ENABLE_SEARXNG derivation must consult ENABLE_HERMES"; exit 1; }
+grep -qE 'ENABLE_OPENCLAW:-false' "$features_phase" \
+  || { echo "[FAIL] ENABLE_SEARXNG derivation must consult ENABLE_OPENCLAW"; exit 1; }
+grep -Fq 'ENABLE_WEB_SEARCH="$ENABLE_SEARXNG"' "$features_phase" \
+  || { echo "[FAIL] ENABLE_WEB_SEARCH must track ENABLE_SEARXNG"; exit 1; }
+grep -Fq 'ENABLE_WEB_SEARCH: "${ENABLE_WEB_SEARCH:-false}"' docker-compose.base.yml \
+  || { echo "[FAIL] docker-compose.base.yml must interpolate ENABLE_WEB_SEARCH"; exit 1; }
+if grep -qE 'ENABLE_WEB_SEARCH: "true"' docker-compose.base.yml; then
+  echo "[FAIL] docker-compose.base.yml must not hardcode ENABLE_WEB_SEARCH=true"
+  exit 1
+fi
+grep -Fq 'ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-true}' installers/phases/06-directories.sh \
+  || { echo "[FAIL] Linux .env generator must interpolate ENABLE_WEB_SEARCH"; exit 1; }
+grep -Fq '_macos_set_builtin_compose_state searxng "$ENABLE_SEARXNG"' installers/macos/install-macos.sh \
+  || { echo "[FAIL] macOS installer must gate SearXNG with ENABLE_SEARXNG"; exit 1; }
+grep -Fq 'ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-true}' installers/macos/lib/env-generator.sh \
+  || { echo "[FAIL] macOS .env generator must interpolate ENABLE_WEB_SEARCH"; exit 1; }
 
 windows_plan="installers/windows/lib/service-plan.ps1"
 test -f "$windows_plan" || { echo "[FAIL] missing $windows_plan"; exit 1; }
