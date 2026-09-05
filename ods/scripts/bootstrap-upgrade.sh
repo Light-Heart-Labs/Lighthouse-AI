@@ -106,23 +106,70 @@ get_remote_size() {
         | grep -i '^content-length:' | tail -1 | tr -dc '0-9'
 }
 
-# Write status JSON (atomic via mv)
 write_status() {
     local status="$1" percent="${2:-}" downloaded="${3:-0}" total="${4:-0}" speed="${5:-0}" eta="${6:-}"
-    local _safe_model="${FULL_GGUF_FILE//\"/\\\"}"
-    cat > "$STATUS_FILE.tmp" << STATUSEOF
-{
-  "status": "$status",
-  "model": "$_safe_model",
-  "percent": ${percent:-null},
-  "bytesDownloaded": $downloaded,
-  "bytesTotal": $total,
-  "speedBytesPerSec": $speed,
-  "eta": "${eta:-}",
-  "updatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%SZ')"
+
+    if ! python3 - "$STATUS_FILE" "$status" "$FULL_GGUF_FILE" "$percent" "$downloaded" "$total" "$speed" "$eta" <<'PYEOF'
+import json
+import os
+import stat
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+status_file = os.path.abspath(sys.argv[1])
+status_value = sys.argv[2]
+model_value = sys.argv[3]
+percent_value = sys.argv[4]
+downloaded_value = int(sys.argv[5]) if sys.argv[5].isdigit() else 0
+total_value = int(sys.argv[6]) if sys.argv[6].isdigit() else 0
+speed_value = int(sys.argv[7]) if sys.argv[7].isdigit() else 0
+eta_value = sys.argv[8]
+
+updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+data = {
+    "status": status_value,
+    "model": model_value,
+    "percent": float(percent_value) if percent_value else None,
+    "bytesDownloaded": downloaded_value,
+    "bytesTotal": total_value,
+    "speedBytesPerSec": speed_value,
+    "eta": eta_value or "",
+    "updatedAt": updated_at,
 }
-STATUSEOF
-    mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+
+parent = os.path.dirname(status_file)
+os.makedirs(parent, exist_ok=True)
+temp_path = None
+
+try:
+    descriptor, temp_path = tempfile.mkstemp(
+        prefix=".bootstrap-status.",
+        suffix=".tmp",
+        dir=parent,
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    if os.path.exists(status_file):
+        original_mode = stat.S_IMODE(os.stat(status_file).st_mode)
+        os.chmod(temp_path, original_mode)
+    os.replace(temp_path, status_file)
+    temp_path = None
+finally:
+    if temp_path is not None:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+PYEOF
+    then
+        log "ERROR: failed to write status file"
+        return 1
+    fi
 }
 
 status_percent() {
