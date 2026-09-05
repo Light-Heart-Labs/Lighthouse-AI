@@ -503,6 +503,15 @@ else
 ' ' ')"
 fi
 
+# 22. The read-only provenance view consumes the same schema contract but must
+# never expose secret values while reporting defaults, unknown keys, and
+# duplicate assignments.
+if python3 "$ROOT_DIR/tests/test_explain_config.py"; then
+    pass "Configuration provenance inspector honors schema and redaction contracts"
+else
+    fail "Configuration provenance inspector contract failed"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
