@@ -1167,13 +1167,7 @@ ai_ok "Docker CLI found"
 
 if ! $DOCKER_RUNNING; then
     ai_err "Docker daemon is not responding."
-    case "${DOCKER_BACKEND:-unknown}" in
-        desktop)  ai "Start Docker Desktop from /Applications or the menu bar, then re-run this installer." ;;
-        colima)   ai "Run \`colima start\` (e.g. \`colima start --cpu 6 --memory 12 --disk 60\`) then re-run this installer." ;;
-        rancher)  ai "Open Rancher Desktop and wait for the daemon to come up, then re-run this installer." ;;
-        orbstack) ai "Open OrbStack and wait for the daemon to come up, then re-run this installer." ;;
-        *)        ai "Start your docker daemon (Docker Desktop, Colima, Rancher Desktop, OrbStack, ...) and re-run this installer." ;;
-    esac
+    ai "$(macos_docker_daemon_startup_hint)"
     exit 1
 fi
 ai_ok "Docker daemon ready (v${DOCKER_VERSION}, backend=${DOCKER_BACKEND:-unknown})"

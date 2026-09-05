@@ -98,7 +98,7 @@ test_docker_desktop() {
     DOCKER_INSTALLED=false
     DOCKER_RUNNING=false
     DOCKER_VERSION=""
-    DOCKER_BACKEND="unknown"  # "desktop" | "colima" | "rancher" | "orbstack" | "other"
+    DOCKER_BACKEND="unknown"  # "desktop" | "colima" | "rancher" | "orbstack" | "podman" | "other"
 
     # Check if docker CLI is available
     if ! command -v docker >/dev/null 2>&1; then
@@ -124,11 +124,67 @@ test_docker_desktop() {
         *)                                                    DOCKER_BACKEND="other" ;;
     esac
 
-    # Check if Docker daemon is responsive
-    if docker version >/dev/null 2>&1; then
-        DOCKER_RUNNING=true
-        DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+    # Podman Desktop / podman-docker expose a `docker` CLI whose --version
+    # string is "podman …". Context inspect often yields an empty/unknown
+    # endpoint, so classify before the daemon probe (issue #2933).
+    if docker --version 2>/dev/null | grep -qi podman \
+       || docker version 2>&1 | grep -qi podman; then
+        DOCKER_BACKEND="podman"
     fi
+
+    # Check if the engine is responsive. `docker version` talks to the
+    # server; a Podman machine that is stopped fails here while `docker
+    # --version` (client-only) still succeeds — that is the #2933 split.
+    if docker info >/dev/null 2>&1 || docker version >/dev/null 2>&1; then
+        DOCKER_RUNNING=true
+        DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null \
+            || docker info --format '{{.ServerVersion}}' 2>/dev/null \
+            || echo "unknown")
+    elif [[ "$DOCKER_BACKEND" == "podman" ]] && macos_try_podman_docker_host; then
+        DOCKER_RUNNING=true
+        DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null \
+            || echo "unknown")
+    fi
+}
+
+# When the docker CLI is Podman's shim but DOCKER_HOST still points at a
+# missing Docker Desktop socket, bind the live Podman remote socket so
+# later compose/info calls use the same engine the operator already started.
+macos_try_podman_docker_host() {
+    command -v podman >/dev/null 2>&1 || return 1
+    podman info >/dev/null 2>&1 || return 1
+    local sock
+    sock=$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || true)
+    sock="${sock#unix://}"
+    [[ -n "$sock" && -S "$sock" ]] || return 1
+    export DOCKER_HOST="unix://${sock}"
+    docker info >/dev/null 2>&1
+}
+
+# Operator-facing next step when the engine CLI is present but the daemon
+# (or Podman machine) is down. Keep this next to detection so tests can
+# assert the Podman hint without sourcing the full installer.
+macos_docker_daemon_startup_hint() {
+    case "${DOCKER_BACKEND:-unknown}" in
+        desktop)
+            echo "Start Docker Desktop from /Applications or the menu bar, then re-run this installer."
+            ;;
+        colima)
+            echo "Run \`colima start\` (e.g. \`colima start --cpu 6 --memory 12 --disk 60\`) then re-run this installer."
+            ;;
+        rancher)
+            echo "Open Rancher Desktop and wait for the daemon to come up, then re-run this installer."
+            ;;
+        orbstack)
+            echo "Open OrbStack and wait for the daemon to come up, then re-run this installer."
+            ;;
+        podman)
+            echo "Start the Podman machine (\`podman machine start\`) or open Podman Desktop, then re-run this installer."
+            ;;
+        *)
+            echo "Start your container engine (Docker Desktop, Colima, Rancher Desktop, OrbStack, or Podman) and re-run this installer."
+            ;;
+    esac
 }
 
 # Detect a stale `credsStore: desktop` config (left by `brew install docker`

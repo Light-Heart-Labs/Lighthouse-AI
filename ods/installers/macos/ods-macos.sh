@@ -86,9 +86,10 @@ INSTALL_DIR="${ODS_INSTALL_DIR}"
 # ============================================================================
 
 test_docker_running() {
-    if ! docker info >/dev/null 2>&1; then
-        ai_err "Docker Desktop is not running."
-        ai "Start it from the Applications folder or menu bar, then try again."
+    test_docker_desktop
+    if ! $DOCKER_RUNNING; then
+        ai_err "Docker daemon is not responding."
+        ai "$(macos_docker_daemon_startup_hint)"
         return 1
     fi
     return 0
