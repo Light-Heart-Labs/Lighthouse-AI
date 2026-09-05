@@ -239,6 +239,9 @@ def check_http(
         except socket.timeout:
             last_err = f"http {m}: timeout"
             continue
+        except ConnectionResetError:
+            last_err = f"http {m}: connection reset by peer"
+            continue
 
     return (False, last_err or "http: request failed", None)
 
