@@ -234,6 +234,129 @@ describe('Extensions page — unhealthy + install derivations', () => {
     expect(screen.getByText('Install')).toBeInTheDocument()
   })
 
+  it('previews the authoritative lifecycle plan before installing', async () => {
+    vi.spyOn(globalThis.AbortSignal, 'timeout').mockReturnValue(new AbortController().signal)
+    const catalog = {
+      extensions: [{
+        id: 'planned-service',
+        name: 'Planned Service',
+        status: 'not_installed',
+        source: 'library',
+        installable: true,
+        features: [baseFeature],
+        description: 'desc',
+      }],
+      summary: baseSummary({ not_installed: 1 }),
+      gpu_backend: 'apple',
+      agent_available: true,
+    }
+    const fetchMock = vi.fn(async (url, options) => {
+      const target = String(url)
+      if (target.includes('/api/extensions/catalog')) return makeJsonResponse(catalog)
+      if (target.includes('/api/templates')) return makeJsonResponse({ templates: [] })
+      if (target === '/api/extensions/planned-service/plan?action=install') {
+        return makeJsonResponse({
+          id: 'planned-service',
+          action: 'install',
+          current_state: 'not_installed',
+          target_state: 'enabled',
+          can_apply: true,
+          blocking_reasons: [],
+          affected_services: ['planned-api', 'planned-worker'],
+          dependencies: ['database'],
+          dependents: [],
+          data: { path: 'data/planned-service', preserved: true, exists: false },
+          steps: [
+            { operation: 'copy_definition' },
+            { operation: 'pull_and_start', services: ['planned-api', 'planned-worker'] },
+          ],
+        })
+      }
+      if (target === '/api/extensions/planned-service/install') {
+        return makeJsonResponse({ action: 'installing' })
+      }
+      throw new Error(`Unmocked fetch: ${target} ${options?.method || 'GET'}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<Extensions />)
+    await screen.findByText('Planned Service')
+    const installButton = screen.getByRole('button', { name: 'Install' })
+    fireEvent.click(installButton)
+    fireEvent.click(installButton)
+
+    expect(await screen.findByText('Deployment plan')).toBeInTheDocument()
+    expect(screen.getByText('planned-api, planned-worker')).toBeInTheDocument()
+    expect(screen.getByText('database')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/extensions/planned-service/install',
+      expect.anything(),
+    )
+    expect(fetchMock.mock.calls.filter(
+      ([url]) => String(url) === '/api/extensions/planned-service/plan?action=install',
+    )).toHaveLength(1)
+
+    const confirmButton = screen.getByRole('button', { name: 'Confirm install' })
+    fireEvent.click(confirmButton)
+    fireEvent.click(confirmButton)
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(
+        ([url, options]) => String(url) === '/api/extensions/planned-service/install'
+          && options?.method === 'POST',
+      )).toHaveLength(1)
+    })
+  })
+
+  it('keeps a blocked lifecycle plan read-only', async () => {
+    const catalog = {
+      extensions: [{
+        id: 'blocked-service',
+        name: 'Blocked Service',
+        status: 'disabled',
+        source: 'user',
+        installable: true,
+        features: [baseFeature],
+        description: 'desc',
+      }],
+      summary: baseSummary({ installed: 1 }),
+      gpu_backend: 'apple',
+      agent_available: true,
+    }
+    const fetchMock = vi.fn(async (url) => {
+      const target = String(url)
+      if (target.includes('/api/extensions/catalog')) return makeJsonResponse(catalog)
+      if (target.includes('/api/templates')) return makeJsonResponse({ templates: [] })
+      if (target === '/api/extensions/blocked-service/plan?action=uninstall') {
+        return makeJsonResponse({
+          id: 'blocked-service',
+          action: 'uninstall',
+          current_state: 'disabled',
+          target_state: 'not_installed',
+          can_apply: false,
+          blocking_reasons: ['An enabled dependent still requires this extension'],
+          affected_services: ['blocked-service'],
+          dependencies: [],
+          dependents: ['workflow-service'],
+          data: { path: 'data/blocked-service', preserved: true, exists: true },
+          steps: [],
+        })
+      }
+      throw new Error(`Unmocked fetch: ${target}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<Extensions />)
+    await screen.findByText('Blocked Service')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    expect(await screen.findByText('An enabled dependent still requires this extension')).toBeInTheDocument()
+    expect(screen.getByText('workflow-service')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm uninstall' })).toBeDisabled()
+    expect(fetchMock.mock.calls.some(
+      ([url]) => String(url) === '/api/extensions/blocked-service',
+    )).toBe(false)
+  })
+
   it('renders Check Logs CTA for unhealthy user ext', async () => {
     installFetchMock({
       extensions: [
@@ -342,8 +465,7 @@ describe('Extensions page — unhealthy + install derivations', () => {
     await screen.findByText('Tracked Extension')
     fireEvent.click(screen.getByRole('button', { name: 'Update' }))
     expect(screen.getByText(/Local definition changes will be replaced/)).toBeInTheDocument()
-    const updateButtons = screen.getAllByRole('button', { name: 'Update' })
-    fireEvent.click(updateButtons[updateButtons.length - 1])
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm update' }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

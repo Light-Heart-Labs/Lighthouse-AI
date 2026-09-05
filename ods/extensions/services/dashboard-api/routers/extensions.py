@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1369,6 +1369,168 @@ async def extension_detail(
 # --- Mutation endpoints ---
 
 
+ExtensionChangeAction = Literal["install", "enable", "disable", "uninstall"]
+
+
+def _compose_service_names(compose_path: Path) -> list[str]:
+    """Return the concrete Compose services an extension operation affects."""
+    try:
+        data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid compose file: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("services"), dict):
+        raise HTTPException(status_code=400, detail="Compose file has no services map")
+    return sorted(str(name) for name in data["services"])
+
+
+def _enabled_dependents(service_id: str) -> list[str]:
+    """Return enabled extensions whose manifests directly require service_id."""
+    dependents: list[str] = []
+    seen_peers: set[str] = set()
+    for base in (USER_EXTENSIONS_DIR, EXTENSIONS_DIR):
+        try:
+            peer_dirs = list(base.iterdir()) if base.is_dir() else []
+        except OSError:
+            continue
+        for peer_dir in peer_dirs:
+            if (not peer_dir.is_dir() or peer_dir.name == service_id
+                    or peer_dir.name in seen_peers):
+                continue
+            seen_peers.add(peer_dir.name)
+            if ((peer_dir / "compose.yaml").is_file()
+                    and service_id in _read_direct_deps(peer_dir.name)):
+                dependents.append(peer_dir.name)
+    return sorted(dependents)
+
+
+def _extension_change_plan(
+    service_id: str,
+    action: ExtensionChangeAction,
+    *,
+    auto_enable_deps: bool,
+) -> dict:
+    """Build a side-effect-free description of an extension mutation."""
+    _validate_service_id(service_id)
+    _assert_not_core(service_id)
+
+    user_dir = USER_EXTENSIONS_DIR / service_id
+    builtin_dir = EXTENSIONS_DIR / service_id
+    library_dir = EXTENSIONS_LIBRARY_DIR / service_id
+    installed_dir = user_dir if user_dir.is_dir() else builtin_dir
+    active = installed_dir / "compose.yaml"
+    inactive = installed_dir / "compose.yaml.disabled"
+    if active.is_file():
+        current_state = "enabled"
+        compose_path = active
+    elif inactive.is_file():
+        current_state = "disabled"
+        compose_path = inactive
+    else:
+        current_state = "not_installed"
+        compose_path = library_dir / "compose.yaml"
+
+    plan = {
+        "id": service_id,
+        "action": action,
+        "current_state": current_state,
+        "target_state": current_state,
+        "can_apply": True,
+        "blocking_reasons": [],
+        "affected_services": [],
+        "dependencies": [],
+        "dependents": [],
+        "preserves_data": True,
+        "steps": [],
+    }
+
+    if action == "install":
+        plan["target_state"] = "enabled"
+        if current_state != "not_installed":
+            plan["blocking_reasons"].append("Extension is already installed")
+        elif not compose_path.is_file():
+            plan["blocking_reasons"].append("Extension has no deployable library definition")
+        else:
+            plan["affected_services"] = _compose_service_names(compose_path)
+            plan["dependencies"] = _parse_manifest_deps(library_dir / "manifest.yaml")
+            plan["steps"] = [
+                {"operation": "copy_definition", "target": f"user-extensions/{service_id}"},
+                {"operation": "validate_compose", "services": plan["affected_services"]},
+                {"operation": "sync_config", "required": (library_dir / "config").is_dir()},
+                {"operation": "pull_and_start", "services": plan["affected_services"]},
+            ]
+    elif action == "enable":
+        plan["target_state"] = "enabled"
+        if current_state == "not_installed":
+            plan["blocking_reasons"].append("Extension is not installed")
+        else:
+            plan["affected_services"] = _compose_service_names(compose_path)
+            missing = _get_missing_deps_transitive(service_id)
+            plan["dependencies"] = missing
+            if missing and not auto_enable_deps:
+                plan["blocking_reasons"].append(
+                    "Missing dependencies require auto_enable_deps=true: " + ", ".join(missing),
+                )
+            if current_state == "disabled":
+                plan["steps"].append({"operation": "activate_definition"})
+            if missing:
+                plan["steps"].append({
+                    "operation": "enable_dependencies",
+                    "services": missing,
+                    "selected": auto_enable_deps,
+                })
+            plan["steps"].append({
+                "operation": "start",
+                "services": plan["affected_services"],
+            })
+    elif action == "disable":
+        plan["target_state"] = "disabled"
+        if current_state != "enabled":
+            plan["blocking_reasons"].append("Extension is not enabled")
+        else:
+            plan["affected_services"] = _compose_service_names(compose_path)
+            plan["dependents"] = _enabled_dependents(service_id)
+            plan["steps"] = [
+                {"operation": "stop", "services": plan["affected_services"]},
+                {"operation": "deactivate_definition"},
+            ]
+    else:
+        plan["target_state"] = "not_installed"
+        if not user_dir.is_dir():
+            plan["blocking_reasons"].append("Only user-installed extensions can be uninstalled")
+        elif current_state != "disabled":
+            plan["blocking_reasons"].append("Extension must be disabled before uninstalling")
+        else:
+            plan["affected_services"] = _compose_service_names(compose_path)
+            plan["steps"] = [
+                {"operation": "remove_definition", "target": f"user-extensions/{service_id}"},
+                {"operation": "remove_update_backup", "if_present": True},
+            ]
+
+    plan["can_apply"] = not plan["blocking_reasons"]
+    data_info = _get_service_data_info(service_id)
+    plan["data"] = data_info or {
+        "path": f"data/{service_id}",
+        "preserved": True,
+        "exists": False,
+    }
+    return plan
+
+
+@router.get("/api/extensions/{service_id}/plan")
+def extension_change_plan(
+    service_id: str,
+    action: ExtensionChangeAction = Query(...),
+    auto_enable_deps: bool = Query(False),
+    api_key: str = Depends(verify_api_key),
+):
+    """Preview an extension mutation without changing files or containers."""
+    return _extension_change_plan(
+        service_id,
+        action,
+        auto_enable_deps=auto_enable_deps,
+    )
+
+
 @router.post("/api/extensions/{service_id}/logs")
 async def extension_logs(
     service_id: str,
@@ -2333,22 +2495,7 @@ def disable_extension(service_id: str, include_data_info: bool = Query(True), ap
     # present) are reported: a disabled dependent is unaffected, while an
     # enabled one is left pointing at a service the merged compose project
     # no longer defines, which fails compose config for the whole stack.
-    dependents_warning = []
-    seen_peers: set[str] = set()
-    for base in (USER_EXTENSIONS_DIR, EXTENSIONS_DIR):
-        try:
-            peer_dirs = list(base.iterdir()) if base.is_dir() else []
-        except OSError:
-            continue
-        for peer_dir in peer_dirs:
-            if (not peer_dir.is_dir() or peer_dir.name == service_id
-                    or peer_dir.name in seen_peers):
-                continue
-            seen_peers.add(peer_dir.name)
-            if not (peer_dir / "compose.yaml").exists():
-                continue
-            if service_id in _read_direct_deps(peer_dir.name):
-                dependents_warning.append(peer_dir.name)
+    dependents_warning = _enabled_dependents(service_id)
 
     # Call agent to stop BEFORE renaming (prevents zombie containers)
     agent_ok = _call_agent("stop", service_id)
