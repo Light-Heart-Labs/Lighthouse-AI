@@ -59,6 +59,9 @@ import {
   OPERATIONS_CONTINUATION_UNVERIFIED_DELIVERY_PREFIX,
   OPERATIONS_LOOP_ABORT_REASON,
   OPERATIONS_NOT_REQUESTED_REASON,
+  UNREQUESTED_OPERATIONS_TERMINAL_REASON,
+  UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON,
+  NETWORK_DISCOVERY_UNVERIFIED_TEXT,
   OPERATIONS_REQUIRES_BROKER_REASON,
   OPERATIONS_REQUIRES_PROJECTIONS_REASON,
   OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
@@ -869,8 +872,105 @@ test("routes a compact workspace task to core tools and blocks unrequested Opera
         },
       },
     }).blockReason,
-    OPERATIONS_NOT_REQUESTED_REASON
+    UNREQUESTED_OPERATIONS_TERMINAL_REASON
   );
+});
+
+test("first unrequested Operations correction allows authorized workspace write and read", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); return true; } });
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", {
+    prompt: "Create /workspace/project/probe.py and inspect the files in that workspace.",
+  });
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.doesNotMatch(OPERATIONS_NOT_REQUESTED_REASON, /Do not call another tool/);
+  // An authorized sibling, and a model's later corrected tool selection, both
+  // remain usable. Neither spends another unrequested-Operations attempt.
+  assert.notEqual(call(guard, "write", { event: { params: {
+    path: "project/probe.py", content: "print('hello')\n",
+  } } })?.block, true);
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.notEqual(call(guard, "tool_call", { event: { params: {
+    id: "openclaw:core:read", args: { path: "project/probe.py" },
+  } } })?.block, true);
+  assert.deepEqual(aborts, []);
+  // Correct work does not reset the cumulative count if the model later
+  // selects an unrequested Operations capability again.
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.deepEqual(aborts, []);
+});
+
+test("second unrequested Operations round leaves one final-response opportunity then aborts every tool path", () => {
+  for (const next of [
+    ["pixel_ods_host_observe", { actions: ["host.identity"] }],
+    ["tool_call", { id: "pixel_ods_host_observe", args: { actions: ["host.identity"] } }],
+    ["tool_call", { id: "openclaw:pixel-operations-broker:pixel_ops_run", args: { target: "ods-host", action: "host.identity" } }],
+    ["tool_search", { query: "pixel_ods_host_observe" }],
+    ["tool_call", { id: "reply_to_current", args: { text: "Still working" } }],
+    ["tool_call", { id: "ls", args: { path: "project" } }],
+    ["pixel_ods_status", {}],
+  ]) {
+    const aborts = [];
+    const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); return true; } });
+    const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+    guard.observeRun(context, "pixel", {
+      prompt: "Create /workspace/project/probe.py and inspect the files in that workspace.",
+    });
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    assert.equal(call(guard, "tool_call", { event: { params: {
+      id: "openclaw:pixel-ods:pixel_ods_host_observe", args: { actions: ["host.identity"] },
+    } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+    assert.deepEqual(aborts, [], "first refusal permits correction to authorized workspace work");
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+    assert.match(UNREQUESTED_OPERATIONS_TERMINAL_REASON, /Do not call another tool/);
+    assert.deepEqual(aborts, [], "second refusal permits a normal final answer");
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    const result = call(guard, next[0], { event: { params: next[1] }, context: { sessionId: undefined } });
+    assert.equal(result.blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON, next[0]);
+    assert.deepEqual(aborts, ["session-1"], "abort uses the observed active session when this hook omits it");
+    assert.deepEqual(guard.verificationForRun("run-1"), { status: "failed", text: UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON });
+    call(guard, next[0], { event: { params: next[1] } });
+    assert.deepEqual(aborts, ["session-1"], "successful abort is not repeated");
+  }
+});
+
+test("parallel siblings do not spend multiple unrequested Operations correction attempts", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); return true; } });
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "Create /workspace/project/probe.py and inspect the files in that workspace." });
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.deepEqual(aborts, []);
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.deepEqual(aborts, [], "terminal-round siblings do not prematurely abort the run");
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON);
+  assert.deepEqual(aborts, ["session-1"]);
+});
+
+test("unrequested Operations abort failures remain closed and do not poison a different run", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); if (aborts.length === 1) throw new Error("temporarily unavailable"); return true; } });
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Hello Pixel." });
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON);
+  assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON);
+  assert.deepEqual(aborts, ["session-1", "session-1"]);
+  guard.observeRun({ agentId: "pixel", runId: "new-run", sessionId: "new-session" }, "pixel", { prompt: "Inspect this computer's CPU." });
+  assert.deepEqual(call(guard, "pixel_ods_host_observe", {
+    event: { runId: "new-run", params: { actions: ["host.cpu"] } },
+    context: { runId: "new-run", sessionId: "new-session" },
+  }), { params: { actions: ["host.cpu"] } });
 });
 
 test("adapts common small-model inspection aliases only to the owner workspace", () => {
@@ -3049,6 +3149,90 @@ test("classifies broad host exploration into a useful nonredundant typed invento
     userMessageOperationsRequirements([], "Explain CPU scheduling in this system."),
     { required: false, actions: ["host.cpu"] }
   );
+});
+
+test("host inspection and separate LAN discovery retain local inventory without granting peer or login authority", () => {
+  const prompt = "Can you inspect this computer and find the other computers on my local network? " +
+    "Tell me what you can actually see and which of them appear to support SSH. " +
+    "This is read-only: do not sign into another machine, change settings, or install anything.";
+  const requirements = userMessageOperationsRequirements([], prompt);
+  assert.equal(requirements.required, true);
+  assert.equal(requirements.networkDiscoveryRequested, true);
+  assert.equal(requirements.networkPeer, undefined);
+  assert.deepEqual(new Set(requirements.actions), new Set([
+    "host.identity", "host.kernel", "host.platform", "host.os-release", "host.uptime",
+    "host.processes", "host.services", "host.cpu", "host.gpu", "host.memory", "host.storage",
+    "host.network-addresses", "host.network-routes", "host.listening-ports", "host.tailscale",
+  ]));
+  assert.equal(userMessageRequestsHostCommand([], prompt), false);
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  assert.deepEqual(call(guard, "tool_call", { event: { params: {
+    id: "pixel_ods_host_observe", args: { actions: ["host.identity"], peer: "invented-peer", ports: [22] },
+  } } }), { params: { id: "pixel_ods_host_observe", args: { actions: requirements.actions } } });
+  for (const tool of ["pixel_ods_host_command_propose", "tool_call"]) {
+    assert.equal(call(guard, tool, { event: { params: tool === "tool_call"
+      ? { id: "pixel_ods_host_command_propose", args: { command: "ssh invented-peer hostname" } }
+      : { command: "ssh invented-peer hostname" } } }).block, true);
+  }
+});
+
+test("network discovery requests stay read-only and explicit local facets and exclusions stay bounded", () => {
+  for (const prompt of [
+    "Find the other computers on my local network and tell me which have SSH.",
+    "Which devices are on my LAN?",
+    "Discover devices on my local network without logging into them.",
+  ]) {
+    const value = userMessageOperationsRequirements([], prompt);
+    assert.equal(value.required, true, prompt);
+    assert.deepEqual(value.actions, ["host.network-addresses", "host.network-routes"], prompt);
+    assert.equal(value.networkDiscoveryRequested, true);
+    assert.equal(value.networkPeer, undefined);
+  }
+  assert.deepEqual(userMessageOperationsRequirements([], "Inspect my network."), {
+    required: true, actions: ["host.network-addresses", "host.network-routes"],
+  });
+  assert.deepEqual(userMessageOperationsRequirements([], "Inspect this computer's CPU and memory and find the other computers on my local network."), {
+    required: true, actions: ["host.cpu", "host.memory", "host.network-addresses", "host.network-routes"], networkDiscoveryRequested: true,
+  });
+  const excluded = userMessageOperationsRequirements([], "Inspect this computer and find other devices on my local network. Do not inspect the GPU, storage, or IP addresses.");
+  assert.equal(excluded.required, true);
+  assert.ok(excluded.actions.includes("host.cpu"));
+  for (const action of ["host.gpu", "host.storage", "host.network-addresses", "host.network-routes", "host.listening-ports", "raw-shell", "host.network-peer"]) {
+    assert.equal(excluded.actions.includes(action), false, action);
+  }
+  for (const prompt of [
+    "Build a website that can find computers on my local network. Inspect every file and show the host-verified preview.",
+    "Explain how to discover computers on my local network.",
+    "Do not inspect this computer.",
+    "Do not discover devices on my local network.",
+    "Create a fictional computer inventory and network-discovery animation.",
+  ]) assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
+});
+
+test("verified local interfaces and routes cannot become a claimed LAN discovery or SSH qualification", () => {
+  const guard = createToolLoopGuard();
+  const prompt = "Find other computers on my local network and report which support SSH.";
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  const jobId = "ops-1234567890123-abcdef123456";
+  const actions = [
+    ["addresses", "host.network-addresses", JSON.stringify([{ ifname: "eth0", addr_info: [{ family: "inet", local: "192.168.1.10", prefixlen: 24 }] }])],
+    ["routes", "host.network-routes", JSON.stringify([{ dst: "default", gateway: "192.168.1.1", dev: "eth0" }])],
+  ];
+  afterCall(guard, "pixel_ops_workflow_submit", { event: {
+    params: { steps: actions.map(([id, action]) => ({ id, target: "ods-host", action })) },
+    result: { details: { jobId, status: "submitted", kind: "workflow" } },
+  } });
+  afterCall(guard, "pixel_ops_job_wait", { event: {
+    params: { jobId }, result: { details: { jobId, status: "succeeded", waitTimedOut: false,
+      steps: actions.map(([stepId, action, stdout]) => ({ stepId, target: "ods-host", action, exitCode: 0, stdout, stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] })),
+    } },
+  } });
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "failed", "the local observation passed but the requested peer discovery did not");
+  assert.match(verification.text, /Network interfaces: eth0=192\.168\.1\.10\/24/);
+  assert.match(verification.text, /default via 192\.168\.1\.1 dev eth0/);
+  assert.ok(verification.text.endsWith(NETWORK_DISCOVERY_UNVERIFIED_TEXT));
 });
 
 test("keeps an explicit multi-facet host inspection bounded to the requested evidence", () => {

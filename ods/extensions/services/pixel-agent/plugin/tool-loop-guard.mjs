@@ -226,7 +226,16 @@ export const OPERATIONS_REQUIRES_BROKER_REASON =
   "The owner requested host or Operations evidence. Generic exec runs inside Pixel's sandbox and cannot establish host facts. For requested host.* observations, use the visible tool_call Tool Search control once with id pixel_ods_host_observe and args containing the exact requested actions; it returns the terminal broker receipt. Use pixel_ops_inventory, pixel_ops_run, and pixel_ops_job_wait only for other named Operations work. A status projection cannot substitute for required host work; use it only for an owner-requested ODS runtime facet after terminal host evidence.";
 
 export const OPERATIONS_NOT_REQUESTED_REASON =
-  "Pixel blocked this Operations tool because the owner's current request did not ask for host or ODS Operations work. For sandbox workspace work, use read, write, edit, apply_patch, exec, or process only; do not submit an Operations job.";
+  "Pixel blocked this Operations tool because the owner's current request did not ask for host or ODS Operations work. Continue only the owner's original authorized task. For requested sandbox workspace work, use read, write, edit, apply_patch, exec, or process; do not submit an Operations job or broaden the task.";
+
+export const UNREQUESTED_OPERATIONS_TERMINAL_REASON =
+  "Pixel blocked another unrequested Operations attempt after a routing correction. Do not call another tool in this response or submit an Operations job. Give the owner a final answer explaining what was verified and what remains incomplete; existing work is preserved.";
+
+export const UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON =
+  "Pixel stopped this response after another tool was requested following repeated unrequested Operations attempts and a terminal no-more-tools instruction. No additional tool was authorized; existing work is preserved.";
+
+export const NETWORK_DISCOVERY_UNVERIFIED_TEXT =
+  "LAN discovery and remote SSH availability were not verified by these local-host observations. No peer scan or remote login was performed.";
 
 export const OPERATIONS_INVENTORY_REQUIRES_TOOL_REASON =
   "The owner asked what Operations capabilities are actually available. Call only pixel_ops_inventory with no arguments, then report its bounded current inventory. Do not submit a job, call status, search for tools, or exercise any capability.";
@@ -4024,7 +4033,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
   const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i;
   const hostContext = hostContextPattern.test(text);
-  const hostFacetCount = [
+  const hostScopeFacetPatterns = [
     /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro|uptime|load averages?|system load)\b/i,
     /\b(?:process|processes|process inventory)\b/i,
     /\b(?:systemd|system services?|service inventory)\b/i,
@@ -4034,32 +4043,50 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:disk|filesystem|storage|mounts?)\b/i,
     /\b(?:network|interfaces?|addresses?|ip addresses?|routes?|routing|ports?|listeners?)\b/i,
     /\btailscale\b/i,
-  ].filter((pattern) => pattern.test(text)).length;
+  ];
+  // A second request to find network peers must not narrow an independent
+  // request to inspect this computer. Evaluate facets in the same clause as
+  // the host inspection, including coordinated discovery requests.
+  const hostIntentClauses = text.split(
+    /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:and|then)\s+(?=(?:find|discover|locate|detect|identify|list|look\s+for|scan)\b)/i
+  );
+  const artifactOrExplanation = /\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i;
+  const negatedObservationClause = (clause) => /^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don't|never|avoid|skip|omit|exclude)\b/i.test(clause);
+  const networkDiscoveryClause = (clause) =>
+    /\b(?:LAN|local\s+network)\b/i.test(clause) &&
+    /\b(?:computers|machines|hosts|devices|peers)\b/i.test(clause) &&
+    /\b(?:find|discover|locate|detect|identify|list|scan|look\s+for|which|what)\b/i.test(clause);
+  // Facets in a later "Report CPU and RAM" sentence still refine the same
+  // inspection. Only an independent peer-discovery clause is outside the
+  // local-host facet scope; do not broaden every multi-sentence host request.
+  const localHostFacetText = hostIntentClauses.filter((clause) =>
+    !networkDiscoveryClause(clause) && !negatedObservationClause(clause)).join(" ");
   const hostExplorationPattern =
     /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i;
   // Do not combine an artifact instruction such as "inspect every file" with
   // a later preview phrase such as "the host can verify it". Host exploration
   // authority requires the host scope and exploration intent in the same
   // owner-authored clause.
-  const hostExplorationIntent = text
-    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+  const hostExplorationIntent = hostIntentClauses
     .some(
       (clause) =>
-        hostContextPattern.test(clause) && hostExplorationPattern.test(clause)
+        hostContextPattern.test(clause) && hostExplorationPattern.test(clause) &&
+        !artifactOrExplanation.test(clause) && !negatedObservationClause(clause)
     );
   // A device question does not need the word "Operations" or "inspect".
   // Keep its request and device in the same clause; artifact-building and
   // explanatory sentences must not become compulsory host work.
-  const directHostObservation = text
-    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+  const directHostObservation = hostIntentClauses
     .some((clause) => hostContextPattern.test(clause) &&
       /\b(?:tell\s+me|show\s+me|check|report|measure|what(?:['’]s|\s+is)?|which|how\s+(?:much|many))\b/i.test(clause) &&
-      !/\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i.test(clause));
-  const naturalHostOverview = hostContext && (
-    /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(text) ||
-    /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(text) ||
-    /\b(?:describe|summari[sz]e|profile)\b.{0,24}\b(?:this|the|my|our|ODS)\b/i.test(text)
-  );
+      !artifactOrExplanation.test(clause) && !negatedObservationClause(clause));
+  const naturalHostOverview = hostIntentClauses.some((clause) =>
+    hostContextPattern.test(clause) && !artifactOrExplanation.test(clause) &&
+    !negatedObservationClause(clause) && (
+      /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(clause) ||
+      /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(clause) ||
+      /\b(?:describe|summari[sz]e|profile)\b.{0,24}\b(?:this|the|my|our|ODS)\b/i.test(clause)
+    ));
   const broadScopeIntent =
     /\b(?:everything|anything)\b.{0,24}\b(?:about|here|on|regarding)\b/i.test(text) ||
     /\ball\s+(?:the\s+)?(?:host\s+|machine\s+|computer\s+|system\s+)?(?:details|facts|information)\b/i.test(text) ||
@@ -4067,7 +4094,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
       text
     );
   const broadHostExploration = hostContext && (hostExplorationIntent || naturalHostOverview) &&
-    (hostFacetCount === 0 || broadScopeIntent);
+    (broadScopeIntent || !hostScopeFacetPatterns.some((pattern) => pattern.test(localHostFacetText)));
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionInventory = userMessageRequestsExtensionInventory(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
@@ -4075,6 +4102,16 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   const networkPeer = hostCommand
     ? undefined
     : userMessageNetworkPeerRequest(messages, prompt);
+  const networkDiscoveryRequested = !hostCommand && !networkPeer && hostIntentClauses.some((clause) =>
+    networkDiscoveryClause(clause) &&
+    !artifactOrExplanation.test(clause) &&
+    !negatedObservationClause(clause)) &&
+    !explicitlyExcludesHostObservation(text, "LAN|local\\s+network|network");
+  const localNetworkOverview = !hostCommand && !networkPeer && hostIntentClauses.some((clause) =>
+    /\b(?:LAN|local\s+network|(?:host|machine|computer|system|my|our|this)\s+network)\b/i.test(clause) &&
+    /\b(?:inspect|explore|check|survey|examine|report|show)\b/i.test(clause) &&
+    !/\b(?:interfaces?|addresses?|routes?|routing|ports?|listeners?)\b/i.test(clause) &&
+    !artifactOrExplanation.test(clause) && !negatedObservationClause(clause));
   const actions = [];
   if (
     /\b(?:hostname|host identity)\b/i.test(text) ||
@@ -4111,10 +4148,10 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   if (broadHostExploration || (hostContext && /\b(?:disk|filesystem|storage|mounts?)\b/i.test(text))) {
     actions.push("host.storage");
   }
-  if (broadHostExploration || (hostContext && /\b(?:network interfaces?|interfaces?|addresses?|ip addresses?)\b/i.test(text))) {
+  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:network interfaces?|interfaces?|addresses?|ip addresses?)\b/i.test(text))) {
     actions.push("host.network-addresses");
   }
-  if (broadHostExploration || (hostContext && /\b(?:routes?|routing)\b/i.test(text))) {
+  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:routes?|routing)\b/i.test(text))) {
     actions.push("host.network-routes");
   }
   if (
@@ -4181,11 +4218,12 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   return {
     required:
       capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
-      (hostContext && (hostExplorationIntent || directHostObservation) &&
+      ((localNetworkOverview || networkDiscoveryRequested || (hostContext && (hostExplorationIntent || directHostObservation))) &&
         requestedActions.some((action) => action.startsWith("host."))) ||
       extensionInventory || extensionCatalog || Boolean(extensionLifecycle) || hostCommand || Boolean(networkPeer),
     actions: requestedActions,
     ...(networkPeer ? { networkPeer } : {}),
+    ...(networkDiscoveryRequested ? { networkDiscoveryRequested: true } : {}),
   };
 }
 
@@ -5070,6 +5108,11 @@ export function createToolLoopGuard({
         operationsHostCommandRequested: false,
         operationsExactHostCommand: undefined,
         operationsNetworkPeer: undefined,
+        operationsNetworkDiscoveryRequested: false,
+        unrequestedOperationsDeniedRounds: 0,
+        unrequestedOperationsDeniedRound: 0,
+        unrequestedOperationsTerminal: false,
+        unrequestedOperationsAborted: false,
         operationsInventoryOnly: false,
         operationsInventoryAttempted: false,
         operationsInventory: undefined,
@@ -5218,6 +5261,28 @@ export function createToolLoopGuard({
     // policy and deterministic routing active from runId alone; operations
     // that truly need a session still fail closed on the optional sessionId.
     const state = runId ? stateFor(runId) : undefined;
+    // Put this terminal fuse before every tool-specific return, including
+    // Tool Search, reply controls, and workspace recovery adaptations. The
+    // first offending round remains a recoverable routing correction. Only
+    // after a second offending round and one final-answer opportunity does
+    // another tool abort the real active run instead of blocking forever.
+    if (state?.unrequestedOperationsTerminal) {
+      if (state.operationsPromptRound > 0 &&
+          state.operationsPromptRound === state.unrequestedOperationsDeniedRound) {
+        // Parallel siblings were chosen before the terminal correction
+        // reached the model. Do not turn them into an early run abort.
+        return { block: true, blockReason: UNREQUESTED_OPERATIONS_TERMINAL_REASON };
+      }
+      const activeSession = sessionId ?? state.currentSessionId;
+      if (!state.unrequestedOperationsAborted && typeof activeSession === "string" && activeSession) {
+        try {
+          state.unrequestedOperationsAborted = typeof abortRun === "function" && Boolean(abortRun(activeSession));
+        } catch (error) {
+          warn(`Pixel unrequested-Operations abort failed for run ${runId}: ${String(error)}`);
+        }
+      }
+      return { block: true, blockReason: UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON };
+    }
     let pendingParams = normalizedParams ?? event?.params;
     if (
       state?.workspaceVisualContinuationRequested &&
@@ -6153,6 +6218,10 @@ export function createToolLoopGuard({
           : { params: { jobId } };
       }
     }
+    if (state?.operationsRequired && !state.operationsHostCommandRequested &&
+        effectiveToolName === SYNCHRONOUS_HOST_COMMAND_TOOL) {
+      return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
+    }
     if (state?.operationsHostCommandRequested) {
       if (state.operationsTerminalJobs.size > 0) {
         return { block: true, blockReason: OPERATIONS_HOST_COMMAND_COMPLETE_REASON };
@@ -6246,7 +6315,21 @@ export function createToolLoopGuard({
       !state.exactDownloadRequested &&
       OPERATIONS_TOOLS.has(effectiveToolName)
     ) {
-      return { block: true, blockReason: OPERATIONS_NOT_REQUESTED_REASON };
+      // Count offending model rounds cumulatively, not parallel siblings or
+      // unrelated authorized workspace calls. Without model-round telemetry,
+      // each subsequent offending selection is the bounded fallback attempt.
+      if (state.operationsPromptRound === 0 ||
+          state.operationsPromptRound !== state.unrequestedOperationsDeniedRound) {
+        state.unrequestedOperationsDeniedRounds += 1;
+      }
+      state.unrequestedOperationsDeniedRound = state.operationsPromptRound;
+      state.unrequestedOperationsTerminal = state.unrequestedOperationsDeniedRounds >= 2;
+      return {
+        block: true,
+        blockReason: state.unrequestedOperationsTerminal
+          ? UNREQUESTED_OPERATIONS_TERMINAL_REASON
+          : OPERATIONS_NOT_REQUESTED_REASON,
+      };
     }
 
     if (state?.exactDownloadRequested && state.exactDownloadPromotion) {
@@ -7088,6 +7171,7 @@ export function createToolLoopGuard({
           ? userMessageExactHostCommand(event?.messages, event?.prompt)
           : undefined;
         state.operationsNetworkPeer = operations.networkPeer;
+        state.operationsNetworkDiscoveryRequested = operations.networkDiscoveryRequested === true;
         state.operationsInventoryOnly =
           state.operationsRequired &&
           !operationsContinuation &&
@@ -8102,6 +8186,9 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
+    if (state.unrequestedOperationsAborted) {
+      return { status: "failed", text: UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON };
+    }
     if (
       state.workspacePreviewRequested &&
       !state.operationsRequired &&
@@ -8277,13 +8364,16 @@ export function createToolLoopGuard({
           : evidenceText;
         return {
           status:
+            !state.operationsNetworkDiscoveryRequested && (
             evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX) ||
-            evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX)
+            evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX))
             ? "passed"
             : "failed",
-          text: verifiedText,
+          text: state.operationsNetworkDiscoveryRequested
+            ? `${verifiedText}\n- ${NETWORK_DISCOVERY_UNVERIFIED_TEXT}`
+            : verifiedText,
         };
       }
     }
