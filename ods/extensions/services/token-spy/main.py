@@ -16,6 +16,7 @@ import re
 import secrets
 import shlex
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -41,6 +42,11 @@ else:
     from db import init_db, log_usage, query_report, query_session_status, query_summary, query_usage, query_recent_events
 
 # ── Configuration ────────────────────────────────────────────────────────────
+
+
+# Serializes read-modify-write of per-agent sessions.json so concurrent
+# /api/reset-session calls cannot clobber each other's updates.
+_sessions_json_lock = threading.Lock()
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "unknown")
 START_TIME = time.time()
@@ -1406,18 +1412,24 @@ def _kill_session(agent: str, reason: str = "manual") -> dict:
     except FileNotFoundError:
         return {"agent": agent, "action": "none", "reason": "session file already gone"}
 
-    # Clean sessions.json reference (best-effort)
+    # Clean sessions.json reference (best-effort).
+    # Serialize under a lock and write atomically: concurrent /api/reset-session
+    # calls otherwise interleave read-modify-write and silently drop each other's
+    # deletions, or truncate the file mid-write.
     sessions_json = f"{sessions_dir}/sessions.json"
-    try:
-        with open(sessions_json, "r") as f:
-            data = json.load(f)
-        to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get("sessionId") == largest]
-        for k in to_remove:
-            del data[k]
-        with open(sessions_json, "w") as f:
-            json.dump(data, f, indent=2)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        log.warning(f"[RESET] Failed to clean sessions.json for {agent}")
+    with _sessions_json_lock:
+        try:
+            with open(sessions_json, "r") as f:
+                data = json.load(f)
+            to_remove = [k for k, v in data.items() if isinstance(v, dict) and v.get("sessionId") == largest]
+            for k in to_remove:
+                del data[k]
+            tmp_path = f"{sessions_json}.tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, sessions_json)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            log.warning(f"[RESET] Failed to clean sessions.json for {agent}")
 
     log.warning(f"[RESET] Killed session {largest} for {agent} ({size} bytes) — {reason}")
     return {"agent": agent, "action": "killed", "session_id": largest, "size_bytes": size}
