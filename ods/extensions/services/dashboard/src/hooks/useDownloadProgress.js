@@ -30,24 +30,25 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
   const [cancelError, setCancelError] = useState(null)
   const [isCancelling, setIsCancelling] = useState(false)
   const lastCompleteKeyRef = useRef(null)
-  const progressRequestRef = useRef(0)
-  const latestAppliedProgressRequestRef = useRef(0)
+  const progressInFlightRef = useRef(false)
   const cancelInFlightRef = useRef(false)
 
   const fetchProgress = useCallback(async () => {
-    const requestId = ++progressRequestRef.current
+    if (progressInFlightRef.current) return null
+    progressInFlightRef.current = true
+
     try {
       const response = await fetch('/api/models/download-status')
       if (!response.ok) return
       
       const data = await response.json()
-      if (requestId < latestAppliedProgressRequestRef.current) return data
-      latestAppliedProgressRequestRef.current = requestId
       
       if (data.status === 'downloading' || data.status === 'verifying') {
         const downloaded = data.bytesDownloaded || 0
         const total = data.bytesTotal || 0
-        const rawPercent = total > 0 ? (downloaded / total) * 100 : 0
+        const rawPercent = total > 0
+          ? (downloaded / total) * 100
+          : Number.isFinite(data.percent) ? data.percent : 0
         const percent = Math.min(100, Math.max(0, rawPercent))
 
         setIsDownloading(true)
@@ -93,6 +94,8 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
     } catch {
       // Silently fail - API might not be available
       return null
+    } finally {
+      progressInFlightRef.current = false
     }
   }, [])
 
