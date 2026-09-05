@@ -21,6 +21,11 @@ fi
 
 set -euo pipefail
 
+command -v jq >/dev/null 2>&1 || {
+    echo "ERROR: jq is required for functional API response validation" >&2
+    exit 1
+}
+
 # Colors
 RED='\e[0;31m'
 GREEN='\e[0;32m'
@@ -73,16 +78,9 @@ test_llm_functional() {
     echo ""
     echo "> Testing LLM Functional Generation"
 
-    # The grep-based extraction pipelines in this script may legitimately
-    # produce zero matches (LLM/TTS/embeddings/whisper offline or returning
-    # unexpected payload). Under `set -euo pipefail` such a no-match would
-    # abort the script before the `[[ -z ... ]]` guard below can treat it
-    # as a test failure. Using `if ! VAR=$(...)` keeps the set -e safety
-    # net engaged everywhere else; `set -e` is disabled only for the
-    # evaluation of the condition (per bash spec), so a failed pipeline
-    # leaves VAR empty and the explicit `fail` path below runs.
     local model_id=""
-    if ! model_id=$(curl -s --max-time 10 "$LLM_URL/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4); then
+    if ! model_id=$(curl -s --max-time 10 "$LLM_URL/v1/models" 2>/dev/null \
+        | jq -er '.data[0].id | select(type == "string" and length > 0)'); then
         model_id=""
     fi
     model_id="${model_id:-local}"
@@ -102,7 +100,9 @@ test_llm_functional() {
     fi
 
     local content=""
-    if ! content=$(echo "$response" | grep -oE '"content":[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4); then
+    if ! content=$(jq -er \
+        '.choices[0].message.content | select(type == "string" and length > 0)' \
+        <<< "$response"); then
         content=""
     fi
 
@@ -197,12 +197,11 @@ test_embeddings_functional() {
         return 1
     fi
     
-    # Check if response contains array of numbers
-    if echo "$response" | grep -qE '\[\s*-?[0-9]+\.[0-9]+'; then
-        local vector_len=0
-        if ! vector_len=$(echo "$response" | grep -oE '-?[0-9]+\.[0-9]+' | wc -l); then
-            vector_len=0
-        fi
+    # TEI returns an array (usually nested) of numeric vector components.
+    local vector_len=0
+    if vector_len=$(jq -er \
+        'if type == "array" then ([.. | numbers] | length) else 0 end | select(. > 0)' \
+        <<< "$response"); then
         pass "Embeddings generates vectors ($vector_len dimensions)"
     else
         fail "Embeddings did not return valid vectors"
@@ -252,7 +251,7 @@ test_whisper_functional() {
     fi
     
     local transcription=""
-    if ! transcription=$(echo "$response" | grep -oE '"text":[[:space:]]*"[^"]+"' | head -1 | cut -d'"' -f4); then
+    if ! transcription=$(jq -er '.text | select(type == "string" and length > 0)' <<< "$response"); then
         transcription=""
     fi
     
