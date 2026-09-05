@@ -24,8 +24,12 @@ esac
 
 REPORT_FILE="${1:-/tmp/ods-doctor-report.json}"
 
-CAP_FILE="/tmp/ods-doctor-capabilities.json"
-PREFLIGHT_FILE="/tmp/ods-doctor-preflight.json"
+# Unique per-run intermediates: two overlapping doctor runs must not share
+# (or symlink-swap) the same fixed /tmp path, and the JSON readers below
+# would otherwise parse a foreign or truncated file mid-run.
+CAP_FILE="$(mktemp "${TMPDIR:-/tmp}/ods-doctor-capabilities.XXXXXXXX")"
+PREFLIGHT_FILE="$(mktemp "${TMPDIR:-/tmp}/ods-doctor-preflight.XXXXXXXX")"
+trap 'rm -f "$CAP_FILE" "$PREFLIGHT_FILE"' EXIT
 DOCTOR_BASH_CMD="${BASH:-}"
 if [[ -z "$DOCTOR_BASH_CMD" || ! -x "$DOCTOR_BASH_CMD" ]]; then
     DOCTOR_BASH_CMD="$(command -v bash 2>/dev/null || printf '%s\n' bash)"
