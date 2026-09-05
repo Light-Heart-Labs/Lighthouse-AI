@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:17:14Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -1731,6 +1731,59 @@
           "priority": 9
         }
       ]
+    },
+    {
+      "id": "meilisearch",
+      "name": "Meilisearch",
+      "description": "Typo-tolerant full-text and hybrid search API for local apps and agents.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 7700,
+      "external_port_default": 7700,
+      "health_endpoint": "/health",
+      "env_vars": [
+        {
+          "key": "MEILI_MASTER_KEY",
+          "required": true,
+          "description": "Master key for all Meilisearch API access"
+        }
+      ],
+      "tags": [
+        "search",
+        "full-text",
+        "hybrid-search",
+        "typo-tolerance",
+        "agents"
+      ],
+      "features": [
+        {
+          "id": "meilisearch-api",
+          "name": "Typo-Tolerant Search API",
+          "description": "Fast full-text, filtering, faceting, and hybrid search for local datasets",
+          "icon": "Search",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "meilisearch"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 10
+          },
+          "enabled_services_all": [
+            "meilisearch"
+          ],
+          "setup_time": "~1 minute",
+          "priority": 34,
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 90
     },
     {
       "id": "milvus",

@@ -1,0 +1,48 @@
+schema_version: ods.services.v1
+
+service:
+  id: meilisearch
+  name: Meilisearch
+  aliases: [search-engine, full-text-search]
+  container_name: ods-meilisearch
+  host_env: MEILISEARCH_HOST
+  default_host: meilisearch
+  port: 7700
+  external_port_env: MEILISEARCH_PORT
+  external_port_default: 7700
+  health: /health
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 90
+  description: "Typo-tolerant full-text and hybrid search API for local apps and agents."
+  env_vars:
+    - key: MEILI_MASTER_KEY
+      required: true
+      secret: true
+      description: Master key for all Meilisearch API access
+  setup_hook: setup.sh
+
+features:
+  - id: meilisearch-api
+    name: Typo-Tolerant Search API
+    description: Fast full-text, filtering, faceting, and hybrid search for local datasets
+    icon: Search
+    category: data
+    requirements:
+      services: [meilisearch]
+      vram_gb: 0
+      disk_gb: 10
+    enabled_services_all: [meilisearch]
+    setup_time: ~1 minute
+    priority: 34
+    gpu_backends: [all]
+
+tags:
+  - search
+  - full-text
+  - hybrid-search
+  - typo-tolerance
+  - agents
