@@ -26,9 +26,9 @@ export function useVersion() {
           data.update_available = false
         }
         setVersion(data)
+        setError(null)
       } catch (err) {
         setError(err.message)
-        setVersion(null)
       } finally {
         setLoading(false)
       }
