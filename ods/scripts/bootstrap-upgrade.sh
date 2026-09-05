@@ -106,23 +106,62 @@ get_remote_size() {
         | grep -i '^content-length:' | tail -1 | tr -dc '0-9'
 }
 
-# Write status JSON (atomic via mv)
+# Write status JSON with a flushed + fsync'd atomic replace.
+#
+# Plain `cat >` + `mv` is neither durable (no fsync) nor atomic across
+# filesystem boundaries (mv falls back to cp+unlink), so an interruption
+# during a multi-GB download could leave bootstrap-status.json 0-byte or
+# truncated. Mirror the robust pattern from scripts/session-cleanup.sh:
+# write to a temp file in the same directory, fsync, then os.replace.
 write_status() {
     local status="$1" percent="${2:-}" downloaded="${3:-0}" total="${4:-0}" speed="${5:-0}" eta="${6:-}"
-    local _safe_model="${FULL_GGUF_FILE//\"/\\\"}"
-    cat > "$STATUS_FILE.tmp" << STATUSEOF
-{
-  "status": "$status",
-  "model": "$_safe_model",
-  "percent": ${percent:-null},
-  "bytesDownloaded": $downloaded,
-  "bytesTotal": $total,
-  "speedBytesPerSec": $speed,
-  "eta": "${eta:-}",
-  "updatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%SZ')"
+    local model="${FULL_GGUF_FILE:-}"
+    STATUS_DEST="$STATUS_FILE" STATUS_MODEL="$model" \
+    STATUS_STATUS="$status" STATUS_PERCENT="$percent" \
+    STATUS_DOWNLOADED="$downloaded" STATUS_TOTAL="$total" \
+    STATUS_SPEED="$speed" STATUS_ETA="$eta" \
+    python3 - <<'PY'
+import os, sys, json, tempfile, datetime
+dst = os.environ["STATUS_DEST"]
+model = os.environ.get("STATUS_MODEL", "")
+status = os.environ.get("STATUS_STATUS", "")
+percent_raw = os.environ.get("STATUS_PERCENT", "")
+downloaded = int(os.environ.get("STATUS_DOWNLOADED", "0") or 0)
+total = int(os.environ.get("STATUS_TOTAL", "0") or 0)
+speed = int(os.environ.get("STATUS_SPEED", "0") or 0)
+eta = os.environ.get("STATUS_ETA", "") or ""
+try:
+    percent = int(percent_raw)
+except (TypeError, ValueError):
+    percent = None
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+obj = {
+    "status": status,
+    "model": model,
+    "percent": percent,
+    "bytesDownloaded": downloaded,
+    "bytesTotal": total,
+    "speedBytesPerSec": speed,
+    "eta": eta,
+    "updatedAt": now,
 }
-STATUSEOF
-    mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+parent = os.path.dirname(dst) or "."
+fd, tmp = tempfile.mkstemp(prefix=".bootstrap-status.", suffix=".tmp", dir=parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(obj, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, dst)
+finally:
+    if os.path.exists(tmp):
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+PY
 }
 
 status_percent() {
