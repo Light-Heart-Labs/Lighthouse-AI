@@ -1619,6 +1619,21 @@ def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
             raise HTTPException(
                 status_code=409, detail=f"Extension already installed: {service_id}",
             )
+
+    missing_deps = _get_missing_install_deps(service_id)
+    if missing_deps:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    "Install or enable dependencies first: "
+                    f"{', '.join(missing_deps)}"
+                ),
+                "missing_dependencies": missing_deps,
+            },
+        )
+
+    if dest.exists():
         # Broken or failed directory — clean up before reinstall.
         logger.warning("Cleaning up extension directory before retry: %s", dest)
         shutil.rmtree(dest)
@@ -2064,10 +2079,12 @@ def _read_direct_deps(service_id: str) -> list[str]:
     """Return direct depends_on list for a service from its manifest.
 
     Checks user-extensions first, then built-in extensions — the same
-    shadowing order as _resolve_extension_dir. A user directory without a
-    manifest still shadows a built-in of the same id.
+    shadowing order as _resolve_extension_dir — and finally the installable
+    library source so dependencies can be checked before the target is copied.
+    A user directory without a manifest still shadows a built-in of the same
+    id.
     """
-    for base in (USER_EXTENSIONS_DIR, EXTENSIONS_DIR):
+    for base in (USER_EXTENSIONS_DIR, EXTENSIONS_DIR, EXTENSIONS_LIBRARY_DIR):
         ext_dir = base / service_id
         if not ext_dir.is_dir():
             continue
@@ -2088,6 +2105,26 @@ def _is_dep_satisfied(dep: str) -> bool:
     if (USER_EXTENSIONS_DIR / dep / "compose.yaml").exists():
         return True
     return False
+
+
+def _get_missing_install_deps(service_id: str) -> list[str]:
+    """Resolve dependencies from the authoritative library source pre-copy."""
+    source_dir = EXTENSIONS_LIBRARY_DIR / service_id
+    direct_deps: list[str] = []
+    for name in ("manifest.yaml", "manifest.yml"):
+        candidate = source_dir / name
+        if candidate.exists():
+            direct_deps = _parse_manifest_deps(candidate)
+            break
+
+    order: list[str] = []
+    visiting = {service_id}
+    for dep in direct_deps:
+        if _is_dep_satisfied(dep) or dep in order:
+            continue
+        _get_missing_deps_transitive(dep, _visiting=visiting, _order=order)
+        order.append(dep)
+    return order
 
 
 def _get_missing_deps_transitive(
