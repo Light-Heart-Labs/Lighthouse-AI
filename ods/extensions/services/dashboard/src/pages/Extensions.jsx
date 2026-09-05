@@ -1295,7 +1295,7 @@ function ConsoleModal({ ext, onClose }) {
           <span className={`text-[10px] ${disconnected ? 'text-red-400' : 'text-theme-text-muted'}`}>
             {disconnected ? 'Reconnecting...' : 'Auto-refreshing every 2s'}
           </span>
-          <button onClick={fetchLogsOnce} className="text-xs text-theme-text-muted hover:text-theme-text-secondary transition-colors" title="Refresh now">
+          <button onClick={fetchLogsOnce} className="text-xs text-theme-text-muted hover:text-theme-text-secondary transition-colors" title="Refresh now" aria-label="Refresh logs">
             <RefreshCw size={12} />
           </button>
         </div>
