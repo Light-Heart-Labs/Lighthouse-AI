@@ -188,6 +188,7 @@ async def _check_host_systemd_health(service_id: str, config: dict) -> ServiceSt
 _TOKEN_FILE = Path(DATA_DIR) / "token_counter.json"
 _PERF_FILE = Path(DATA_DIR) / "model_performance.json"
 MAX_SINGLE_REQUEST_TOKENS_PER_SECOND = 10_000.0
+MAX_MODEL_PERFORMANCE_SAMPLES = 512
 _prev_tokens = {"count": 0, "time": 0.0, "tps": 0.0}
 _token_counter_lock = threading.Lock()
 
@@ -293,6 +294,29 @@ def _performance_key(backend: str, gpu_name: str, model_name: str,
     return ":".join(parts)
 
 
+def _prune_model_performance_samples(samples: dict, protected_keys: set[str]) -> None:
+    """Discard the oldest observations while retaining the sample just recorded."""
+    excess = len(samples) - MAX_MODEL_PERFORMANCE_SAMPLES
+    if excess <= 0:
+        return
+
+    def updated_at(item: tuple[str, object]) -> float:
+        sample = item[1]
+        if not isinstance(sample, dict):
+            return 0.0
+        try:
+            return float(sample.get("updated_at", 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    candidates = sorted(
+        ((key, sample) for key, sample in samples.items() if key not in protected_keys),
+        key=updated_at,
+    )
+    for key, _sample in candidates[:excess]:
+        samples.pop(key, None)
+
+
 def record_model_performance(
     model_name: Optional[str],
     gpu_name: Optional[str],
@@ -350,7 +374,9 @@ def record_model_performance(
         "sample_count": previous_count + 1,
         "updated_at": int(time.time()),
     }
-    samples[_performance_key(backend, gpu_name, model_name)] = samples[key]
+    generic_key = _performance_key(backend, gpu_name, model_name)
+    samples[generic_key] = samples[key]
+    _prune_model_performance_samples(samples, {key, generic_key})
     _write_json_file(_PERF_FILE, data)
 
 
