@@ -9,27 +9,12 @@ ods_docker_rootless_state() {
         0|false) return 1 ;;
     esac
 
-    # Docker reports rootless via .SecurityOptions (contains "name=rootless").
-    # This field is Docker-specific; the podman "docker" shim does not expose it
-    # and the Go template errors out instead of returning empty.
     local security_options
-    if security_options=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null) \
-       && [[ -n "$security_options" && "$security_options" != "null" ]]; then
-        grep -q 'rootless' <<<"$security_options"
-        return
+    if ! security_options=$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null); then
+        echo "[error] Could not determine whether Docker is running in rootless mode." >&2
+        return 2
     fi
-
-    # Podman (invoked through the docker CLI shim) reports rootless via
-    # .Host.Security.Rootless — a plain "true"/"false" boolean.
-    local podman_rootless
-    if podman_rootless=$(docker info --format '{{.Host.Security.Rootless}}' 2>/dev/null) \
-       && [[ -n "$podman_rootless" ]]; then
-        [[ "$podman_rootless" == "true" ]]
-        return
-    fi
-
-    echo "[error] Could not determine whether Docker is running in rootless mode." >&2
-    return 2
+    grep -q '"name=rootless"\|rootless' <<<"$security_options"
 }
 
 ods_is_rootless_docker() {
@@ -71,7 +56,16 @@ _ods_rootless_service_enabled() {
         hermes)   [[ "${ENABLE_HERMES:-false}" == "true" ]] ;;
         comfyui)  [[ "${ENABLE_COMFYUI:-false}" == "true" ]] ;;
         langfuse) [[ "${ENABLE_LANGFUSE:-${LANGFUSE_ENABLED:-false}}" == "true" ]] ;;
-        *) return 1 ;;
+        *)
+            # PR #32: Fallback for extensions not in the hardcoded list above.
+            # If the service has a compose.yaml under extensions/, treat it as
+            # potentially enabled so ownership repair isn't silently skipped.
+            local _install="${INSTALL_DIR:-${ODS_DIR:-}}"
+            [[ -n "$_install" ]] || return 1
+            [[ -f "$_install/extensions/services/${service}/compose.yaml" ]] \
+                || [[ -f "$_install/data/user-extensions/${service}/compose.yaml" ]] \
+                || return 1
+            ;;
     esac
 }
 
@@ -131,51 +125,6 @@ _ods_rootless_ensure_helper_image() {
         echo "[error] Could not pull $ODS_ROOTLESS_HELPER_IMAGE for rootless ownership repair." >&2
         return 1
     fi
-}
-
-ods_rootless_make_host_writable() {
-    local install_dir="$1" relative="$2" install_root target
-
-    case "$relative" in
-        config/*) ;;
-        *)
-            echo "[error] Refusing rootless host-writable repair outside config/: $relative" >&2
-            return 1
-            ;;
-    esac
-    case "/$relative/" in
-        */../*)
-            echo "[error] Refusing rootless host-writable path traversal: $relative" >&2
-            return 1
-            ;;
-    esac
-    [[ ! -L "$install_dir/$relative" ]] || {
-        echo "[error] Refusing rootless host-writable repair for symlink: $relative" >&2
-        return 1
-    }
-
-    install_root=$(readlink -f "$install_dir") || return 1
-    target=$(readlink -f "$install_dir/$relative") || return 1
-    case "$target" in
-        "$install_root"/config/*) ;;
-        *)
-            echo "[error] Rootless host-writable target escapes config/: $relative -> $target" >&2
-            return 1
-            ;;
-    esac
-
-    _ods_rootless_ensure_helper_image || return 1
-    if ! docker run --rm --pull never --user 0:0 --network none \
-        -v "$target:/target" \
-        "$ODS_ROOTLESS_HELPER_IMAGE" \
-        chown -R 0:0 /target; then
-        echo "[error] Could not restore host-user ownership for $relative in the rootless namespace." >&2
-        return 1
-    fi
-    [[ -w "$target" ]] || {
-        echo "[error] Rootless host-writable verification failed for $relative." >&2
-        return 1
-    }
 }
 
 _ods_rootless_ensure_directory() {
