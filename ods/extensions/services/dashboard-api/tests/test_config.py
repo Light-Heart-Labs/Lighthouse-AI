@@ -146,10 +146,41 @@ class TestHostAgentResolution:
 
     def test_resolve_agent_host_falls_back_outside_container(self, monkeypatch):
         monkeypatch.delenv("ODS_AGENT_HOST", raising=False)
+        monkeypatch.delenv("ODS_DOCKER_ROOTLESS", raising=False)
         monkeypatch.setattr(config, "_running_inside_container", lambda: False)
         monkeypatch.setattr(config, "_detect_container_default_gateway", lambda: "192.168.1.1")
 
         assert config._resolve_agent_host() == "host.docker.internal"
+
+    def test_resolve_agent_host_prefers_host_lan_ip_when_rootless(self, monkeypatch):
+        # Rootless: the container gateway can't reach the host, so the agent host
+        # is the installer-detected HOST_LAN_IP (no persisted DHCP ODS_AGENT_HOST).
+        monkeypatch.delenv("ODS_AGENT_HOST", raising=False)
+        monkeypatch.setenv("ODS_DOCKER_ROOTLESS", "true")
+        monkeypatch.setenv("HOST_LAN_IP", "10.1.1.17")
+        monkeypatch.setattr(config, "_running_inside_container", lambda: True)
+        monkeypatch.setattr(config, "_detect_container_default_gateway", lambda: "172.18.0.1")
+
+        assert config._resolve_agent_host() == "10.1.1.17"
+
+    def test_resolve_agent_host_rootless_without_lan_ip_uses_gateway(self, monkeypatch):
+        # Regular rootless install (no --lan): HOST_LAN_IP is unset, so the
+        # gateway path is used (agent is host-only in that configuration).
+        monkeypatch.delenv("ODS_AGENT_HOST", raising=False)
+        monkeypatch.setenv("ODS_DOCKER_ROOTLESS", "true")
+        monkeypatch.delenv("HOST_LAN_IP", raising=False)
+        monkeypatch.setattr(config, "_running_inside_container", lambda: True)
+        monkeypatch.setattr(config, "_detect_container_default_gateway", lambda: "172.18.0.1")
+
+        assert config._resolve_agent_host() == "172.18.0.1"
+
+    def test_resolve_agent_host_explicit_wins_over_rootless_lan_ip(self, monkeypatch):
+        monkeypatch.setenv("ODS_AGENT_HOST", "10.9.8.7")
+        monkeypatch.setenv("ODS_DOCKER_ROOTLESS", "true")
+        monkeypatch.setenv("HOST_LAN_IP", "10.1.1.17")
+        monkeypatch.setattr(config, "_running_inside_container", lambda: True)
+
+        assert config._resolve_agent_host() == "10.9.8.7"
 
 
 class TestHostNativeLlmResolution:

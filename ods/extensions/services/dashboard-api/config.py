@@ -636,6 +636,15 @@ def _resolve_agent_host() -> str:
     explicit = os.environ.get("ODS_AGENT_HOST", "").strip()
     if explicit:
         return explicit
+    # Docker rootless: the container's default gateway is not routable to the
+    # host, so the only reachable host address is the LAN IP the installer
+    # detected (HOST_LAN_IP, set under --lan). Prefer it so a 0.0.0.0-bound agent
+    # is reachable without persisting a DHCP IP as an ODS_AGENT_HOST setting.
+    if os.environ.get("ODS_DOCKER_ROOTLESS", "").strip().lower() == "true":
+        host_lan_ip = os.environ.get("HOST_LAN_IP", "").strip()
+        if host_lan_ip:
+            logger.info("Resolved ODS_AGENT_HOST=%s via HOST_LAN_IP (rootless)", host_lan_ip)
+            return host_lan_ip
     if _running_inside_container():
         gw = _detect_container_default_gateway()
         if gw:
