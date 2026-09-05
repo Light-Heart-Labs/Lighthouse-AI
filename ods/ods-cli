@@ -121,7 +121,7 @@ _env_set() {
         # Use awk to avoid sed delimiter collisions with values containing | / or =
         awk -v k="$key" -v v="$val" '{
             if (index($0, k "=") == 1) print k "=" v; else print
-        }' "$file" > "${file}.tmp" && cat "${file}.tmp" > "$file" && rm -f "${file}.tmp"
+        }' "$file" > "${file}.tmp" && mv -f "${file}.tmp" "$file"
     else
         echo "${key}=${val}" >> "$file"
     fi
@@ -131,8 +131,7 @@ _env_unset() {
     local key="$1" file="$INSTALL_DIR/.env"
     [[ -f "$file" ]] || return 0
     awk -v k="$key" 'index($0, k "=") != 1 { print }' "$file" > "${file}.tmp" \
-        && cat "${file}.tmp" > "$file" \
-        && rm -f "${file}.tmp"
+        && mv -f "${file}.tmp" "$file"
 }
 
 _env_get_raw() {
@@ -6387,6 +6386,66 @@ cmd_template() {
     esac
 }
 
+# PR #37: Disk usage breakdown for ODS directories
+cmd_disk_usage() {
+    echo ""
+    echo -e "${BOLD}ODS Disk Usage${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    local total_kb=0
+    local _fmt="%-30s %10s\n"
+
+    _du_line() {
+        local label="$1" path="$2"
+        if [[ -d "$path" ]]; then
+            local size_kb
+            size_kb=$(du -sk "$path" 2>/dev/null | awk '{print $1}')
+            local size_human
+            size_human=$(du -sh "$path" 2>/dev/null | awk '{print $1}')
+            printf "$_fmt" "$label" "$size_human"
+            total_kb=$(( total_kb + ${size_kb:-0} ))
+        else
+            printf "$_fmt" "$label" "—"
+        fi
+    }
+
+    _du_line "📁 User data (open-webui)" "$INSTALL_DIR/data/open-webui"
+    _du_line "📁 User data (n8n)"        "$INSTALL_DIR/data/n8n"
+    _du_line "📁 User data (qdrant)"     "$INSTALL_DIR/data/qdrant"
+    _du_line "📁 User data (baserow)"    "$INSTALL_DIR/data/baserow"
+    _du_line "📁 User data (openclaw)"   "$INSTALL_DIR/data/openclaw"
+    _du_line "🤖 Models"                 "$INSTALL_DIR/data/models"
+    _du_line "💾 Backups"                "$INSTALL_DIR/.backups"
+    _du_line "📦 Cache (HF)"            "$INSTALL_DIR/data/hf-cache"
+    _du_line "🔧 Extensions"            "$INSTALL_DIR/extensions"
+    _du_line "🧩 User extensions"       "$INSTALL_DIR/data/user-extensions"
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local total_human
+    if command -v numfmt >/dev/null 2>&1; then
+        total_human=$(echo "$(( total_kb * 1024 ))" | numfmt --to=iec --suffix=B 2>/dev/null || echo "${total_kb}KB")
+    else
+        total_human="$(( total_kb / 1024 ))MB"
+    fi
+    printf "$_fmt" "TOTAL (on-disk)" "$total_human"
+    echo ""
+
+    # Docker storage
+    if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+        echo -e "${BOLD}Docker Storage${NC}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        docker system df 2>/dev/null || echo "  (docker system df failed)"
+    fi
+    echo ""
+
+    # Filesystem free space
+    echo -e "${BOLD}Filesystem${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    df -h "$INSTALL_DIR" 2>/dev/null | head -2
+    echo ""
+}
+
 cmd_help() {
     sr_load
     cat << EOF
@@ -6590,6 +6649,7 @@ case "${1:-help}" in
     template|tmpl) shift; cmd_template "$@" ;;
     agent)        shift; cmd_agent "$@" ;;
     help|h|--help|-h) cmd_help ;;
+    disk-usage|disk|du) shift; cmd_disk_usage "$@" ;;
     version|v|--version|-v) echo "ods-cli v${VERSION}" ;;
     *)           error "Unknown command: $1. Run 'ods help' for usage." ;;
 esac
