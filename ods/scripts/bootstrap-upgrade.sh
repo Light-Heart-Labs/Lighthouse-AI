@@ -3109,6 +3109,7 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
             [[ -z "$_bind" ]] && _bind="127.0.0.1"
             _native_port=$(grep '^ODS_NATIVE_LLAMA_PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
             [[ "$_native_port" =~ ^[0-9]+$ ]] || _native_port="8080"
+            _parallel=$(grep '^LLAMA_PARALLEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
             _flash_attn=$(grep '^LLAMA_ARG_FLASH_ATTN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
             _cache_type_k=$(grep '^LLAMA_ARG_CACHE_TYPE_K=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
             _cache_type_v=$(grep '^LLAMA_ARG_CACHE_TYPE_V=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
@@ -3125,6 +3126,7 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
                 --reasoning-format "$_reasoning_fmt"
                 --metrics
             )
+            [[ -n "$_parallel" ]] && _llama_args+=(--parallel "$_parallel")
             [[ -n "$_flash_attn" ]] && _llama_args+=(--flash-attn "$_flash_attn")
             [[ -n "$_cache_type_k" ]] && _llama_args+=(--cache-type-k "$_cache_type_k")
             [[ -n "$_cache_type_v" ]] && _llama_args+=(--cache-type-v "$_cache_type_v")
@@ -3163,15 +3165,18 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
                     kill -9 "$_new_pid" 2>/dev/null || true
                 fi
                 if [[ -n "${_old_model_path:-}" && -f "$_old_model_path" ]]; then
+                    # Preserve the complete verified launch contract during
+                    # rollback; only the model path should change.
+                    _rollback_args=("${_llama_args[@]}")
+                    for ((_arg_i = 0; _arg_i < ${#_rollback_args[@]} - 1; _arg_i++)); do
+                        if [[ "${_rollback_args[$_arg_i]}" == "--model" ]]; then
+                            _rollback_args[$((_arg_i + 1))]="$_old_model_path"
+                            break
+                        fi
+                    done
                     (
                         cd "$INSTALL_DIR" || exit 1
-                        exec "$LLAMA_SERVER_BIN" \
-                            --host "$_bind" --port "$_native_port" \
-                            --model "$_old_model_path" \
-                            --ctx-size "$_ctx_size" \
-                            --n-gpu-layers "$_gpu_layers" \
-                            --reasoning-format "${_reasoning_fmt:-none}" \
-                            --metrics
+                        exec "$LLAMA_SERVER_BIN" "${_rollback_args[@]}"
                     ) > "$LLAMA_SERVER_LOG" 2>&1 &
                     _rollback_pid=$!
                     echo "$_rollback_pid" > "$LLAMA_SERVER_PID_FILE"
