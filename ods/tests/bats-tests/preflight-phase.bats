@@ -32,9 +32,17 @@ setup() {
     export DRY_RUN=false
     export PKG_MANAGER="apt"
     export VERSION="2.3.0"
+    export TEST_EUID=1000
 
     mkdir -p "$SCRIPT_DIR"
     touch "$LOG_FILE"
+
+    # Preserve the production phase byte-for-byte except for an injectable
+    # effective uid. Root-run containers can then exercise both root rejection
+    # and the remaining non-root preflight boundaries deterministically.
+    export PREFLIGHT_PHASE="$BATS_TEST_TMPDIR/01-preflight-test.sh"
+    sed 's/\[\[ \$EUID -eq 0 \]\]/[[ ${TEST_EUID:-$EUID} -eq 0 ]]/' \
+        "$BATS_TEST_DIRNAME/../../installers/phases/01-preflight.sh" > "$PREFLIGHT_PHASE"
 
     # Create minimal os-release
     mkdir -p "$BATS_TEST_TMPDIR/etc"
@@ -51,10 +59,6 @@ teardown() {
 # ── Root check ──────────────────────────────────────────────────────────────
 
 @test "preflight: fails when run as root" {
-    local patched_phase="$BATS_TEST_TMPDIR/01-preflight-root-test.sh"
-    sed 's/\[\[ \$EUID -eq 0 \]\]/[[ ${TEST_EUID:-$EUID} -eq 0 ]]/' \
-        "$BATS_TEST_DIRNAME/../../installers/phases/01-preflight.sh" > "$patched_phase"
-
     run bash -c '
         export SCRIPT_DIR="'"$SCRIPT_DIR"'"
         export INSTALL_DIR="'"$INSTALL_DIR"'"
@@ -76,7 +80,7 @@ teardown() {
         show_stranger_boot() { :; }
         ods_progress() { :; }
 
-        source "'"$patched_phase"'"
+        source "$PREFLIGHT_PHASE"
     '
     assert_failure
     assert_output --partial "ROOT_ERROR"
@@ -177,7 +181,7 @@ MOCK
         show_stranger_boot() { :; }
         ods_progress() { :; }
 
-        source "'"$BATS_TEST_DIRNAME/../../installers/phases/01-preflight.sh"'"
+        source "$PREFLIGHT_PHASE"
         echo "PHASE_COMPLETE"
     '
     assert_success
@@ -216,7 +220,7 @@ MOCK
         show_stranger_boot() { :; }
         ods_progress() { :; }
 
-        source "'"$BATS_TEST_DIRNAME/../../installers/phases/01-preflight.sh"'"
+        source "$PREFLIGHT_PHASE"
     '
 
     # Should log about existing installation
@@ -268,7 +272,7 @@ MOCK
             builtin command "$@"
         }
 
-        source "'"$BATS_TEST_DIRNAME/../../installers/phases/01-preflight.sh"'"
+        source "$PREFLIGHT_PHASE"
     '
 
     assert_output --partial "rsync"
