@@ -65,7 +65,9 @@ if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
 
 $distroList = @()
 if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
-    $distroList = (& wsl.exe -l -q 2>$null | Where-Object { $_.Trim() -ne "" })
+    # wsl.exe emits UTF-16LE and Windows PowerShell 5.1 decodes native output
+    # as ANSI, leaving NUL padding that corrupts distro names passed to -d.
+    $distroList = (& wsl.exe -l -q 2>$null | ForEach-Object { ($_ -replace "`0", '').Trim() } | Where-Object { $_ -ne '' })
 }
 if (-not $distroList) {
     Write-Host "[ERROR] No WSL distro found." -ForegroundColor Red
