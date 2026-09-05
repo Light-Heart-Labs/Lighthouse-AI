@@ -141,8 +141,17 @@ def _annotate_model_lifecycle(payload: dict[str, Any], lifecycle: Optional[dict[
 
 
 def _configured_ods_mode() -> str:
-    """Return the current persisted mode without treating process env as config."""
-    return normalize_ods_mode(read_env_file_value("ODS_MODE", INSTALL_DIR))
+    """Return the current persisted mode without treating process env as config.
+
+    When the mounted .env is unreadable (Docker rootless maps the container user
+    to a subuid that cannot read a 0600 root-owned .env), the file read yields
+    "unknown". Fall back to the mode the container was started with so an
+    unreadable file degrades to "assume no drift" instead of blocking activation.
+    """
+    configured = normalize_ods_mode(read_env_file_value("ODS_MODE", INSTALL_DIR))
+    if configured == "unknown":
+        return ODS_MODE_EFFECTIVE
+    return configured
 
 
 def _model_activation_mode_denial(

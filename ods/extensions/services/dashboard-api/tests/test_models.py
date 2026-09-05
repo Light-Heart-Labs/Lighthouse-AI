@@ -2655,3 +2655,25 @@ def test_load_model_rejects_local_gguf_path_separators(test_client, monkeypatch,
     )
 
     assert resp.status_code == 404
+
+
+def test_configured_ods_mode_falls_back_to_effective_when_env_unreadable(monkeypatch):
+    import routers.models as models_router
+
+    # Rootless Docker: the 0600 root-owned .env is unreadable by the container
+    # user, so the file reader yields "". Fall back to the effective mode rather
+    # than reporting "unknown" and blocking activation.
+    monkeypatch.setattr(models_router, "read_env_file_value", lambda key, install_dir: "")
+    monkeypatch.setattr(models_router, "ODS_MODE_EFFECTIVE", "local")
+
+    assert models_router._configured_ods_mode() == "local"
+
+
+def test_configured_ods_mode_prefers_persisted_file_value(monkeypatch):
+    import routers.models as models_router
+
+    # A readable .env still wins so genuine effective/configured drift surfaces.
+    monkeypatch.setattr(models_router, "read_env_file_value", lambda key, install_dir: "cloud")
+    monkeypatch.setattr(models_router, "ODS_MODE_EFFECTIVE", "local")
+
+    assert models_router._configured_ods_mode() == "cloud"
