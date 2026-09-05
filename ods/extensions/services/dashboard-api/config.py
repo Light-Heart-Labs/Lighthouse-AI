@@ -294,6 +294,15 @@ def _read_manifest_file(path: Path) -> dict[str, Any]:
     return data
 
 
+def _manifest_bool(service: dict[str, Any], key: str, default: bool) -> bool:
+    if key not in service:
+        return default
+    value = service[key]
+    if type(value) is not bool:
+        raise ValueError(f"service.{key} must be a boolean")
+    return value
+
+
 def load_extension_manifests(
     manifest_dir: Path, gpu_backend: str,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
@@ -343,6 +352,11 @@ def load_extension_manifests(
                 service_id = service.get("id")
                 if not service_id:
                     raise ValueError("service.id is required")
+                external_link = _manifest_bool(service, "external_link", True)
+                macos_host_supported = _manifest_bool(
+                    service, "macos_host_supported", False
+                )
+                host_network = _manifest_bool(service, "host_network", False)
                 compose_file = str(service.get("compose_file") or "").strip()
                 if service.get("type") == "docker" and compose_file:
                     compose_path = ext_dir / compose_file
@@ -357,7 +371,7 @@ def load_extension_manifests(
                 if gpu_backend == "apple":
                     if (
                         service.get("type") == "host-systemd"
-                        and not service.get("macos_host_supported", False)
+                        and not macos_host_supported
                     ):
                         continue  # Linux-only service, not available on macOS
                     # All docker services run on macOS regardless of gpu_backends declaration
@@ -385,12 +399,12 @@ def load_extension_manifests(
                     "name": service.get("name", service_id),
                     "ui_path": service.get("ui_path", "/"),
                     "public_url": public_url,
-                    "external_link": bool(service.get("external_link", True)),
-                    "macos_host_supported": bool(service.get("macos_host_supported", False)),
+                    "external_link": external_link,
+                    "macos_host_supported": macos_host_supported,
                     "container_name": service.get("container_name", f"ods-{service_id}"),
                     "depends_on": service.get("depends_on", []),
                     "category": service.get("category", "optional"),
-                    "host_network": bool(service.get("host_network", False)),
+                    "host_network": host_network,
                     "setup_hook": service.get("setup_hook", ""),
                     "hooks": service.get("hooks", {}),
                     "gpu_backends": service.get("gpu_backends", []),
