@@ -20,7 +20,7 @@ _ods_compose_python_cmd() {
 _ods_compose_is_local_image() {
     local image="${1:-}"
     case "$image" in
-        ""|ods-*|ods-*:*|docker.io/library/ods-*|localhost/*|localhost:*/*|127.0.0.1:*/*)
+        ""|ods-*|docker.io/library/ods-*|localhost/*|localhost:*/*|127.0.0.1:*/*)
             return 0
             ;;
     esac
