@@ -24,6 +24,9 @@ MAX_IDLE_DAYS=7
 
 # Ensure the log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
+# The cold target may not exist yet on first use; without it mv/ln
+# fail silently (script runs without -e) while the summary still says ARCHIVED.
+mkdir -p "$COLD_DIR"
 
 # Models to never archive (currently serving or critical)
 PROTECTED_MODELS=(
