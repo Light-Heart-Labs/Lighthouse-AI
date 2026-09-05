@@ -63,7 +63,7 @@ LLM requests routed through LiteLLM to cloud APIs.
 
 | Aspect | Details |
 |--------|---------|
-| **LLM** | Claude, GPT-4o, MiniMax via LiteLLM |
+| **LLM** | Claude, GPT-4o, MiniMax, OrcaRouter via LiteLLM |
 | **Cost** | ~$0.003-0.06/1K tokens |
 | **Requires** | Internet, API keys |
 | **GPU** | Not needed |
@@ -123,6 +123,7 @@ adding one-off installer or dashboard paths.
 | `OPENAI_API_KEY` | *(empty)* | OpenAI API key (cloud/hybrid) |
 | `TOGETHER_API_KEY` | *(empty)* | Together AI API key (optional) |
 | `MINIMAX_API_KEY` | *(empty)* | MiniMax API key (optional, cloud/hybrid) |
+| `ORCAROUTER_API_KEY` | *(empty)* | OrcaRouter API key (optional, cloud/hybrid) |
 
 ---
 

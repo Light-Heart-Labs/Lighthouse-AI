@@ -281,6 +281,12 @@ litellm_settings:
       api_base: https://api.minimax.io/v1
       api_key: os.environ/MINIMAX_API_KEY
 
+  - model_name: orcarouter
+    litellm_params:
+      model: openai/orcarouter/auto
+      api_base: https://api.orcarouter.ai/v1
+      api_key: os.environ/ORCAROUTER_API_KEY
+
 router_settings:
   routing_strategy: simple-shuffle
 
@@ -318,6 +324,12 @@ def render_litellm_hybrid(inputs: RenderInputs) -> RenderedFile:
       model: openai/MiniMax-M2.7-highspeed
       api_base: https://api.minimax.io/v1
       api_key: os.environ/MINIMAX_API_KEY
+
+  - model_name: orcarouter
+    litellm_params:
+      model: openai/orcarouter/auto
+      api_base: https://api.orcarouter.ai/v1
+      api_key: os.environ/ORCAROUTER_API_KEY
 
   - model_name: default
     litellm_params:
@@ -529,6 +541,12 @@ def render_litellm_switchboard(inputs: RenderInputs) -> RenderedFile:
       model: openai/MiniMax-M2.7-highspeed
       api_base: https://api.minimax.io/v1
       api_key: os.environ/MINIMAX_API_KEY
+""",
+            """  - model_name: orcarouter
+    litellm_params:
+      model: openai/orcarouter/auto
+      api_base: https://api.orcarouter.ai/v1
+      api_key: os.environ/ORCAROUTER_API_KEY
 """,
         ])
     routes.append(f'  - model_name: "*"\n{local_route}')

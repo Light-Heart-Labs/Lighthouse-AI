@@ -34,6 +34,12 @@ model_list:
       api_base: https://api.minimax.io/v1
       api_key: os.environ/MINIMAX_API_KEY
 
+  - model_name: orcarouter
+    litellm_params:
+      model: openai/orcarouter/auto
+      api_base: https://api.orcarouter.ai/v1
+      api_key: os.environ/ORCAROUTER_API_KEY
+
   - model_name: "*"
     litellm_params:
       model: openai/ods/current

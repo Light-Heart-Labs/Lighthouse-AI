@@ -15,7 +15,7 @@ ODS does not expose LiteLLM as a normal dashboard quicklink. The upstream LiteLL
 - **Single endpoint for all modes**: Same `POST /v1/chat/completions` URL regardless of backend
 - **Three operating modes**: Local, cloud, and hybrid with automatic fallback
 - **OpenAI-compatible API**: Works with any OpenAI SDK client
-- **Multi-provider routing**: Anthropic, OpenAI, Together AI, MiniMax, and local llama-server
+- **Multi-provider routing**: Anthropic, OpenAI, Together AI, MiniMax, OrcaRouter, and local llama-server
 - **Master key auth**: Secure all requests with `LITELLM_KEY`
 - **Drop params**: Unsupported parameters silently ignored across backends
 - **Usage telemetry**: Reports metadata-only completion usage to Token Spy
@@ -52,6 +52,7 @@ model_list:
   - model_name: fast          # → anthropic/claude-haiku-4-5-20251001
   - model_name: minimax       # → MiniMax-M2.7 via minimax API
   - model_name: minimax-fast  # → MiniMax-M2.7-highspeed
+  - model_name: orcarouter    # → orcarouter/auto via OrcaRouter gateway
 ```
 
 ### hybrid
@@ -84,6 +85,7 @@ Environment variables (set in `.env`):
 | `OPENAI_API_KEY` | *(empty)* | Required for OpenAI models in `cloud` mode |
 | `TOGETHER_API_KEY` | *(empty)* | Required for Together AI models in `cloud` mode |
 | `MINIMAX_API_KEY` | *(empty)* | Required for MiniMax models in `cloud`/`hybrid` modes |
+| `ORCAROUTER_API_KEY` | *(empty)* | Required for OrcaRouter models in `cloud`/`hybrid` modes |
 
 ## API Endpoints
 
@@ -136,7 +138,7 @@ Your App / n8n / Scripts
     ┌────┴─────────────────┐
     │                       │
     ▼  (local / hybrid)     ▼  (cloud / hybrid fallback)
-llama-server:8080      Anthropic / OpenAI / Together AI
+llama-server:8080      Anthropic / OpenAI / Together AI / OrcaRouter
 (GGUF model)           (external APIs)
 ```
 
