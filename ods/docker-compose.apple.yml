@@ -9,7 +9,7 @@
 
 services:
   llama-server:
-    image: ghcr.io/ggml-org/llama.cpp:server-b8248
+    image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b8248}
     platform: linux/arm64
     deploy:
       resources:
