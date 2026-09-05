@@ -2,6 +2,8 @@
 # ods-cli - Command line interface for ODS
 # Mission: M5 (Clonable ODS Setup Server)
 # Version: 2.0.0 — Registry-driven service resolution
+# FILE-SIZE-OK: intentional monolith; see docs/ODS_CLI_DECOMPOSITION.md for the
+# behavior-preserving split plan. Do not grow gratuitously.
 
 set -euo pipefail
 
@@ -1270,6 +1272,20 @@ _ods_cli_pull_external_images() {
 # Commands
 #=============================================================================
 
+# Docker healthcheck status ("healthy"/"unhealthy"/"starting"/"none"/"") for a
+# service's container. Internal-only services (expose, no published host port —
+# e.g. model-router, #2624) are unreachable via the host loopback HTTP probe, so
+# `ods status` consults the container's own healthcheck instead of falsely
+# reporting "not responding". Mirrors the docker-inspect idiom at ods-cli:1068,5528.
+_service_container_health() {
+    local sid="$1"
+    local container="${SERVICE_CONTAINERS[$sid]:-ods-$sid}"
+    command -v docker &>/dev/null || return 0
+    docker inspect \
+        --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+        "$container" 2>/dev/null || true
+}
+
 cmd_status() {
     local json_mode="false"
     while [[ $# -gt 0 ]]; do
@@ -1344,6 +1360,11 @@ cmd_status() {
             url="http://127.0.0.1:${port}${health}"
             timeout="${SERVICE_HEALTH_TIMEOUTS[$sid]:-5}"
             if curl -sf --max-time "$timeout" "$url" > /dev/null 2>&1; then
+                echo "healthy|$name" > "$tmpdir/$sid"
+            elif [[ "$(_service_container_health "$sid")" == "healthy" ]]; then
+                # Internal-only service (expose, no published host port): the
+                # loopback HTTP probe can't reach it, so trust the container's
+                # own Docker healthcheck. (#2624)
                 echo "healthy|$name" > "$tmpdir/$sid"
             else
                 echo "unhealthy|$name" > "$tmpdir/$sid"
@@ -1456,6 +1477,11 @@ cmd_status_json() {
         else
             local url="http://127.0.0.1:${port}${health}"
             if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
+                status="healthy"
+            elif [[ "$(_service_container_health "$sid")" == "healthy" ]]; then
+                # Internal-only service (expose, no published host port): trust
+                # the container's Docker healthcheck rather than the unreachable
+                # loopback probe. (#2624)
                 status="healthy"
             else
                 status="unhealthy"
