@@ -321,6 +321,9 @@ generate_ods_env() {
         if [[ -z "$(read_env_value "$env_path" "EMBEDDING_MODEL")" ]]; then
             upsert_env_value "$env_path" "EMBEDDING_MODEL" "${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}"
         fi
+        if [[ -z "$(read_env_value "$env_path" "EMBEDDING_MODEL_REVISION")" ]]; then
+            upsert_env_value "$env_path" "EMBEDDING_MODEL_REVISION" "${EMBEDDING_MODEL_REVISION:-main}"
+        fi
         if ! env_key_exists "$env_path" "RAG_EMBEDDING_MODEL"; then
             upsert_env_value "$env_path" "RAG_EMBEDDING_MODEL" "${RAG_EMBEDDING_MODEL:-}"
         fi
@@ -494,6 +497,7 @@ generate_ods_env() {
         open_webui_llm_api_key="$litellm_key"
     fi
     local embedding_model="${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}"
+    local embedding_model_revision="${EMBEDDING_MODEL_REVISION:-main}"
     local rag_embedding_model="${RAG_EMBEDDING_MODEL:-}"
     local rag_openai_api_base_url="${RAG_OPENAI_API_BASE_URL:-}"
     local rag_openai_api_key="${RAG_OPENAI_API_KEY:-}"
@@ -649,6 +653,7 @@ TTS_VOICE=en_US-lessac-medium
 # Open WebUI uses this canonical model at first boot unless an explicit
 # external-provider override is configured.
 EMBEDDING_MODEL=${embedding_model}
+EMBEDDING_MODEL_REVISION=${embedding_model_revision}
 RAG_EMBEDDING_MODEL=${rag_embedding_model}
 RAG_OPENAI_API_BASE_URL=${rag_openai_api_base_url}
 RAG_OPENAI_API_KEY=${rag_openai_api_key}
