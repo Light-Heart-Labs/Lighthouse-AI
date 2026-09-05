@@ -231,6 +231,7 @@ export function TroubleshootingAssistant({ serviceStatus }) {
                           <button
                             onClick={() => copyToClipboard(solution.command, `${issue.id}-${i}`)}
                             className="absolute top-1 right-1 p-1 bg-theme-card hover:bg-theme-surface-hover rounded text-theme-text-muted hover:text-theme-text transition-colors"
+                            aria-label={copied === `${issue.id}-${i}` ? 'Copied' : 'Copy command'}
                           >
                             {copied === `${issue.id}-${i}` ? (
                               <Check className="w-3 h-3 text-emerald-400" />
