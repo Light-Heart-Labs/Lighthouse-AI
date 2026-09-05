@@ -118,12 +118,12 @@ def _safe_probe_receipt(value: Any) -> dict[str, Any] | None:
     clean_resolution = None
     if isinstance(resolution, Mapping):
         clean_resolution = {
-            "ok": bool(resolution.get("ok")),
+            "ok": resolution.get("ok") is True,
             "addressCount": _safe_int(resolution.get("addressCount")),
         }
     receipt: dict[str, Any] = {
         "schema": _safe_text(value.get("schema"), max_length=64),
-        "ok": bool(value.get("ok")),
+        "ok": value.get("ok") is True,
         "verifiedAt": _safe_text(value.get("verifiedAt"), max_length=64),
         "endpoint": _safe_text(value.get("endpoint"), max_length=32),
         "httpStatus": _safe_int(value.get("httpStatus")),
@@ -139,7 +139,7 @@ def _safe_probe_receipt(value: Any) -> dict[str, Any] | None:
 def _safe_route_status(value: Any) -> dict[str, Any]:
     status = value if isinstance(value, Mapping) else {}
     clean: dict[str, Any] = {
-        "proven": bool(status.get("proven")),
+        "proven": status.get("proven") is True,
         "reason": _safe_text(status.get("reason"), max_length=128) or "disabled",
     }
     last_probe = _safe_probe_receipt(status.get("lastProbe"))
@@ -215,7 +215,7 @@ def _safe_secret_status(value: Any) -> dict[str, Any]:
     secret = value if isinstance(value, Mapping) else {}
     raw_bytes = secret.get("bytes")
     return {
-        "configured": bool(secret.get("configured")),
+        "configured": secret.get("configured") is True,
         "bytes": raw_bytes if type(raw_bytes) is int or raw_bytes is None else None,
     }
 
@@ -495,8 +495,8 @@ def _safe_ssh_supervisor_status(
         "valid": schema == _SSH_SUPERVISOR_SCHEMA,
         "schema": schema,
         "status": _safe_text(payload.get("status"), max_length=64) or "unknown",
-        "ready": bool(payload.get("ready")),
-        "readyToStart": bool(payload.get("readyToStart")),
+        "ready": payload.get("ready") is True,
+        "readyToStart": payload.get("readyToStart") is True,
         "reason": _safe_text(payload.get("reason"), max_length=128) or "unknown",
         "tunnelBaseUrl": _safe_text(payload.get("tunnelBaseUrl"), max_length=256) or None,
         "tunnels": tunnels,
@@ -519,8 +519,8 @@ def _safe_egress_tunnel(value: Any) -> dict[str, Any] | None:
             "pid": _safe_int(process.get("pid")),
         }
     tunnel: dict[str, Any] = {
-        "ok": bool(value.get("ok")),
-        "ready": bool(value.get("ready")),
+        "ok": value.get("ok") is True,
+        "ready": value.get("ready") is True,
         "status": _safe_text(value.get("status"), max_length=64) or "unknown",
         "reason": _safe_text(value.get("reason"), max_length=128) or "unknown",
         "process": clean_process,
@@ -592,7 +592,7 @@ def _sanitize_egress_health(payload: Any) -> dict[str, Any]:
     clean_resolution = None
     if isinstance(resolution, Mapping):
         clean_resolution = {
-            "ok": bool(resolution.get("ok")),
+            "ok": resolution.get("ok") is True,
             "reason": _safe_text(resolution.get("reason"), max_length=128),
             "addressCount": (
                 resolution.get("addressCount")
@@ -603,7 +603,7 @@ def _sanitize_egress_health(payload: Any) -> dict[str, Any]:
     return {
         "reachable": True,
         "valid": True,
-        "ready": bool(payload.get("ready")),
+        "ready": payload.get("ready") is True,
         "status": _safe_text(payload.get("status"), max_length=64) or "unknown",
         "reason": _safe_text(payload.get("reason"), max_length=128),
         "secret": _safe_secret_status(payload.get("secret")),
@@ -636,7 +636,7 @@ def _sanitize_egress_probe_response(payload: Any) -> dict[str, Any]:
         raise ValueError("invalid_egress_probe_response")
     return {
         "schema": schema,
-        "ok": bool(payload.get("ok")),
+        "ok": payload.get("ok") is True,
         "transport": _safe_text(payload.get("transport"), max_length=32),
         "probe": probe,
         "tunnel": _safe_egress_tunnel(payload.get("tunnel")),
