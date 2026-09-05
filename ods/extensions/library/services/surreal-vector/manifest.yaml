@@ -1,0 +1,58 @@
+schema_version: ods.services.v1
+
+service:
+  id: surreal-vector
+  name: Surreal Vector (Qdrant-compat)
+  aliases: [surreal-rag, surreal-qdrant]
+  container_name: ods-surreal-vector
+  host_env: SURREAL_VECTOR_HOST
+  default_host: surreal-vector
+  port: 6333
+  external_port_env: SURREAL_VECTOR_PORT
+  external_port_default: 6335
+  health: /readyz
+  type: docker
+  gpu_backends: [all]
+  compose_file: compose.yaml
+  category: optional
+  depends_on: [surrealdb]
+  description: |
+    Qdrant-compatible vector API backed by SurrealDB HNSW indexes.
+    Point Open WebUI at this service (VECTOR_DB=qdrant) to use Surreal
+    as the RAG store; browse the same chunks in Surrealist.
+  tags:
+    - knowledge-graph
+    - vector-database
+    - rag
+    - surrealdb
+    - qdrant-compat
+  env_vars:
+    - key: SURREALDB_URL
+      required: false
+      description: "SurrealDB HTTP URL from containers (default http://surrealdb:8000)"
+    - key: SURREALDB_USER
+      required: false
+      description: "SurrealDB root user"
+    - key: SURREALDB_PASS
+      required: true
+      secret: true
+      description: "SurrealDB root password (shared with surrealdb service)"
+    - key: SURREAL_VECTOR_NS
+      required: false
+      description: "Surreal namespace for RAG chunks (default ods)"
+    - key: SURREAL_VECTOR_DB
+      required: false
+      description: "Surreal database for RAG chunks (default rag)"
+
+features:
+  - id: surreal-rag-backend
+    name: SurrealDB RAG Backend
+    description: Store Open WebUI document embeddings in SurrealDB via a Qdrant-compatible API
+    icon: Database
+    category: data
+    requirements:
+      services: [surrealdb, surreal-vector]
+      vram_gb: 0
+    enabled_services_all: [surrealdb, surreal-vector]
+    setup_time: ~2 minutes
+    priority: 13
