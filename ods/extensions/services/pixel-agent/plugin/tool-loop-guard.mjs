@@ -4356,6 +4356,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const revise =
     /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
   const browserVisual =
+    /\b(?:artworks?|animated\s+(?:art|illustrations?|scenes?)|interactive\s+(?:art|charts?|diagrams?))\b/i.test(text) ||
     /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
     /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*games?\b/i.test(text);
   const explicitBrowser =
@@ -4385,6 +4386,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     nonVisualImplementation
   ) return false;
   const directPreview =
+    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:artworks?|illustrations?|charts?|diagrams?|animations?|games?)\b/i.test(text) ||
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
     /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
     /\b(?:open|publish|refresh|republish|serve|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(text);
@@ -4406,6 +4408,19 @@ function userMessageRequiresWorkspacePreviewAuthorship(
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i;
   const rejectsCreation =
     /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|design|generate|implement|make|write)\b/i;
+  // "Show me" can request an existing artifact, not a new creation. Requiring
+  // fresh writes here would force the model to replace files just to display
+  // them. The preview tool still requires a successful current-run index read
+  // and an independently verified snapshot; it must not claim fresh authorship.
+  const explicitCreation =
+    /\b(?:build|create|develop|generate|implement|write)\b/i.test(text) ||
+    /\b(?:design|make)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\b/i.test(text) ||
+    /\b(?:from\s+scratch|novel|original)\b/i.test(text);
+  const reuseExisting =
+    /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
+    /\b(?:artwork|animation|chart|diagram|game|illustration|site|website)\b[^.!?;\n]{0,48}\bin\s+(?:(?:my|the|our)\s+)?workspace\b/i.test(text) ||
+    /\b(?:show|open|view|preview)\s+(?:me\s+)?(?:the|that|this|our|my)\b[^.!?;\n]{0,64}\b(?:artwork|animation|chart|diagram|game|illustration|site|website)\b/i.test(text);
+  if (reuseExisting && !explicitCreation) return false;
   return create.test(text) && !rejectsCreation.test(text);
 }
 

@@ -8979,6 +8979,65 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   );
 });
 
+test("shows named existing artwork without forcing replacement or claiming new authorship", () => {
+  for (const prompt of [
+    "Please finish and show me the Clockwork Tide artwork in my workspace. Keep its existing design and files instead of recreating it. Check what actually works, and tell me honestly if anything still needs fixing.",
+    "Show me the existing artwork.",
+    "Show me the existing artwork in my workspace. Make sure the animation still runs.",
+    "Show me the existing chart.",
+    "Show me the Clockwork Tide artwork.",
+    "Show me the artwork again.",
+    "Open the existing animated illustration here.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel", { prompt }
+    );
+    const previewParams = { relativeDirectory: "clockwork-tide" };
+    assert.equal(call(guard, "pixel_ods_workspace_preview", {
+      event: { params: previewParams },
+    }).block, true, "files must be inspected first");
+    const readParams = { path: "clockwork-tide/index.html" };
+    call(guard, "read", { event: { params: readParams } });
+    afterCall(guard, "read", {
+      event: { params: readParams, result: { details: { status: "completed" } } },
+    });
+    assert.deepEqual(call(guard, "pixel_ods_workspace_preview", {
+      event: { params: previewParams },
+    }), { params: previewParams }, prompt);
+  }
+  for (const prompt of [
+    "Explain this artwork.",
+    "Show the artwork but do not publish it.",
+    "Make an animated illustration without showing a preview.",
+    "Read my artwork notes and summarize them.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+});
+
+test("new artwork requests still reject read-only reuse of existing creative bytes", () => {
+  for (const prompt of [
+    "Make a new interactive artwork using the existing design notes.",
+    "Show me an original interactive artwork.",
+    "Design a new interactive artwork using the existing design notes.",
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel", { prompt }
+    );
+    const params = { path: "new-artwork/index.html" };
+    call(guard, "read", { event: { params } });
+    afterCall(guard, "read", {
+      event: { params, result: { details: { status: "completed" } } },
+    });
+    assert.equal(call(guard, "pixel_ods_workspace_preview", {
+      event: { params: { relativeDirectory: "new-artwork" } },
+    }).block, true, prompt);
+  }
+});
+
 test("rejects publication evidence not bound to every current-run model write", () => {
   for (const mismatch of ["entry-digest", "file-count", "snapshot-digest", "byte-count"]) {
     const guard = createToolLoopGuard();
