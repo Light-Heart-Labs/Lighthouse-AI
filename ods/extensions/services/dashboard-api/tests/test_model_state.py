@@ -323,6 +323,35 @@ class TestModelStateEndpoint:
         assert any("routeSeq" in error for error in body["errors"])
         assert any("unexpected" in error for error in body["errors"])
 
+    def test_missing_schema_file_is_diagnostic(self, test_client, monkeypatch, tmp_path):
+        # _validate_document treats an unreadable/invalid schema the same way as a
+        # malformed state document: it degrades to a diagnostic response, never a
+        # 500 - this is a distinct code path from the "state file missing" case.
+        path = self._point_at(monkeypatch, tmp_path)
+        _record(path)
+        monkeypatch.setenv("ODS_MODEL_STATE_SCHEMA_PATH", str(tmp_path / "no-such-schema.json"))
+
+        resp = test_client.get("/api/models/state", headers=test_client.auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["exists"] is True
+        assert body["valid"] is False
+        assert any("state schema unavailable or invalid" in error for error in body["errors"])
+
+    def test_invalid_schema_json_is_diagnostic(self, test_client, monkeypatch, tmp_path):
+        path = self._point_at(monkeypatch, tmp_path)
+        _record(path)
+        bad_schema = tmp_path / "bad-schema.json"
+        bad_schema.write_text("not json", encoding="utf-8")
+        monkeypatch.setenv("ODS_MODEL_STATE_SCHEMA_PATH", str(bad_schema))
+
+        resp = test_client.get("/api/models/state", headers=test_client.auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["exists"] is True
+        assert body["valid"] is False
+        assert any("state schema unavailable or invalid" in error for error in body["errors"])
+
     def test_requires_auth(self, test_client, monkeypatch, tmp_path):
         self._point_at(monkeypatch, tmp_path)
         resp = test_client.get("/api/models/state")
