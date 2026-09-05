@@ -106,6 +106,9 @@ test: ## Run unit and contract tests
 	@echo "=== CLI update post-verification ==="
 	@bash tests/test-cli-update-verification.sh
 	@echo ""
+	@echo "=== update rollback target boundary ==="
+	@bash tests/test-update-rollback-target-boundary.sh
+	@echo ""
 	@echo "=== ods config show secret-mask matrix ==="
 	@bash tests/test-ods-config-secret-mask.sh
 	@echo ""

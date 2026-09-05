@@ -49,6 +49,17 @@ log_ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
+validate_rollback_target() {
+    local target="$1"
+
+    if [[ "$target" == "." || "$target" == ".." ||
+          "$target" == */* || "$target" == *\\* ||
+          "$target" =~ [[:cntrl:]] ]]; then
+        log_error "Invalid rollback target: use a single path segment without slashes or control characters"
+        return 1
+    fi
+}
+
 get_current_version() {
     if [[ -f "$VERSION_FILE" ]]; then
         jq -r '.version // "0.0.0"' "$VERSION_FILE" 2>/dev/null || echo "0.0.0"
@@ -748,6 +759,10 @@ cmd_update() {
 cmd_rollback() {
     local target="${1:-}"
     local backup_path=""
+
+    if [[ -n "$target" ]] && ! validate_rollback_target "$target"; then
+        return 1
+    fi
 
     if [[ -n "$target" ]]; then
         # Explicit target: search rollback snapshots first, then general backups.
