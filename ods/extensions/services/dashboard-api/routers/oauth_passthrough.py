@@ -28,8 +28,10 @@ How it slots in:
   4. This handler looks up the nonce, refuses the callback if state is
      missing/unknown/expired/replayed, and only on a valid nonce writes
      the ``{code, state, ts}`` payload to ``data/persona/oauth_callback.json``
-     (operator-owned; Hermes reads it) and returns a friendly success
-     page. The nonce is deleted on write, making it single-use.
+     (operator-owned; Hermes reads it) if that mailbox is empty. A callback
+     arriving while another result is pending receives a retryable conflict
+     instead of overwriting the unconsumed code. The nonce is deleted on a
+     successful write, making it single-use.
   5. The agent (per persona) checks for the callback file after sending
      the URL — when present, it consumes the code, runs the skill's
      ``setup.py --auth-code <CODE>`` to finalise, deletes the file, and
@@ -52,6 +54,10 @@ Security model:
   * Nonces are single-use: consumed (deleted) BEFORE the callback payload
     is written, so a race between two callbacks with the same state
     resolves to one winner even under concurrent load.
+  * The fixed callback file is a one-slot mailbox. Publishing uses an atomic
+    no-clobber operation, so callbacks for different valid states cannot
+    overwrite one another. A losing flow retains its nonce and can be retried
+    after the agent consumes the pending result.
   * Nonces bind the ``return_url`` at init time. The callback endpoint
     never accepts a ``return_url`` query param — that eliminates the
     open-redirect surface a provider redirect could otherwise expose.
@@ -71,6 +77,7 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -275,6 +282,44 @@ def _atomic_write_0600(target: Path, data: str) -> None:
     tmp.replace(target)
 
 
+def _atomic_create_0600(target: Path, data: str) -> None:
+    """Atomically publish a complete owner-only file without replacing one.
+
+    A unique temporary file avoids concurrent writers sharing scratch space.
+    Linking it into place is atomic and raises ``FileExistsError`` when the
+    one-slot callback mailbox is already occupied.
+    """
+    fd, raw_tmp_path = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    tmp = Path(raw_tmp_path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(data)
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            logger.debug("could not chmod %s to 0600", tmp, exc_info=True)
+        os.link(tmp, target)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("could not remove callback temp file %s", tmp, exc_info=True)
+
+
+def _restore_nonce(nonce_path: Path, nonce_payload: dict) -> bool:
+    """Restore a consumed nonce when its callback could not be delivered."""
+    try:
+        _atomic_write_0600(nonce_path, json.dumps(nonce_payload, indent=2))
+    except OSError:
+        logger.exception("oauth callback failed to restore nonce %s", nonce_path)
+        return False
+    return True
+
+
 def _success_page(skill: str, return_url: Optional[str] = None) -> str:
     """The HTML the user sees after authorising. Friendly, clear about
     what just happened, with a button back into ODS Talk if we know
@@ -410,7 +455,9 @@ async def oauth_callback(
     ``data/persona/oauth_callback.json`` for the agent to consume. Nonces
     are single-use and consumed BEFORE the callback file is written, so
     a race between two callbacks with the same state resolves to one
-    winner.
+    winner. The callback file is a one-slot mailbox: an occupied mailbox
+    is never overwritten, and the losing flow's nonce is restored so the
+    provider redirect can be retried after the pending result is consumed.
     """
     if error:
         # Consume the nonce even on error so a denied flow can't be
@@ -502,9 +549,25 @@ async def oauth_callback(
     }
     target = _callback_dir() / "oauth_callback.json"
     try:
-        _atomic_write_0600(target, json.dumps(payload, indent=2))
+        _atomic_create_0600(target, json.dumps(payload, indent=2))
+    except FileExistsError:
+        if not _restore_nonce(nonce_path, nonce_payload):
+            return HTMLResponse(
+                _error_page("ODS could not preserve this authorisation while another result was pending. Restart the flow from the chat."),
+                status_code=500,
+            )
+        logger.warning("oauth callback mailbox occupied; retry preserved for skill=%s", skill_id)
+        return HTMLResponse(
+            _error_page("Another authorisation result is waiting for your assistant. Let it finish, then refresh this page to retry."),
+            status_code=409,
+        )
     except OSError as exc:
         logger.exception("oauth callback failed to write %s: %s", target, exc)
+        if not _restore_nonce(nonce_path, nonce_payload):
+            return HTMLResponse(
+                _error_page("ODS caught the redirect but could not preserve its pending state. Restart the flow from the chat."),
+                status_code=500,
+            )
         return HTMLResponse(
             _error_page("ODS caught the redirect but couldn't hand the code back to your assistant. The operator might need to check filesystem permissions on data/persona/."),
             status_code=500,

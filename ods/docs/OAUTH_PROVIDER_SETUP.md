@@ -100,7 +100,9 @@ cookies or bearer auth. It relies on a server-issued `state` nonce instead:
 4. When the provider redirects to `/api/oauth/callback`, dashboard-api
    looks up the nonce, rejects any callback whose state is missing,
    malformed, unknown, expired, or already consumed, and only on a
-   valid nonce writes `data/persona/oauth_callback.json`.
+   valid nonce writes `data/persona/oauth_callback.json`. This is a one-slot
+   mailbox: if an earlier callback is still waiting, the new callback returns
+   HTTP 409 without overwriting it and preserves its nonce for a browser retry.
 5. Nonces are single-use — consumed (deleted) before the callback file
    is written, so a race between two callbacks with the same state
    resolves to a single winner.
