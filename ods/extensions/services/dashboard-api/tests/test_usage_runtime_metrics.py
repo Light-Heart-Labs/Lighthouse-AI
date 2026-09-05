@@ -112,3 +112,16 @@ def test_distinct_keys_are_tracked_independently(clean_state):
     b = usage._observe_runtime_request_delta("b", input_tokens=100, output_tokens=0)
     assert a["requests"] == 1  # key "a" grew
     assert b["requests"] == 0  # key "b" unchanged, still at baseline
+
+
+def test_runtime_request_state_evicts_least_recently_used_key(clean_state, monkeypatch):
+    monkeypatch.setattr(usage, "MAX_LOCAL_RUNTIME_REQUEST_STATES", 2)
+    usage._observe_runtime_request_delta("a", input_tokens=10, output_tokens=0)
+    usage._observe_runtime_request_delta("b", input_tokens=20, output_tokens=0)
+
+    # Refresh "a", making "b" the least recently observed runtime.
+    usage._observe_runtime_request_delta("a", input_tokens=11, output_tokens=0)
+    usage._observe_runtime_request_delta("c", input_tokens=30, output_tokens=0)
+
+    assert list(usage._LOCAL_RUNTIME_REQUEST_STATE) == ["a", "c"]
+    assert usage._LOCAL_RUNTIME_REQUEST_STATE["a"]["requests"] == 1
