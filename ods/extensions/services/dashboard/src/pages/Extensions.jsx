@@ -65,6 +65,7 @@ const STATUS_STYLES = {
   disabled:      'bg-theme-border text-theme-text-muted',
   not_installed: 'border border-theme-border text-theme-text-muted',
   incompatible:  'bg-orange-500/20 text-orange-400',
+  backend_unknown: 'bg-slate-500/20 text-slate-300',
   installing:    'bg-blue-500/20 text-blue-400',
   setting_up:    'bg-blue-500/20 text-blue-400',
   error:         'bg-red-500/20 text-red-300',
@@ -78,6 +79,7 @@ const STATUS_DESCRIPTIONS = {
   unhealthy:     'Container is running but health check is failing \u2014 check logs',
   not_installed: 'Available to install from the extension library',
   incompatible:  'Requires a GPU backend not available on this system',
+  backend_unknown: 'GPU backend has not been detected; installation is unavailable',
   installing:    'Being downloaded and set up',
   setting_up:    'Running post-install configuration hooks',
   error:         'Installation or startup failed \u2014 click for details',
@@ -333,8 +335,8 @@ export default function Extensions() {
       .filter(Boolean)
   )]
 
-  const STATUS_FILTERS = ['all', 'enabled', 'cli_installed', 'stopped', 'unhealthy', 'disabled', 'installing', 'setting_up', 'error', 'not_installed', 'incompatible']
-  const STATUS_LABELS = { all: 'All', enabled: 'Enabled', cli_installed: 'CLI Installed', stopped: 'Stopped', unhealthy: 'Unhealthy', disabled: 'Disabled', installing: 'Installing', setting_up: 'Setting Up', error: 'Error', not_installed: 'Not Installed', incompatible: 'Incompatible' }
+  const STATUS_FILTERS = ['all', 'enabled', 'cli_installed', 'stopped', 'unhealthy', 'disabled', 'installing', 'setting_up', 'error', 'not_installed', 'incompatible', 'backend_unknown']
+  const STATUS_LABELS = { all: 'All', enabled: 'Enabled', cli_installed: 'CLI Installed', stopped: 'Stopped', unhealthy: 'Unhealthy', disabled: 'Disabled', installing: 'Installing', setting_up: 'Setting Up', error: 'Error', not_installed: 'Not Installed', incompatible: 'Incompatible', backend_unknown: 'GPU Unknown' }
 
   // Filter extensions
   const query = search.toLowerCase()

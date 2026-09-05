@@ -438,6 +438,23 @@ class TestLoadExtensionManifests:
         services, _, _ = load_extension_manifests(tmp_path, "nvidia")
         assert "nvidia-only" in services
 
+    def test_unknown_backend_keeps_manifests_available_for_status_reporting(self, tmp_path):
+        svc_dir = tmp_path / "nvidia-only"
+        svc_dir.mkdir()
+        (svc_dir / "manifest.yaml").write_text(
+            "schema_version: ods.services.v1\n"
+            "service:\n  id: nvidia-only\n  name: NVIDIA Only\n  port: 80\n"
+            "  gpu_backends: [nvidia]\n"
+            "features:\n"
+            "  - id: cuda-feature\n    name: CUDA Feature\n"
+            "    gpu_backends: [nvidia]\n"
+        )
+
+        services, features, _ = load_extension_manifests(tmp_path, "unknown")
+
+        assert "nvidia-only" in services
+        assert [feature["id"] for feature in features] == ["cuda-feature"]
+
     def test_empty_directory(self, tmp_path):
         services, features, _ = load_extension_manifests(tmp_path, "nvidia")
         assert services == {}
