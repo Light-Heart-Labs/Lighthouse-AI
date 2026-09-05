@@ -44,7 +44,7 @@ function titleize(value) {
     .replace(/^./, char => char.toUpperCase())
 }
 
-function boolLabel(value) {
+export function boolLabel(value) {
   return value ? 'Yes' : 'No'
 }
 
@@ -108,7 +108,7 @@ function modelStatus(model, currentModel) {
   return typeof model?.status === 'string' && model.status.trim() ? model.status.trim() : 'unknown'
 }
 
-function modelSize(model) {
+export function modelSize(model) {
   if (model?.size) return model.size
   if (typeof model?.sizeGb === 'number' && Number.isFinite(model.sizeGb)) return `${model.sizeGb.toFixed(1)} GB`
   return null
@@ -145,7 +145,7 @@ async function responsePayload(response) {
   }
 }
 
-function errorMessage(payload, fallback) {
+export function errorMessage(payload, fallback) {
   if (typeof payload?.detail === 'string' && payload.detail.trim()) return payload.detail
   if (payload?.detail && typeof payload.detail === 'object') {
     if (typeof payload.detail.message === 'string' && payload.detail.message.trim()) return payload.detail.message
