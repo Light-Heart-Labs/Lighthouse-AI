@@ -426,50 +426,50 @@ async function responseJson(response) {
   try { return await response.json() } catch { return {} }
 }
 
-function errorMessage(body, fallback) {
+export function errorMessage(body, fallback) {
   if (typeof body?.detail === 'string') return body.detail
   if (typeof body?.detail?.message === 'string') return body.detail.message
   if (typeof body?.error === 'string') return body.error
   return fallback
 }
 
-function formatCompact(value) {
+export function formatCompact(value) {
   return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value || 0))
 }
 
-function formatDate(value) {
+export function formatDate(value) {
   if (!value) return 'unknown'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'unknown'
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
 }
 
-function formatLicense(value) {
+export function formatLicense(value) {
   return value ? String(value).replace(/-/g, ' ').toUpperCase() : 'Not declared'
 }
 
-function formatPipeline(value) {
+export function formatPipeline(value) {
   return String(value || 'text-generation').replace(/-/g, ' ')
 }
 
-function formatBytes(value) {
+export function formatBytes(value) {
   const bytes = Number(value || 0)
   if (bytes >= 1024 ** 3) return `${(bytes / (1024 ** 3)).toFixed(1)} GB`
   return `${Math.round(bytes / (1024 ** 2))} MB`
 }
 
-function formatContext(value) {
+export function formatContext(value) {
   const tokens = Number(value || 0)
   return tokens ? `${Math.round(tokens / 1024)}K tokens` : 'Unknown'
 }
 
-function contextSourceLabel(source) {
+export function contextSourceLabel(source) {
   if (source === 'gguf_metadata') return 'GGUF metadata'
   if (source === 'hub_config') return 'Hub config'
   return 'Not published by repository'
 }
 
-function authorFallbackStyle(author) {
+export function authorFallbackStyle(author) {
   const value = String(author || 'huggingface')
   const hash = Array.from(value).reduce((total, char) => ((total * 31) + char.charCodeAt(0)) >>> 0, 0)
   const hue = hash % 360
