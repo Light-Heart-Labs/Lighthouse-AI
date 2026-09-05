@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
+import asyncio
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -97,6 +98,18 @@ def _load_route() -> dict[str, Any]:
     return route_from_state(load_route_state(ROUTE_PATH), policy=policy)
 
 
+MAX_DIRECT_CLIENTS = 4
+
+
+def _evict_stale_clients(clients: dict) -> None:
+    # Close and drop oldest cached clients so endpoint rotations don't leak
+    # idle httpx connection pools indefinitely.
+    while len(clients) > MAX_DIRECT_CLIENTS:
+        _, old = clients.popitem(last=False)
+        if old is not None and not old.is_closed:
+            asyncio.ensure_future(old.aclose())
+
+
 def _http_client(connection_key: str = "") -> httpx.AsyncClient:
     if connection_key:
         clients = getattr(app.state, "direct_http_clients", None)
@@ -107,6 +120,7 @@ def _http_client(connection_key: str = "") -> httpx.AsyncClient:
         if client is None or client.is_closed:
             client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
             clients[connection_key] = client
+            _evict_stale_clients(clients)
         return client
     client = getattr(app.state, "http", None)
     if client is None or client.is_closed:
