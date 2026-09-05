@@ -50,16 +50,10 @@ detect_compose_file() {
 }
 
 detect_inference_service() {
-    if [[ ${#COMPOSE_FILE_ARGS[@]} -eq 0 ]]; then
-        echo "llama-server"
-        return
-    fi
-
-    if docker compose "${COMPOSE_FILE_ARGS[@]}" config --services 2>/dev/null | grep -q '^llama-server$'; then
-        echo "llama-server"
-    else
-        echo "llama-server"
-    fi
+    # Currently ODS only ships llama-server as the inference backend.
+    # When additional backends are added, this function should inspect the
+    # compose config to pick the right one.
+    echo "llama-server"
 }
 
 resolve_inference_runtime() {
