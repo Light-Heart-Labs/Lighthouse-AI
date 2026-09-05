@@ -179,7 +179,10 @@ async def _refresh_release_cache() -> Optional[dict]:
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
+        response.raise_for_status()
         data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"unexpected latest release response: {type(data).__name__}")
         payload = {
             "latest": data.get("tag_name", "").lstrip("v"),
             "changelog_url": data.get("html_url"),
@@ -298,7 +301,10 @@ async def get_update_dry_run():
                 f"{_GITHUB_RELEASES_API}/latest",
                 headers=_GITHUB_HEADERS,
             )
+        resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"unexpected latest release response: {type(data).__name__}")
         latest = _normalize_version(data.get("tag_name")) or None
         changelog_url = data.get("html_url") or None
         if latest:
