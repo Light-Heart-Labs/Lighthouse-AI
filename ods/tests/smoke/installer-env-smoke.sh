@@ -213,6 +213,12 @@ else
     fail ".env file was not generated"
 fi
 
+if grep -q '^MODEL_PROFILE_EFFECTIVE=qwen$' "$INSTALL_DIR/.env"; then
+    pass "Linux installer persists the effective model profile receipt"
+else
+    fail "Linux installer did not persist MODEL_PROFILE_EFFECTIVE"
+fi
+
 if [[ "$ENV_GENERATED" == true && -f "$INSTALL_DIR/.env" ]]; then
     if grep -q '^EMBEDDING_MODEL=BAAI/bge-m3$' "$INSTALL_DIR/.env" \
         && grep -q '^RAG_EMBEDDING_MODEL=$' "$INSTALL_DIR/.env" \

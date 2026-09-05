@@ -910,6 +910,7 @@ TARGET_API_KEY=not-needed
 
 #=== LLM Settings (llama-server) ===
 MODEL_PROFILE=${MODEL_PROFILE_VALUE}
+MODEL_PROFILE_EFFECTIVE=${MODEL_PROFILE_EFFECTIVE:-qwen}
 # Effective model profile for this hardware: ${MODEL_PROFILE_EFFECTIVE:-qwen}
 LLM_MODEL=${LLM_MODEL}
 GGUF_FILE=${GGUF_FILE}

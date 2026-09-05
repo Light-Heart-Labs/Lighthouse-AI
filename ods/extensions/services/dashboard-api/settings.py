@@ -79,6 +79,7 @@ _READ_ONLY_ENV_FIELDS = {
     "MODEL_RUNTIME_PROFILE": "The runtime profile is selected and managed during model activation.",
     "MODEL_RUNTIME_PROFILE_LABEL": "The runtime profile is selected and managed during model activation.",
     "MODEL_RUNTIME_PROFILE_SOURCE": "The runtime profile is selected and managed during model activation.",
+    "MODEL_PROFILE_EFFECTIVE": "The effective model profile is resolved and managed by the installer.",
     "MODEL_RECOMMENDED_MODEL": "The recommended model is selected by the installer for the detected hardware.",
     "MODEL_RECOMMENDED_GGUF": "The recommended model artifact is selected by the installer for the detected hardware.",
     "MODEL_RECOMMENDED_CONTEXT": "The recommended context is selected by the installer for the recommended model.",

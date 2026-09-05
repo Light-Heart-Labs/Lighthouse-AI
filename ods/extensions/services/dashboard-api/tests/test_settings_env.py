@@ -268,6 +268,7 @@ def test_api_settings_env_marks_model_context_and_recommendation_read_only(
     keys = (
         "CTX_SIZE",
         "MAX_CONTEXT",
+        "MODEL_PROFILE_EFFECTIVE",
         "MODEL_RECOMMENDED_MODEL",
         "MODEL_RECOMMENDED_GGUF",
         "MODEL_RECOMMENDED_CONTEXT",

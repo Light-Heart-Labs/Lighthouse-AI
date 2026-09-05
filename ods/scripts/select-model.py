@@ -70,7 +70,7 @@ def effective_profile(profile: str, backend: str, tier: str) -> str:
         return profile
     if normalize_key(tier) in {"cloud", "0", "t0"}:
         return "qwen"
-    return "gemma4" if normalize_key(backend) in {"apple", "nvidia", "sycl"} else "qwen"
+    return "gemma4"
 
 
 def normalize_model(raw: dict[str, Any]) -> dict[str, Any] | None:
