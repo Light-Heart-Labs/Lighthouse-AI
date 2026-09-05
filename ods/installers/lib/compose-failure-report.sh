@@ -178,10 +178,26 @@ write_compose_failure_report() {
         fi
     } > "$report" 2>&1
 
-    if command -v ai_warn >/dev/null 2>&1; then
-        ai_warn "Compose failure report saved: $report"
+    # This function always runs as the first stage of a pipeline at every
+    # call site (`write_compose_failure_report ... | tail -n 1`), and bash's
+    # `set -e` is suspended for every command in a pipeline except the last
+    # — so a failed mkdir/redirect above (e.g. $install_dir unwritable)
+    # would NOT abort here. Explicitly verify the report actually landed on
+    # disk before claiming success; otherwise the caller would get back a
+    # path to a file that doesn't exist while believing the report saved.
+    if [[ -s "$report" ]]; then
+        if command -v ai_warn >/dev/null 2>&1; then
+            ai_warn "Compose failure report saved: $report"
+        else
+            echo "Compose failure report saved: $report"
+        fi
+        printf '%s\n' "$report"
     else
-        echo "Compose failure report saved: $report"
+        if command -v ai_bad >/dev/null 2>&1; then
+            ai_bad "Could not write compose failure report to $report"
+        else
+            echo "Could not write compose failure report to $report" >&2
+        fi
+        return 1
     fi
-    printf '%s\n' "$report"
 }
