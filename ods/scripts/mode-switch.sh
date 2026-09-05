@@ -30,9 +30,16 @@ error() { echo -e "${RED}✗${NC} $1" >&2; exit 1; }
 env_set() {
     local key="$1" val="$2"
     if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
-        awk -v k="$key" -v v="$val" '{
+        local tmp
+        tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
+        if awk -v k="$key" -v v="$val" '{
             if (index($0, k "=") == 1) print k "=" v; else print
-        }' "$ENV_FILE" > "${ENV_FILE}.tmp" && cat "${ENV_FILE}.tmp" > "$ENV_FILE" && rm -f "${ENV_FILE}.tmp"
+        }' "$ENV_FILE" > "$tmp"; then
+            mv "$tmp" "$ENV_FILE"
+        else
+            rm -f "$tmp"
+            error "Failed to update ${key} in $ENV_FILE"
+        fi
     else
         echo "${key}=${val}" >> "$ENV_FILE"
     fi
