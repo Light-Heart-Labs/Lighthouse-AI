@@ -123,13 +123,6 @@ if [[ "$PIXEL_AGENT_MODE" == "pixel" ]]; then
         ai_warn "Pixel adaptive mode will use this best-fit local model."
         ai_warn "Every callable model remains selectable; catalog testing is performance guidance, not an access gate."
         log "Pixel selected in adaptive mode on an untested local model; Hermes remains available as rollback when enabled"
-    elif [[ "$_pixel_model_route_class" == "unmanaged-external" ]]; then
-        if [[ "${ENABLE_PIXEL:-auto}" == "true" ]]; then
-            ai_bad "Pixel requires an ODS-managed LiteLLM route; generic external-model reuse is not yet eligible."
-            return 1 2>/dev/null || exit 1
-        fi
-        PIXEL_AGENT_MODE=hermes
-        log "Pixel auto-gate selected Hermes because this install uses a generic external-model route"
     else
         ENABLE_PIXEL_RUNTIME=true
         log "Pixel selected as the default ODS agent on the managed ODS model route; Hermes remains available as rollback when enabled"
@@ -216,6 +209,7 @@ if ! $DRY_RUN; then
     fi
     _pixel_support_services="${ENABLE_RECOMMENDED:-false}"
     [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && _pixel_support_services=true
+    [[ -n "${EXTERNAL_LLM_URL:-}" ]] && _pixel_support_services=true
     _sync_extension_compose "$_pixel_support_services" litellm    "LiteLLM"       "neither recommended services nor Pixel are enabled"
     # SearXNG backs Pixel, Open WebUI web search, Perplexica, and agent web tools.
     # It is not only a recommended extra — --no-recommended with Perplexica

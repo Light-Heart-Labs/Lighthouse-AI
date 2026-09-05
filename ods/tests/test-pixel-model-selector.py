@@ -175,10 +175,10 @@ def main() -> int:
     assert "catalog testing is performance guidance, not an access gate" in features
     assert "PIXEL_AGENT_MODE=hermes" not in features[
         features.index('PIXEL_AGENT_MODEL_READY:-unknown'):
-        features.index('"$_pixel_model_route_class" == "unmanaged-external"')
+        features.index('export PIXEL_AGENT_MODE')
     ]
     assert "ods_pixel_model_route_class" in features
-    assert '"$_pixel_model_route_class" == "unmanaged-external"' in features
+    assert 'unmanaged-external' not in features
     assert '"${ENABLE_PIXEL_RUNTIME:-false}" == "true"' in features
     assert '_sync_extension_compose "$_pixel_support_services" litellm' in features
     # Search is shared with other installed consumers as well as Pixel.

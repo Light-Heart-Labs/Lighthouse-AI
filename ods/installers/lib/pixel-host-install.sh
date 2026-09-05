@@ -2261,7 +2261,10 @@ _ods_pixel_runtime_model_identity() {
     # the friendlier catalog alias. Otherwise ingress truth and the OpenClaw
     # contract diverge as soon as a model has a distinct GGUF/runtime name.
     local model=""
-    if [[ "${GPU_BACKEND:-}" == amd \
+    if [[ -n "${EXTERNAL_LLM_URL:-}" ]]; then
+        model="${EXTERNAL_LLM_MODEL:-}"
+        [[ -n "$model" ]] || return 1
+    elif [[ "${GPU_BACKEND:-}" == amd \
         && "${LLM_BACKEND:-}" == lemonade \
         && "${AMD_INFERENCE_RUNTIME:-}" == lemonade ]]; then
         model="${LEMONADE_MODEL:-}"

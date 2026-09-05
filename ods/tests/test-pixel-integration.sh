@@ -425,7 +425,7 @@ for route_case in \
     "cloud||false|managed-gateway" \
     "hybrid||false|managed-gateway" \
     "local||true|managed-gateway" \
-    "cloud|http://127.0.0.1:1234|false|unmanaged-external"; do
+    "local|http://127.0.0.1:1234|false|managed-gateway"; do
     IFS='|' read -r route_mode route_url route_lemonade route_expected <<<"$route_case"
     result="$(ods_pixel_model_route_class "$route_mode" "$route_url" "$route_lemonade")"
     if [[ "$result" == "$route_expected" ]]; then

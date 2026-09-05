@@ -755,14 +755,14 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         *) ODS_MODEL_SWITCHBOARD_VALUE="enabled" ;;
     esac
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" && "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
-        ai_warn "External LLM reuse bypasses the managed model router; setting ODS_MODEL_SWITCHBOARD=observe."
+        ai_warn "External LLM reuse uses the authenticated LiteLLM gateway directly; setting ODS_MODEL_SWITCHBOARD=observe."
         ODS_MODEL_SWITCHBOARD_VALUE="observe"
     fi
     _default_llm_api_url="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "http://litellm:4000"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "http://litellm:4000"; elif [[ "${ODS_MODE:-local}" == "local" ]]; then echo "http://llama-server:8080"; else echo "http://litellm:4000"; fi)"
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
-        LLM_API_URL_VALUE="$EXTERNAL_LLM_CONTAINER_URL_VALUE"
-        OPEN_WEBUI_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
-        OPEN_WEBUI_LLM_API_KEY_VALUE=""
+        LLM_API_URL_VALUE="http://litellm:4000"
+        OPEN_WEBUI_LLM_BASE_URL_VALUE="http://litellm:4000/v1"
+        OPEN_WEBUI_LLM_API_KEY_VALUE="${LITELLM_KEY}"
     elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
         LLM_API_URL_VALUE="$_default_llm_api_url"
         OPEN_WEBUI_LLM_BASE_URL_VALUE=""
@@ -781,7 +781,7 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     if [[ "$ODS_MODEL_SWITCHBOARD_VALUE" == "enabled" ]]; then
         _default_open_webui_task_model="ods/current"
     elif [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
-        _default_open_webui_task_model="$EXTERNAL_SELECTED_MODEL"
+        _default_open_webui_task_model="ods/current"
     elif [[ "$OPEN_WEBUI_LLM_BASE_URL_VALUE" == *"litellm:4000"* || "$LLM_API_URL_VALUE" == *"litellm:4000"* ]]; then
         _default_open_webui_task_model="default"
     fi
@@ -804,8 +804,8 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
         _default_hermes_api_key="${LITELLM_KEY}"
     fi
     if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
-        HERMES_LLM_BASE_URL_VALUE="${EXTERNAL_LLM_CONTAINER_URL_VALUE}/v1"
-        HERMES_LLM_API_KEY_VALUE="not-needed"
+        HERMES_LLM_BASE_URL_VALUE="http://litellm:4000/v1"
+        HERMES_LLM_API_KEY_VALUE="${LITELLM_KEY}"
     elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" ]]; then
         HERMES_LLM_BASE_URL_VALUE="$_default_hermes_base_url"
         HERMES_LLM_API_KEY_VALUE="$_default_hermes_api_key"
@@ -1361,7 +1361,17 @@ ENV_EOF
     # model name verbatim and lemonade returns 404.  Instead, map all
     # requests to the concrete model ID that lemonade actually serves.
     # bootstrap-upgrade.sh regenerates this config when the model swaps.
-    if [[ "$GPU_BACKEND" == "amd" || "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then
+    if [[ "$EXTERNAL_LLM_ACTIVE" == "true" ]]; then
+        # Fail installation if the external route cannot be materialized. Pixel
+        # must never bind its authenticated gateway to a stale local template.
+        if ! "${ODS_PYTHON_CMD:-python3}" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
+            --surface litellm-external --model "$EXTERNAL_SELECTED_MODEL" \
+            --llm-base-url "$EXTERNAL_LLM_CONTAINER_URL_VALUE" \
+            --output-root "$INSTALL_DIR" --write >> "$LOG_FILE" 2>&1; then
+            error "Runtime config renderer failed for the external model gateway"
+            return 1
+        fi
+    elif [[ "$GPU_BACKEND" == "amd" || "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then
         _phase06_step "render-amd-litellm-config"
         mkdir -p "$INSTALL_DIR/config/litellm"
         # Source bootstrap-model.sh for BOOTSTRAP_GGUF_FILE and bootstrap_needed().
@@ -1420,6 +1430,15 @@ ENV_EOF
             ai_ok "Generated LiteLLM config for Lemonade (model: extra.${_active_gguf})"
         fi
         unset _renderer_py
+    elif [[ "${EXTERNAL_LLM_RESET:-false}" == "true" && "$ODS_MODE_VALUE" == "local" ]]; then
+        # A same-directory rerun does not copy the checked-in local map over
+        # the old external map. Reset the actual gateway route, not just .env.
+        if ! "${ODS_PYTHON_CMD:-python3}" "$SCRIPT_DIR/scripts/render-runtime-configs.py" \
+            --surface litellm-local --output-root "$INSTALL_DIR" --write \
+            >> "$LOG_FILE" 2>&1; then
+            error "Runtime config renderer failed while restoring local inference"
+            return 1
+        fi
     fi
 
     # Materialize router inputs before Compose can interpret file bind mounts.

@@ -53,6 +53,31 @@ def model_provider_by_id(settings: dict[str, object], provider_id: str) -> dict[
     raise AssertionError(f"missing model provider {provider_id}")
 
 
+def test_external_model_uses_authenticated_gateway_without_vendor_impersonation() -> None:
+    result = run_renderer("--surface", "litellm-external", "--model", "owner/model-q4",
+                          "--llm-base-url", "http://10.0.2.2:18080")
+    rendered = file_by_surface(result, "litellm-external")
+    assert rendered["path"] == "config/litellm/local.yaml"
+    config = rendered["content"]
+    assert 'model_name: "ods/current"' in config
+    assert config.count('model: "openai/owner/model-q4"') == 4
+    assert config.count('api_base: "http://10.0.2.2:18080/v1"') == 4
+    assert "master_key: os.environ/LITELLM_MASTER_KEY" in config
+    assert "enable_thinking" not in config  # Do not invent backend-specific capabilities.
+
+
+def test_external_gateway_rejects_credentialed_or_malformed_bases() -> None:
+    for base in ("file:///tmp/model", "http://user:secret@host/v1", "http://host?key=x",
+                 "http://host:99999", "http://host/v1#fragment", "http://host\n/v1"):
+        result = subprocess.run([sys.executable, str(SCRIPT), "--surface", "litellm-external",
+                                 "--llm-base-url", base], capture_output=True, text=True)
+        assert result.returncode != 0, base
+    result = run_renderer("--surface", "litellm-external", "--model", 'owner/"model',
+                          "--llm-base-url", "http://[::1]:18080/v1")
+    content = file_by_surface(result, "litellm-external")["content"]
+    assert 'model: ' + json.dumps('openai/owner/"model') in content
+
+
 def test_all_surfaces_render() -> None:
     payload = run_renderer("--surface", "all")
     surfaces = {item["surface"] for item in payload["files"]}
@@ -617,6 +642,8 @@ def test_atomic_write_failure_preserves_known_good_config() -> None:
 
 def main() -> int:
     tests = [
+        test_external_model_uses_authenticated_gateway_without_vendor_impersonation,
+        test_external_gateway_rejects_credentialed_or_malformed_bases,
         test_all_surfaces_render,
         test_switchboard_surface_gated_on_enabled_mode,
         test_local_profiles_allow_long_agent_streams,

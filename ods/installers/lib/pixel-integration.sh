@@ -137,8 +137,8 @@ ods_pixel_resolve_enablement() {
 }
 
 # Classify only model routes that the Pixel host installer can bind through the
-# authenticated ODS LiteLLM gateway. Generic external-model reuse bypasses that
-# managed gateway today and must remain a distinct fail-closed class.
+# authenticated ODS LiteLLM gateway. Phase 02 validates external endpoints and
+# Phase 06 renders their concrete model behind the same authenticated alias.
 ods_pixel_model_route_class() {
     local mode="${1:-local}"
     local external_url="${2:-}"
@@ -146,7 +146,7 @@ ods_pixel_model_route_class() {
     [[ "$external_url" != *$'\n'* && "$external_url" != *$'\r'* ]] || return 1
     [[ "$lemonade_external" == true || "$lemonade_external" == false ]] || return 1
     if [[ -n "$external_url" ]]; then
-        printf '%s\n' unmanaged-external
+        printf '%s\n' managed-gateway
         return 0
     fi
     if [[ "$lemonade_external" == true ]]; then

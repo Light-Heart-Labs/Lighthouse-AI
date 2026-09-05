@@ -7,8 +7,10 @@ block="$(sed -n '/^    _pixel_support_services=/,/^    unset _pixel_support_serv
 [[ -n "$block" ]] || { echo 'FAIL: missing shared-service selection block'; exit 1; }
 
 flags=(ENABLE_RECOMMENDED ENABLE_PIXEL_RUNTIME ENABLE_PERPLEXICA ENABLE_HERMES ENABLE_OPENCLAW)
-for ((mask=0; mask<32; mask++)); do
+for ((mask=0; mask<64; mask++)); do
     (
+        EXTERNAL_LLM_URL=""
+        if ((mask & 32)); then EXTERNAL_LLM_URL=http://10.0.2.2:18080; fi
         for index in "${!flags[@]}"; do
             value=false
             if ((mask & (1 << index))); then value=true; fi
@@ -21,8 +23,8 @@ for ((mask=0; mask<32; mask++)); do
 
         expected_gateway=false
         expected_search=false
-        if ((mask & 3)); then expected_gateway=true; fi
-        if ((mask)); then expected_search=true; fi
+        if ((mask & 35)); then expected_gateway=true; fi
+        if ((mask & 31)); then expected_search=true; fi
         [[ "${selected[litellm]:-missing}" == "$expected_gateway" ]] || {
             echo "FAIL: LiteLLM selection for mask $mask"; exit 1;
         }
@@ -36,4 +38,4 @@ for ((mask=0; mask<32; mask++)); do
         }
     )
 done
-echo 'PASS: all 32 Pixel/shared-service consumer combinations'
+echo 'PASS: all 64 Pixel/external/shared-service consumer combinations'

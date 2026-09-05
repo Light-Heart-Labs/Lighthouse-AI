@@ -19,6 +19,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +184,44 @@ litellm_settings:
   stream_timeout: 900
 """
     return RenderedFile("litellm-local", "config/litellm/local.yaml", content)
+
+
+def render_litellm_external(inputs: RenderInputs) -> RenderedFile:
+    """Bind a selected local/LAN OpenAI-compatible model behind ODS auth."""
+    model = inputs.model
+    raw_base = inputs.llm_base_url
+    if not model or len(model) > 512 or any(ord(c) < 32 or ord(c) == 127 for c in model):
+        raise ValueError("external gateway requires a nonempty model without control characters")
+    parsed = urlsplit(raw_base)
+    _ = parsed.port  # Reject malformed/out-of-range ports before rendering.
+    if (
+        parsed.scheme not in {"http", "https"} or not parsed.hostname
+        or parsed.username is not None or parsed.password is not None
+        or parsed.query or parsed.fragment
+        or parsed.path.rstrip("/") not in {"", "/v1", "/api/v1"}
+        or any(ord(c) <= 32 or ord(c) == 127 for c in raw_base)
+    ):
+        raise ValueError("external gateway requires a credential-free HTTP(S) API base")
+    base = normalize_openai_base_url(raw_base)
+    entries = []
+    for alias in dict.fromkeys((PUBLIC_MODEL_ALIAS, "default", model, "*")):
+        entries.append(f"""  - model_name: {yaml_scalar(alias)}
+    litellm_params:
+      model: {yaml_scalar('openai/' + model)}
+      api_base: {yaml_scalar(base)}
+      api_key: not-needed
+""")
+    content = "model_list:\n" + "\n".join(entries) + """
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 900
+  stream_timeout: 900
+"""
+    return RenderedFile("litellm-external", "config/litellm/local.yaml", content)
 
 
 def render_litellm_local_native(inputs: RenderInputs) -> RenderedFile:
@@ -666,6 +705,7 @@ RENDERERS: dict[str, Callable[[RenderInputs], RenderedFile]] = {
     "opencode": render_opencode,
     "litellm-local": render_litellm_local,
     "litellm-local-native": render_litellm_local_native,
+    "litellm-external": render_litellm_external,
     "litellm-cloud": render_litellm_cloud,
     "litellm-hybrid": render_litellm_hybrid,
     "litellm-lemonade": render_litellm_lemonade,

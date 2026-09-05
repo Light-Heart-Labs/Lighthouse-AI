@@ -59,12 +59,16 @@ Pixel is selected only on:
 - Ubuntu 24.04 LTS or Debian 12;
 - Linux with `systemd` as PID 1;
 - a native Linux host or WSL2 (WSL1 is rejected); and
-- an ODS-managed local, cloud, hybrid, or Lemonade model route.
+- an ODS-managed local, cloud, hybrid, Lemonade, or external OpenAI-compatible model route.
 
 ODS supports more platforms than Pixel. macOS, Windows-native, other Linux
-distributions, and generic external Ollama/LM Studio reuse continue to install
-ODS and use Hermes. Generic external reuse does not yet enter the authenticated
-ODS gateway, so Pixel rejects it rather than silently taking a different route.
+distributions continue to install ODS and use Hermes. External Ollama, LM Studio,
+and generic OpenAI-compatible endpoints are bound through authenticated LiteLLM;
+Pixel uses the exact selected upstream model behind `ods/current`. For a generic
+local/LAN endpoint, select `--external-llm-provider openai-compatible` together
+with `--external-llm-url` and `--external-llm-model`. This reuse path is for
+credential-free upstreams; credentialed remote providers use the Remote GPU
+provider workflow. Do not put credentials in an endpoint URL.
 These are ODS capability gates, not a reduction of the ODS support matrix.
 
 ## Architecture

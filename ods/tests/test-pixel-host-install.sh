@@ -1686,6 +1686,15 @@ check test "$(GGUF_FILE='My Custom Model (Q4_K_M).gguf' \
     AMD_INFERENCE_RUNTIME=lemonade \
     LEMONADE_MODEL='extra.My Custom Model (Q4_K_M).gguf' \
     _ods_pixel_runtime_model_identity)" = 'extra.My Custom Model (Q4_K_M).gguf'
+check test "$(EXTERNAL_LLM_URL='http://10.0.2.2:18080' \
+    EXTERNAL_LLM_MODEL='org/qwen+tools:remote' GGUF_FILE='stale-local.gguf' \
+    _ods_pixel_runtime_model_identity)" = 'org/qwen+tools:remote'
+if EXTERNAL_LLM_URL='http://10.0.2.2:18080' EXTERNAL_LLM_MODEL='' \
+    _ods_pixel_runtime_model_identity >/dev/null 2>&1; then
+    fail "external runtime identity requires the selected upstream model"
+else
+    pass "external runtime identity requires the selected upstream model"
+fi
 
 linked_answers="$TEST_ROOT/onboarding-linked.json"
 printf '%s\n' 'sentinel' > "$TEST_ROOT/onboarding-link-target"
