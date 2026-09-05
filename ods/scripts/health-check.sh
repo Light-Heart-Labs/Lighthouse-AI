@@ -87,6 +87,17 @@ log() { $QUIET || echo -e "$1"; }
 
 # Portable millisecond timestamp (macOS BSD date lacks %N)
 _now_ms() {
+    # GNU coreutils (Linux): date +%s%N gives nanoseconds
+    local ns
+    if ns="$(date +%s%N 2>/dev/null)" && [[ "$ns" != *N* ]]; then
+        echo "${ns:0:13}"
+        return
+    fi
+    # macOS / BSD: Perl is always available
+    if perl -MTime::HiRes=time -e 'printf "%d\n", time*1000' 2>/dev/null; then
+        return
+    fi
+    # Last resort: python3
     python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || echo "$(date +%s)000"
 }
 
@@ -195,15 +206,12 @@ test_gpu() {
         if [ -n "$gpu_info" ]; then
             IFS=',' read -r mem_used mem_total gpu_util temp <<< "$gpu_info"
             result_set "gpu" "ok"
+            result_set "gpu_backend" "nvidia"
             result_set "gpu_mem_used" "${mem_used// /}"
             result_set "gpu_mem_total" "${mem_total// /}"
             result_set "gpu_util" "${gpu_util// /}"
             result_set "gpu_temp" "${temp// /}"
 
-            # Warn if GPU memory > 95% (approaching OOM) or temp > 80C.
-            # Deliberately NOT based on utilization: a llama-server doing
-            # inference legitimately pins the GPU at ~100% util, so a
-            # util-based warning would fire during normal, healthy load.
             local mem_used mem_total
             mem_used="$(result_get "gpu_mem_used")"
             mem_total="$(result_get "gpu_mem_total")"
@@ -218,6 +226,31 @@ test_gpu() {
             return 0
         fi
     fi
+
+    # PR #4: AMD ROCm detection
+    if command -v rocm-smi &>/dev/null; then
+        local _amd_mem _amd_temp
+        _amd_mem=$(rocm-smi --showmeminfo vram --csv 2>/dev/null | tail -1)
+        _amd_temp=$(rocm-smi --showtemp --csv 2>/dev/null | awk -F, 'NR>1{print $2; exit}')
+        if [[ -n "$_amd_mem" ]]; then
+            result_set "gpu" "ok"
+            result_set "gpu_backend" "amd"
+            result_set "gpu_temp" "${_amd_temp:-unknown}"
+            return 0
+        fi
+    fi
+
+    # PR #4: Intel Arc / Data Center GPU detection
+    if command -v xpu-smi &>/dev/null; then
+        local _xpu_info
+        _xpu_info=$(xpu-smi discovery 2>/dev/null | head -5)
+        if [[ -n "$_xpu_info" ]]; then
+            result_set "gpu" "ok"
+            result_set "gpu_backend" "intel"
+            return 0
+        fi
+    fi
+
     result_set "gpu" "unavailable"
     return 1
 }
@@ -459,19 +492,33 @@ log ""
 
 # JSON output
 if $JSON_OUTPUT; then
-    echo "{"
-    echo "  \"timestamp\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
-    echo "  \"status\": \"$([ $EXIT_CODE -eq 0 ] && echo "healthy" || ([ $EXIT_CODE -eq 1 ] && echo "degraded" || echo "critical"))\","
-    echo "  \"services\": {"
-    first=true
-    for i in "${!RESULT_KEYS[@]}"; do
-        $first || echo ","
-        first=false
-        echo -n "    \"${RESULT_KEYS[$i]}\": \"${RESULT_VALS[$i]}\""
-    done
-    echo ""
-    echo "  }"
-    echo "}"
+    if command -v jq >/dev/null 2>&1; then
+        # PR #1: Use jq for safe JSON construction (handles escaping)
+        _services="{}"
+        for i in "${!RESULT_KEYS[@]}"; do
+            _services=$(echo "$_services" | jq --arg k "${RESULT_KEYS[$i]}" --arg v "${RESULT_VALS[$i]}" '. + {($k): $v}')
+        done
+        jq -n \
+            --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg status "$([ $EXIT_CODE -eq 0 ] && echo "healthy" || ([ $EXIT_CODE -eq 1 ] && echo "degraded" || echo "critical"))" \
+            --argjson services "$_services" \
+            '{timestamp: $ts, status: $status, services: $services}'
+    else
+        # Fallback: hand-built JSON (no jq available)
+        echo "{"
+        echo "  \"timestamp\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+        echo "  \"status\": \"$([ $EXIT_CODE -eq 0 ] && echo "healthy" || ([ $EXIT_CODE -eq 1 ] && echo "degraded" || echo "critical"))\","
+        echo "  \"services\": {"
+        first=true
+        for i in "${!RESULT_KEYS[@]}"; do
+            $first || echo ","
+            first=false
+            echo -n "    \"${RESULT_KEYS[$i]}\": \"${RESULT_VALS[$i]}\""
+        done
+        echo ""
+        echo "  }"
+        echo "}"
+    fi
 fi
 
 exit $EXIT_CODE
