@@ -46,23 +46,7 @@ pub fn run_install(
 
     // Phase 2: Build installer arguments
     let ods_dir = install_dir.join("ods");
-    let mut args = vec!["--tier".to_string(), tier.to_string()];
-
-    if features.contains(&"voice".to_string()) {
-        args.push("--voice".into());
-    }
-    if features.contains(&"workflows".to_string()) {
-        args.push("--workflows".into());
-    }
-    if features.contains(&"rag".to_string()) {
-        args.push("--rag".into());
-    }
-    if features.contains(&"image_gen".to_string()) {
-        args.push("--image-gen".into());
-    }
-    if features.contains(&"all".to_string()) {
-        args.push("--all".into());
-    }
+    let args = unix_installer_args(tier, &features);
 
     // Phase 3: Run the installer with progress parsing
     update_progress(&state, "Running installer", 20);
@@ -79,27 +63,7 @@ pub fn run_install(
     }
 
     let mut child = if cfg!(target_os = "windows") {
-        let mut ps_args = vec![
-            "-NoProfile".to_string(),
-            "-ExecutionPolicy".to_string(),
-            "Bypass".to_string(),
-            "-File".to_string(),
-            install_ps1.to_string_lossy().to_string(),
-            "-NonInteractive".to_string(),
-            "-Tier".to_string(),
-            tier.to_string(),
-        ];
-
-        for feature in &features {
-            match feature.as_str() {
-                "voice" => ps_args.push("-Voice".into()),
-                "workflows" => ps_args.push("-Workflows".into()),
-                "rag" => ps_args.push("-Rag".into()),
-                "image_gen" => ps_args.push("-Comfyui".into()),
-                "all" => ps_args.push("-All".into()),
-                _ => {}
-            }
-        }
+        let ps_args = windows_installer_args(tier, &features, &install_ps1);
 
         Command::new("powershell.exe")
             .args(&ps_args)
@@ -172,6 +136,69 @@ pub fn run_install(
             Err(format!("Installation failed:\n{}", detail))
         }
     }
+}
+
+fn unix_installer_args(tier: u8, features: &[String]) -> Vec<String> {
+    let mut args = if tier == 0 {
+        vec!["--cloud".to_string(), "--non-interactive".to_string()]
+    } else {
+        vec![
+            "--tier".to_string(),
+            tier.to_string(),
+            "--non-interactive".to_string(),
+        ]
+    };
+
+    for feature in features {
+        let flag = match feature.as_str() {
+            "voice" => Some("--voice"),
+            "workflows" => Some("--workflows"),
+            "rag" => Some("--rag"),
+            "recommended" => Some("--recommended"),
+            "image_gen" => Some("--comfyui"),
+            "all" => Some("--all"),
+            _ => None,
+        };
+        if let Some(flag) = flag {
+            args.push(flag.to_string());
+        }
+    }
+
+    args
+}
+
+fn windows_installer_args(tier: u8, features: &[String], script: &Path) -> Vec<String> {
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        script.to_string_lossy().to_string(),
+        "-NonInteractive".to_string(),
+    ];
+    if tier == 0 {
+        args.push("-Cloud".to_string());
+    } else {
+        args.push("-Tier".to_string());
+        args.push(tier.to_string());
+    }
+
+    for feature in features {
+        let flag = match feature.as_str() {
+            "voice" => Some("-Voice"),
+            "workflows" => Some("-Workflows"),
+            "rag" => Some("-Rag"),
+            "recommended" => Some("-Recommended"),
+            "image_gen" => Some("-Comfyui"),
+            "all" => Some("-All"),
+            _ => None,
+        };
+        if let Some(flag) = flag {
+            args.push(flag.to_string());
+        }
+    }
+
+    args
 }
 
 fn ensure_checkout(install_dir: &Path) -> Result<(), String> {
@@ -428,5 +455,75 @@ mod tests {
             "https://github.com/example/ODS.git",
             DEFAULT_REPO_URL
         ));
+    }
+
+    #[test]
+    fn unix_gui_install_is_non_interactive_and_maps_features_to_cli_flags() {
+        let args = unix_installer_args(
+            2,
+            &[
+                "voice".to_string(),
+                "recommended".to_string(),
+                "image_gen".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            args,
+            [
+                "--tier",
+                "2",
+                "--non-interactive",
+                "--voice",
+                "--recommended",
+                "--comfyui",
+            ]
+        );
+    }
+
+    #[test]
+    fn unix_tier_zero_selects_cloud_mode() {
+        assert_eq!(
+            unix_installer_args(0, &[]),
+            ["--cloud", "--non-interactive"]
+        );
+    }
+
+    #[test]
+    fn windows_gui_install_maps_features_to_powershell_switches() {
+        let args = windows_installer_args(
+            3,
+            &[
+                "workflows".to_string(),
+                "rag".to_string(),
+                "all".to_string(),
+            ],
+            Path::new("C:\\ODS\\install.ps1"),
+        );
+
+        assert_eq!(
+            args,
+            [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "C:\\ODS\\install.ps1",
+                "-NonInteractive",
+                "-Tier",
+                "3",
+                "-Workflows",
+                "-Rag",
+                "-All",
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_tier_zero_selects_cloud_mode() {
+        let args = windows_installer_args(0, &[], Path::new("install.ps1"));
+
+        assert!(args.contains(&"-Cloud".to_string()));
+        assert!(!args.contains(&"-Tier".to_string()));
     }
 }
