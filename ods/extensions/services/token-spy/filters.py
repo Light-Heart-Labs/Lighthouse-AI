@@ -238,6 +238,7 @@ def _filter_history(body: dict, cfg: dict, result: FilterResult,
     # An atomic unit is: [user msg, assistant reply, tool_call/tool result chain]
     # We must not split these or the API contract breaks.
     units = _group_into_units(conv_msgs)
+    original_units = units  # kept for the Step 7 restoration below
 
     # Step 3: Apply max_pairs — keep only the N most recent units
     if max_pairs and len(units) > max_pairs:
@@ -287,14 +288,25 @@ def _filter_history(body: dict, cfg: dict, result: FilterResult,
     # from the original conversation are present (protects in-flight tool chains)
     if always_keep_last_n and conv_msgs:
         tail = conv_msgs[-always_keep_last_n:]
-        # Check if tail messages are already in filtered_conv
-        # by comparing the last N messages
         tail_ids = {id(m) for m in tail}
-        existing_ids = {id(m) for m in filtered_conv[-always_keep_last_n:]} if filtered_conv else set()
-        if not tail_ids.issubset(existing_ids):
-            # Ensure tail messages are present — they may have been modified by
-            # truncation but should still be in the list since we keep recent units
-            pass  # Units-based approach already preserves recent messages
+        existing_ids = {id(m) for m in filtered_conv}
+        missing_ids = tail_ids - existing_ids
+        if missing_ids:
+            # max_pairs/drop_old_tool_calls above dropped a unit that held one
+            # of the guaranteed tail messages. Restore whichever original
+            # units still hold a missing message, in original order, ahead of
+            # what survived filtering — units are atomic (user/assistant/tool
+            # chains), so we restore whole units rather than splicing
+            # individual messages back in and risking a broken tool_call/
+            # tool_result pairing.
+            restored = []
+            for unit in original_units:
+                unit_ids = {id(m) for m in unit}
+                if unit_ids & missing_ids and not unit_ids & existing_ids:
+                    restored.extend(unit)
+                    result.messages_removed -= len(unit)
+                    existing_ids |= unit_ids
+            filtered_conv = restored + filtered_conv
 
     result.messages_kept = len(system_msgs) + len(filtered_conv)
 
