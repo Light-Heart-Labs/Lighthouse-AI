@@ -16,42 +16,42 @@ _ods_completion() {
     case $cword in
         1)
             # Complete main commands and aliases
-            COMPREPLY=($(compgen -W "$main_commands $aliases" -- "$cur"))
+            mapfile -t COMPREPLY < <(compgen -W "$main_commands $aliases" -- "$cur")
             return 0
             ;;
         2)
             case $prev in
                 gpu|g)
-                    COMPREPLY=($(compgen -W "status topology assignment validate reassign help" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "status topology assignment validate reassign help" -- "$cur")
                     return 0
                     ;;
                 preset|p)
-                    COMPREPLY=($(compgen -W "save load list delete export import" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "save load list delete export import" -- "$cur")
                     return 0
                     ;;
                 mode|m)
-                    COMPREPLY=($(compgen -W "local cloud hybrid" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "local cloud hybrid" -- "$cur")
                     return 0
                     ;;
                 model)
-                    COMPREPLY=($(compgen -W "current list swap" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "current list swap" -- "$cur")
                     return 0
                     ;;
                 config|cfg)
-                    COMPREPLY=($(compgen -W "show edit validate" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "show edit validate" -- "$cur")
                     return 0
                     ;;
                 backup)
-                    COMPREPLY=($(compgen -W "verify -c -l --compress --list" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "verify -c -l --compress --list" -- "$cur")
                     return 0
                     ;;
                 doctor|diag|d)
-                    COMPREPLY=($(compgen -W "--json" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "--json" -- "$cur")
                     return 0
                     ;;
                 enable|disable|logs|log|l|restart|r|start|stop|shell|sh)
                     # Complete with service names
-                    COMPREPLY=($(compgen -W "$services" -- "$cur"))
+                    mapfile -t COMPREPLY < <(compgen -W "$services" -- "$cur")
                     return 0
                     ;;
                 restore)
@@ -59,7 +59,7 @@ _ods_completion() {
                     local backup_dir="${ODS_HOME:-$HOME/ods}/.backups"
                     if [[ -d "$backup_dir" ]]; then
                         local backup_ids=$(ls -1 "$backup_dir" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}' | sort -r)
-                        COMPREPLY=($(compgen -W "$backup_ids" -- "$cur"))
+                        mapfile -t COMPREPLY < <(compgen -W "$backup_ids" -- "$cur")
                     fi
                     return 0
                     ;;
@@ -70,11 +70,11 @@ _ods_completion() {
                 gpu|g)
                     case $prev in
                         reassign)
-                            COMPREPLY=($(compgen -W "--auto --manual --dry-run" -- "$cur"))
+                            mapfile -t COMPREPLY < <(compgen -W "--auto --manual --dry-run" -- "$cur")
                             return 0
                             ;;
                         topology|topo|t)
-                            COMPREPLY=($(compgen -W "--force" -- "$cur"))
+                            mapfile -t COMPREPLY < <(compgen -W "--force" -- "$cur")
                             return 0
                             ;;
                     esac
@@ -86,7 +86,7 @@ _ods_completion() {
                             local preset_dir="${ODS_HOME:-$HOME/ods}/.presets"
                             if [[ -d "$preset_dir" ]]; then
                                 local presets=$(ls -1 "$preset_dir" 2>/dev/null | sed 's/\.preset$//')
-                                COMPREPLY=($(compgen -W "$presets" -- "$cur"))
+                                mapfile -t COMPREPLY < <(compgen -W "$presets" -- "$cur")
                             fi
                             return 0
                             ;;
@@ -95,13 +95,13 @@ _ods_completion() {
                             local preset_dir="${ODS_HOME:-$HOME/ods}/.presets"
                             if [[ -d "$preset_dir" ]]; then
                                 local presets=$(ls -1 "$preset_dir" 2>/dev/null | sed 's/\.preset$//')
-                                COMPREPLY=($(compgen -W "$presets" -- "$cur"))
+                                mapfile -t COMPREPLY < <(compgen -W "$presets" -- "$cur")
                             fi
                             return 0
                             ;;
                         import)
                             # Complete with .tar.gz files
-                            COMPREPLY=($(compgen -f -X '!*.tar.gz' -- "$cur"))
+                            mapfile -t COMPREPLY < <(compgen -f -X '!*.tar.gz' -- "$cur")
                             return 0
                             ;;
                     esac
@@ -110,7 +110,7 @@ _ods_completion() {
                     case $prev in
                         swap)
                             # Complete with available tiers (0-4)
-                            COMPREPLY=($(compgen -W "0 1 2 3 4" -- "$cur"))
+                            mapfile -t COMPREPLY < <(compgen -W "0 1 2 3 4" -- "$cur")
                             return 0
                             ;;
                     esac
@@ -122,7 +122,7 @@ _ods_completion() {
                             local backup_dir="${ODS_HOME:-$HOME/ods}/.backups"
                             if [[ -d "$backup_dir" ]]; then
                                 local backup_ids=$(ls -1 "$backup_dir" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}' | sort -r)
-                                COMPREPLY=($(compgen -W "$backup_ids" -- "$cur"))
+                                mapfile -t COMPREPLY < <(compgen -W "$backup_ids" -- "$cur")
                             fi
                             return 0
                             ;;
@@ -136,7 +136,7 @@ _ods_completion() {
                     case "${words[2]}" in
                         export)
                             # Complete with .tar.gz filename for export destination
-                            COMPREPLY=($(compgen -f -X '!*.tar.gz' -- "$cur"))
+                            mapfile -t COMPREPLY < <(compgen -f -X '!*.tar.gz' -- "$cur")
                             return 0
                             ;;
                     esac
