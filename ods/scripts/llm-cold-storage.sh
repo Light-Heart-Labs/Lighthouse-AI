@@ -87,6 +87,13 @@ do_archive() {
     local archived=0
     local skipped=0
 
+    # Ensure the cold-storage target directory exists before moving any model
+    # tree into it.  Without this, `mv` fails when $COLD_DIR has never been
+    # created (first archive run on a fresh host).
+    if [[ "$dry_run" == "false" ]]; then
+        mkdir -p "$COLD_DIR"
+    fi
+
     log "========== LLM cold storage scan started (dry_run=$dry_run) =========="
 
     for model_dir in "$HF_CACHE"/models--*/; do
