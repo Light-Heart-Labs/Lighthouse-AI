@@ -181,3 +181,99 @@ if find "$INSTALL_DIR/data/backups" -mindepth 1 -maxdepth 1 -type d -name 'pre-u
 fi
 [[ ! -s "$DOCKER_LOG" ]] || { cat "$DOCKER_LOG"; fail "non-git update invoked Docker"; }
 pass "ods-update fails cleanly before mutating non-git runtime installs"
+
+#------------------------------------------------------------------------------
+# Regression: `ps --services` emits one service name per line and Compose allows
+# spaces in a service name. cmd_health used to collect that into a scalar and
+# iterate it unquoted, word-splitting "custom worker" into "custom" + "worker".
+# Each fragment then matched no container, reported "unknown", and failed the
+# health check for a stack that was actually running.
+#------------------------------------------------------------------------------
+SPACE_BIN_DIR="$TMP_DIR/space-bin"
+mkdir -p "$SPACE_BIN_DIR"
+SERVICE_QUERY_LOG="$TMP_DIR/service-queries.log"
+PS_SERVICES_EXIT="$TMP_DIR/ps-services-exit"
+export SERVICE_QUERY_LOG PS_SERVICES_EXIT
+printf '0\n' > "$PS_SERVICES_EXIT"
+: > "$SERVICE_QUERY_LOG"
+
+cat > "$SPACE_BIN_DIR/docker" <<'SH'
+#!/usr/bin/env bash
+[[ "${1:-}" == "info" ]] && exit 0
+if [[ "${1:-}" == "compose" && "${2:-}" == "version" ]]; then exit 0; fi
+[[ "${1:-}" == "compose" ]] && shift
+
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "ps" ]]; then
+        next="${args[$((i + 1))]:-}"
+        if [[ "$next" == "--services" ]]; then
+            # Simulate a failing `ps` when the fixture asks for it.
+            if [[ "$(cat "${PS_SERVICES_EXIT:?}")" != "0" ]]; then
+                echo "compose: no configuration file provided" >&2
+                exit 1
+            fi
+            printf '%s\n' 'dashboard-api' 'custom worker' 'litellm'
+            exit 0
+        fi
+        if [[ "$next" == "--format" ]]; then
+            # docker compose ps --format json <service>
+            requested="${args[$((i + 3))]:-}"
+            printf '%s\n' "$requested" >> "${SERVICE_QUERY_LOG:?}"
+            case "$requested" in
+                dashboard-api|"custom worker"|litellm)
+                    printf '%s\n' '{"State":"running"}' ;;
+                *)
+                    printf '%s\n' '[]' ;;
+            esac
+            exit 0
+        fi
+    fi
+done
+exit 0
+SH
+chmod +x "$SPACE_BIN_DIR/docker"
+
+printf '%s\n' '-f docker-compose.base.yml -f docker-compose.cpu.yml' > "$INSTALL_DIR/.compose-flags"
+
+PATH="$SPACE_BIN_DIR:$BIN_DIR:$PATH" bash "$INSTALL_DIR/ods-update.sh" health \
+    > "$TMP_DIR/spaced-service.out" 2>&1 \
+    || { cat "$TMP_DIR/spaced-service.out"; fail "health should pass when a service name contains a space"; }
+
+grep -qF "Service custom worker: running" "$TMP_DIR/spaced-service.out" \
+    || { cat "$TMP_DIR/spaced-service.out"; fail "spaced service name was not reported as a single running service"; }
+if grep -Eq "Service (custom|worker): " "$TMP_DIR/spaced-service.out"; then
+    cat "$TMP_DIR/spaced-service.out"
+    fail "spaced service name was word-split into separate services"
+fi
+grep -qF "All health checks passed" "$TMP_DIR/spaced-service.out" \
+    || { cat "$TMP_DIR/spaced-service.out"; fail "a healthy stack was flagged unhealthy by the spaced service name"; }
+grep -qxF "custom worker" "$SERVICE_QUERY_LOG" \
+    || { cat "$SERVICE_QUERY_LOG"; fail "per-service ps was not queried with the whole service name"; }
+if grep -qxE "custom|worker" "$SERVICE_QUERY_LOG"; then
+    cat "$SERVICE_QUERY_LOG"
+    fail "per-service ps was queried with a word-split fragment"
+fi
+pass "ods-update health treats a spaced service name as one service"
+
+# A failing `ps --services` must warn and return 1, never fall through and
+# iterate a single empty service name.
+printf '1\n' > "$PS_SERVICES_EXIT"
+: > "$SERVICE_QUERY_LOG"
+set +e
+PATH="$SPACE_BIN_DIR:$BIN_DIR:$PATH" bash "$INSTALL_DIR/ods-update.sh" health \
+    > "$TMP_DIR/no-services.out" 2>&1
+no_services_exit=$?
+set -e
+
+[[ "$no_services_exit" -ne 0 ]] \
+    || { cat "$TMP_DIR/no-services.out"; fail "health should fail when the service list cannot be resolved"; }
+grep -q "No services found for resolved compose stack" "$TMP_DIR/no-services.out" \
+    || { cat "$TMP_DIR/no-services.out"; fail "health did not warn about the unresolvable service list"; }
+if grep -q "Service : " "$TMP_DIR/no-services.out"; then
+    cat "$TMP_DIR/no-services.out"
+    fail "health iterated an empty service name after a failed ps"
+fi
+[[ ! -s "$SERVICE_QUERY_LOG" ]] \
+    || { cat "$SERVICE_QUERY_LOG"; fail "health queried a service after ps --services failed"; }
+pass "ods-update health fails cleanly when the service list cannot be resolved"
