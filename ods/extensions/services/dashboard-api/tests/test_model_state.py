@@ -328,6 +328,28 @@ class TestModelStateEndpoint:
         resp = test_client.get("/api/models/state")
         assert resp.status_code in (401, 403)
 
+    def test_state_read_oserror_is_diagnostic(self, test_client, monkeypatch, tmp_path):
+        # A read failure other than "missing file" (e.g. a permission error) must
+        # degrade to the same diagnostic shape as malformed JSON, never a 500 -
+        # this endpoint's contract is read-only and never treats bad state as a
+        # server error.
+        path = self._point_at(monkeypatch, tmp_path)
+        path.write_text("{}", encoding="utf-8")
+        original_read_text = Path.read_text
+
+        def flaky_read_text(self, *args, **kwargs):
+            if self.name == "model-state.json":
+                raise OSError("simulated permission denied")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", flaky_read_text)
+        resp = test_client.get("/api/models/state", headers=test_client.auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["exists"] is True
+        assert body["valid"] is False
+        assert any("read failed" in e for e in body["errors"])
+
 
 class TestObserveHook:
     @pytest.fixture(autouse=True)
