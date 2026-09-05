@@ -11029,6 +11029,29 @@ def _opencode_model_route(env: dict, model_id: str) -> tuple[str, str, str]:
     return provider_id, model_id, model_id
 
 
+def _is_opencode_config_user_owned(
+    current_model_ref: str | None,
+    ods_provider_id: str,
+) -> bool:
+    """Determine if OpenCode config is user-owned based on its current model selection.
+
+    A config is considered user-owned if its current model points to a non-ODS provider.
+    This prevents ODS from hijacking a native OpenCode CLI that shares the same config path.
+
+    Args:
+        current_model_ref: The current "model" field value (format: "provider/model" or None)
+        ods_provider_id: The ODS provider ID (typically "llama-server")
+
+    Returns:
+        True if config is user-owned (should not update default model selection),
+        False if config is ODS-managed (safe to update default model selection)
+    """
+    if not isinstance(current_model_ref, str) or "/" not in current_model_ref:
+        return False
+    current_provider = current_model_ref.split("/", 1)[0]
+    return current_provider not in (ods_provider_id, "ods")
+
+
 def _opencode_config_matches(
     config: object,
     provider_id: str,
@@ -11064,7 +11087,12 @@ def _update_opencode_config(
     context_length: int,
     display_name: str | None = None,
 ) -> None:
-    """Update both OpenCode compatibility files and verify persisted routing."""
+    """Update both OpenCode compatibility files and verify persisted routing.
+
+    Respects user-owned OpenCode CLI configs: only updates the ODS provider route,
+    not the user's selected default model, if the config already points to a
+    non-ODS provider.
+    """
     base_url, api_key = _opencode_route(env)
     provider_id, route_model_id, route_display_name = _opencode_model_route(env, model_id)
     display_name = route_display_name if route_model_id != model_id else (display_name or model_id)
@@ -11076,8 +11104,11 @@ def _update_opencode_config(
         source = previous.get("parsed") or snapshot["source"]
         config = json.loads(json.dumps(source))
         previous_model_ref = config.get("model")
-        config["model"] = model_ref
-        config["small_model"] = model_ref
+
+        is_user_owned = _is_opencode_config_user_owned(previous_model_ref, provider_id)
+        if not is_user_owned:
+            config["model"] = model_ref
+            config["small_model"] = model_ref
         config.setdefault("$schema", "https://opencode.ai/config.json")
 
         providers = config.setdefault("provider", {})
