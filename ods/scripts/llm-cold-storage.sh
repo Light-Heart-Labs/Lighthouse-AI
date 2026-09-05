@@ -14,6 +14,7 @@
 #   ./llm-cold-storage.sh --restore <name> # Restore a specific model
 #   ./llm-cold-storage.sh --restore-all    # Restore all archived models
 #   ./llm-cold-storage.sh --status         # Show archive status
+#   ./llm-cold-storage.sh --status --json  # Machine-readable inventory
 #
 set -uo pipefail
 
@@ -224,30 +225,143 @@ show_status() {
     echo "Cold storage total: $(du -sh "$COLD_DIR" 2>/dev/null | cut -f1)"
 }
 
-case "${1:-}" in
-    --execute)
+json_escape() {
+    local value="${1-}"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '%s' "$value"
+}
+
+du_size() {
+    local path="$1" output
+    if [[ ! -e "$path" ]]; then
+        printf '0'
+        return 0
+    fi
+    if ! output=$(du -sh "$path" 2>&1); then
+        echo "ERROR: could not measure $path: $output" >&2
+        return 1
+    fi
+    printf '%s' "${output%%$'\t'*}"
+}
+
+show_status_json() {
+    local hot=0 cold_links=0 cold=0 comma="" model_dir cold_model
+    local cache_total cold_total
+    cache_total="$(du_size "$HF_CACHE")" || return 1
+    cold_total="$(du_size "$COLD_DIR")" || return 1
+
+    printf '{"schema_version":"1","kind":"llm-cold-storage-status",'
+    printf '"paths":{"cache":"%s","cold_storage":"%s"},"models":[' \
+        "$(json_escape "$HF_CACHE")" "$(json_escape "$COLD_DIR")"
+
+    for model_dir in "$HF_CACHE"/models--*/; do
+        [[ -d "$model_dir" ]] || continue
+        local name size state idle_json protected=false in_use=false
+        name="$(basename "$model_dir")"
+        size="$(du_size "$model_dir")" || return 1
+        if [[ -L "${model_dir%/}" ]]; then
+            state="cold_link"
+            idle_json="null"
+            cold_links=$((cold_links + 1))
+        else
+            state="hot"
+            idle_json="$(get_last_access_days "$model_dir")"
+            is_protected "$name" && protected=true
+            is_model_in_use "$name" && in_use=true
+            hot=$((hot + 1))
+        fi
+        printf '%s{"name":"%s","state":"%s","size":"%s","idle_days":%s,' \
+            "$comma" "$(json_escape "$name")" "$state" "$(json_escape "$size")" "$idle_json"
+        printf '"protected":%s,"in_use":%s,"path":"%s"}' \
+            "$protected" "$in_use" "$(json_escape "${model_dir%/}")"
+        comma=","
+    done
+
+    for cold_model in "$COLD_DIR"/models--*/; do
+        [[ -d "$cold_model" ]] || continue
+        local name size
+        name="$(basename "$cold_model")"
+        size="$(du_size "$cold_model")" || return 1
+        printf '%s{"name":"%s","state":"cold","size":"%s","idle_days":null,' \
+            "$comma" "$(json_escape "$name")" "$(json_escape "$size")"
+        printf '"protected":false,"in_use":false,"path":"%s"}' \
+            "$(json_escape "${cold_model%/}")"
+        comma=","
+        cold=$((cold + 1))
+    done
+
+    printf '],"summary":{"hot":%d,"cold_links":%d,"cold":%d,' "$hot" "$cold_links" "$cold"
+    printf '"cache_size":"%s","cold_storage_size":"%s"}}\n' \
+        "$(json_escape "$cache_total")" "$(json_escape "$cold_total")"
+}
+
+ACTION=""
+RESTORE_NAME=""
+JSON_OUTPUT=false
+
+select_action() {
+    if [[ -n "$ACTION" && "$ACTION" != "$1" ]]; then
+        echo "ERROR: choose exactly one cold-storage action" >&2
+        exit 2
+    fi
+    ACTION="$1"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --execute) select_action "execute"; shift ;;
+        --restore)
+            select_action "restore"
+            RESTORE_NAME="${2:-}"
+            [[ -n "$RESTORE_NAME" ]] || { echo "Usage: $0 --restore <model-name>" >&2; exit 2; }
+            shift 2
+            ;;
+        --restore-all) select_action "restore_all"; shift ;;
+        --status) select_action "status"; shift ;;
+        --json) JSON_OUTPUT=true; shift ;;
+        --help|-h) select_action "help"; shift ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+
+[[ -n "$ACTION" ]] || ACTION="dry_run"
+if [[ "$JSON_OUTPUT" == "true" && "$ACTION" != "status" ]]; then
+    echo "ERROR: --json is supported only with --status" >&2
+    exit 2
+fi
+
+case "$ACTION" in
+    execute)
         do_archive false
         ;;
-    --restore)
-        [[ -n "${2:-}" ]] || { echo "Usage: $0 --restore <model-name>"; exit 1; }
-        do_restore "$2"
+    restore)
+        do_restore "$RESTORE_NAME"
         ;;
-    --restore-all)
+    restore_all)
         do_restore_all
         ;;
-    --status)
-        show_status
+    status)
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            show_status_json
+        else
+            show_status
+        fi
         ;;
-    --help|-h)
-        echo "Usage: $0 [--execute|--restore <name>|--restore-all|--status|--help]"
+    help)
+        echo "Usage: $0 [--execute|--restore <name>|--restore-all|--status [--json]|--help]"
         echo ""
         echo "  (no args)            Dry-run: show what would be archived"
         echo "  --execute            Archive idle models (>$MAX_IDLE_DAYS days)"
         echo "  --restore <name>     Restore model from cold storage"
         echo "  --restore-all        Restore all archived models"
         echo "  --status             Show current hot/cold status"
+        echo "  --status --json      Emit machine-readable hot/cold inventory"
         ;;
-    *)
+    dry_run)
         do_archive true
         ;;
 esac
