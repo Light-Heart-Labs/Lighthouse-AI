@@ -61,6 +61,42 @@ describe('TemplatePreview apply result', () => {
     expect(await screen.findByText(/template applied/i)).toBeInTheDocument()
   })
 
+  test('aborts a stale preview when the selected template changes', async () => {
+    let firstSignal
+    const fetchMock = vi.fn()
+      .mockImplementationOnce((_url, options) => {
+        firstSignal = options.signal
+        return new Promise((_, reject) => {
+          options.signal.addEventListener('abort', () => {
+            const error = new Error('Aborted')
+            error.name = 'AbortError'
+            reject(error)
+          }, { once: true })
+        })
+      })
+      .mockResolvedValueOnce(response({
+        changes: { to_enable: [], already_enabled: ['svc-b'], incompatible: [] },
+        warnings: [],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { rerender } = render(
+      <TemplatePreview template={template} onClose={vi.fn()} />,
+    )
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    rerender(
+      <TemplatePreview
+        template={{ ...template, id: 'next-template', services: ['svc-b'] }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(firstSignal.aborted).toBe(true)
+    expect(await screen.findByText('svc-b')).toBeInTheDocument()
+  })
+
   test('does not report all services active when apply skipped a service', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({

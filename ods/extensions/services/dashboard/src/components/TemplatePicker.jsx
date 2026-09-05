@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   MessageSquare, Image, Code, Shield, Layers, Package,
   Loader2, X, Check, AlertTriangle, HardDrive,
@@ -9,11 +9,16 @@ const TEMPLATE_APPLY_TIMEOUT_MS = 30 * 60 * 1000
 
 const fetchJson = async (url, options = {}) => {
   const c = new AbortController()
-  const t = setTimeout(() => c.abort(), options.timeout || 30000)
+  const { signal, timeout = 30000, ...fetchOptions } = options
+  const abort = () => c.abort()
+  if (signal?.aborted) abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  const t = setTimeout(abort, timeout)
   try {
-    return await fetch(url, { ...options, signal: c.signal })
+    return await fetch(url, { ...fetchOptions, signal: c.signal })
   } finally {
     clearTimeout(t)
+    signal?.removeEventListener('abort', abort)
   }
 }
 
@@ -128,19 +133,32 @@ export function TemplatePreview({ template, onClose, onApplied }) {
 
   const Icon = ICON_MAP[template.icon] || Package
 
-  const loadPreview = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetchJson(`/api/templates/${template.id}/preview`, { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setPreviewData(await res.json())
-    } catch (err) {
-      setError(err.name === 'AbortError' ? 'Request timed out' : 'Failed to load preview')
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    const controller = new AbortController()
+
+    const loadPreview = async () => {
+      setLoading(true)
+      setError(null)
+      setPreviewData(null)
+      try {
+        const res = await fetchJson(`/api/templates/${template.id}/preview`, {
+          method: 'POST',
+          signal: controller.signal,
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        setPreviewData(await res.json())
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setError(err.name === 'AbortError' ? 'Request timed out' : 'Failed to load preview')
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
     }
-  }
+
+    loadPreview()
+    return () => controller.abort()
+  }, [template.id])
 
   const handleApply = async () => {
     setApplying(true)
@@ -166,11 +184,6 @@ export function TemplatePreview({ template, onClose, onApplied }) {
     } finally {
       setApplying(false)
     }
-  }
-
-  // Load preview on mount
-  if (!previewData && !loading && !error) {
-    loadPreview()
   }
 
   const changes = previewData?.changes || {}
