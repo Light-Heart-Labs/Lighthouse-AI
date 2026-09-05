@@ -216,6 +216,7 @@ jobs:
           bash tests/test-external-services.sh
           bash tests/test-resolve-compose-resilient.sh
           bash tests/test-phase03-multigpu-tty.sh
+          bash tests/test-tmpfile-cleanup.sh
           bash tests/contracts/test-preflight-fixtures.sh
           bash tests/test-preflight-resolver-bug.sh
           bash tests/test-desktop-agent-host-env.sh
