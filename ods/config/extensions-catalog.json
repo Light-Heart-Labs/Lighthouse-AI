@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-24T03:20:28Z",
+  "generated_at": "2026-08-20T03:20:49Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -2189,6 +2189,59 @@
           ]
         }
       ]
+    },
+    {
+      "id": "typesense",
+      "name": "Typesense",
+      "description": "Fast federated, vector, and typo-tolerant search for local applications.",
+      "category": "optional",
+      "gpu_backends": [
+        "all"
+      ],
+      "compose_file": "compose.yaml",
+      "depends_on": [],
+      "port": 8108,
+      "external_port_default": 8108,
+      "health_endpoint": "/health",
+      "env_vars": [
+        {
+          "key": "TYPESENSE_API_KEY",
+          "required": true,
+          "description": "Bootstrap administrator key for the Typesense API"
+        }
+      ],
+      "tags": [
+        "search",
+        "federated-search",
+        "vector-search",
+        "typo-tolerance",
+        "agents"
+      ],
+      "features": [
+        {
+          "id": "typesense-search-api",
+          "name": "Federated and Vector Search",
+          "description": "Query multiple collections with full-text, filters, and vector similarity",
+          "icon": "Search",
+          "category": "data",
+          "requirements": {
+            "services": [
+              "typesense"
+            ],
+            "vram_gb": 0,
+            "disk_gb": 10
+          },
+          "enabled_services_all": [
+            "typesense"
+          ],
+          "setup_time": "~1 minute",
+          "priority": 35,
+          "gpu_backends": [
+            "all"
+          ]
+        }
+      ],
+      "startup_timeout": 90
     },
     {
       "id": "weaviate",
