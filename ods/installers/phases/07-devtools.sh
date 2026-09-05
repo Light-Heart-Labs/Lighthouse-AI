@@ -186,8 +186,12 @@ else
             _opencode_key="no-key"
         fi
         if [[ -z "${_opencode_key:-}" ]]; then
-            ai_err "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
-            exit 1
+            # `error` is the Linux installer's fatal helper (lib/logging.sh)
+            # and exits 1 itself, so no separate exit is needed. This used to
+            # call the macOS-only error helper from installers/macos/lib/ui.sh,
+            # which is never sourced on this path — so the line died with
+            # "command not found" instead of printing the message.
+            error "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
         fi
 
         # Writes a fresh opencode.json from the template. Used for first-install
