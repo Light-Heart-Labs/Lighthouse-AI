@@ -6656,3 +6656,191 @@ class TestNvidiaHealthUnchanged:
         assert '"ok"' in body
         # But Lemonade check would fail (no model_loaded key)
         assert _check_lemonade_health(body) is False
+
+
+def _write_mlx_activation_fixture(tmp_path, *, gpu_backend="apple"):
+    """Install tree whose catalog holds one MLX model with real shard hashes."""
+    install_dir = tmp_path / "install"
+    config_dir = install_dir / "config"
+    data_dir = install_dir / "data"
+    weights = data_dir / "models" / "mlx" / "target-mlx" / "8-bit"
+    weights.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+
+    shard = b"mlx-weights"
+    (weights / "model-00001-of-00001.safetensors").write_bytes(shard)
+    (weights / "config.json").write_text("{}", encoding="utf-8")
+
+    (config_dir / "model-library.json").write_text(
+        json.dumps({"models": [{
+            "id": "target-mlx",
+            "runtime": "mlx",
+            "mlx_repo": "example/Target-MLX",
+            "mlx_revision": "0" * 40,
+            "mlx_subdir": "8-bit",
+            "mlx_files": [{
+                "file": "8-bit/model-00001-of-00001.safetensors",
+                "url": "https://huggingface.co/example/Target-MLX/resolve/main/8-bit/x",
+                "sha256": hashlib.sha256(shard).hexdigest(),
+                "size_bytes": len(shard),
+            }],
+            "llm_model_name": "target-mlx",
+            "context_length": 65536,
+        }]}),
+        encoding="utf-8",
+    )
+
+    # A real interpreter path so the launcher's preflight passes.
+    venv_bin = data_dir / "mlx" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_stub = venv_bin / "python"
+    python_stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python_stub.chmod(0o755)
+
+    (install_dir / ".env").write_text(
+        f"GPU_BACKEND={gpu_backend}\n"
+        "LLM_MODEL=old-model\n"
+        "CTX_SIZE=2048\n"
+        "OLLAMA_PORT=8080\n",
+        encoding="utf-8",
+    )
+    return install_dir
+
+
+class TestMLXActivation:
+    def _prepare(self, tmp_path, monkeypatch, *, gpu_backend="apple"):
+        install_dir = _write_mlx_activation_fixture(tmp_path, gpu_backend=gpu_backend)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _s: None)
+        return install_dir
+
+    def test_activates_and_publishes_an_mlx_route(self, tmp_path, monkeypatch):
+        install_dir = self._prepare(tmp_path, monkeypatch)
+        weights = install_dir / "data" / "models" / "mlx" / "target-mlx" / "8-bit"
+        order = []
+
+        monkeypatch.setattr(
+            _mod, "_restart_native_mlx_server",
+            lambda _env_path, model_dir: order.append(("restart", str(model_dir))),
+        )
+        monkeypatch.setattr(
+            _mod, "_wait_for_mlx_readiness",
+            lambda env, model_ref, ctx: (
+                order.append(("wait", model_ref)) or {
+                    "identity": model_ref,
+                    "contextLength": ctx,
+                    "contextVerified": False,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            ),
+        )
+
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-mlx")
+
+        assert handler.response_code == 200, handler.parse_response()
+        payload = handler.parse_response()
+        assert payload["runtime"] == "mlx"
+        assert payload["context_verified"] is False
+        assert order == [("restart", str(weights)), ("wait", str(weights))]
+
+        state = json.loads(
+            (install_dir / "data" / "model-state.json").read_text(encoding="utf-8")
+        )
+        # The route must publish as a real mlx backend, not be downgraded to
+        # "unknown" and not be withheld for lacking a context readback.
+        assert state["active"]["backend"]["kind"] == "mlx"
+        assert state["active"]["backend"]["endpointId"] == "mlx-host"
+        assert state["active"]["runtimeModelId"] == str(weights)
+
+        env_text = (install_dir / ".env").read_text(encoding="utf-8")
+        assert f"MLX_MODEL_PATH={weights}" in env_text
+        assert "CTX_SIZE=65536" in env_text
+
+    def test_non_apple_backend_is_refused(self, tmp_path, monkeypatch):
+        self._prepare(tmp_path, monkeypatch, gpu_backend="nvidia")
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-mlx")
+        assert handler.response_code == 400
+        assert "apple GPU backend" in handler.parse_response()["error"]
+
+    def test_corrupt_shard_blocks_activation_before_any_restart(
+        self, tmp_path, monkeypatch
+    ):
+        install_dir = self._prepare(tmp_path, monkeypatch)
+        shard = (install_dir / "data" / "models" / "mlx" / "target-mlx" / "8-bit"
+                 / "model-00001-of-00001.safetensors")
+        shard.write_bytes(b"tampered")
+        restarted = []
+        monkeypatch.setattr(
+            _mod, "_restart_native_mlx_server",
+            lambda *a: restarted.append(a),
+        )
+
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-mlx")
+        assert handler.response_code == 400
+        assert "sha256 mismatch" in handler.parse_response()["error"]
+        assert restarted == []
+
+    def test_failed_verification_restores_env_and_stops_the_process(
+        self, tmp_path, monkeypatch
+    ):
+        install_dir = self._prepare(tmp_path, monkeypatch)
+        env_path = install_dir / ".env"
+        before = env_path.read_text(encoding="utf-8")
+        stopped = []
+
+        monkeypatch.setattr(_mod, "_restart_native_mlx_server", lambda *a: None)
+        monkeypatch.setattr(_mod, "_wait_for_mlx_readiness", lambda *a: {})
+        monkeypatch.setattr(
+            _mod, "_stop_native_mlx_server", lambda pid: stopped.append(pid)
+        )
+
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-mlx")
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["failure_phase"] == "verify_identity"
+        assert env_path.read_text(encoding="utf-8") == before
+        assert stopped, "a failed activation must not leave the process running"
+        assert not (install_dir / "data" / "model-state.json").exists()
+
+    def test_stage_failure_is_reported_as_stage(self, tmp_path, monkeypatch):
+        self._prepare(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            _mod, "_restart_native_mlx_server",
+            lambda *a: (_ for _ in ()).throw(RuntimeError("interpreter missing")),
+        )
+        monkeypatch.setattr(_mod, "_stop_native_mlx_server", lambda pid: None)
+
+        handler = _ResponseHandler()
+        _mod.AgentHandler._do_model_activate(handler, "target-mlx")
+        assert handler.response_code == 500
+        payload = handler.parse_response()
+        assert payload["failure_phase"] == "stage"
+        assert "interpreter missing" in payload["failure_detail"]
+
+
+class TestMLXIdentityMatching:
+    def test_exact_path_match_is_required(self):
+        body = json.dumps({"data": [
+            {"id": "/models/mlx/Other-8bit"},
+            {"id": "/models/mlx/Target-8bit"},
+        ]})
+        assert _mod._mlx_reported_identity(body, "/models/mlx/Target-8bit") == \
+            "/models/mlx/Target-8bit"
+
+    def test_prefix_of_a_served_model_is_not_accepted(self):
+        # "/models/mlx/Target" must not match "/models/mlx/Target-8bit".
+        body = json.dumps({"data": [{"id": "/models/mlx/Target-8bit"}]})
+        assert _mod._mlx_reported_identity(body, "/models/mlx/Target") == ""
+
+    def test_trailing_slash_is_tolerated(self):
+        body = json.dumps({"data": [{"id": "/models/mlx/Target-8bit"}]})
+        assert _mod._mlx_reported_identity(body, "/models/mlx/Target-8bit/") == \
+            "/models/mlx/Target-8bit"
+
+    def test_malformed_body_yields_no_identity(self):
+        assert _mod._mlx_reported_identity("not json", "/x") == ""
+        assert _mod._mlx_reported_identity('{"data": {}}', "/x") == ""

@@ -91,6 +91,9 @@ class RenderInputs:
     remote_llm_transport: str = ""
     remote_llm_base_url: str = ""
     remote_llm_model: str = ""
+    # Native MLX runtime base URL (Apple Silicon). Empty when no MLX runtime
+    # is configured, which keeps the endpoint out of the router allowlist.
+    mlx_api_base: str = ""
     # Switchboard rollout mode: legacy | observe | enabled (plan section 8)
     switchboard_mode: str = "observe"
 
@@ -574,6 +577,16 @@ def render_model_router_endpoints(inputs: RenderInputs) -> RenderedFile:
             "id": "lemonade-default",
             "baseUrl": _origin_base(inputs.lemonade_api_base, "http://lemonade:8000/api"),
         })
+    # MLX is always a host process (Docker on macOS has no Metal passthrough),
+    # so it is only reachable over host.docker.internal and only exists when
+    # an MLX base URL was configured.
+    if inputs.mlx_api_base.strip():
+        endpoints.append({
+            "id": "mlx-host",
+            "baseUrl": _origin_base(
+                inputs.mlx_api_base, "http://host.docker.internal:8081"
+            ),
+        })
     content = json.dumps({"endpoints": endpoints}, indent=2) + "\n"
     return RenderedFile(
         "model-router-endpoints", "config/model-router/endpoints.json", content
@@ -645,6 +658,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--gguf-file", default=DEFAULT_GGUF)
     parser.add_argument("--lemonade-model-id", default="")
     parser.add_argument("--lemonade-api-base", default="http://llama-server:8080/api/v1")
+    parser.add_argument(
+        "--mlx-api-base",
+        default="",
+        help="Native MLX server base URL; empty disables the mlx-host endpoint",
+    )
     parser.add_argument("--gpu-backend", choices=["amd", "apple", "cpu", "nvidia"], default="nvidia")
     parser.add_argument("--ods-mode", choices=["local", "cloud", "hybrid", "lemonade"], default="local")
     parser.add_argument("--llm-base-url", default="http://llama-server:8080/v1")
@@ -735,6 +753,7 @@ def render(args: argparse.Namespace) -> dict[str, object]:
         gguf_file=args.gguf_file,
         lemonade_model_id=args.lemonade_model_id,
         lemonade_api_base=args.lemonade_api_base,
+        mlx_api_base=args.mlx_api_base,
         gpu_backend=args.gpu_backend,
         ods_mode=args.ods_mode,
         llm_base_url=args.llm_base_url,

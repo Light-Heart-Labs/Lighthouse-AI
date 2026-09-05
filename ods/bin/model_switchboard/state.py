@@ -33,7 +33,7 @@ HISTORY_LIMIT = 10
 PUBLIC_MODEL_DEFAULT = "ods/current"
 STATE_FILE_MODE = 0o644
 
-_BACKEND_KINDS = {"llama-server", "lemonade", "hipfire", "unknown"}
+_BACKEND_KINDS = {"llama-server", "lemonade", "hipfire", "mlx", "unknown"}
 _OPERATION_PHASES = {
     "requested", "staging", "verifying", "publishing",
     "flipping", "serving", "failed", "rolling_back",

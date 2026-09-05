@@ -2018,6 +2018,74 @@
       "tokens_per_sec_estimate": 15,
       "llm_model_name": "qwen3.5-122b-a10b",
       "llama_server_image": null
+    },
+    {
+      "id": "qwen3.8-27b-uncensored-mlx-8bit",
+      "name": "Qwen 3.8 27B Uncensored (MLX 8-bit)",
+      "family": "qwen",
+      "runtime": "mlx",
+      "mlx_repo": "orcarouter/Qwen3.8-27B-Uncensored-MLX",
+      "mlx_revision": "ef682bdbb5c28d8869ecbf615459b8d15eb24799",
+      "mlx_subdir": "8-bit",
+      "mlx_files": [
+        {
+          "file": "8-bit/model-00001-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00001-of-00006.safetensors",
+          "sha256": "d8f01eded64ecd012b90a8e1375433a5ec49cd1acadb77c2ed5f8ce833af528e",
+          "size_bytes": 5317707349
+        },
+        {
+          "file": "8-bit/model-00002-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00002-of-00006.safetensors",
+          "sha256": "e90b3f8eadb473ce46d60f231d7a50f0386d4e6dcb92907cd7c99f1e75e33573",
+          "size_bytes": 5354102528
+        },
+        {
+          "file": "8-bit/model-00003-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00003-of-00006.safetensors",
+          "sha256": "1fc349c8f9411680471dd5c0f6e586958feb9cc67d7c020ed459423b7b6ea050",
+          "size_bytes": 5354184654
+        },
+        {
+          "file": "8-bit/model-00004-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00004-of-00006.safetensors",
+          "sha256": "86b4fe4b4a85620254875b52575f5a459f83f0ead952c362b9800937a2e9dba9",
+          "size_bytes": 5337309675
+        },
+        {
+          "file": "8-bit/model-00005-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00005-of-00006.safetensors",
+          "sha256": "215aa22dc0d42e96283ae624b48c6ae82173999a6ff137c575f07f825ee53975",
+          "size_bytes": 5292848520
+        },
+        {
+          "file": "8-bit/model-00006-of-00006.safetensors",
+          "url": "https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX/resolve/ef682bdbb5c28d8869ecbf615459b8d15eb24799/8-bit/model-00006-of-00006.safetensors",
+          "sha256": "0c7e1d9fb971cf6eaea638ee8d48661abc85ed822e34f405e334b8c1ef910ff6",
+          "size_bytes": 2845065535
+        }
+      ],
+      "gated": true,
+      "size_bytes": 29501218261,
+      "size_mb": 28135,
+      "vram_required_gb": 32,
+      "context_length": 65536,
+      "max_context_length": 262144,
+      "quantization": "MLX-8bit",
+      "specialty": "Uncensored / Red-Team",
+      "description": "Abliterated Qwen 3.8 27B in MLX 8-bit for Apple Silicon. Vision tower preserved, 256K native context, served by the native MLX runtime rather than llama.cpp. Refusal behavior has been removed, so it carries no model-side guardrails and is intended for red-team and evaluation work behind your own filtering.",
+      "tokens_per_sec_estimate": 14,
+      "llm_model_name": "qwen3.8-27b-uncensored-mlx",
+      "llama_server_image": null,
+      "gpu_backend_scope": ["apple"],
+      "app_compatibility": {
+        "openai_chat": {
+          "status": "unvalidated",
+          "label": "Not fleet-validated",
+          "reason": "Added alongside the native MLX runtime adapter. No fleet validation run has covered the MLX runtime family yet.",
+          "globalScope": true
+        }
+      }
     }
   ]
 }

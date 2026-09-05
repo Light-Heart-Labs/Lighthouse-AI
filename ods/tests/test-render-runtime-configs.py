@@ -362,6 +362,27 @@ def test_router_endpoints_strip_trailing_v1() -> None:
     assert by_id["lemonade-default"] == "http://lemonade:8000/api"
 
 
+def test_router_endpoints_omit_mlx_when_unconfigured() -> None:
+    payload = run_renderer("--surface", "model-router-endpoints")
+    import json as _json
+    content = _json.loads(payload["files"][0]["content"])
+    assert [e["id"] for e in content["endpoints"]] == ["llama-server-default"]
+
+
+def test_router_endpoints_add_mlx_host_when_configured() -> None:
+    payload = run_renderer(
+        "--surface", "model-router-endpoints",
+        "--gpu-backend", "apple",
+        "--mlx-api-base", "http://host.docker.internal:8081/v1",
+    )
+    import json as _json
+    content = _json.loads(payload["files"][0]["content"])
+    by_id = {e["id"]: e["baseUrl"] for e in content["endpoints"]}
+    # MLX only ever runs as a host process, and the /v1 suffix is stripped
+    # because the router appends the full OpenAI path itself.
+    assert by_id["mlx-host"] == "http://host.docker.internal:8081"
+
+
 def test_lemonade_disables_thinking_and_uses_extra_alias() -> None:
     payload = run_renderer(
         "--surface",

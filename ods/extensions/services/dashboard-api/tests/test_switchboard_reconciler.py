@@ -281,6 +281,167 @@ class TestNativeLlamaAdapter:
         assert required.issubset(set(dir(ad.FakeAdapter)))
 
 
+class TestNativeMLXAdapter:
+    """MLX is a host process reached over host.docker.internal, and reports a
+    model reference rather than a GGUF filename."""
+
+    def _proof(self, identity="/models/mlx/Q-8bit", context_length=65536,
+               context_verified=True):
+        return {
+            "identity": identity,
+            "contextLength": context_length,
+            "contextVerified": context_verified,
+            "verifiedAt": "2026-07-20T00:00:00+00:00",
+        }
+
+    def test_kind_is_a_distinct_runtime_family(self):
+        assert ad.NativeMLXAdapter.kind == "mlx"
+
+    def test_delegates_with_model_ref_and_no_lemonade_argument(self):
+        seen = {}
+
+        def restart(env):
+            seen["restart_env"] = env
+
+        def wait_ready(env, model_ref, context_length):
+            seen["wait"] = (model_ref, context_length)
+            return self._proof("/models/mlx/Q-8bit", 65536)
+
+        adapter = ad.NativeMLXAdapter(
+            restart=restart,
+            wait_ready=wait_ready,
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+            capabilities={"chat": True, "vision": True, "tools": True},
+        )
+        env = {"GPU_BACKEND": "apple"}
+        run = rc.run_runtime_activation(adapter, env)
+        assert run["ok"] is True
+        assert run["identity"] == "/models/mlx/Q-8bit"
+        assert run["contextLength"] == 65536
+        assert run["capabilities"] == {
+            "chat": True,
+            "tools": True,
+            "vision": True,
+            "agentViable": False,
+        }
+        assert seen["restart_env"] is env
+        assert seen["wait"] == ("/models/mlx/Q-8bit", 65536)
+
+    def test_unconfirmed_context_is_carried_as_unverified_not_asserted(self):
+        # MLX has no /props endpoint, so a probe that cannot read the served
+        # context must still succeed while reporting contextVerified False.
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(context_verified=False),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is True
+        assert run["contextVerified"] is False
+
+    def test_restart_exception_becomes_stage_failure(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: (_ for _ in ()).throw(OSError("port busy")),
+            wait_ready=lambda *a: self._proof(),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "stage"
+        assert "port busy" in run["detail"]
+
+    def test_not_ready_is_identity_failure(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: {},
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+        assert "did not report the staged model" in run["detail"]
+
+    def test_non_dict_probe_return_is_identity_failure(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: None,
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+        assert "did not return a proof record" in run["detail"]
+
+    def test_probe_exception_is_identity_failure_not_a_raise(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: (_ for _ in ()).throw(OSError("connection refused")),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+        assert "connection refused" in run["detail"]
+
+    def test_blank_identity_is_rejected(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(identity="   "),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+        assert "did not report the staged model" in run["detail"]
+
+    def test_nonpositive_context_is_rejected(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(context_length=0),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+        assert "valid context length" in run["detail"]
+
+    def test_publish_native_alias_is_a_proven_noop(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        assert adapter.publish_native_alias({})["ok"] is True
+
+    def test_optional_operations_report_unconfigured(self):
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+        )
+        for op in ("unload", "delete", "rollback"):
+            outcome = getattr(adapter, op)({})
+            assert outcome["ok"] is False
+            assert "is not configured" in outcome["detail"]
+
+    def test_configured_rollback_runs(self):
+        seen = {}
+        adapter = ad.NativeMLXAdapter(
+            restart=lambda _env: None,
+            wait_ready=lambda *a: self._proof(),
+            expected_model="/models/mlx/Q-8bit",
+            context_length=65536,
+            rollback=lambda env: seen.setdefault("rolled_back", env),
+        )
+        outcome = adapter.rollback({"K": "V"})
+        assert outcome["ok"] is True
+        assert seen["rolled_back"] == {"K": "V"}
+
+
 class TestLemonadeAdapter:
     def test_verify_uses_resolved_lemonade_id(self):
         seen = {}

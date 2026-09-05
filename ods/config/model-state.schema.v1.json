@@ -56,7 +56,7 @@
               "required": ["kind", "endpointId"],
               "additionalProperties": false,
               "properties": {
-                "kind": { "enum": ["llama-server", "lemonade", "hipfire", "unknown"] },
+                "kind": { "enum": ["llama-server", "lemonade", "hipfire", "mlx", "unknown"] },
                 "endpointId": { "type": "string", "minLength": 1 },
                 "nativeRoute": { "type": ["string", "null"] }
               }
