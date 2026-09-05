@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
 import socket
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 
@@ -50,6 +53,85 @@ def assert_egress_error(func, code: str) -> EgressError:
         assert_true(exc.code == code, f"expected {code}, got {exc.code}")
         return exc
     raise AssertionError(f"expected EgressError {code}")
+
+
+def load_egress_app():
+    class StubResponse:
+        def __init__(
+            self,
+            content=None,
+            *,
+            status_code: int = 200,
+            media_type: str | None = None,
+            headers: dict[str, str] | None = None,
+        ):
+            self.body = content if isinstance(content, bytes) else b""
+            self.status_code = status_code
+            self.media_type = media_type
+            self.headers = headers or {}
+
+    class StubJSONResponse(StubResponse):
+        def __init__(self, content, *, status_code: int = 200, **kwargs):
+            super().__init__(
+                json.dumps(content).encode("utf-8"),
+                status_code=status_code,
+                **kwargs,
+            )
+
+    class StubFastAPI:
+        def __init__(self, *args, **kwargs):
+            self.state = types.SimpleNamespace()
+
+        def _decorator(self, *args, **kwargs):
+            return lambda func: func
+
+        get = post = api_route = on_event = _decorator
+
+    httpx_stub = types.ModuleType("httpx")
+    httpx_stub.AsyncClient = object
+    httpx_stub.HTTPError = OSError
+    httpx_stub.TimeoutException = TimeoutError
+    fastapi_stub = types.ModuleType("fastapi")
+    fastapi_stub.FastAPI = StubFastAPI
+    fastapi_stub.Request = object
+    fastapi_stub.Response = StubResponse
+    responses_stub = types.ModuleType("fastapi.responses")
+    responses_stub.JSONResponse = StubJSONResponse
+    responses_stub.StreamingResponse = StubResponse
+    dependency_stubs = {
+        "httpx": httpx_stub,
+        "fastapi": fastapi_stub,
+        "fastapi.responses": responses_stub,
+    }
+    previous_modules = {name: sys.modules.get(name) for name in dependency_stubs}
+    sys.modules.update(dependency_stubs)
+    spec = importlib.util.spec_from_file_location("ods_remote_provider_egress_app", APP_MAIN)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+    return module
+
+
+class ChunkedRequest:
+    def __init__(self, chunks: list[bytes], *, content_length: str | None = None):
+        self.method = "POST"
+        self.headers = {}
+        if content_length is not None:
+            self.headers["content-length"] = content_length
+        self._chunks = chunks
+        self.chunks_read = 0
+
+    async def stream(self):
+        for chunk in self._chunks:
+            self.chunks_read += 1
+            yield chunk
 
 
 def ssh_metadata(**overrides: object) -> dict[str, object]:
@@ -257,6 +339,44 @@ def test_egress_fails_closed_without_secret_or_supported_transport() -> None:
     )
 
 
+def test_forward_rejects_declared_oversize_body_without_reading_it() -> None:
+    app_module = load_egress_app()
+    app_module.MAX_BODY_BYTES = 5
+    request = ChunkedRequest([b"must-not-be-read"], content_length="6")
+
+    response = asyncio.run(app_module.forward("v1/chat/completions", request))
+    payload = json.loads(response.body)
+
+    assert_true(response.status_code == 413, "oversize Content-Length must return 413")
+    assert_true(payload["error"]["type"] == "payload_too_large", "oversize response code drifted")
+    assert_true(request.chunks_read == 0, "declared oversize body must be rejected before buffering")
+
+
+def test_forward_rejects_invalid_content_length_without_reading_body() -> None:
+    app_module = load_egress_app()
+    request = ChunkedRequest([b"must-not-be-read"], content_length="not-a-number")
+
+    response = asyncio.run(app_module.forward("v1/chat/completions", request))
+    payload = json.loads(response.body)
+
+    assert_true(response.status_code == 400, "invalid Content-Length must return 400")
+    assert_true(payload["error"]["type"] == "invalid_content_length", "invalid length response code drifted")
+    assert_true(request.chunks_read == 0, "invalid length must be rejected before reading the body")
+
+
+def test_forward_bounds_chunked_body_without_content_length() -> None:
+    app_module = load_egress_app()
+    app_module.MAX_BODY_BYTES = 5
+    request = ChunkedRequest([b"abc", b"def", b"must-not-be-read"])
+
+    response = asyncio.run(app_module.forward("v1/chat/completions", request))
+    payload = json.loads(response.body)
+
+    assert_true(response.status_code == 413, "oversize chunked body must return 413")
+    assert_true(payload["error"]["type"] == "payload_too_large", "chunked response code drifted")
+    assert_true(request.chunks_read == 2, "body reader must stop as soon as the limit is crossed")
+
+
 def test_secret_file_status_is_support_bundle_safe() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         missing = Path(tmp) / "provider-api-key"
@@ -462,6 +582,9 @@ def main() -> int:
         test_direct_resolution_rejects_unsafe_dns_answers,
         test_ssh_route_uses_internal_tunnel_without_direct_dns,
         test_egress_fails_closed_without_secret_or_supported_transport,
+        test_forward_rejects_declared_oversize_body_without_reading_it,
+        test_forward_rejects_invalid_content_length_without_reading_body,
+        test_forward_bounds_chunked_body_without_content_length,
         test_secret_file_status_is_support_bundle_safe,
         test_probe_response_returns_redacted_ssh_receipt_through_tunnel_boundary,
         test_probe_response_fails_closed_when_ssh_tunnel_is_not_ready,

@@ -149,6 +149,35 @@ def _response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+async def _bounded_request_body(request: Request) -> bytes:
+    """Read an inbound body without buffering beyond the configured limit."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_bytes = int(content_length)
+        except ValueError as exc:
+            raise EgressError(
+                400,
+                "invalid_content_length",
+                "request Content-Length is invalid",
+            ) from exc
+        if declared_bytes < 0:
+            raise EgressError(
+                400,
+                "invalid_content_length",
+                "request Content-Length is invalid",
+            )
+        if declared_bytes > MAX_BODY_BYTES:
+            raise EgressError(413, "payload_too_large", "request body exceeds limit")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_BODY_BYTES:
+            raise EgressError(413, "payload_too_large", "request body exceeds limit")
+        body.extend(chunk)
+    return bytes(body)
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -334,6 +363,7 @@ async def probe() -> Response:
 async def forward(full_path: str, request: Request) -> Response:
     path = "/" + full_path
     try:
+        body = await _bounded_request_body(request)
         route = _load_route()
         resolved_addresses = validate_direct_provider_resolution(route)
         secret = read_provider_secret(SECRET_PATH)
@@ -347,7 +377,7 @@ async def forward(full_path: str, request: Request) -> Response:
             method=request.method,
             path=path,
             headers=dict(request.headers),
-            body=await request.body(),
+            body=body,
             route=route,
             provider_secret=secret,
             max_body_bytes=MAX_BODY_BYTES,
