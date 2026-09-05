@@ -52,6 +52,7 @@ Environment variables (set in `.env`):
 | `GET` | `/status` | Yes | Full system status (all above combined) |
 | `GET` | `/api/status` | Yes | Dashboard-formatted status with inference metrics |
 | `GET` | `/api/host-agent/diagnostics` | Yes | Host-agent URL, gateway, auth, and live probe diagnostics |
+| `GET` | `/api/events/services` | Yes | SSE stream of deduplicated service-health transitions; repeat `service=` to scope the stream |
 
 ### Preflight
 
