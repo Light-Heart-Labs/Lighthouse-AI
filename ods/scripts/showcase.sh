@@ -21,12 +21,17 @@ ODS_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Source service registry for port resolution
 if [[ -f "$ODS_DIR/lib/service-registry.sh" ]]; then
-    export SCRIPT_DIR="$ODS_DIR"
+    # service-registry.sh expects SCRIPT_DIR to be the ODS root.
+    # Save and restore so subprocesses see the real script directory.
+    _saved_script_dir="${SCRIPT_DIR:-}"
+    SCRIPT_DIR="$ODS_DIR"
     . "$ODS_DIR/lib/service-registry.sh"
     sr_load
     [[ -f "$ODS_DIR/lib/safe-env.sh" ]] && . "$ODS_DIR/lib/safe-env.sh"
     load_env_file "$ODS_DIR/.env"
     sr_resolve_ports
+    SCRIPT_DIR="$_saved_script_dir"
+    unset _saved_script_dir
 fi
 
 # URLs — resolved from registry
