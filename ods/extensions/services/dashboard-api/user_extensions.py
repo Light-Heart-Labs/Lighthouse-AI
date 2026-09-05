@@ -38,7 +38,7 @@ def scan_user_extension_services(
 
         service_id = item.name
 
-        if not _SERVICE_ID_RE.match(service_id):
+        if not _SERVICE_ID_RE.fullmatch(service_id):
             continue
 
         # Only enabled extensions (compose.yaml present, not .disabled)

@@ -287,12 +287,18 @@ class TestExtensionDetail:
         """Regex validation rejects path traversal and invalid service IDs."""
         _patch_extensions_config(monkeypatch, [], tmp_path=tmp_path)
 
-        for bad_id in ["..etc", ".hidden", "UPPERCASE", "-starts-dash"]:
+        # "%0A" is a trailing newline: Python's `$` matches just before a final
+        # newline, so a `$`-anchored `.match()` lets "foo\n" through and the id
+        # reaches the 404 detail string and the logs verbatim.
+        for bad_id in ["..etc", ".hidden", "UPPERCASE", "-starts-dash", "foo%0A"]:
             resp = test_client.get(
                 f"/api/extensions/{bad_id}",
                 headers=test_client.auth_headers,
             )
             assert resp.status_code == 404, f"Expected 404 for: {bad_id}"
+            assert "\n" not in resp.json()["detail"], (
+                f"Rejected id leaked a newline into the error body: {bad_id}"
+            )
 
     def test_detail_path_traversal_with_slashes(self, test_client):
         """Path traversal with slashes never reaches the handler."""
@@ -1472,7 +1478,9 @@ class TestMutationPathTraversal:
         """Path traversal IDs are rejected on all mutation endpoints."""
         _patch_mutation_config(monkeypatch, tmp_path)
 
-        bad_ids = ["..etc", ".hidden", "UPPERCASE", "-starts-dash"]
+        # "%0A" decodes to a trailing newline, which a `$`-anchored `.match()`
+        # accepts. Every mutation endpoint must reject it on format alone.
+        bad_ids = ["..etc", ".hidden", "UPPERCASE", "-starts-dash", "foo%0A"]
         endpoints = [
             ("POST", "/api/extensions/{}/install"),
             ("POST", "/api/extensions/{}/enable"),
@@ -1500,6 +1508,14 @@ class TestMutationPathTraversal:
                     )
                 assert resp.status_code == 404, (
                     f"Expected 404 for {method} {url}, got {resp.status_code}"
+                )
+                # A 404 alone does not prove the format check ran — an id that
+                # slips through still 404s at the directory lookup. The error
+                # body is what distinguishes the two: only the format check
+                # rejects before the id is interpolated into a message.
+                detail = resp.json().get("detail", "")
+                assert "\n" not in str(detail), (
+                    f"Rejected id leaked a newline into {method} {url}: {detail!r}"
                 )
 
 

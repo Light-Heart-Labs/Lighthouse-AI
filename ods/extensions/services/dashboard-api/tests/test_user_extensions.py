@@ -1,7 +1,9 @@
 """Tests for user extension manifest scanner."""
 
+import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 from user_extensions import (
@@ -41,6 +43,21 @@ class TestScanUserExtensions:
     def test_scan_nonexistent_dir(self, tmp_path):
         """Non-existent directory returns empty dict."""
         assert scan_user_extension_services(tmp_path / "nope") == {}
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows forbids \\n in a filename")
+    def test_scan_skips_directory_name_with_trailing_newline(self, tmp_path):
+        """A directory whose name ends in a newline is not a valid service id.
+
+        Python's `$` matches just before a final newline, so a `$`-anchored
+        `.match()` accepts "my-ext\\n" and the scanner would publish it as a
+        service id that no compose or manifest lookup can resolve.
+        """
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext\n"
+        _write_manifest(ext_dir, _make_manifest("my-ext"))
+        (ext_dir / "compose.yaml").write_text("services:\n  my-ext:\n    image: test\n")
+
+        assert scan_user_extension_services(user_dir) == {}
 
     def test_scan_enabled_extension(self, tmp_path):
         """Extension with compose.yaml + manifest returns correct config."""
