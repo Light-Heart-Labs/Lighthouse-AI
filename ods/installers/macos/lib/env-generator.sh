@@ -76,7 +76,9 @@ upsert_env_value() {
     local key="$2"
     local value="$3"
     if grep -qE "^${key}=" "$env_path" 2>/dev/null; then
-        sed -i '' "s|^${key}=.*|${key}=${value}|" "$env_path"
+        local esc_value
+        esc_value=$(printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/&/\\&/g' -e 's/|/\\|/g' -e 's/"/\\"/g')
+        sed -i '' "s|^${key}=.*|${key}=${esc_value}|" "$env_path"
     else
         printf '%s=%s\n' "$key" "$value" >> "$env_path"
     fi
