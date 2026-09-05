@@ -153,7 +153,7 @@ async function fetchBraveWeb(query, count, offset) {
 }
 
 async function handleV1Search(res, params) {
-  const query = params.get("q");
+  const query = (params.get("q") ?? "").trim();
   if (!query) {
     send(res, 400, { error: "missing_query_param_q" });
     return;
@@ -285,7 +285,7 @@ async function handleSearxngSearch(res, params) {
     send(res, 400, { error: "unsupported_format", detail: "only format=json is supported" });
     return;
   }
-  const query = params.get("q");
+  const query = (params.get("q") ?? "").trim();
   if (!query) {
     send(res, 400, { error: "missing_query_param_q" });
     return;
