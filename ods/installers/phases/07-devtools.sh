@@ -186,8 +186,7 @@ else
             _opencode_key="no-key"
         fi
         if [[ -z "${_opencode_key:-}" ]]; then
-            ai_err "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
-            exit 1
+            error "OpenCode switchboard config requires LITELLM_KEY, but it is empty."
         fi
 
         # Writes a fresh opencode.json from the template. Used for first-install
