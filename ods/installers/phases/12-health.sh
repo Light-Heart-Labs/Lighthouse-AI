@@ -160,7 +160,7 @@ _phase12_verify_external_lemonade_completion() {
         "${auth_header[@]}" \
         -H "Content-Type: application/json" \
         -d "$body" 2>&1)" || {
-        printf "  ${RED}ERR${NC} External Lemonade completion failed\n"
+        printf '  %sERR%s External Lemonade completion failed\n' "$RED" "$NC"
         ai_warn "LiteLLM could not complete through external Lemonade (model: ${model})."
         ai_warn "Check that Lemonade is reachable from Docker containers, is bound to 0.0.0.0 on trusted hosts, and that LEMONADE_MODEL matches /api/v1/models."
         printf '%s\n' "$response" >> "$LOG_FILE"
@@ -168,11 +168,11 @@ _phase12_verify_external_lemonade_completion() {
     }
 
     if printf '%s\n' "$response" | grep -Eq '"content"[[:space:]]*:[[:space:]]*"[^"]+'; then
-        printf "  ${BGRN}OK${NC} External Lemonade completion route healthy\n"
+        printf '  %sOK%s External Lemonade completion route healthy\n' "$BGRN" "$NC"
         return 0
     fi
 
-    printf "  ${RED}ERR${NC} External Lemonade returned no assistant content\n"
+    printf '  %sERR%s External Lemonade returned no assistant content\n' "$RED" "$NC"
     ai_warn "LiteLLM reached external Lemonade but did not receive non-empty assistant content (model: ${model})."
     if _phase12_model_looks_non_chat "$model"; then
         ai_warn "The selected Lemonade model looks like an image/non-chat model. ODS needs a text/chat model for the LLM route."
@@ -250,7 +250,7 @@ if content is None:
         return 1
     }
 
-    printf "  ${BGRN}OK${NC} External ${provider} route and completion healthy\n"
+    printf '  %sOK%s External %s route and completion healthy\n' "$BGRN" "$NC" "$provider"
 }
 
 # Core service health checks with adaptive timeouts.
