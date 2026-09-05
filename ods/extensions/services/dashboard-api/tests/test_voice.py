@@ -21,6 +21,17 @@ def _health(statuses):
     return _check
 
 
+def _health_raising(*failing_ids):
+    """check_service_health stub that raises for the given service ids."""
+
+    async def _check(service_id, config, **kwargs):
+        if service_id in failing_ids:
+            raise ConnectionError(f"{service_id} host agent unreachable")
+        return SimpleNamespace(status="healthy")
+
+    return _check
+
+
 def _services(*service_ids):
     return {sid: {"name": sid, "port": 1234} for sid in service_ids}
 
@@ -95,3 +106,26 @@ class TestVoiceStatus:
         result = await voice_status(api_key="test")
 
         assert result["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_raising_health_check_reports_unavailable_not_500(self, monkeypatch):
+        """A health-check exception (e.g. host agent connection refused) must
+        degrade the service to unavailable, not bubble up as a 500."""
+        monkeypatch.setattr("config.SERVICES", _services("whisper", "tts"))
+        monkeypatch.setattr("helpers.check_service_health", _health_raising("whisper"))
+
+        result = await voice_status(api_key="test")
+
+        assert result["services"]["stt"]["status"] == "unavailable"
+        assert result["services"]["tts"]["status"] == "healthy"
+        assert result["available"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_raising_livekit_health_check_reports_unavailable(self, monkeypatch):
+        monkeypatch.setattr("config.SERVICES", _services("whisper", "tts", "livekit"))
+        monkeypatch.setattr("helpers.check_service_health", _health_raising("livekit"))
+
+        result = await voice_status(api_key="test")
+
+        assert result["services"]["livekit"]["status"] == "unavailable"
+        assert result["available"] is False
