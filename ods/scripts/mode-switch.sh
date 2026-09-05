@@ -26,13 +26,16 @@ warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 error() { echo -e "${RED}✗${NC} $1" >&2; exit 1; }
 
 # Update or add a key=value in .env
-# Uses awk index() instead of sed to avoid delimiter collisions
+# Uses awk index() instead of sed to avoid delimiter collisions.
+# The temp-file is renamed via `mv` (atomic on the same filesystem) instead
+# of `cat > original` which truncates before writing — an interruption between
+# the truncate and the write leaves a zero-length .env.
 env_set() {
     local key="$1" val="$2"
     if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
         awk -v k="$key" -v v="$val" '{
             if (index($0, k "=") == 1) print k "=" v; else print
-        }' "$ENV_FILE" > "${ENV_FILE}.tmp" && cat "${ENV_FILE}.tmp" > "$ENV_FILE" && rm -f "${ENV_FILE}.tmp"
+        }' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
     else
         echo "${key}=${val}" >> "$ENV_FILE"
     fi
