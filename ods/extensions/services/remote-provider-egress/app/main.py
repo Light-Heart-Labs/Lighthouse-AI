@@ -16,6 +16,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .client_cache import AsyncClientCache
 from remote_provider.egress import (
     DEFAULT_MAX_BODY_BYTES,
     DEFAULT_SECRET_PATH,
@@ -66,6 +67,10 @@ PROBE_TIMEOUT_SECONDS = float(
         str(DEFAULT_PROBE_TIMEOUT_SECONDS),
     )
 )
+DIRECT_HTTP_CLIENT_CACHE_SIZE = max(
+    1,
+    int(os.environ.get("ODS_REMOTE_PROVIDER_CLIENT_CACHE_SIZE", "4")),
+)
 app = FastAPI(title="ODS Remote Provider Egress", docs_url=None, redoc_url=None, openapi_url=None)
 
 _HOP_BY_HOP_RESPONSE_HEADERS = {
@@ -97,22 +102,31 @@ def _load_route() -> dict[str, Any]:
     return route_from_state(load_route_state(ROUTE_PATH), policy=policy)
 
 
-def _http_client(connection_key: str = "") -> httpx.AsyncClient:
+async def _http_client(connection_key: str = "") -> httpx.AsyncClient:
     if connection_key:
-        clients = getattr(app.state, "direct_http_clients", None)
-        if clients is None:
-            clients = {}
-            app.state.direct_http_clients = clients
-        client = clients.get(connection_key)
-        if client is None or client.is_closed:
-            client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-            clients[connection_key] = client
-        return client
+        cache = getattr(app.state, "direct_http_client_cache", None)
+        if cache is None:
+            cache = _new_direct_http_client_cache()
+            app.state.direct_http_client_cache = cache
+        return await cache.acquire(connection_key)
     client = getattr(app.state, "http", None)
     if client is None or client.is_closed:
         client = httpx.AsyncClient(follow_redirects=False, trust_env=False)
         app.state.http = client
     return client
+
+
+def _new_direct_http_client_cache() -> AsyncClientCache:
+    return AsyncClientCache(
+        lambda: httpx.AsyncClient(follow_redirects=False, trust_env=False),
+        DIRECT_HTTP_CLIENT_CACHE_SIZE,
+    )
+
+
+async def _release_http_client(connection_key: str) -> None:
+    if not connection_key:
+        return
+    await app.state.direct_http_client_cache.release(connection_key)
 
 
 def _error_response(exc: EgressError) -> JSONResponse:
@@ -171,7 +185,7 @@ def _safe_tunnel_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 async def _ssh_tunnel_status() -> dict[str, Any]:
-    client = _http_client()
+    client = await _http_client()
     try:
         response = await client.get(
             SSH_TUNNEL_HEALTH_URL,
@@ -356,7 +370,7 @@ async def forward(full_path: str, request: Request) -> Response:
     except EgressError as exc:
         return _error_response(exc)
 
-    client = _http_client(upstream_request.connection_key)
+    client = await _http_client(upstream_request.connection_key)
     headers = dict(upstream_request.headers)
     extensions = {}
     if upstream_request.tls_server_name:
@@ -386,6 +400,7 @@ async def forward(full_path: str, request: Request) -> Response:
                         yield chunk
                 finally:
                     await upstream.aclose()
+                    await _release_http_client(upstream_request.connection_key)
 
             return StreamingResponse(
                 stream_body(),
@@ -404,10 +419,12 @@ async def forward(full_path: str, request: Request) -> Response:
         )
         upstream = await client.send(req)
     except httpx.TimeoutException:
+        await _release_http_client(upstream_request.connection_key)
         return _error_response(
             EgressError(504, "upstream_timeout", "remote provider timed out")
         )
     except httpx.HTTPError as exc:
+        await _release_http_client(upstream_request.connection_key)
         return _error_response(
             EgressError(
                 502,
@@ -415,6 +432,7 @@ async def forward(full_path: str, request: Request) -> Response:
                 f"remote provider unavailable: {exc}",
             )
         )
+    await _release_http_client(upstream_request.connection_key)
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
@@ -426,13 +444,12 @@ async def forward(full_path: str, request: Request) -> Response:
 @app.on_event("startup")
 async def _startup() -> None:
     app.state.http = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-    app.state.direct_http_clients = {}
+    app.state.direct_http_client_cache = _new_direct_http_client_cache()
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     await app.state.http.aclose()
-    clients = getattr(app.state, "direct_http_clients", {})
-    for client in clients.values():
-        await client.aclose()
-    clients.clear()
+    cache = getattr(app.state, "direct_http_client_cache", None)
+    if cache is not None:
+        await cache.close()

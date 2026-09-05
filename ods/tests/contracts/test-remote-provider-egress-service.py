@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
 import socket
 import sys
@@ -31,6 +33,7 @@ BASE_COMPOSE = ROOT / "docker-compose.base.yml"
 MANIFEST = ROOT / "extensions" / "services" / "remote-provider-egress" / "manifest.yaml"
 DOCKERFILE = ROOT / "extensions" / "services" / "remote-provider-egress" / "Dockerfile"
 APP_MAIN = ROOT / "extensions" / "services" / "remote-provider-egress" / "app" / "main.py"
+CLIENT_CACHE = APP_MAIN.with_name("client_cache.py")
 POLICY = ROOT / "config" / "remote-provider-egress-policy.json"
 
 
@@ -452,6 +455,65 @@ def test_pinned_request_preserves_non_default_port_and_separates_tls_origins() -
     assert_true(first.connection_key == rotated_address.connection_key, "DNS address rotation for one TLS identity must use a bounded client pool")
 
 
+def test_direct_http_client_cache_evicts_and_closes_least_recent_origin() -> None:
+    spec = importlib.util.spec_from_file_location("ods_egress_client_cache_test", CLIENT_CACHE)
+    assert_true(spec is not None and spec.loader is not None, "client cache must be importable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class FakeClient:
+        def __init__(self):
+            self.is_closed = False
+
+        async def aclose(self):
+            self.is_closed = True
+
+    async def exercise_cache() -> None:
+        cache = module.AsyncClientCache(FakeClient, 2)
+
+        first = await cache.acquire("https://first.example:443")
+        await cache.release("https://first.example:443")
+        second = await cache.acquire("https://second.example:443")
+        await cache.release("https://second.example:443")
+        reused = await cache.acquire("https://first.example:443")
+        await cache.release("https://first.example:443")
+        third = await cache.acquire("https://third.example:443")
+
+        assert_true(reused is first, "cache hit must reuse the existing connection pool")
+        assert_true(second.is_closed, "least-recently-used pool must be closed on eviction")
+        assert_true(not first.is_closed and not third.is_closed, "active cached pools must remain open")
+        assert_true(
+            cache.keys == (
+                "https://first.example:443",
+                "https://third.example:443",
+            ),
+            "cache must retain only the two most recent provider origins",
+        )
+
+        await cache.release("https://third.example:443")
+        await cache.close()
+
+        active_cache = module.AsyncClientCache(FakeClient, 2)
+        active_first = await active_cache.acquire("https://active-first.example:443")
+        active_second = await active_cache.acquire("https://active-second.example:443")
+        await active_cache.acquire("https://active-third.example:443")
+        assert_true(
+            len(active_cache) == 3,
+            "simultaneous active origins may temporarily exceed the idle cache bound",
+        )
+        assert_true(
+            not active_first.is_closed and not active_second.is_closed,
+            "cache pressure must not close in-flight provider pools",
+        )
+        await active_cache.release("https://active-first.example:443")
+        assert_true(active_first.is_closed, "released least-recent active pool must be trimmed")
+        await active_cache.release("https://active-second.example:443")
+        await active_cache.release("https://active-third.example:443")
+        await active_cache.close()
+
+    asyncio.run(exercise_cache())
+
+
 def main() -> int:
     tests = [
         test_compose_service_is_internal_only_and_hardened,
@@ -469,6 +531,7 @@ def main() -> int:
         test_prepare_upstream_request_with_resolved_addresses,
         test_prepare_upstream_request_with_resolved_ipv6_addresses,
         test_pinned_request_preserves_non_default_port_and_separates_tls_origins,
+        test_direct_http_client_cache_evicts_and_closes_least_recent_origin,
     ]
     for test in tests:
         test()
