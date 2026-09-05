@@ -73,6 +73,7 @@ from routers import (
     talk,
     tailscale,
     usage,
+    test,
     node,
 )
 from settings import (
@@ -1168,6 +1169,7 @@ app.include_router(extensions.router)
 app.include_router(gpu_router.router)
 app.include_router(resources.router)
 app.include_router(voice.router)
+app.include_router(test.router)
 # Static switchboard state route registers before the dynamic model-ID routes.
 app.include_router(model_state_router.router)
 app.include_router(model_routes_router.router)
