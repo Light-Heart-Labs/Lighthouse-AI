@@ -51,7 +51,7 @@ function isOwnerToken(token) {
   return token.token_type === 'owner'
 }
 
-function tokenStatus(token) {
+export function tokenStatus(token) {
   if (token.revoked_at) return { label: 'revoked', tone: 'bg-theme-border text-theme-text-muted' }
   if (!isOwnerToken(token) && token.expires_at && new Date(token.expires_at).getTime() < Date.now()) {
     return { label: 'expired', tone: 'bg-theme-border text-theme-text-muted' }
@@ -65,7 +65,7 @@ function tokenStatus(token) {
   return { label: 'active', tone: 'bg-green-500/20 text-green-400' }
 }
 
-function tokenCanRevoke(token) {
+export function tokenCanRevoke(token) {
   const status = tokenStatus(token).label
   return status === 'active' || status.startsWith('used')
 }
