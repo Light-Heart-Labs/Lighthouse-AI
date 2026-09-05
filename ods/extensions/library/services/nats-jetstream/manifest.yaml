@@ -1,0 +1,70 @@
+schema_version: ods.services.v1
+
+service:
+  id: nats-jetstream
+  name: NATS JetStream
+  aliases: [nats, event-bus, message-broker]
+  container_name: ods-nats
+  container_uid: 1000
+  host_env: NATS_HOST
+  default_host: nats-jetstream
+  port: 8222
+  external_port_env: NATS_MONITOR_PORT
+  external_port_default: 8222
+  health: "/healthz?js-enabled-only=true"
+  external_link: false
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 90
+  description: "Authenticated pub/sub and encrypted durable streams for local agent events."
+  env_vars:
+    - key: NATS_PASSWORD
+      required: true
+      secret: true
+      description: Password required for client connections; must start with a letter
+    - key: NATS_JETSTREAM_KEY
+      required: true
+      secret: true
+      description: Stable key used to encrypt JetStream files at rest; must start with a letter
+    - key: NATS_USER
+      required: false
+      default: ods
+      description: Client username
+    - key: NATS_JETSTREAM_MAX_MEMORY
+      required: false
+      default: 256MB
+      description: Maximum memory-backed JetStream storage
+    - key: NATS_JETSTREAM_MAX_FILE
+      required: false
+      default: 10GB
+      description: Maximum file-backed JetStream storage
+    - key: NATS_MAX_PAYLOAD
+      required: false
+      default: 8MB
+      description: Largest accepted message payload
+  setup_hook: setup.sh
+
+features:
+  - id: nats-agent-event-bus
+    name: Durable Agent Event Bus
+    description: Coordinate services with pub/sub, request/reply, persisted streams, and consumers
+    icon: Workflow
+    category: agents
+    requirements:
+      services: [nats-jetstream]
+      vram_gb: 0
+      disk_gb: 10
+    enabled_services_all: [nats-jetstream]
+    setup_time: ~1 minute
+    priority: 39
+    gpu_backends: [all]
+
+tags:
+  - messaging
+  - event-bus
+  - pubsub
+  - jetstream
+  - agents

@@ -1,0 +1,52 @@
+services:
+  nats-jetstream:
+    image: nats:2.14.5-alpine
+    container_name: ods-nats
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      NATS_USER: "${NATS_USER:-ods}"
+      NATS_PASSWORD: "${NATS_PASSWORD:?NATS_PASSWORD must be set}"
+      NATS_JETSTREAM_KEY: "${NATS_JETSTREAM_KEY:?NATS_JETSTREAM_KEY must be set}"
+      NATS_JETSTREAM_MAX_MEMORY: "${NATS_JETSTREAM_MAX_MEMORY:-256MB}"
+      NATS_JETSTREAM_MAX_FILE: "${NATS_JETSTREAM_MAX_FILE:-10GB}"
+      NATS_MAX_PAYLOAD: "${NATS_MAX_PAYLOAD:-8MB}"
+    volumes:
+      - ./data/nats-jetstream:/data:rw
+      - ./config/nats-jetstream/nats-server.conf:/etc/nats/nats-server.conf:ro
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${NATS_PORT:-4222}:4222"
+      - "${BIND_ADDRESS:-127.0.0.1}:${NATS_MONITOR_PORT:-8222}:8222"
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - -q
+        - "http://127.0.0.1:8222/healthz?js-enabled-only=true"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+networks:
+  ods-network:
+    external: true
