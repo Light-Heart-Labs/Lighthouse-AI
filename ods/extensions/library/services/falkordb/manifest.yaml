@@ -1,0 +1,70 @@
+schema_version: ods.services.v1
+
+service:
+  id: falkordb
+  name: FalkorDB
+  aliases: [graph-database, knowledge-graph]
+  container_name: ods-falkordb
+  container_uid: 999
+  host_env: FALKORDB_HOST
+  default_host: falkordb
+  port: 3000
+  external_port_env: FALKORDB_UI_PORT
+  external_port_default: 3000
+  health: /
+  ui_path: /
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 180
+  description: "Persistent knowledge graphs and graph queries with a local authenticated explorer."
+  env_vars:
+    - key: FALKORDB_PASSWORD
+      required: true
+      secret: true
+      description: Password required for graph database connections
+    - key: FALKORDB_AUTH_SECRET
+      required: true
+      secret: true
+      description: Secret used to sign Browser sessions
+    - key: FALKORDB_ENCRYPTION_KEY
+      required: true
+      secret: true
+      description: Stable key used to encrypt Browser connection credentials
+    - key: FALKORDB_MAXMEMORY
+      required: false
+      default: 3gb
+      description: Database memory ceiling before writes are rejected
+    - key: FALKORDB_BROWSER_URL
+      required: false
+      default: http://localhost:3000
+      description: Public Browser URL used for sessions and allowed origins
+  setup_hook: setup.sh
+
+features:
+  - id: falkordb-knowledge-graph
+    name: Knowledge Graph Memory and Explorer
+    description: Store connected agent memory, traverse relationships, and inspect graphs visually
+    icon: GitBranch
+    category: data
+    requirements:
+      services: [falkordb]
+      vram_gb: 0
+      disk_gb: 10
+    enabled_services_all: [falkordb]
+    setup_time: ~2 minutes
+    priority: 38
+    launch:
+      type: service
+      service: falkordb
+      path: /
+    gpu_backends: [all]
+
+tags:
+  - graph-database
+  - knowledge-graph
+  - agent-memory
+  - cypher
+  - rag
