@@ -8588,8 +8588,8 @@ test("binds a natural visual follow-up to the same session's verified artifact",
       params: { id: "exec", args: { command: "true" } },
     },
   });
-  assert.equal(shell.block, true);
-  assert.equal(shell.blockReason, WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON);
+  assert.equal(shell?.block, undefined);
+  assert.equal(shell?.params?.args?.workdir, "/workspace/signal-garden");
 
   const edit = call(guard, "tool_call", {
     ...run2,
@@ -8685,6 +8685,36 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     }),
     { params: { path: "signal-garden/index.html" } }
   );
+});
+
+test("fresh-chat repair of an explicitly named workspace project can inspect and verify", () => {
+  for (const verb of ["Repair", "Fix"]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      {
+        prompt: `${verb} the existing Moon Garden game in my workspace (moon-garden). ` +
+          "Level 2 currently starts solved. Inspect its actual initialization, make a focused " +
+          "edit, verify the configurations, and publish the repaired preview. Keep the existing game and art.",
+      }
+    );
+    const params = { path: "moon-garden/game.js" };
+    assert.equal(call(guard, "read", { event: { params } })?.block, undefined);
+    afterCall(guard, "read", {
+      event: { params, result: { content: [{ type: "text", text: "const level = 2;" }] } },
+    });
+    assert.equal(call(guard, "exec", {
+      event: { params: { command: "node --test", workdir: "/workspace/moon-garden" } },
+    })?.block, undefined);
+    assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  }
+});
+
+test("negated workspace repairs do not grant continuation intent", () => {
+  for (const prompt of ["Do not repair the game in my workspace.", "Never fix /workspace/moon-garden."]) {
+    assert.equal(userMessageRequestsWorkspaceContinuation([], prompt), false);
+  }
 });
 
 test("never carries natural visual authority into another session", () => {

@@ -157,7 +157,7 @@ export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON =
   "Pixel has not yet completed the requested visual change. Make one focused edit to a file already read inside the bound artifact directory, then republish that same directory; do not publish an unchanged snapshot.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON =
-  "Pixel confined this visual follow-up to the most recently verified artifact in this chat. Use only read and focused edit calls inside that exact directory, then republish the same directory with pixel_ods_workspace_preview; do not use exec, process, apply_patch, write, another directory, or a generated starter.";
+  "Keep this visual follow-up in the bound artifact directory. Read existing files before focused edits, use sandbox exec/process for inspection and verification, then republish the same directory with pixel_ods_workspace_preview. Do not blindly overwrite it, create a replacement project, or modify another directory.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON =
   "Pixel could not find a readback-verified visual artifact bound to this chat, so it did not guess or modify unrelated workspace files. Ask the owner to build or republish the artifact first, or provide its exact workspace path explicitly.";
@@ -4305,9 +4305,9 @@ export function userMessageRequestsWorkspaceContinuation(messages, prompt = unde
   if (!text) return false;
   const namesWorkspace = /(?:\/workspace(?:\/[A-Za-z0-9._/-]+)?|\bworkspace\b)/i;
   const requestsAction =
-    /\b(?:continue|work|inspect|create|write|edit|update|build|implement|run|test|verify|read|save|generate)\b/i;
+    /\b(?:continue|work|inspect|create|write|edit|fix|repair|update|build|implement|run|test|verify|read|save|generate)\b/i;
   const rejectsAction =
-    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:continue|work|inspect|create|write|edit|update|build|implement|run|test|verify|read|save|generate)\b/i;
+    /\b(?:do\s+not|don't|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:continue|work|inspect|create|write|edit|fix|repair|update|build|implement|run|test|verify|read|save|generate)\b/i;
   return text
     .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
     .some(
@@ -5729,7 +5729,7 @@ export function createToolLoopGuard({
           .split("/")
           .every((part) => WORKSPACE_PATH_COMPONENT.test(part));
       if (
-        !["read", "edit", WORKSPACE_PREVIEW_TOOL].includes(selectedToolName) ||
+        !["read", "edit", "exec", "process", "tool_search", "tool_describe", WORKSPACE_PREVIEW_TOOL].includes(selectedToolName) ||
         (FILE_PATH_TOOLS.has(selectedToolName) && !insideContinuationDirectory)
       ) {
         return {
