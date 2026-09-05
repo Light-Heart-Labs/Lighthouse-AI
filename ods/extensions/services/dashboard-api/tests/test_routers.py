@@ -796,6 +796,50 @@ def test_chat_connection_error(test_client, monkeypatch):
     assert resp.status_code == 503
 
 
+def test_chat_timeout_returns_gateway_timeout(test_client):
+    import asyncio
+
+    session_mock = MagicMock()
+    session_mock.post = MagicMock(side_effect=asyncio.TimeoutError())
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session_mock)
+    session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.setup.aiohttp.ClientSession", return_value=session_ctx):
+        resp = test_client.post(
+            "/api/chat",
+            json={"message": "hi"},
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"] == "LLM backend timed out"
+
+
+def test_chat_malformed_success_returns_bad_gateway(test_client):
+    resp_mock = AsyncMock()
+    resp_mock.status = 200
+    resp_mock.json = AsyncMock(return_value={"choices": ["not-an-object"]})
+    response_ctx = AsyncMock()
+    response_ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+    response_ctx.__aexit__ = AsyncMock(return_value=False)
+    session_mock = MagicMock()
+    session_mock.post = MagicMock(return_value=response_ctx)
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__ = AsyncMock(return_value=session_mock)
+    session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.setup.aiohttp.ClientSession", return_value=session_ctx):
+        resp = test_client.post(
+            "/api/chat",
+            json={"message": "hi"},
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "LLM backend returned an invalid response"
+
+
 # ---------------------------------------------------------------------------
 # Models router — split-file download status (issue #316)
 # ---------------------------------------------------------------------------
