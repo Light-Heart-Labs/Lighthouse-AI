@@ -84,7 +84,11 @@ def _as_mapping(v: Any) -> Optional[Mapping[str, Any]]:
 
 
 def _as_sequence(v: Any) -> Optional[Sequence[Any]]:
-    return v if isinstance(v, Sequence) and not isinstance(v, (str, bytes, bytearray)) else None
+    return (
+        v
+        if isinstance(v, Sequence) and not isinstance(v, (str, bytes, bytearray))
+        else None
+    )
 
 
 def _require_key(v: Validator, obj: Mapping[str, Any], path: str, key: str) -> Any:
@@ -121,7 +125,9 @@ def _optional_type(v: Validator, value: Any, path: str, expected: str) -> None:
     _require_type(v, value, path, expected)
 
 
-def _require_one_of(v: Validator, value: Any, path: str, allowed: Sequence[str]) -> None:
+def _require_one_of(
+    v: Validator, value: Any, path: str, allowed: Sequence[str]
+) -> None:
     if not isinstance(value, str):
         v.add(path, f"expected string enum {list(allowed)}, got {_type_name(value)}")
         return
@@ -147,7 +153,10 @@ def _require_iso8601ish(v: Validator, value: Any, path: str) -> None:
     _require_type(v, value, path, "string")
     if isinstance(value, str):
         # Very lightweight check: 2026-03-15T12:34:56+00:00 / Z / with fractional seconds.
-        if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$", value):
+        if not re.match(
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$",
+            value,
+        ):
             v.add(path, "expected ISO8601 timestamp (UTC or offset)")
 
 
@@ -156,9 +165,18 @@ def _require_iso8601ish(v: Validator, value: Any, path: str) -> None:
 # -----------------------------
 
 
+def _require_success_exit_code(v: Validator, exit_code: Any, path: str) -> None:
+    # The simulation summary is a release-gate artifact: a recorded non-zero
+    # exit code means the simulated run failed and must fail validation even
+    # though the summary itself is structurally valid.
+    if _is_int(exit_code) and exit_code != 0:
+        v.add(f"{path}.exit_code", f"expected 0 (success), got {exit_code}")
+
+
 def validate_linux_dryrun(v: Validator, linux: Mapping[str, Any], path: str) -> None:
     exit_code = _require_key(v, linux, path, "exit_code")
     _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_success_exit_code(v, exit_code, path)
 
     signals = _require_key(v, linux, path, "signals")
     _require_type(v, signals, f"{path}.signals", "object")
@@ -188,6 +206,7 @@ def validate_linux_dryrun(v: Validator, linux: Mapping[str, Any], path: str) -> 
 def validate_macos_installer(v: Validator, mac: Mapping[str, Any], path: str) -> None:
     exit_code = _require_key(v, mac, path, "exit_code")
     _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_success_exit_code(v, exit_code, path)
 
     log_path = _require_key(v, mac, path, "log")
     _require_path_like(v, log_path, f"{path}.log")
@@ -225,9 +244,12 @@ def validate_windows_scenario(v: Validator, win: Mapping[str, Any], path: str) -
         _require_type(v, warnings, f"{path}.report.summary.warnings", "int")
 
 
-def validate_doctor_snapshot(v: Validator, doctor: Mapping[str, Any], path: str) -> None:
+def validate_doctor_snapshot(
+    v: Validator, doctor: Mapping[str, Any], path: str
+) -> None:
     exit_code = _require_key(v, doctor, path, "exit_code")
     _require_type(v, exit_code, f"{path}.exit_code", "int")
+    _require_success_exit_code(v, exit_code, path)
 
     report = _require_key(v, doctor, path, "report")
     _require_type(v, report, f"{path}.report", "object")
@@ -238,14 +260,21 @@ def validate_doctor_snapshot(v: Validator, doctor: Mapping[str, Any], path: str)
     if "autofix_hints" not in report:
         v.add(f"{path}.report", "missing required key 'autofix_hints'")
     else:
-        _require_type(v, report.get("autofix_hints"), f"{path}.report.autofix_hints", "array")
+        _require_type(
+            v, report.get("autofix_hints"), f"{path}.report.autofix_hints", "array"
+        )
 
     # Newer doctor outputs include a summary block; validate if present.
     if "summary" in report:
         _require_type(v, report.get("summary"), f"{path}.report.summary", "object")
         summary = report.get("summary")
         if isinstance(summary, Mapping) and "runtime_ready" in summary:
-            _require_type(v, summary.get("runtime_ready"), f"{path}.report.summary.runtime_ready", "bool")
+            _require_type(
+                v,
+                summary.get("runtime_ready"),
+                f"{path}.report.summary.runtime_ready",
+                "bool",
+            )
 
 
 def validate_golden_paths(v: Validator, golden: Mapping[str, Any], path: str) -> None:
@@ -342,7 +371,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         description="Validate ODS installer simulation summary JSON.",
     )
     p.add_argument("summary_json", help="Path to summary.json")
-    p.add_argument("--strict", action="store_true", help="Fail on unknown keys and require generated_at")
+    p.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail on unknown keys and require generated_at",
+    )
     return p.parse_args(argv)
 
 
