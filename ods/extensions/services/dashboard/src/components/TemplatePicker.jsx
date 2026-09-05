@@ -195,7 +195,7 @@ export function TemplatePreview({ template, onClose, onApplied }) {
               <p className="text-xs text-theme-text-muted">{template.description}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-theme-text-muted hover:text-theme-text transition-colors">
+          <button onClick={onClose} className="text-theme-text-muted hover:text-theme-text transition-colors" aria-label="Close">
             <X size={18} />
           </button>
         </div>
