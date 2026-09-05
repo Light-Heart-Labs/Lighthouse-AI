@@ -887,6 +887,13 @@ async def forward(full_path: str, request: Request) -> Response:
             status_code=400,
         )
 
+    if "stream" in payload and type(payload["stream"]) is not bool:
+        return JSONResponse(
+            {"error": {"message": "stream must be a boolean",
+                       "type": "invalid_request_error", "code": "400"}},
+            status_code=400,
+        )
+
     requested_alias = str(payload.get("model") or PUBLIC_ALIASES[0])
 
     global _inflight
@@ -936,7 +943,7 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
     payload["model"] = route["runtimeModelId"]
     request_id = str(uuid.uuid4())
     probe_id = _verify_probe_marker(raw_body.decode("utf-8", "replace"))
-    is_stream = bool(payload.get("stream"))
+    is_stream = payload.get("stream", False)
 
     headers = _sanitize_headers(request)
     api_key = os.environ.get(route["apiKeyEnv"], "") if route["apiKeyEnv"] else ""
