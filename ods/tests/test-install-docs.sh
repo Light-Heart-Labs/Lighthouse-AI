@@ -203,6 +203,19 @@ require_literal "$REPO_ROOT/README.md" '**Linux or macOS**' "Front-page Linux/ma
 require_literal "$REPO_ROOT/README.md" '**Windows PowerShell**' "Front-page Windows install label"
 require_literal "$REPO_ROOT/README.md" 'Docker must be installed and running' "Front-page Docker prerequisite"
 
+model_switch_docs=(
+    "$REPO_ROOT/README.md"
+    "$ROOT_DIR/FAQ.md"
+)
+
+for file in "${model_switch_docs[@]}"; do
+    require_literal "$file" 'Dashboard' "Model download workflow"
+    require_literal "$file" 'does not download from the network' "Model swap network contract"
+    if grep -qF './scripts/pre-download.sh --tier 3' "$file"; then
+        fail "Model switch guidance invokes an unsupported pre-download tier in ${file#"$REPO_ROOT"/}"
+    fi
+done
+
 for file in "${windows_copy_paste_docs[@]}"; do
     require_literal "$file" "$WINDOWS_SOURCE_ZIP_URL" "Windows no-Git source ZIP install"
     require_literal "$file" '[guid]::NewGuid().ToString("N")' "Windows collision-free temporary source directory"
