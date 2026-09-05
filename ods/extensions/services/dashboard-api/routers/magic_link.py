@@ -63,7 +63,6 @@ from typing import Optional
 from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
