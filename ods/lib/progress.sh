@@ -128,7 +128,7 @@ print_phase() {
     local desc=$2
     local estimate=${PHASE_ESTIMATES[$phase]:-0}
     local duration
-    duration=$(format_duration $estimate)
+    duration=$(format_duration "$estimate")
     
     echo -e "\n${BOLD}${BLUE}▶ $desc${NC} ${CYAN}(~$duration)${NC}"
 }
