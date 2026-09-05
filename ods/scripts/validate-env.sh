@@ -159,6 +159,30 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
     continue
   fi
 
+  # PR #12: Deprecated env var detection with migration guidance
+  case "$key" in
+    OLLAMA_PORT)
+      log_warn "Line $line_no: $key is deprecated → rename to LLAMA_SERVER_PORT"
+      WARNINGS=$((WARNINGS + 1))
+      ;;
+    ENABLE_STT)
+      log_warn "Line $line_no: $key is deprecated → rename to ENABLE_VOICE"
+      WARNINGS=$((WARNINGS + 1))
+      ;;
+    OPENWEBUI_PORT)
+      log_warn "Line $line_no: $key is deprecated → rename to WEBUI_PORT"
+      WARNINGS=$((WARNINGS + 1))
+      ;;
+    ENABLE_LANGFUSE)
+      log_warn "Line $line_no: $key is deprecated → rename to LANGFUSE_ENABLED"
+      WARNINGS=$((WARNINGS + 1))
+      ;;
+    ODS_CLI_VERSION)
+      log_warn "Line $line_no: $key is deprecated → use ODS_VERSION (set automatically by installer)"
+      WARNINGS=$((WARNINGS + 1))
+      ;;
+  esac
+
   # Remove inline comments only when value is unquoted.
   # Example: FOO=bar # comment
   # Keep hashes inside quotes.
