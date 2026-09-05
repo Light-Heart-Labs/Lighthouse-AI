@@ -1,5 +1,7 @@
 """Tests for config.py — manifest loading and service discovery."""
-
+import importlib
+import os
+import config
 import logging
 from pathlib import Path
 
@@ -48,6 +50,27 @@ features:
 def test_normalize_ods_mode(value, expected):
     assert config.normalize_ods_mode(value) == expected
 
+def test_live_env_value_strips_one_pair_and_preserves_unmatched_quotes(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text(
+        "PAIRED='model-v2'\n"
+        "UNMATCHED=model-v2'\n"
+        "REPEATED=''model-v2''\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "INSTALL_DIR", str(tmp_path))
+
+    assert config.read_live_env_value("PAIRED") == "model-v2"
+    assert config.read_live_env_value("UNMATCHED") == "model-v2'"
+    assert config.read_live_env_value("REPEATED") == "'model-v2'"
+
+
+def test_gpu_backend_defaults_to_unknown_when_unset(monkeypatch):
+    """Ensure that if GPU_BACKEND is not present in the environment, it falls back to 'unknown'."""
+    monkeypatch.delenv("GPU_BACKEND", raising=False)
+    
+    importlib.reload(config)
+    
+    assert config.GPU_BACKEND == "unknown"
 
 def test_live_env_value_prefers_last_persisted_value(monkeypatch, tmp_path):
     (tmp_path / ".env").write_text(
