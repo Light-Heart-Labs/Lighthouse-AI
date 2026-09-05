@@ -106,7 +106,7 @@ set_qwen_tier_config() {
             # build, same hardware. Until upstream fixes coder-next on this
             # build, route Spark to the A3B MoE — same architectural fit
             # (large total / small active params on unified memory).
-            if [[ "${HOST_ARCH:-}" == "arm64" ]]; then
+            if [[ "${HOST_ARCH:-$(uname -m 2>/dev/null || true)}" == "arm64" ]]; then
                 TIER_NAME="NVIDIA Ultra (90GB+, aarch64 — A3B substitution)"
                 LLM_MODEL="qwen3.6-35b-a3b"
                 GGUF_FILE="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
@@ -212,10 +212,10 @@ set_gemma4_tier_config() {
             TIER_NAME="Intel Arc"
             LLM_MODEL="gemma-4-e4b-it"
             GGUF_FILE="gemma-4-E4B-it-Q4_K_M.gguf"
-            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf"
-            GGUF_SHA256="85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
+            GGUF_SHA256=""
             MAX_CONTEXT=32768
-            LLM_MODEL_SIZE_MB=4747
+            LLM_MODEL_SIZE_MB=5340
             GPU_BACKEND="sycl"
             N_GPU_LAYERS=99
             ;;
@@ -223,10 +223,10 @@ set_gemma4_tier_config() {
             TIER_NAME="Intel Arc Lite"
             LLM_MODEL="gemma-4-e2b-it"
             GGUF_FILE="gemma-4-E2B-it-Q4_K_M.gguf"
-            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf"
-            GGUF_SHA256="740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"
+            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
+            GGUF_SHA256=""
             MAX_CONTEXT=16384
-            LLM_MODEL_SIZE_MB=2963
+            LLM_MODEL_SIZE_MB=2810
             GPU_BACKEND="sycl"
             N_GPU_LAYERS=99
             ;;
@@ -271,19 +271,19 @@ set_gemma4_tier_config() {
             TIER_NAME="Entry Level"
             LLM_MODEL="gemma-4-e2b-it"
             GGUF_FILE="gemma-4-E2B-it-Q4_K_M.gguf"
-            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf"
-            GGUF_SHA256="740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8"
+            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
+            GGUF_SHA256=""
             MAX_CONTEXT=16384
-            LLM_MODEL_SIZE_MB=2963
+            LLM_MODEL_SIZE_MB=2810
             ;;
         2)
             TIER_NAME="Prosumer"
             LLM_MODEL="gemma-4-e4b-it"
             GGUF_FILE="gemma-4-E4B-it-Q4_K_M.gguf"
-            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf"
-            GGUF_SHA256="85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+            GGUF_URL="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"
+            GGUF_SHA256=""
             MAX_CONTEXT=32768
-            LLM_MODEL_SIZE_MB=4747
+            LLM_MODEL_SIZE_MB=5340
             ;;
         3)
             TIER_NAME="Pro"
@@ -360,7 +360,7 @@ tier_to_model() {
             case "$t" in
                 CLOUD)          model="anthropic/claude-sonnet-4-5-20250514" ;;
                 NV_ULTRA)
-                    if [[ "${HOST_ARCH:-}" == "arm64" ]]; then
+                    if [[ "${HOST_ARCH:-$(uname -m 2>/dev/null || true)}" == "arm64" ]]; then
                         model="qwen3.6-35b-a3b"
                     else
                         model="qwen3-coder-next"
