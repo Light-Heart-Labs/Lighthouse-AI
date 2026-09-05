@@ -1,0 +1,59 @@
+schema_version: ods.services.v1
+
+service:
+  id: pgvector
+  name: pgvector (PostgreSQL 17)
+  aliases: [postgres-vector, vector-postgres]
+  container_name: ods-pgvector
+  container_uid: 999
+  host_env: PGVECTOR_HOST
+  default_host: pgvector
+  port: 5432
+  external_port_env: PGVECTOR_PORT
+  external_port_default: 5432
+  health: /metrics
+  health_port: 9187
+  external_link: false
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: []
+  startup_timeout: 120
+  description: "PostgreSQL 17 with pgvector and readiness-aware Prometheus metrics."
+  env_vars:
+    - key: PGVECTOR_PASSWORD
+      required: true
+      secret: true
+      description: Password for the bootstrap PostgreSQL role
+    - key: PGVECTOR_USER
+      required: false
+      default: ods
+      description: Bootstrap PostgreSQL role
+    - key: PGVECTOR_DATABASE
+      required: false
+      default: ods
+      description: Database initialized with the vector extension
+  setup_hook: setup.sh
+
+features:
+  - id: pgvector-sql-search
+    name: Vector SQL Database
+    description: Combine relational queries, transactions, and vector similarity in PostgreSQL
+    icon: Database
+    category: data
+    requirements:
+      services: [pgvector]
+      vram_gb: 0
+      disk_gb: 20
+    enabled_services_all: [pgvector]
+    setup_time: ~2 minutes
+    priority: 36
+    gpu_backends: [all]
+
+tags:
+  - postgres
+  - vector-database
+  - sql
+  - embeddings
+  - rag
