@@ -20,6 +20,8 @@ import {
   PENDING_EXEC_REQUIRES_POLL_REASON,
   PENDING_EXEC_RETRY_EXHAUSTED_REASON,
   CANCELLABLE_EXEC_UNAVAILABLE_REASON,
+  EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON,
+  WORKSPACE_PREVIEW_REQUIRES_FILES_REASON,
   CLIENT_CANCELLED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
   EXEC_PRIVATE_NETWORK_REASON,
@@ -6400,7 +6402,7 @@ test("aborts only the active run when the model ignores the terminal block", () 
 
 test("does not constrain other agents or non-web tools", () => {
   const guard = createToolLoopGuard({ limits: { search: 1, fetch: 1, total: 1 } });
-  assert.equal(call(guard, "exec"), undefined);
+  assert.equal(call(guard, "exec", { event: { params: { command: "true" } } }), undefined);
   assert.equal(
     call(guard, "web_search", { context: { agentId: "other" } }),
     undefined
@@ -6632,6 +6634,51 @@ test("fails closed when exact cancellable execution preparation is unavailable",
   assert.deepEqual(aborts, ["session-1"]);
 });
 
+test("malformed exec arguments allow bounded correction without bypassing cancellation", () => {
+  for (const wrapped of [false, true]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (runId, command) => { prepared.push(command); return `/control/${runId}`; },
+      signal: () => true,
+    } });
+    const invoke = (args) => call(guard, wrapped ? "tool_call" : "exec", {
+      event: { params: wrapped ? { id: "exec", args } : args },
+    });
+    const command = "python3 << 'PYEOF'\nprint('verified')\nPYEOF";
+    assert.equal(invoke({ command: { command, workdir: "/workspace" } }).blockReason,
+      EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON);
+    assert.deepEqual(prepared, []);
+    const corrected = invoke({ command, workdir: "/workspace" });
+    assert.equal(corrected.block, undefined);
+    assert.deepEqual(prepared, [command]);
+    assert.equal((wrapped ? corrected.params.args : corrected.params).command, "/control/run-1");
+  }
+});
+
+test("malformed exec corrections are run-bounded and cannot disguise failed control registration", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun: (id) => { aborts.push(id); return true; } });
+  for (const command of [undefined, ["true"]]) {
+    assert.equal(call(guard, "exec", { event: { params: { command } } }).blockReason,
+      EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON);
+  }
+  assert.equal(call(guard, "exec", { event: { params: { command: "  " } } }).blockReason,
+    CODING_RETRY_EXHAUSTED_REASON);
+  assert.equal(call(guard, "exec", { event: { params: { command: "true" } } }).blockReason,
+    CODING_LOOP_ABORT_REASON);
+  assert.deepEqual(aborts, ["session-1"]);
+
+  const broken = createToolLoopGuard({ execControl: {
+    prepare: () => { throw new Error("registration failed"); }, signal: () => true,
+  } });
+  assert.equal(call(broken, "exec", { event: { params: { command: {} } } }).blockReason,
+    EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON);
+  assert.equal(call(broken, "exec", { event: { params: { command: "true" } } }).blockReason,
+    CANCELLABLE_EXEC_UNAVAILABLE_REASON);
+  assert.equal(call(broken, "read", { event: { params: { path: "index.html" } } }).blockReason,
+    CODING_LOOP_ABORT_REASON);
+});
+
 test("normalizes the common exec cmd alias before cancellable wrapping", () => {
   const prepared = [];
   const guard = createToolLoopGuard({
@@ -6692,8 +6739,8 @@ test("normalizes a compact-model exec shell alias before cancellable wrapping", 
           args: { shell: "printf unsafe", context: "host" },
         },
       },
-    }),
-    undefined
+    }).blockReason,
+    EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON
   );
 });
 
@@ -6733,8 +6780,8 @@ test("normalizes a compact-model exec script envelope before cancellable wrappin
           args: { script: "printf unsafe", context: "host" },
         },
       },
-    }),
-    undefined
+    }).blockReason,
+    EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON
   );
 });
 
@@ -8424,6 +8471,35 @@ test("keeps every visual category on the model-authored write path", () => {
     });
     assert.equal(routed, undefined, prompt);
   }
+});
+
+test("new interactive objects do not require catalog nouns or a prior preview", () => {
+  for (const prompt of [
+    "Build me a beautiful little interval trainer for stretching, with editable work and rest durations, start, pause, reset and round counting. Make it keyboard friendly and usable on a phone. Give it an original visual design and show it here so I can use it. Test the timer behavior rather than just saying it works.",
+    "Create a recipe-scaling calculator. Make it keyboard accessible and show it here.",
+    "Build a fractal explorer for my camping trip. Give it touch controls and display it here.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspaceVisualContinuation([], prompt), false, prompt);
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    assert.equal(call(guard, "write", { event: { params: {
+      path: "new-project/index.html", content: "<!doctype html><title>Model output</title>",
+    } } })?.block, undefined);
+    assert.equal(call(guard, "pixel_ods_workspace_preview", { event: { params: {
+      relativeDirectory: "new-project",
+    } } }).blockReason, WORKSPACE_PREVIEW_REQUIRES_FILES_REASON);
+  }
+  for (const prompt of [
+    "Create a button for this existing app. Make it keyboard friendly.",
+    "Create a new color scheme for this app, then make it accessible.",
+    "Do not create a timer. Make it faster.",
+  ]) assert.equal(userMessageRequestsWorkspaceVisualContinuation([], prompt), true, prompt);
+  for (const prompt of [
+    "Write a summary of the meeting and show it here.",
+    "Build a Python command-line calculator with keyboard controls and show it here.",
+    "Create an interactive trainer but do not show it here.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
 
 test("recognizes SVG artwork and explicit preview publication without widening nonvisual intent", () => {

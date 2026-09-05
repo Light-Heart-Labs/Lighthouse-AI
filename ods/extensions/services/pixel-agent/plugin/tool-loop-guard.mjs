@@ -138,6 +138,9 @@ export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
 export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
   "Pixel could not establish the exact cancellation boundary for this command. Do not call another tool in this turn; explain that execution is temporarily unavailable.";
 
+export const EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON =
+  "The exec command was not a non-empty string, so nothing was executed. Retry with command containing the shell text and workdir as a separate field, not an object inside command. For tool_call, use id exec and args containing those fields. Do not change the intended command or its authority.";
+
 export const WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON =
   "A server started inside Pixel's disposable sandbox is not reachable from the owner's browser. Do not start python http.server, npm dev, Vite, or another background server and do not claim any localhost port. Finish the static files, then call pixel_ods_workspace_preview with their one workspace-relative directory; share only its independently verified URL.";
 
@@ -4402,7 +4405,11 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const unreachableLocalPreview =
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
-  return directPreview || unreachableLocalPreview ||
+  const interactiveDelivery =
+    freshWorkspaceCreationRequested(text) &&
+    /\b(?:show|display|preview)\b[^.!?;\n]{0,64}\bhere\b/i.test(text) &&
+    /\b(?:controls?|interacti(?:ve|on)|keyboard|mobile|phone|touch)\b/i.test(text);
+  return directPreview || unreachableLocalPreview || interactiveDelivery ||
     ((website || application || browserInterface) && (build || revise)) ||
     (browserVisual && build);
 }
@@ -4445,6 +4452,20 @@ export function userMessageRequestsWorkspacePreviewInspection(
   );
 }
 
+function freshWorkspaceCreationRequested(text) {
+  const creation = /\b(?:build|create|develop|design|generate|implement|make|write)\s+(?:(?:me|us)\s+)?(?:a|an|another|new|some)\s+\w/i;
+  const rejected = /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|design|generate|implement|make|write)\b/i;
+  const existingTarget = /\b(?:existing|previous|prior|same|current)\s+\w/i;
+  const visualTarget = /\b(?:for|from|in|inside|into|of|on|onto|to|using|with)\s+(?:(?:this|that|the|my|our)\s+)(?:animated\s+)?(?:app|artifact|board|dashboard|demo|form|game|illustration|interface|page|preview|prototype|scene|site|svg|visual|voxel|website)\b|\b(?:for|in|into|of|on|onto|to|using|with)\s+(?:it|that)\b/i;
+  // A new object can be a timer, calculator, or something not in a catalog.
+  // Later "make it accessible" refers to that object. Component requests
+  // anchored to existing work ("create a button for this app") remain edits.
+  return text.split(/[.!?;\n]+/).some((clause) =>
+    creation.test(clause) && !rejected.test(clause) &&
+    !existingTarget.test(clause) && !visualTarget.test(clause)
+  );
+}
+
 export function userMessageRequestsWorkspaceVisualContinuation(
   messages,
   prompt = undefined
@@ -4466,11 +4487,7 @@ export function userMessageRequestsWorkspaceVisualContinuation(
   // In a creation request, "keep it self-contained" or "make it responsive"
   // refers to the new artifact, not a missing artifact from an earlier turn.
   // Stop at relational words so "create a button for this app" stays an edit.
-  const newVisualObject =
-    /\b(?:build|create|develop|design|generate|implement|make|write)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\s+(?:(?!(?:existing|previous|prior|same|for|from|in|inside|into|of|on|onto|to|using|with)\b)[\w-]+\s+){0,8}(?:app|application|artwork|board|dashboard|demo|form|game|illustration|interface|page|prototype|scene|site|svg|visuali[sz]ation|voxel|website)\b/i;
-  const rejectsCreation =
-    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b[^.!?;\n]{0,96}\b(?:build|create|develop|design|generate|implement|make|write)\b/i;
-  if (clauses.some((clause) => newVisualObject.test(clause) && !rejectsCreation.test(clause))) {
+  if (freshWorkspaceCreationRequested(text)) {
     return false;
   }
   return clauses.some(
@@ -5109,6 +5126,7 @@ export function createToolLoopGuard({
         operationsCorrectionPromptRound: undefined,
         operationsRoutingBlocks: 0,
         failedExec: new Map(),
+        invalidExecArgumentAttempts: 0,
         successfulExec: new Map(),
         successfulExecBlocks: new Map(),
         failedVerificationAttempts: 0,
@@ -6813,6 +6831,19 @@ export function createToolLoopGuard({
     }
 
     if (selectedToolName === "exec") {
+      // A malformed model envelope is not a failed cancellation boundary.
+      // Reject it before prepare(), permit a bounded schema correction, and
+      // still route the corrected call through every normal safety check.
+      // Do not unwrap nested objects or infer missing command/control fields.
+      if (typeof selectedParams?.command !== "string" || !selectedParams.command.trim()) {
+        state.invalidExecArgumentAttempts += 1;
+        if (state.invalidExecArgumentAttempts >= effective.failedExecRetries) {
+          state.codingExhausted = true;
+          state.codingTerminalBlocks = 1;
+          return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
+        }
+        return { block: true, blockReason: EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON };
+      }
       const fingerprint = execFingerprint(selectedParams);
       const verificationFingerprint = verificationExecFingerprint(
         selectedParams
