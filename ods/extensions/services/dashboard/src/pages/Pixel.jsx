@@ -459,18 +459,23 @@ export default function Pixel({ systemStatus = null }) {
         const runtimeKeys = runtime && typeof runtime === 'object' && !Array.isArray(runtime)
           ? Object.keys(runtime).sort().join('\n')
           : ''
-        setAgentRuntime(
-          runtimeKeys === ['contextLength', 'maxTokens', 'model', 'reasoning', 'source'].join('\n')
+        const validRemoteRuntime = runtimeKeys === ['contextLength', 'maxTokens', 'model', 'reasoning', 'source'].join('\n')
           && runtime.source === 'remote-provider'
-          && typeof runtime.model === 'string'
-          && runtime.model.length > 0
-          && runtime.model.length <= 256
-          && Number.isInteger(runtime.contextLength)
-          && runtime.contextLength >= 4096
           && Number.isInteger(runtime.maxTokens)
           && runtime.maxTokens >= 1
           && runtime.maxTokens <= runtime.contextLength
           && typeof runtime.reasoning === 'boolean'
+          && runtime.contextLength >= 4096
+        const validLocalRuntime = runtimeKeys === ['contextLength', 'model', 'source'].join('\n')
+          && runtime.source === 'local-switchboard'
+        setAgentRuntime(
+          (validRemoteRuntime || validLocalRuntime)
+          && typeof runtime.model === 'string'
+          && runtime.model.length > 0
+          && runtime.model.length <= 256
+          && Number.isInteger(runtime.contextLength)
+          && runtime.contextLength >= 1
+          && runtime.contextLength <= 10_000_000
             ? runtime
             : null
         )

@@ -4138,6 +4138,57 @@ class TestModelActivationOwnership:
         _mod._project_switchboard_agent_viability(payload)
         assert payload == {"status": "idle"}
 
+    @pytest.mark.parametrize("agent_viable", [True, False])
+    @pytest.mark.parametrize("backend", ["llama-server", "lemonade"])
+    def test_model_status_projects_verified_local_identity_without_onboarding(
+        self, tmp_path, monkeypatch, agent_viable, backend,
+    ):
+        install_dir = tmp_path / "ods"
+        install_dir.mkdir()
+        env = (
+            "ODS_MODE=local\nGPU_BACKEND=cpu\nLLM_MODEL=same-model\n"
+            "GGUF_FILE=same-model.gguf\nCTX_SIZE=65536\n"
+        )
+        if backend == "lemonade":
+            env += (
+                "LEMONADE_MODEL=same-model.gguf\n"
+                "LEMONADE_BASE_URL=http://host.docker.internal:8080/api/v1\n"
+                "LLM_BACKEND=lemonade\n"
+            )
+        (install_dir / ".env").write_text(env, encoding="utf-8")
+        state_path = install_dir / "data" / "model-state.json"
+        _mod._switchboard_state.record_verified_route(
+            state_path, catalog_id="same-model", runtime_model_id="same-model.gguf",
+            backend_kind=backend, endpoint_id=f"{backend}-default",
+            context_length=65536,
+            capabilities={"chat": True, "tools": False, "vision": False,
+                          "agentViable": agent_viable},
+            proof_identity="same-model.gguf",
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_active_remote_provider_pixel_runtime", lambda: None)
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeRuntime"] == {
+            "source": "local-switchboard", "model": "same-model.gguf",
+            "contextLength": 65536,
+        }
+        assert payload["activeAgentViable"] is agent_viable
+
+        # Missing proof and a cloud transition must not expose a local rollback
+        # route as Pixel's active runtime. This is a display rule, not admission.
+        (install_dir / ".env").write_text(env.replace("local", "cloud"), encoding="utf-8")
+        payload = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert "activeRuntime" not in payload
+        (install_dir / ".env").write_text(env, encoding="utf-8")
+        doc = json.loads(state_path.read_text(encoding="utf-8"))
+        doc["active"]["proof"]["completion"] = False
+        state_path.write_text(json.dumps(doc), encoding="utf-8")
+        payload = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert "activeRuntime" not in payload
+
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
         handler = _FakeHandler(json.dumps({"model_id": "target-a"}).encode("utf-8"))
@@ -4492,6 +4543,13 @@ class TestModelActivationModeAndMacosBridge:
         monkeypatch.setattr(_mod, "_stop_macos_native_llama_server", record_stop)
         monkeypatch.setattr(_mod, "_configure_macos_llm_bridge", record_bridge)
         monkeypatch.setattr(_mod, "_launch_native_llama_server", record_launch)
+        # This fixture covers the native model bridge, not an installed
+        # OpenCode service. The generic subprocess stub must not manufacture
+        # a running service and trigger a real localhost health request.
+        monkeypatch.setattr(
+            _mod, "_capture_managed_opencode_state",
+            lambda: {"system": "Darwin", "active": False},
+        )
         monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_args, **_kwargs: True)
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         handler = _FakeHandler(b"")

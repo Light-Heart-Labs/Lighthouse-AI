@@ -187,6 +187,17 @@ def _active_runtime_projection(status: object) -> dict[str, object] | None:
     if not isinstance(status, dict):
         return None
     runtime = status.get("activeRuntime")
+    if isinstance(runtime, dict) and runtime.get("source") == "local-switchboard":
+        expected = {"source", "model", "contextLength"}
+        if (
+            set(runtime) == expected
+            and isinstance(runtime.get("model"), str)
+            and 1 <= len(runtime["model"]) <= 256
+            and type(runtime.get("contextLength")) is int
+            and 1 <= runtime["contextLength"] <= 10_000_000
+        ):
+            return {key: runtime[key] for key in expected}
+        return None
     expected = {"source", "model", "contextLength", "maxTokens", "reasoning"}
     if (
         not isinstance(runtime, dict)

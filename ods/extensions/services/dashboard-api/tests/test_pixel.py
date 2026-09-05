@@ -347,6 +347,10 @@ async def test_status_projects_only_validated_active_remote_runtime(monkeypatch)
 @pytest.mark.parametrize(
     "runtime",
     [
+        {"source": "local-switchboard", "model": "local-model", "contextLength": True},
+        {"source": "local-switchboard", "model": "local-model", "contextLength": 0},
+        {"source": "local-switchboard", "model": "local-model", "contextLength": 65536,
+         "apiKey": "must-not-project"},
         {
             "source": "local",
             "model": "forged",
@@ -376,6 +380,23 @@ def test_active_runtime_projection_rejects_untrusted_or_malformed_state(runtime)
     assert "must-not-project" not in json.dumps(
         pixel._active_runtime_projection({"activeRuntime": runtime})
     )
+
+
+@pytest.mark.asyncio
+async def test_status_projects_local_identity_even_for_adaptive_model(monkeypatch):
+    runtime = {"source": "local-switchboard", "model": "Qwen3.6-35B-A3B-GGUF",
+               "contextLength": 65536}
+
+    async def local_status(*_args, **_kwargs):
+        return {"status": "idle", "activeAgentViable": False, "activeRuntime": runtime}
+
+    monkeypatch.setattr(pixel, "request_agent_json", local_status)
+    body = json.dumps({"data": [{"id": "pixel/default"}]}).encode()
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(FakeResponse(chunks=[body]))):
+        result = await pixel.pixel_status()
+    assert result["available"] is True
+    assert result["runtime"] == runtime
+    assert result["modelSupport"]["tier"] == "adaptive"
 
 
 def test_active_runtime_projection_accepts_a_constrained_adaptive_context():

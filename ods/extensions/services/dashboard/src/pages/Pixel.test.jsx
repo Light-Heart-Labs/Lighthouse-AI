@@ -628,7 +628,21 @@ describe('Pixel', () => {
     expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
   })
 
-  it('ignores a non-remote runtime projection and keeps the live local identity', async () => {
+  it('shows the verified local runtime instead of stale installer model metadata', async () => {
+    globalThis.fetch.mockResolvedValue(response({
+      available: true,
+      runtime: { source: 'local-switchboard', model: 'Qwen3.6-35B-A3B-GGUF', contextLength: 65536 },
+      modelSupport: { tier: 'adaptive', detail: 'Pixel adapts its tools to this model.' },
+    }))
+    render(<Pixel systemStatus={{ inference: { loadedModel: 'qwen3.5-9b', contextSize: 32768 } }} />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('Qwen3.6-35B-A3B-GGUF')).toBeInTheDocument()
+    expect(screen.getByText('64K context')).toBeInTheDocument()
+    expect(screen.queryByText('qwen3.5-9b')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeEnabled()
+  })
+
+  it('ignores an unknown runtime source and keeps the fallback local identity', async () => {
     globalThis.fetch.mockResolvedValue(
       response({
         available: true,

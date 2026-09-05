@@ -1948,7 +1948,7 @@ def _switchboard_state_path() -> Path:
 
 
 def _project_switchboard_agent_viability(payload: dict) -> None:
-    """Add only the verified active model route's Pixel viability to status.
+    """Project the verified active route's identity and Pixel viability.
 
     Remote activation and local switchboard records are host-owned and
     structurally validated. Missing, stale, or malformed state remains unknown
@@ -1973,6 +1973,30 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
     active = doc.get("active")
     if not isinstance(active, dict):
         return
+    # Local model identity is independent of tool qualification. The route
+    # record has no output-token/reasoning settings; do not invent those or
+    # require Pixel onboarding to show which model is actually serving.
+    env = load_env(INSTALL_DIR / ".env")
+    proof = active.get("proof")
+    local_model = active.get("runtimeModelId")
+    local_context = active.get("contextLength")
+    if (
+        env.get("ODS_MODE", "local") == "local"
+        and _switchboard_state.migrate_env_identity(env)
+        and active.get("reconstructed") is not True
+        and active.get("verifiedAt")
+        and isinstance(proof, dict)
+        and proof.get("completion") is True
+        and isinstance(local_model, str)
+        and _valid_pixel_model_name(local_model)
+        and type(local_context) is int
+        and 1 <= local_context <= 10_000_000
+    ):
+        payload["activeRuntime"] = {
+            "source": "local-switchboard",
+            "model": local_model,
+            "contextLength": local_context,
+        }
     capabilities = active.get("capabilities")
     if not isinstance(capabilities, dict):
         return
