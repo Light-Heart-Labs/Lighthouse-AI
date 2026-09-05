@@ -791,12 +791,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash ${SCRIPT_DIR}/install.sh ${resume_args}
+ExecStart=/bin/bash "${SCRIPT_DIR}/install.sh" ${resume_args}
 ExecStartPost=/bin/rm -f /etc/systemd/system/${svc_name}.service
 ExecStartPost=/bin/systemctl daemon-reload
-WorkingDirectory=${SCRIPT_DIR}
+WorkingDirectory="${SCRIPT_DIR}"
 Environment="HOME=${HOME}"
-Environment="USER=${USER}"
+Environment="USER=${USER:-$(id -un)}"
 StandardOutput=journal+console
 StandardError=journal+console
 
