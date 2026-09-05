@@ -89,6 +89,17 @@ MODELS_INI="$INSTALL_DIR/config/llama-server/models.ini"
 STATUS_FILE="$INSTALL_DIR/data/bootstrap-status.json"
 UPGRADE_LOCK_DIR=""
 
+# Resolve a usable Python interpreter for atomic status writes. (#2728)
+# python3 is preferred; fall back to python. If neither is available the
+# write_status function degrades gracefully and skips the fsync write with
+# a warning rather than aborting the download.
+PYTHON_CMD=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+fi
+
 # Cross-platform file size (GNU stat on Linux/WSL2, BSD stat on macOS)
 # IMPORTANT: Try GNU stat -c %s FIRST (Linux). stat -f on Linux returns filesystem
 # block count (not file size). BSD stat -f %z is the macOS fallback.
@@ -106,24 +117,81 @@ get_remote_size() {
         | grep -i '^content-length:' | tail -1 | tr -dc '0-9'
 }
 
-# Write status JSON (atomic via mv)
+# Write status JSON atomically with fsync.
+#
+# The original implementation used a shell heredoc redirect (cat > .tmp) and
+# then `mv`. Shell redirection never calls fsync(), so the kernel may not flush
+# buffered bytes to disk before the process is killed. Additionally, `mv` across
+# filesystem boundaries (e.g. /tmp vs a Docker volume mount) falls back to
+# cp + unlink, breaking atomicity. (#2728)
+#
+# Fix: delegate the write to Python, which flushes + fsyncs the temp file before
+# os.replace(), matching the proven pattern in session-cleanup.sh.
 write_status() {
     local status="$1" percent="${2:-}" downloaded="${3:-0}" total="${4:-0}" speed="${5:-0}" eta="${6:-}"
     local _safe_model="${FULL_GGUF_FILE//\"/\\\"}"
-    cat > "$STATUS_FILE.tmp" << STATUSEOF
-{
-  "status": "$status",
-  "model": "$_safe_model",
-  "percent": ${percent:-null},
-  "bytesDownloaded": $downloaded,
-  "bytesTotal": $total,
-  "speedBytesPerSec": $speed,
-  "eta": "${eta:-}",
-  "updatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%SZ')"
+    local _updated_at
+    _updated_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%SZ')"
+    local _percent_json="${percent:-null}"
+
+    if [[ -z "${PYTHON_CMD:-}" ]]; then
+        log "WARNING: no Python interpreter found; skipping fsync'd status write for $STATUS_FILE"
+        return 0
+    fi
+
+    "$PYTHON_CMD" - \
+        "$STATUS_FILE" \
+        "$status" \
+        "$_safe_model" \
+        "$_percent_json" \
+        "$downloaded" \
+        "$total" \
+        "$speed" \
+        "${eta:-}" \
+        "$_updated_at" \
+        <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+status_file = sys.argv[1]
+payload = {
+    "status":           sys.argv[2],
+    "model":            sys.argv[3],
+    "percent":          None if sys.argv[4] == "null" else float(sys.argv[4]),
+    "bytesDownloaded":  int(sys.argv[5]),
+    "bytesTotal":       int(sys.argv[6]),
+    "speedBytesPerSec": int(sys.argv[7]),
+    "eta":              sys.argv[8],
+    "updatedAt":        sys.argv[9],
 }
-STATUSEOF
-    mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+parent = os.path.dirname(os.path.abspath(status_file))
+os.makedirs(parent, exist_ok=True)
+tmp_path = None
+try:
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".bootstrap-status.",
+        suffix=".tmp",
+        dir=parent,
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, status_file)
+    tmp_path = None
+finally:
+    if tmp_path is not None:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+PY
 }
+
+
 
 status_percent() {
     local downloaded="${1:-0}" total="${2:-0}"
