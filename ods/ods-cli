@@ -854,15 +854,12 @@ get_compose_flags() {
 
     # Fast path: use saved flags from installer if available
     if [[ -f "$INSTALL_DIR/.compose-flags" ]]; then
-        local cached
-        cached=$(< "$INSTALL_DIR/.compose-flags")
-        if [[ "$cached" == -f\ * ]]; then
-            # Validate that every referenced compose file still exists.
-            # Protects against renames across upgrades (e.g. multigpu.yml →
-            # multigpu-nvidia.yml) where the cache would otherwise hand docker
-            # compose a path that no longer resolves.
+        local -a cached_toks
+        [[ -f "$INSTALL_DIR/.compose-flags" ]] && mapfile -t cached_toks < "$INSTALL_DIR/.compose-flags"
+    
+        if [[ "${cached_toks[0]}" == "-f" ]]; then
             local stale=0 prev="" tok
-            for tok in $cached; do
+            for tok in "${cached_toks[@]}"; do
                 if [[ "$prev" == "-f" ]]; then
                     if [[ "$tok" = /* ]]; then
                         [[ -f "$tok" ]] || { stale=1; break; }
