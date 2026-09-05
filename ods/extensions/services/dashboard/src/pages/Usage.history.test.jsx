@@ -117,4 +117,25 @@ describe('Usage sparkline history retention', () => {
     await waitFor(() => expect(screen.getByText('Usage')).toBeInTheDocument())
     await waitFor(() => expect(storedPeriods()).toEqual([MAY]))
   })
+
+  it('renders and keeps working when localStorage.setItem throws (quota exceeded / private browsing)', async () => {
+    // Only the usage-history key must throw -- other app code (e.g.
+    // ThemeContext) also writes to localStorage and isn't part of what's
+    // under test here.
+    const realSetItem = window.localStorage.__proto__.setItem
+    const setItemSpy = vi.spyOn(window.localStorage.__proto__, 'setItem')
+      .mockImplementation(function (key, value) {
+        if (key === STORAGE_KEY) throw new Error('QuotaExceededError')
+        return realSetItem.call(this, key, value)
+      })
+
+    render(<Usage status={{}} />)
+
+    // writeUsageHistory's try/catch must swallow the failure silently -- the
+    // page still renders and no unhandled error reaches the test runner.
+    await waitFor(() => expect(screen.getByText('Usage')).toBeInTheDocument())
+    expect(setItemSpy).toHaveBeenCalledWith(STORAGE_KEY, expect.any(String))
+
+    setItemSpy.mockRestore()
+  })
 })
