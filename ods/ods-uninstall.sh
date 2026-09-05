@@ -52,6 +52,7 @@ run_sudo() {
 
 resolve_compose_flags() {
     local flags=""
+    local _gpu="${GPU_BACKEND:-nvidia}"
 
     if [[ -f "$INSTALL_DIR/.compose-flags" ]]; then
         flags="$(tr '\n' ' ' < "$INSTALL_DIR/.compose-flags" | xargs 2>/dev/null || true)"
@@ -61,16 +62,16 @@ resolve_compose_flags() {
         flags="$("$INSTALL_DIR/scripts/resolve-compose-stack.sh" \
             --script-dir "$INSTALL_DIR" \
             --tier "${TIER:-1}" \
-            --gpu-backend "${GPU_BACKEND:-nvidia}" \
+            --gpu-backend "$_gpu" \
             --gpu-count "${GPU_COUNT:-1}" \
             --ods-mode "${ODS_MODE:-local}" 2>/dev/null || true)"
     fi
 
     if [[ -z "$flags" && -f "$INSTALL_DIR/docker-compose.base.yml" ]]; then
         flags="-f docker-compose.base.yml"
-        case "${GPU_BACKEND:-}" in
+        case "$_gpu" in
             amd|nvidia|intel|apple|arc|cpu)
-                [[ -f "$INSTALL_DIR/docker-compose.${GPU_BACKEND}.yml" ]] && flags="$flags -f docker-compose.${GPU_BACKEND}.yml"
+                [[ -f "$INSTALL_DIR/docker-compose.${_gpu}.yml" ]] && flags="$flags -f docker-compose.${_gpu}.yml"
                 ;;
         esac
     fi
