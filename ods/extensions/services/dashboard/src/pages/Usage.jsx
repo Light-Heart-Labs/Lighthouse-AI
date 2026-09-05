@@ -182,9 +182,12 @@ function computeDelta(current, previous) {
   return ((Number(current || 0) - prev) / prev) * 100
 }
 
-function buildSparkShape(values, width = 126, height = 46) {
+export function buildSparkShape(values, width = 126, height = 46) {
   if (!values.length) return { line: '', area: '' }
-  const numericValues = values.map(value => Number(value || 0))
+  const numericValues = values.map(value => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+  })
   const max = Math.max(...numericValues)
   const min = Math.min(...numericValues)
   const spread = max === min ? (Math.abs(max) || 1) : max - min
