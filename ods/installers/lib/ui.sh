@@ -320,7 +320,7 @@ pull_with_progress() {
     if [[ $attempt -gt 1 ]]; then
       local backoff
       backoff="$(_docker_pull_retry_delay "$((attempt - 1))")"
-      printf "  ${AMB}⟳${NC} [$count/$total] Retry attempt $attempt of $max_attempts for $label (waiting ${backoff}s)\n"
+      printf '  %s⟳%s [%s/%s] Retry attempt %s of %s for %s (waiting %ss)\n' "${AMB}" "${NC}" "$count" "$total" "$attempt" "$max_attempts" "$label" "${backoff}"
       sleep "$backoff"
     fi
 
@@ -367,7 +367,7 @@ pull_with_progress() {
   done
 
   # All attempts failed
-  printf "  ${RED}✗${NC} [$count/$total] Failed after $max_attempts attempts: $label\n"
+  printf '  %s✗%s [%s/%s] Failed after %s attempts: %s\n' "${RED}" "${NC}" "$count" "$total" "$max_attempts" "$label"
   return 1
 }
 
