@@ -306,7 +306,7 @@ function formatCpuPercent(value) {
   return `${n.toFixed(1)}%`
 }
 
-function readOverviewHistory() {
+export function readOverviewHistory() {
   try {
     const raw = globalThis.localStorage?.getItem(OVERVIEW_HISTORY_KEY)
     if (!raw) return overviewMemoryHistory
@@ -323,7 +323,7 @@ function readOverviewHistory() {
   }
 }
 
-function writeOverviewHistory(samples) {
+export function writeOverviewHistory(samples) {
   overviewMemoryHistory = samples
   try {
     globalThis.localStorage?.setItem(OVERVIEW_HISTORY_KEY, JSON.stringify(samples))
@@ -332,7 +332,7 @@ function writeOverviewHistory(samples) {
   }
 }
 
-function readServiceCpuHistory() {
+export function readServiceCpuHistory() {
   try {
     const raw = globalThis.localStorage?.getItem(SERVICE_CPU_HISTORY_KEY)
     if (!raw) return serviceCpuMemoryHistory
@@ -351,7 +351,7 @@ function readServiceCpuHistory() {
   }
 }
 
-function writeServiceCpuHistory(history) {
+export function writeServiceCpuHistory(history) {
   serviceCpuMemoryHistory = history
   try {
     globalThis.localStorage?.setItem(SERVICE_CPU_HISTORY_KEY, JSON.stringify(history))
