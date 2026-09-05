@@ -2,12 +2,12 @@ import { renderHook, act } from '@testing-library/react'
 import { usePwaInstallPrompt } from '../usePwaInstallPrompt'
 
 // Helper: fire a synthetic beforeinstallprompt event that the hook listens for.
-function fireBeforeInstall() {
+function fireBeforeInstall(userChoice = Promise.resolve({ outcome: 'accepted' })) {
   const event = new Event('beforeinstallprompt')
   // The real event has prompt() + userChoice + preventDefault. Stub them.
   event.preventDefault = vi.fn()
   event.prompt = vi.fn().mockResolvedValue()
-  event.userChoice = Promise.resolve({ outcome: 'accepted' })
+  event.userChoice = userChoice
   window.dispatchEvent(event)
   return event
 }
@@ -98,6 +98,30 @@ describe('usePwaInstallPrompt', () => {
       await result.current.promptInstall()
     })
     expect(event.prompt).toHaveBeenCalled()
+  })
+
+  test('ignores repeated install clicks while the browser choice is pending', async () => {
+    globalThis.localStorage.setItem('ods-pwa-visit-count', '5')
+    let resolveChoice
+    const userChoice = new Promise(resolve => { resolveChoice = resolve })
+    const { result } = renderHook(() => usePwaInstallPrompt())
+    let event
+    act(() => { event = fireBeforeInstall(userChoice) })
+
+    let firstPrompt
+    let repeatedPrompt
+    act(() => {
+      firstPrompt = result.current.promptInstall()
+      repeatedPrompt = result.current.promptInstall()
+    })
+
+    expect(event.prompt).toHaveBeenCalledOnce()
+    await expect(repeatedPrompt).resolves.toEqual({ outcome: 'pending' })
+    await act(async () => {
+      resolveChoice({ outcome: 'accepted' })
+      await firstPrompt
+    })
+    expect(globalThis.localStorage.getItem('ods-pwa-installed')).toBe('1')
   })
 
   test('appinstalled event marks the PWA installed and hides the banner', () => {
