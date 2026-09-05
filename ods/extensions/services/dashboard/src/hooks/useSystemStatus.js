@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 
 const POLL_INTERVAL = 5000 // 5 seconds
+const STATUS_REQUEST_TIMEOUT_MS = 12000
 
 // Mock data for development/demo - gated behind VITE_USE_MOCK_DATA env var
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
@@ -54,6 +55,7 @@ export function useSystemStatus() {
   // llama-server under inference load) we skip the next poll rather
   // than stacking concurrent requests that can amplify the problem.
   const fetchInFlight = useRef(false)
+  const activeRequest = useRef(null)
   // Allow the very first fetch to run even on a hidden tab so that
   // users who open the dashboard in a background window (multi-monitor,
   // restored session, browser automation) don't see a permanently stuck
@@ -62,6 +64,7 @@ export function useSystemStatus() {
   const hasInitialData = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
     const fetchStatus = async () => {
       if (USE_MOCK_DATA) {
         setLoading(false)
@@ -75,19 +78,27 @@ export function useSystemStatus() {
       // Skip this tick if the previous fetch hasn't returned yet.
       if (fetchInFlight.current) return
       fetchInFlight.current = true
+      const controller = new AbortController()
+      activeRequest.current = controller
+      const timeout = setTimeout(() => controller.abort(), STATUS_REQUEST_TIMEOUT_MS)
 
       try {
-        const response = await fetch('/api/status')
+        const response = await fetch('/api/status', { signal: controller.signal })
         if (!response.ok) throw new Error('Failed to fetch status')
         const data = await response.json()
+        if (cancelled) return
         setStatus(data)
         setError(null)
         hasInitialData.current = true
       } catch (err) {
-        setError(err.message)
+        if (!cancelled) {
+          setError(err?.name === 'AbortError' ? 'Status request timed out' : err.message)
+        }
       } finally {
+        clearTimeout(timeout)
+        if (activeRequest.current === controller) activeRequest.current = null
         fetchInFlight.current = false
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
@@ -99,6 +110,9 @@ export function useSystemStatus() {
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
+      cancelled = true
+      activeRequest.current?.abort()
+      activeRequest.current = null
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisibility)
     }
