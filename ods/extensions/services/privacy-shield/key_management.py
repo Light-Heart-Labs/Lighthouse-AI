@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import tempfile
 from typing import Optional
 
 
@@ -25,14 +26,21 @@ def load_persisted_key(path: str) -> Optional[str]:
 
 def persist_key(path: str, key: str) -> None:
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(key)
+        dirname = os.path.dirname(path) or "."
+        os.makedirs(dirname, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=dirname, suffix=".tmp")
         try:
-            os.chmod(path, 0o600)
-        except Exception:
-            # Best-effort only (may fail on some mounts/platforms)
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(key)
+            # Restrict permissions before the file becomes live.
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception:
         logging.exception("Failed to persist generated SHIELD_API_KEY")
 
