@@ -8,6 +8,7 @@ import { useFirstRun } from './hooks/useFirstRun'
 import { useSessionBootstrap } from './hooks/useSessionBootstrap'
 import { getInternalRoutes } from './plugins/registry'
 import SplashScreen from './components/SplashScreen'
+import CommandPalette from './components/CommandPalette'
 
 // Phone-first first-boot wizard. Mounted instead of the normal app shell
 // when useFirstRun() reports firstRun=true. Lazy-loaded so the wizard
@@ -153,6 +154,7 @@ function App() {
           install. No-op on already-installed PWAs and on browsers that
           can't install (e.g. Firefox desktop). See usePwaInstallPrompt. */}
       <InstallPromptBanner />
+      <CommandPalette routes={routes} />
     </div>
   )
 }
