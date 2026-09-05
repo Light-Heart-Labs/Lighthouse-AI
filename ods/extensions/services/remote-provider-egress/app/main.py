@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
+import asyncio
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -312,12 +313,18 @@ async def probe() -> Response:
         if route.get("transport") == "ssh":
             tunnel = await _ssh_tunnel_status()
         secret = read_provider_secret(SECRET_PATH)
-        payload = probe_route_response(
-            route,
-            provider_secret=secret,
-            verified_at=_iso_now(),
-            tunnel=tunnel,
-            timeout=PROBE_TIMEOUT_SECONDS,
+        # probe_route_response() makes a blocking urllib call; run it on a
+        # thread executor so the asyncio event loop stays free to serve
+        # concurrent inference requests during the probe.
+        payload = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: probe_route_response(
+                route,
+                provider_secret=secret,
+                verified_at=_iso_now(),
+                tunnel=tunnel,
+                timeout=PROBE_TIMEOUT_SECONDS,
+            ),
         )
     except EgressError as exc:
         return _error_response(exc)
