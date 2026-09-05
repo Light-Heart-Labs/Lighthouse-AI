@@ -129,6 +129,9 @@ test: ## Run unit and contract tests
 	@bash tests/test-backup-integrity.sh
 	@bash tests/test-backup-restore-roundtrip.sh
 	@echo ""
+	@echo "=== restore backup ID boundary ==="
+	@bash tests/test-restore-backup-id-boundary.sh
+	@echo ""
 	@echo "=== bootstrap-upgrade spawn closes inherited FDs ==="
 	@bash tests/test-bootstrap-upgrade-close-inherited-fds.sh
 	@echo ""
