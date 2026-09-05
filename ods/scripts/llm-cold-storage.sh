@@ -166,6 +166,10 @@ do_restore() {
 
 do_restore_all() {
     log "========== Restoring all archived models =========="
+    if [[ ! -d "$COLD_DIR" ]]; then
+        log "Cold storage directory does not exist: $COLD_DIR (nothing to restore)"
+        return 0
+    fi
     for cold_model in "$COLD_DIR"/models--*/; do
         [[ -d "$cold_model" ]] || continue
         local name
