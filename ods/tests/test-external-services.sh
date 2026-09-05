@@ -450,5 +450,11 @@ else
     fail "AMD external reuse .env contract"
 fi
 
+if python3 "$ROOT_DIR/tests/test-external-completion-probe.py"; then
+    pass "completion probe distinguishes reasoning budget exhaustion from invalid responses"
+else
+    fail "external completion response validation"
+fi
+
 printf '\nResult: %d passed, %d failed\n' "$PASSED" "$FAILED"
 [[ "$FAILED" -eq 0 ]]

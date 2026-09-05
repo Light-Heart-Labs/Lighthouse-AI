@@ -268,18 +268,36 @@ request = urllib.request.Request(
 )
 with urllib.request.urlopen(request, timeout=90) as result:
     body = json.load(result)
-content = body.get("choices", [{}])[0].get("message", {}).get("content")
-if content is None:
-    raise SystemExit("completion response did not contain assistant content")
+choices = body.get("choices") if isinstance(body, dict) and not body.get("error") else None
+if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+    raise SystemExit("completion response did not contain a valid choice")
+choice = choices[0]
+message = choice.get("message")
+if not isinstance(message, dict) or message.get("role") != "assistant":
+    raise SystemExit("completion response did not contain an assistant message")
+content = message.get("content")
+reasoning = any(
+    isinstance(message.get(field), str) and message[field].strip()
+    for field in ("reasoning", "reasoning_content")
+)
+if isinstance(content, str) and content.strip():
+    print("assistant token received")
+elif content in (None, "") and reasoning and choice.get("finish_reason") == "length":
+    # This one-token transport probe can end during reasoning. It establishes
+    # inference connectivity, not a completed answer or Pixel task quality.
+    print("reasoning token received; one-token probe exhausted")
+else:
+    raise SystemExit("completion response contained no usable inference token")
 ' "$container_url" "$model" 2>&1
     )" || {
-        ai_bad "ODS containers cannot use external ${provider} at ${container_url}."
-        ai "On Linux, bind the provider to a container-reachable interface (for example 0.0.0.0 on a trusted host) and allow the ODS Docker subnet through the firewall."
+        ai_bad "External ${provider} probe did not return a usable inference token."
+        ai "Check the saved probe error for provider response or connectivity problems before changing network settings."
         printf '%s\n' "$response" >> "$LOG_FILE"
         return 1
     }
 
-    printf "  ${BGRN}OK${NC} External ${provider} route and completion healthy\n"
+    printf "  ${BGRN}OK${NC} External ${provider} inference probe passed (%s)\n" "$response"
+    ai "A completed user-visible answer still requires a real Pixel turn."
 }
 
 # Core service health checks with adaptive timeouts.

@@ -765,20 +765,22 @@ PY
 }
 
 _ods_pixel_model_reconciliation_snapshot() {
-    local owner="$1" home="$2" answers="$3" marker config attestation backup_root
+    local owner="$1" home="$2" answers="$3" marker config attestation backup_root installed_answers
     marker="$home/.config/ods/pixel-managed.json"
     config="$home/.openclaw/openclaw.json"
     attestation="$home/.local/share/pixel/runtime-attestation.json"
     backup_root="$home/.openclaw/backups"
+    installed_answers="$home/.config/pixel-deployment/onboarding.json"
     ods_pixel_run_as_owner "$owner" "$home" python3 - \
-        "$marker" "$config" "$answers" "$attestation" "$backup_root" <<'PY'
+        "$marker" "$config" "$answers" "$attestation" "$backup_root" "$installed_answers" <<'PY'
 import json, os, pathlib, re, shutil, stat, sys, tempfile
 
-marker, config, answers, attestation, backup_root = map(pathlib.Path, sys.argv[1:])
+marker, config, answers, attestation, backup_root, installed_answers = map(pathlib.Path, sys.argv[1:])
 required_sources = (
     (marker, 65536),
     (config, 2 * 1024 * 1024),
     (answers, 2 * 1024 * 1024),
+    (installed_answers, 2 * 1024 * 1024),
 )
 for path, maximum in required_sources:
     info = path.lstat()
@@ -807,6 +809,7 @@ backup_sources = [
     (marker, "pixel-managed.json"),
     (config, "openclaw.json"),
     (answers, "onboarding.json"),
+    (installed_answers, "installed-onboarding.json"),
 ]
 if attestation_present:
     backup_sources.append((attestation, "runtime-attestation.json"))
@@ -1370,6 +1373,16 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
+}
+
+_ods_pixel_install_onboarding_mirror() {
+    local owner="$1" home="$2" answers="$3"
+    local installed_answers="$home/.config/pixel-deployment/onboarding.json"
+    # Pixel configure normally maintains this copy. Stable-alias model changes
+    # deliberately skip configure, so they must publish it in the same model
+    # transaction. Uninstall verifies these exact bytes against the ready marker.
+    _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$answers" "$installed_answers" || return 1
+    ods_pixel_run_as_owner "$owner" "$home" cmp -s -- "$answers" "$installed_answers"
 }
 
 _ods_pixel_openclaw_bin() {
@@ -1957,6 +1970,7 @@ _ods_pixel_restore_model_reconciliation() {
     _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/rollback-onboarding.json" "$answers" || return 1
     _ods_pixel_atomic_replace_managed_file "$owner" "$home" "$backup/pixel-managed.json" "$home/.config/ods/pixel-managed.json" || return 1
     if ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" configure --answers "$answers" --force \
+        || ! _ods_pixel_install_onboarding_mirror "$owner" "$home" "$answers" \
         || ! ods_pixel_run_as_owner "$owner" "$home" "$pixel_root/pixel" plan \
         || ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin" \
         || ! _ods_pixel_restart_gateway_and_verify "$owner" "$home" "$pixel_root" \
@@ -2010,16 +2024,21 @@ ods_pixel_reconcile_promoted_model() {
             # so that change is installed instead of requiring its new hash
             # to already exist in the old ready marker.
             if _ods_pixel_managed_contract_matches "$owner" "$home" "$contract_sha256"; then
-                _ods_pixel_wait_ingress "$owner" "$home" 6 1 || return 1
-                _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" \
-                    "${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin" || return 1
-                if [[ "$final_state" == ready ]]; then
-                    _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
-                else
-                    _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+                # A stale installed mirror needs the transactional path below,
+                # even if the active model and the ODS-side answers match.
+                if ods_pixel_run_as_owner "$owner" "$home" cmp -s -- \
+                    "$answers" "$home/.config/pixel-deployment/onboarding.json"; then
+                    _ods_pixel_wait_ingress "$owner" "$home" 6 1 || return 1
+                    _ods_pixel_verify_plugin_loaded "$owner" "$home" "$openclaw_bin" \
+                        "${INSTALL_DIR:?}/extensions/services/pixel-agent/plugin" || return 1
+                    if [[ "$final_state" == ready ]]; then
+                        _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+                    else
+                        _ods_pixel_mark_verified_installing "$owner" "$home" "$contract_sha256" "$pixel_root" || return 1
+                    fi
+                    printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
+                    return 0
                 fi
-                printf '%s\n' "Pixel stable model alias remains active for $promoted_model"
-                return 0
             fi
         fi
         stable_alias=true
@@ -2067,6 +2086,11 @@ ods_pixel_reconcile_promoted_model() {
             failed=true
             failure_phase="config-install"
         fi
+    fi
+    if [[ "$failed" == false ]] \
+        && ! _ods_pixel_install_onboarding_mirror "$owner" "$home" "$answers"; then
+        failed=true
+        failure_phase="onboarding-mirror-install"
     fi
     if [[ "$failed" == false ]] \
         && ! _ods_pixel_recreate_agent_sandbox "$owner" "$home" "$openclaw_bin"; then

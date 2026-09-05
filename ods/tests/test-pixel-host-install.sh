@@ -1451,7 +1451,12 @@ pathlib.Path(marker).write_text(json.dumps(payload, indent=2, sort_keys=True) + 
 PY
 chmod 0600 "$reconcile_marker"
 check test "$(_ods_pixel_managed_source_ref "$owner" "$reconcile_home")" = "$reconcile_ref"
+mkdir -p "$reconcile_home/.config/pixel-deployment"
+chmod 0700 "$reconcile_home/.config/pixel-deployment"
+cp "$reconcile_answers" "$reconcile_home/.config/pixel-deployment/onboarding.json"
+chmod 0600 "$reconcile_home/.config/pixel-deployment/onboarding.json"
 reconcile_backup="$(_ods_pixel_model_reconciliation_snapshot "$owner" "$reconcile_home" "$reconcile_answers")"
+check cmp -s "$reconcile_backup/installed-onboarding.json" "$reconcile_answers"
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-old" and v["modelName"] == "ODS Local qwen-old"' "$reconcile_backup/rollback-onboarding.json"
 rm -f "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 missing_attestation_backup="$(_ods_pixel_model_reconciliation_snapshot \
@@ -1471,6 +1476,18 @@ chmod 0600 "$reconcile_home/.local/share/pixel/runtime-attestation.json"
 _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" \
     qwen-new 65536 2048 true
 check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["modelId"] == "qwen-new" and v["modelName"] == "ODS Local qwen-new" and v["modelContextWindow"] == 65536 and v["modelMaxTokens"] == 2048 and v["modelReasoning"] is True' "$reconcile_answers"
+check _ods_pixel_install_onboarding_mirror "$owner" "$reconcile_home" "$reconcile_answers"
+check cmp -s "$reconcile_answers" "$reconcile_home/.config/pixel-deployment/onboarding.json"
+check test "$(stat -c '%a' "$reconcile_home/.config/pixel-deployment/onboarding.json")" = 600
+mv "$reconcile_home/.config/pixel-deployment/onboarding.json" "$TEST_ROOT/mirror-before-symlink"
+ln -s "$reconcile_config" "$reconcile_home/.config/pixel-deployment/onboarding.json"
+if _ods_pixel_install_onboarding_mirror "$owner" "$reconcile_home" "$reconcile_answers" >/dev/null 2>&1; then
+    fail "symlink installed onboarding mirror rejected"
+else
+    pass "symlink installed onboarding mirror rejected"
+fi
+rm "$reconcile_home/.config/pixel-deployment/onboarding.json"
+mv "$TEST_ROOT/mirror-before-symlink" "$reconcile_home/.config/pixel-deployment/onboarding.json"
 if _ods_pixel_update_onboarding_model "$owner" "$reconcile_home" "$reconcile_answers" \
     qwen-invalid 2048 1024 false >/dev/null 2>&1; then
     fail "undersized Pixel model context rejected"
@@ -1918,6 +1935,10 @@ assert stable_branch.index("_ods_pixel_wait_ingress") < stable_branch.index("_od
 assert stable_branch.index("_ods_pixel_verify_plugin_loaded") < stable_branch.index("_ods_pixel_mark_ready")
 assert stable_branch.index("Pixel stable model alias remains active") < stable_branch.index("stable_alias=true")
 assert "failure_phase=\"onboarding-update\"" in text
+assert "failure_phase=\"onboarding-mirror-install\"" in text
+mirror_install = text.index("&& ! _ods_pixel_install_onboarding_mirror", reconcile_snapshot)
+assert reconcile_snapshot < mirror_install < reconcile_restart
+assert "installed-onboarding.json" in text
 assert "failure_phase=\"pixel-configure\"" in text
 assert "failure_phase=\"pixel-plan\"" in text
 assert "failure_phase=\"stable-alias-candidate\"" in text
