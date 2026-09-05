@@ -45,6 +45,12 @@ services:
     devices:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
+    # Without group membership, a non-root container process can't actually
+    # read these device nodes (video/render group ownership on the host) —
+    # same requirement as llama-server's group_add in docker-compose.amd.yml.
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
     environment:
       GPU_COUNT: "${GPU_COUNT:-1}"
       GPU_ASSIGNMENT_JSON_B64: "${GPU_ASSIGNMENT_JSON_B64:-}"
