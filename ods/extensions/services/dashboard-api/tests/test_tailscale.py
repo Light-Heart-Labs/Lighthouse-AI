@@ -11,7 +11,7 @@ host-agent layer and is not reproducible here.
 import json
 from unittest.mock import patch
 
-from host_agent_client import AgentHTTPError, AgentTimeout, AgentUnavailable
+from host_agent_client import AgentHTTPError, AgentProtocolError, AgentTimeout, AgentUnavailable
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +130,16 @@ def test_status_passes_through_500_when_agent_errors(test_client):
     with patch("routers.tailscale.request_agent_json", side_effect=err):
         resp = test_client.get("/api/tailscale/status", headers=test_client.auth_headers)
     assert resp.status_code == 500
+
+
+def test_status_returns_500_when_agent_response_violates_contract(test_client):
+    """AgentProtocolError (malformed/non-JSON host-agent response) must
+    surface as a 500 with the underlying error in the detail, not propagate
+    as an unhandled exception."""
+    with patch(
+        "routers.tailscale.request_agent_json",
+        side_effect=AgentProtocolError("response was not valid JSON"),
+    ):
+        resp = test_client.get("/api/tailscale/status", headers=test_client.auth_headers)
+    assert resp.status_code == 500
+    assert "response was not valid JSON" in resp.json()["detail"]
