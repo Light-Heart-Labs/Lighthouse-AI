@@ -28,6 +28,16 @@ router = APIRouter(tags=["remote-provider"])
 
 ROUTE_STATE_SCHEMA = "ods.remote-routing-state.v1"
 EGRESS_URL = os.environ.get("REMOTE_PROVIDER_EGRESS_URL", "http://remote-provider-egress:8091")
+# The egress service authenticates its callers. Resolution order matches
+# the service's own (ODS_EGRESS_INTERNAL_KEY, then DASHBOARD_API_KEY), so
+# both sides agree without a new generated secret.
+EGRESS_INTERNAL_KEY = os.environ.get("ODS_EGRESS_INTERNAL_KEY", "") or os.environ.get(
+    "DASHBOARD_API_KEY", ""
+)
+
+
+def _egress_auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {EGRESS_INTERNAL_KEY}"} if EGRESS_INTERNAL_KEY else {}
 EGRESS_TIMEOUT_SECONDS = 3.0
 PEER_PROXY_TIMEOUT_SECONDS = 30.0
 PEER_PROXY_LOAD_TIMEOUT_SECONDS = 2700.0
@@ -749,7 +759,7 @@ async def _post_egress_probe() -> dict[str, Any]:
     url = f"{EGRESS_URL.rstrip('/')}/probe"
     try:
         async with httpx.AsyncClient(timeout=EGRESS_TIMEOUT_SECONDS) as client:
-            response = await client.post(url)
+            response = await client.post(url, headers=_egress_auth_headers())
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
         logger.debug("remote-provider-egress probe unavailable: %s", exc)
         raise HTTPException(

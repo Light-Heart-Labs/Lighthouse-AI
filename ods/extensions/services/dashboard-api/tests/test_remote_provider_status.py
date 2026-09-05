@@ -1052,10 +1052,12 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
         async def __aexit__(self, *_args):
             return False
 
-        async def post(self, url):
+        async def post(self, url, headers=None):
             calls.append(("post", url))
+            posted_headers.append(headers or {})
             return FakeResponse()
 
+    posted_headers: list = []
     monkeypatch.setattr(rps, "EGRESS_URL", "http://egress.internal:8091/")
     monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
     async def fake_agent_request(method, path, *, payload, timeout):
@@ -1125,6 +1127,11 @@ def test_remote_provider_probe_posts_to_egress_and_sanitizes_receipt(
         ("timeout", 3.0),
         ("post", "http://egress.internal:8091/probe"),
     ]
+    # The egress service authenticates its callers, so the probe must present
+    # the internal key rather than relying on network reachability.
+    assert posted_headers and posted_headers[0].get("Authorization", "").startswith(
+        "Bearer "
+    ), f"probe must send the egress bearer, got {posted_headers}"
     assert agent_calls == [
         (
             "POST",
@@ -1196,7 +1203,7 @@ def test_remote_provider_probe_reports_nonfatal_proof_record_failure(
         async def __aexit__(self, *_args):
             return False
 
-        async def post(self, _url):
+        async def post(self, _url, headers=None):
             return FakeResponse()
 
     async def fake_agent_request(*_args, **_kwargs):
@@ -1255,7 +1262,7 @@ def test_remote_provider_probe_preserves_sanitized_egress_errors(
         async def __aexit__(self, *_args):
             return False
 
-        async def post(self, _url):
+        async def post(self, _url, headers=None):
             return FakeResponse()
 
     monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
