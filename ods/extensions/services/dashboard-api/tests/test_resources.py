@@ -314,6 +314,21 @@ class TestServiceResources:
 
         assert resp.status_code == 404
 
+    def test_restart_service_rejects_malformed_service_id(self, test_client, monkeypatch):
+        """Restart endpoint's _SERVICE_ID_RE guard rejects ids that don't match
+        the expected shape (e.g. uppercase), before ever consulting SERVICES."""
+        monkeypatch.setattr("routers.resources.SERVICES", {"BadID": {"name": "x", "container_name": "x"}})
+
+        with patch("routers.resources._post_agent_json") as post_agent:
+            resp = test_client.post(
+                "/api/services/BadID/restart",
+                headers=test_client.auth_headers,
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Invalid service_id"
+        post_agent.assert_not_called()
+
     def test_restart_service_rejects_non_docker_service(self, test_client, monkeypatch):
         """Restart endpoint rejects known services that do not map to Docker."""
         monkeypatch.setattr("routers.resources.SERVICES", {
