@@ -79,7 +79,7 @@ sr_load() {
             declare -f warn &>/dev/null && warn "Install manually: pip3 install pyyaml"
             _SR_LOADED=true  # Prevent repeated retries
             _SR_FAILED=true
-            return 0
+            return 1
         fi
     fi
 
