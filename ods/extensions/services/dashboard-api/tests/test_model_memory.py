@@ -132,6 +132,11 @@ class TestArchitectureAwareKvCache:
         model = {"params_b": 4, "block_count": 36}
         assert estimated_context_kv_gb(model, 32768) == 0.48
 
+    def test_missing_size_mb_estimates_from_params(self):
+        model = {"params_b": 8.0}
+        gb = required_model_memory_gb(model)
+        assert gb > 4.0
+
 
 @pytest.mark.skipif(
     not CATALOG_PATH.exists() or not SELECT_MODEL_PATH.exists(),
