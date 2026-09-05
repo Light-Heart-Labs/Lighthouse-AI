@@ -96,6 +96,10 @@ jobs:
         shell: pwsh
         run: ./tests/contracts/test-windows-runtime-recovery.ps1
 
+      - name: Windows CLI Update Pull Contract
+        shell: pwsh
+        run: ./tests/contracts/test-windows-cli-update-pull.ps1
+
       - name: Windows Installed Footprint Contract
         if: runner.os == 'Windows'
         shell: pwsh
