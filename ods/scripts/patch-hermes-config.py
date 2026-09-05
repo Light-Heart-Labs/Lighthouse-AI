@@ -10,7 +10,10 @@ the rest of the user's config.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 
@@ -87,12 +90,12 @@ def _ensure_model(
     if block is None:
         insert = ["model:"]
         if model:
-            insert.append(f'  default: "{model}"')
+            insert.append(f'  default: {json.dumps(model)}')
         if base_url:
             insert.append('  provider: "custom"')
-            insert.append(f'  base_url: "{base_url}"')
+            insert.append(f'  base_url: {json.dumps(base_url)}')
         if api_key:
-            insert.append(f'  api_key: "{api_key}"')
+            insert.append(f'  api_key: {json.dumps(api_key)}')
         if context_length:
             insert.append(f"  context_length: {context_length}")
         if max_tokens:
@@ -101,11 +104,11 @@ def _ensure_model(
         return
 
     if model:
-        block = _set_key(lines, block, "default", f'"{model}"', 2)
+        block = _set_key(lines, block, "default", json.dumps(model), 2)
     if base_url:
-        block = _set_key(lines, block, "base_url", f'"{base_url}"', 2)
+        block = _set_key(lines, block, "base_url", json.dumps(base_url), 2)
     if api_key:
-        block = _set_key(lines, block, "api_key", f'"{api_key}"', 2)
+        block = _set_key(lines, block, "api_key", json.dumps(api_key), 2)
     if context_length:
         block = _set_key(lines, block, "context_length", str(context_length), 2)
     # Existing operator values win, but migrate configs that predate ODS's
@@ -290,7 +293,18 @@ def patch_config(
         updated += "\n"
     if updated == original:
         return False
-    path.write_text(updated, encoding="utf-8")
+    # Atomic write: never leave config.yaml half-written on interruption.
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(updated)
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return True
 
 
