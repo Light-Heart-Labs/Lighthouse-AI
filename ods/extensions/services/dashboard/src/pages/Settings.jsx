@@ -925,7 +925,7 @@ function Banner({ tone = 'info', children, onClose }) {
   return (
     <div className={`mb-6 flex w-full items-center justify-between rounded-lg border p-4 text-sm ${cls}`}>
       <span>{children}</span>
-      {onClose ? <button onClick={onClose} className="ml-4 opacity-60 hover:opacity-100">x</button> : null}
+      {onClose ? <button onClick={onClose} aria-label="Dismiss" className="ml-4 opacity-60 hover:opacity-100">x</button> : null}
     </div>
   )
 }
