@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import socket
 import subprocess
@@ -63,6 +64,7 @@ _SERVICE_CAPABILITIES: dict[str, tuple[str, str]] = {
 # Where the dynamic block gets inserted in SOUL.md.template. The template
 # has the literal marker line; this script replaces it.
 _INSERT_MARKER = "<!-- INSTALLATION_CONTEXT -->"
+logger = logging.getLogger("build-installation-context")
 
 
 def _read_env(env_path: Path) -> dict[str, str]:
@@ -172,19 +174,29 @@ def _loaded_model(llm_port: int = 8080) -> str | None:
     """Best-effort: ask llama-server / Lemonade what's currently loaded.
     Returns the model id, or None on any failure (network, no service)."""
     # Try Lemonade health first — has structured per-model state
+    failures: list[tuple[str, Exception]] = []
+    successful_probe = False
     for path in ("/api/v1/health", "/v1/models"):
         try:
             import urllib.request
             with urllib.request.urlopen(f"http://127.0.0.1:{llm_port}{path}", timeout=3) as resp:
                 data = json.load(resp)
-        except Exception:
+        except Exception as exc:
+            failures.append((path, exc))
+            logger.debug("Loaded-model probe failed for %s", path, exc_info=True)
             continue
+        successful_probe = True
         loaded = data.get("all_models_loaded") if isinstance(data, dict) else None
         if isinstance(loaded, list) and loaded:
             return loaded[0].get("model_name")
         models = data.get("data") if isinstance(data, dict) else None
         if isinstance(models, list) and models:
             return models[0].get("id")
+    if failures and not successful_probe:
+        detail = "; ".join(
+            f"{path}: {type(exc).__name__}: {exc}" for path, exc in failures
+        )
+        logger.warning("Could not probe the loaded model on port %s (%s)", llm_port, detail)
     return None
 
 
