@@ -14,6 +14,14 @@
 #   Add new developer tools or change installation methods here.
 # ============================================================================
 
+# Escape a value so it can be interpolated as a sed replacement (| delimiter).
+# In sed's replacement text, backslash, pipe, and ampersand are special:
+# backslash must be doubled, and | / & must be escaped so they are not treated
+# as a delimiter or a "whole match" insertion.
+_devtools_esc_sed() {
+    printf '%s' "$1" | sed 's#\\#\\\\#g; s#|#\\|#g; s#&#\\&#g'
+}
+
 ods_progress 42 "devtools" "Installing developer tools"
 if $DRY_RUN; then
     log "[DRY RUN] Would install AI developer tools (Claude Code, Codex CLI, OpenCode)"
@@ -404,17 +412,23 @@ if [[ -f "$INSTALL_DIR/bin/ods-host-agent.py" ]]; then
                     ai_warn "Failed to create secure temp file for ods-host-agent.service; skipping systemd unit install"
                 else
                     cp "$INSTALL_DIR/scripts/systemd/ods-host-agent.service" "$svc_tmp"
-                    # Substitute placeholders — use sed directly with | delimiter
-                    # (paths contain / but never |, so | is a safe delimiter).
+                    # Substitute placeholders — use sed with | delimiter.
+                    # Values are escaped first because | (our delimiter), & (whole
+                    # match), and \ are special in sed's replacement text; an
+                    # INSTALL_DIR/HOME containing any of these would corrupt the unit.
                     # Dual-form for BSD/GNU sed compatibility.
-                    sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$svc_tmp" 2>/dev/null || \
-                        sed -i '' "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$svc_tmp"
-                    sed -i "s|__HOME__|${HOME}|g" "$svc_tmp" 2>/dev/null || \
-                        sed -i '' "s|__HOME__|${HOME}|g" "$svc_tmp"
-                    sed -i "s|__PYTHON3__|${AGENT_PYTHON}|g" "$svc_tmp" 2>/dev/null || \
-                        sed -i '' "s|__PYTHON3__|${AGENT_PYTHON}|g" "$svc_tmp"
-                    sed -i "s|__INSTALL_USER__|${_agent_user}|g" "$svc_tmp" 2>/dev/null || \
-                        sed -i '' "s|__INSTALL_USER__|${_agent_user}|g" "$svc_tmp"
+                    _inst_esc="$(_devtools_esc_sed "$INSTALL_DIR")"
+                    _home_esc="$(_devtools_esc_sed "$HOME")"
+                    _py_esc="$(_devtools_esc_sed "$AGENT_PYTHON")"
+                    _user_esc="$(_devtools_esc_sed "$_agent_user")"
+                    sed -i "s|__INSTALL_DIR__|${_inst_esc}|g" "$svc_tmp" 2>/dev/null || \
+                        sed -i '' "s|__INSTALL_DIR__|${_inst_esc}|g" "$svc_tmp"
+                    sed -i "s|__HOME__|${_home_esc}|g" "$svc_tmp" 2>/dev/null || \
+                        sed -i '' "s|__HOME__|${_home_esc}|g" "$svc_tmp"
+                    sed -i "s|__PYTHON3__|${_py_esc}|g" "$svc_tmp" 2>/dev/null || \
+                        sed -i '' "s|__PYTHON3__|${_py_esc}|g" "$svc_tmp"
+                    sed -i "s|__INSTALL_USER__|${_user_esc}|g" "$svc_tmp" 2>/dev/null || \
+                        sed -i '' "s|__INSTALL_USER__|${_user_esc}|g" "$svc_tmp"
                     # Verify placeholders were actually rendered
                     if grep -q '__INSTALL_DIR__\|__HOME__\|__PYTHON3__\|__INSTALL_USER__' "$svc_tmp"; then
                         ai_warn "Host agent systemd unit has unrendered placeholders — check $svc_tmp"
@@ -536,14 +550,18 @@ if [[ -f "$INSTALL_DIR/bin/ods-mdns.py" ]] && [[ "$(uname -s)" == "Linux" ]]; th
             ai_warn "Failed to create secure temp file for ods-mdns.service; skipping systemd unit install"
         else
             cp "$INSTALL_DIR/scripts/systemd/ods-mdns.service" "$svc_tmp"
-            sed -i "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$svc_tmp" 2>/dev/null || \
-                sed -i '' "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$svc_tmp"
-            sed -i "s|__HOME__|${HOME}|g" "$svc_tmp" 2>/dev/null || \
-                sed -i '' "s|__HOME__|${HOME}|g" "$svc_tmp"
-            sed -i "s|__PYTHON3__|${MDNS_PYTHON}|g" "$svc_tmp" 2>/dev/null || \
-                sed -i '' "s|__PYTHON3__|${MDNS_PYTHON}|g" "$svc_tmp"
-            sed -i "s|__INSTALL_USER__|${_agent_user}|g" "$svc_tmp" 2>/dev/null || \
-                sed -i '' "s|__INSTALL_USER__|${_agent_user}|g" "$svc_tmp"
+            _inst_esc="$(_devtools_esc_sed "$INSTALL_DIR")"
+            _home_esc="$(_devtools_esc_sed "$HOME")"
+            _py_esc="$(_devtools_esc_sed "$MDNS_PYTHON")"
+            _user_esc="$(_devtools_esc_sed "$_agent_user")"
+            sed -i "s|__INSTALL_DIR__|${_inst_esc}|g" "$svc_tmp" 2>/dev/null || \
+                sed -i '' "s|__INSTALL_DIR__|${_inst_esc}|g" "$svc_tmp"
+            sed -i "s|__HOME__|${_home_esc}|g" "$svc_tmp" 2>/dev/null || \
+                sed -i '' "s|__HOME__|${_home_esc}|g" "$svc_tmp"
+            sed -i "s|__PYTHON3__|${_py_esc}|g" "$svc_tmp" 2>/dev/null || \
+                sed -i '' "s|__PYTHON3__|${_py_esc}|g" "$svc_tmp"
+            sed -i "s|__INSTALL_USER__|${_user_esc}|g" "$svc_tmp" 2>/dev/null || \
+                sed -i '' "s|__INSTALL_USER__|${_user_esc}|g" "$svc_tmp"
             if grep -q '__INSTALL_DIR__\|__HOME__\|__PYTHON3__\|__INSTALL_USER__' "$svc_tmp"; then
                 ai_warn "ods-mdns systemd unit has unrendered placeholders — check $svc_tmp"
             else
