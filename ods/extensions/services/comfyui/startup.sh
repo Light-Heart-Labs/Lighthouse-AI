@@ -9,11 +9,11 @@
 
 set -euo pipefail
 
-COMFYUI_DIR="/opt/comfyui"
-MODELS_MOUNT="/models"
-OUTPUT_MOUNT="/output"
-INPUT_MOUNT="/input"
-WORKFLOWS_MOUNT="/workflows"
+COMFYUI_DIR="${ODS_COMFYUI_DIR:-/opt/comfyui}"
+MODELS_MOUNT="${ODS_COMFYUI_MODELS_MOUNT:-/models}"
+OUTPUT_MOUNT="${ODS_COMFYUI_OUTPUT_MOUNT:-/output}"
+INPUT_MOUNT="${ODS_COMFYUI_INPUT_MOUNT:-/input}"
+WORKFLOWS_MOUNT="${ODS_COMFYUI_WORKFLOWS_MOUNT:-/workflows}"
 
 #-----------------------------------------------------------------------------
 # Create model subdirectories in bind mount (idempotent)
@@ -56,10 +56,13 @@ done
 #-----------------------------------------------------------------------------
 # Copy workflow templates (read-only mount → writable user dir)
 #-----------------------------------------------------------------------------
-if [ -d "$WORKFLOWS_MOUNT" ] && [ "$(ls -A "$WORKFLOWS_MOUNT" 2>/dev/null)" ]; then
+shopt -s nullglob
+workflow_templates=("$WORKFLOWS_MOUNT"/*.json)
+shopt -u nullglob
+if ((${#workflow_templates[@]} > 0)); then
     WORKFLOW_DIR="${COMFYUI_DIR}/user/default/workflows"
     mkdir -p "$WORKFLOW_DIR"
-    cp -u "$WORKFLOWS_MOUNT"/*.json "$WORKFLOW_DIR/" 2>/dev/null || true
+    cp -u -- "${workflow_templates[@]}" "$WORKFLOW_DIR/"
     echo "[startup] Copied workflow templates to ${WORKFLOW_DIR}"
 fi
 
