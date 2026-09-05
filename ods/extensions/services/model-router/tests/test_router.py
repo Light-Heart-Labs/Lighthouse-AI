@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import builtins
 import hashlib
 import hmac
 import importlib
@@ -567,13 +568,26 @@ class TestModelsAndEvidence:
             [b'data: {"model":"Concrete.gguf"}\n\n'],
             model_error=httpx.ReadError("truncated stream"),
         )
-        with pytest.raises(httpx.ReadError, match="truncated stream"):
+        exception_group_type = getattr(
+            builtins, "BaseExceptionGroup", httpx.ReadError
+        )
+        with pytest.raises((httpx.ReadError, exception_group_type)) as exc_info:
             client.post("/v1/chat/completions", json={
                 "model": "ods/current", "stream": True,
                 "messages": [
                     {"role": "user", "content": _signed_marker(probe_id)}
                 ],
             })
+        stream_error = exc_info.value
+        if (
+            exception_group_type is not httpx.ReadError
+            and isinstance(stream_error, exception_group_type)
+        ):
+            read_errors = stream_error.subgroup(httpx.ReadError)
+            assert read_errors is not None
+            assert "truncated stream" in repr(read_errors)
+        else:
+            assert "truncated stream" in str(stream_error)
         ev = client.get(
             f"/internal/route-evidence/{probe_id}",
             headers={"Authorization": "Bearer internal-secret"},
