@@ -71,6 +71,85 @@ class AssignmentResult:
     services: dict
 
 
+#  Input Validation
+
+def _require_finite_number(value, field: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be finite")
+    if positive and number <= 0:
+        raise ValueError(f"{field} must be greater than zero")
+    return number
+
+
+def validate_topology(topology: object) -> None:
+    """Reject malformed topology input before assignment code indexes it."""
+    if not isinstance(topology, dict):
+        raise ValueError("topology root must be a JSON object")
+
+    gpu_count = topology.get("gpu_count")
+    if not isinstance(gpu_count, int) or isinstance(gpu_count, bool):
+        raise ValueError("gpu_count must be an integer")
+    gpus = topology.get("gpus")
+    if not isinstance(gpus, list):
+        raise ValueError("gpus must be an array")
+    if gpu_count != len(gpus):
+        raise ValueError(
+            f"gpu_count ({gpu_count}) does not match gpus length ({len(gpus)})"
+        )
+    if not gpus:
+        raise ValueError("no GPUs found in topology")
+
+    indices = set()
+    for position, gpu in enumerate(gpus):
+        field = f"gpus[{position}]"
+        if not isinstance(gpu, dict):
+            raise ValueError(f"{field} must be an object")
+        index = gpu.get("index")
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            raise ValueError(f"{field}.index must be a non-negative integer")
+        if index in indices:
+            raise ValueError(f"{field}.index duplicates GPU index {index}")
+        indices.add(index)
+        for key in ("uuid", "name"):
+            value = gpu.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field}.{key} must be a non-empty string")
+        _require_finite_number(gpu.get("memory_gb"), f"{field}.memory_gb", positive=True)
+        if gpu.get("memory_free_gb") is not None:
+            free_memory = _require_finite_number(
+                gpu["memory_free_gb"], f"{field}.memory_free_gb"
+            )
+            if free_memory < 0:
+                raise ValueError(f"{field}.memory_free_gb must not be negative")
+
+    links = topology.get("links", [])
+    if not isinstance(links, list):
+        raise ValueError("links must be an array")
+    for position, link in enumerate(links):
+        field = f"links[{position}]"
+        if not isinstance(link, dict):
+            raise ValueError(f"{field} must be an object")
+        for endpoint in ("gpu_a", "gpu_b"):
+            value = link.get(endpoint)
+            if not isinstance(value, int) or isinstance(value, bool) or value not in indices:
+                raise ValueError(f"{field}.{endpoint} must reference a known GPU index")
+        if link["gpu_a"] == link["gpu_b"]:
+            raise ValueError(f"{field} must connect two different GPUs")
+        for key in ("link_type", "link_label"):
+            value = link.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field}.{key} must be a non-empty string")
+        rank = link.get("rank")
+        if not isinstance(rank, int) or isinstance(rank, bool) or rank < 0:
+            raise ValueError(f"{field}.rank must be a non-negative integer")
+
+
 #  Phase 1: Topology Analysis
 
 def parse_gpus(topology: dict) -> list:
@@ -450,7 +529,7 @@ def main():
 
     # Load topology
     try:
-        with open(args.topology) as f:
+        with open(args.topology, encoding="utf-8") as f:
             topology = json.load(f)
     except FileNotFoundError:
         print(f"ERROR: topology file not found: {args.topology}", file=sys.stderr)
@@ -458,14 +537,23 @@ def main():
     except json.JSONDecodeError as e:
         print(f"ERROR: invalid JSON in topology file: {e}", file=sys.stderr)
         sys.exit(1)
+    except (OSError, UnicodeError) as e:
+        print(f"ERROR: could not read topology file: {e}", file=sys.stderr)
+        sys.exit(1)
 
     enabled_services = [s.strip() for s in args.enabled_services.split(",")]
     model_size_mb    = args.model_size
-    gpu_count        = topology.get("gpu_count", 0)
-
-    if gpu_count == 0:
-        print("ERROR: no GPUs found in topology", file=sys.stderr)
+    try:
+        _require_finite_number(model_size_mb, "model size", positive=True)
+    except ValueError as e:
+        print(f"ERROR: invalid model size: {e}", file=sys.stderr)
         sys.exit(1)
+    try:
+        validate_topology(topology)
+    except ValueError as e:
+        print(f"ERROR: invalid topology input: {e}", file=sys.stderr)
+        sys.exit(1)
+    gpu_count = topology["gpu_count"]
 
     #  Early exit: single GPU
     if gpu_count == 1:
