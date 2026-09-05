@@ -268,7 +268,7 @@ function appendUsageHistory(report) {
   return next
 }
 
-function seriesFromHistory(history, key, fallback = []) {
+export function seriesFromHistory(history, key, fallback = []) {
   const values = (history || []).map(sample => Number(sample?.[key] || 0))
   const hasSignal = values.some((value, index) => index > 0 && value !== values[index - 1])
   if (hasSignal) return values
