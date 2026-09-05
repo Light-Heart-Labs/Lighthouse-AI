@@ -888,7 +888,7 @@ cmd_logs() {
         echo ""
         ai "For native llama-server logs:"
         ai "  tail -f ${LLAMA_SERVER_LOG}"
-        return
+        return 1
     fi
 
     # Special case: llama-server logs from native process
@@ -898,6 +898,7 @@ cmd_logs() {
             tail -n "$lines" "$LLAMA_SERVER_LOG"
         else
             ai_warn "No llama-server log file found at ${LLAMA_SERVER_LOG}"
+            return 1
         fi
         return
     fi
@@ -1085,5 +1086,6 @@ case "$COMMAND" in
     *)
         ai_warn "Unknown command: ${COMMAND}"
         show_help
+        exit 1
         ;;
 esac
