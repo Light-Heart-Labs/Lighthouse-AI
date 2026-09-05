@@ -3071,6 +3071,31 @@ test("keeps an explicit multi-facet host inspection bounded to the requested evi
   );
 });
 
+test("ordinary device hardware questions request bounded host observations", () => {
+  for (const device of ["laptop", "PC", "notebook", "desktop", "computer", "machine", "host"]) {
+    assert.deepEqual(userMessageOperationsRequirements([], `Tell me this ${device}'s CPU, GPU, available memory and free disk. Distinguish Windows, WSL and containers. Use evidence and don't change anything.`), {
+      required: true,
+      actions: ["host.cpu", "host.gpu", "host.memory", "host.storage"],
+    }, device);
+  }
+  assert.deepEqual(userMessageOperationsRequirements([], "How much RAM does my laptop have?"), {
+    required: true, actions: ["host.memory"],
+  });
+  assert.deepEqual(userMessageOperationsRequirements([], "What's this PC's GPU?"), {
+    required: true, actions: ["host.gpu"],
+  });
+  assert.deepEqual(userMessageOperationsRequirements([], "Tell me the laptop CPU and memory; do not inspect the GPU or network addresses."), {
+    required: true, actions: ["host.cpu", "host.memory"],
+  });
+  for (const prompt of [
+    "Explain CPU scheduling in this system.",
+    "Create a laptop comparison UI showing CPU and memory. The host can verify it later.",
+    "Inspect every file in the report; show me the host-verified preview with the CPU chart.",
+    "What would a fictional laptop with more memory look like?",
+    "Tell me this laptop's CPU but do not inspect or report CPU information.",
+  ]) assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
+});
+
 test("an explicitly comprehensive host inspection still requests the full inventory", () => {
   const result = userMessageOperationsRequirements(
     [],

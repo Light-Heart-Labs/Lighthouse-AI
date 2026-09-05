@@ -3624,7 +3624,7 @@ function explicitlyExcludesHostObservation(text, facetPattern) {
   const exclusion = new RegExp(
     `\\b(?:` +
       `(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
-        `(?:repeat|restate|include|report|show|list|add|substitute|reveal|disclose|expose)|` +
+        `(?:repeat|restate|include|report|show|list|add|substitute|reveal|disclose|expose|inspect|check|observe|measure|probe)|` +
       `(?:avoid|skip|omit|exclude)|` +
       `without(?:\\s+(?:repeating|restating|including|reporting|showing|listing|adding))?` +
     `)\\b[^.!?;\\n]{0,120}\\b(?:${facetPattern})\\b`,
@@ -4019,7 +4019,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i.test(
       text
     ) && /\b(?:ODS|host|machine)\b/i.test(text);
-  const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system)\b/i;
+  const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i;
   const hostContext = hostContextPattern.test(text);
   const hostFacetCount = [
     /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro|uptime|load averages?|system load)\b/i,
@@ -4044,6 +4044,14 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
       (clause) =>
         hostContextPattern.test(clause) && hostExplorationPattern.test(clause)
     );
+  // A device question does not need the word "Operations" or "inspect".
+  // Keep its request and device in the same clause; artifact-building and
+  // explanatory sentences must not become compulsory host work.
+  const directHostObservation = text
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .some((clause) => hostContextPattern.test(clause) &&
+      /\b(?:tell\s+me|show\s+me|check|report|measure|what(?:['’]s|\s+is)?|which|how\s+(?:much|many))\b/i.test(clause) &&
+      !/\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i.test(clause));
   const naturalHostOverview = hostContext && (
     /\b(?:what|anything)\b.{0,32}\b(?:can|could|do)\s+you\b.{0,32}\b(?:tell|show)\b.{0,24}\b(?:about|regarding)\b/i.test(text) ||
     /\b(?:tell|show)\s+me\b.{0,24}\b(?:about|around)\b/i.test(text) ||
@@ -4170,7 +4178,8 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   return {
     required:
       capabilityInventory || explicitOperations || hostEvidence || broadHostExploration ||
-      (hostContext && hostExplorationIntent && actions.some((action) => action.startsWith("host."))) ||
+      (hostContext && (hostExplorationIntent || directHostObservation) &&
+        requestedActions.some((action) => action.startsWith("host."))) ||
       extensionInventory || extensionCatalog || Boolean(extensionLifecycle) || hostCommand || Boolean(networkPeer),
     actions: requestedActions,
     ...(networkPeer ? { networkPeer } : {}),
