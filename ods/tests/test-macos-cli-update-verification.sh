@@ -57,10 +57,38 @@ if [[ "${1:-}" == "info" ]]; then
     exit 0
 fi
 
+if [[ "${1:-}" == "inspect" ]]; then
+    if [[ "${TEST_UPDATE_MISSING_SERVICE:-0}" == "1" && "${*: -1}" == "dashboard-api-id" ]]; then
+        printf 'exited 1\n'
+    elif [[ "${*: -1}" == "migration-job-id" ]]; then
+        printf 'exited 0\n'
+    else
+        printf 'running 0\n'
+    fi
+    exit 0
+fi
+
 if [[ "${1:-}" == "compose" ]]; then
     shift
     args=("$@")
     joined=" ${args[*]} "
+    if [[ "$joined" == *" config --services "* ]]; then
+        printf '%s\n' dashboard dashboard-api migration-job
+        exit 0
+    fi
+    if [[ "$joined" == *" ps --services --status running "* ]]; then
+        printf '%s\n' dashboard
+        [[ "${TEST_UPDATE_MISSING_SERVICE:-0}" != "1" ]] && printf '%s\n' dashboard-api
+        exit 0
+    fi
+    if [[ "$joined" == *" ps --all -q dashboard-api "* ]]; then
+        printf 'dashboard-api-id\n'
+        exit 0
+    fi
+    if [[ "$joined" == *" ps --all -q migration-job "* ]]; then
+        printf 'migration-job-id\n'
+        exit 0
+    fi
     if [[ "$joined" == *" pull "* ]]; then
         count_file="${TEST_DOCKER_PULL_COUNT:-}"
         count=0
@@ -165,4 +193,27 @@ token_after="$(awk -F= '/^HERMES_DASHBOARD_SESSION_TOKEN=/{print $2}' "$install_
     exit 1
 }
 
-printf '[PASS] macOS update retries transient compose pull failures\n'
+if PATH="$bin_dir:$PATH" \
+    ODS_HOME="$install_dir" \
+    NO_COLOR=1 \
+    TEST_DOCKER_LOG="$docker_log" \
+    TEST_DOCKER_PULL_COUNT="$pull_count_file" \
+    TEST_UPDATE_MISSING_SERVICE=1 \
+        "$BASH" "$macos_cli" update > "$tmp_dir/failed-update.out" 2>&1; then
+    cat "$tmp_dir/failed-update.out" >&2
+    printf '[FAIL] macOS update reported success while dashboard-api exited nonzero\n' >&2
+    exit 1
+fi
+
+grep -q 'Update verification failed: 1/3 services are not running' "$tmp_dir/failed-update.out" || {
+    cat "$tmp_dir/failed-update.out" >&2
+    printf '[FAIL] macOS update did not identify the failed active service count\n' >&2
+    exit 1
+}
+if grep -q 'Update complete' "$tmp_dir/failed-update.out"; then
+    cat "$tmp_dir/failed-update.out" >&2
+    printf '[FAIL] macOS update emitted a success receipt before verification\n' >&2
+    exit 1
+fi
+
+printf '[PASS] macOS update retries pulls and verifies the active Compose stack\n'

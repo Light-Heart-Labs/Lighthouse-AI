@@ -84,6 +84,8 @@ fi
 if [[ "${1:-}" == "compose" ]]; then
     shift
     joined=" $* "
+    [[ "$joined" == *" config --services "* ]] && { printf 'dashboard\n'; exit 0; }
+    [[ "$joined" == *" ps --services --status running "* ]] && { printf 'dashboard\n'; exit 0; }
     [[ "$joined" == *" up "* ]] && exit 0
     [[ "$joined" == *" ps "* ]] && { printf 'ods-dashboard Up 10 seconds 127.0.0.1:3001->3001/tcp\n'; exit 0; }
 fi
