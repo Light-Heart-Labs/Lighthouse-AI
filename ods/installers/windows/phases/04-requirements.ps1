@@ -252,15 +252,22 @@ $_diskCheck = Test-DiskSpace -Path $installDir -RequiredGB $_minDiskGB
 if (-not $_diskCheck.Sufficient) {
     Write-AIWarn "Disk: $($_diskCheck.FreeGB) GB free, ${_minDiskGB} GB required for Tier $selectedTier."
     Write-AI "  Install target checked: $installDir"
-    $_installDirHint = "<path-with-enough-space>\ods"
-    if ($sourceRoot -match "^([A-Za-z]):") {
-        $_installDirHint = "$($Matches[1].ToUpperInvariant()):\ods"
-    }
-    Write-AI "  To use a different drive, rerun from the source checkout with:"
-    Write-AI "  .\install.ps1 -InstallDir $_installDirHint"
+    Write-AI "  Free space on $($_diskCheck.Drive), or rerun with -InstallDir on a drive that has at least ${_minDiskGB} GB free."
     $requirementsMet = $false
 } else {
     Write-AISuccess "Disk: $($_diskCheck.FreeGB) GB free OK (>= ${_minDiskGB} GB for Tier $selectedTier)"
+}
+
+$_dockerDataPath = Get-WindowsDockerDataPath
+$_dockerDisk = Test-WindowsDockerImageDiskSpace `
+    -InstallDir $installDir `
+    -DockerDataPath $_dockerDataPath `
+    -RequiredGB 12
+if (-not $_dockerDisk.SameAsInstall -and -not $_dockerDisk.Sufficient) {
+    Write-AIWarn "Docker disk: $($_dockerDisk.FreeGB) GB free on $($_dockerDisk.Drive), 12 GB required for image pulls."
+    Write-AI "  Docker data: $($_dockerDisk.DockerDataPath)"
+    Write-AI "  Image layers do not use $installDir. Free space on $($_dockerDisk.Drive) or move Docker Desktop's disk image."
+    $requirementsMet = $false
 }
 
 # ── GPU requirement check ─────────────────────────────────────────────────────

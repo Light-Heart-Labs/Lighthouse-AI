@@ -3,7 +3,7 @@
 # ============================================================================
 # Part of: installers/windows/lib/
 # Purpose: GPU detection (NVIDIA via nvidia-smi, AMD via WMI), Docker Desktop
-#          validation, system RAM detection
+#          validation, system RAM detection, and Docker image-disk location.
 #
 # Canonical source: installers/lib/detection.sh (keep tier thresholds in sync)
 #
@@ -596,6 +596,89 @@ function Test-ZipIntegrity {
     }
 }
 
+function Get-WindowsPathDrive {
+    <#
+    .SYNOPSIS
+        Return the drive qualifier (for example 'C:') from a Windows path.
+    #>
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
+    if ($Path -match '^([A-Za-z]):') {
+        return ($Matches[1].ToUpperInvariant() + ":")
+    }
+    return ""
+}
+
+function Get-WindowsDockerDataPathFromSettings {
+    <#
+    .SYNOPSIS
+        Read Docker Desktop's host data path from a settings JSON object.
+    #>
+    param($Settings)
+
+    if ($null -eq $Settings) { return "" }
+
+    foreach ($name in @(
+        "dataFolder",
+        "DataFolder",
+        "diskPath",
+        "DiskPath",
+        "DiskImageLocation",
+        "CustomWslDir"
+    )) {
+        $value = $Settings.$name
+        if ($value -is [string] -and $value -match '^[A-Za-z]:\\') {
+            return $value
+        }
+    }
+
+    foreach ($prop in $Settings.PSObject.Properties) {
+        if ($prop.Name -notmatch '(?i)disk|dataFolder|DataRoot|vhdx|wslDir') {
+            continue
+        }
+        $value = [string]$prop.Value
+        if ($value -match '^[A-Za-z]:\\') {
+            return $value
+        }
+    }
+    return ""
+}
+
+function Get-WindowsDockerDataPath {
+    <#
+    .SYNOPSIS
+        Resolve Docker Desktop's host data path (VHDX or data folder).
+    .DESCRIPTION
+        Docker images live on this path, which is often C: even when ODS is
+        installed on another drive. Settings JSON is preferred; otherwise the
+        default Docker Desktop WSL VHDX location is used.
+    #>
+    param(
+        [string]$LocalAppData = $env:LOCALAPPDATA,
+        [string]$RoamingAppData = $env:APPDATA
+    )
+
+    foreach ($file in @(
+        (Join-Path $RoamingAppData "Docker\settings.json"),
+        (Join-Path $RoamingAppData "Docker\settings-store.json")
+    )) {
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        try {
+            $raw = Get-Content -LiteralPath $file -Raw -ErrorAction Stop
+            $settings = $raw | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            # Optional Docker Desktop settings. Unreadable or invalid JSON
+            # must not abort ODS preflight; fall through to the default VHDX.
+            continue
+        }
+        $fromSettings = Get-WindowsDockerDataPathFromSettings -Settings $settings
+        if ($fromSettings) { return $fromSettings }
+    }
+
+    return (Join-Path $LocalAppData "Docker\wsl\disk\docker_data.vhdx")
+}
+
 function Test-DiskSpace {
     <#
     .SYNOPSIS
@@ -637,6 +720,39 @@ function Test-DiskSpace {
         FreeGB     = $freeGB
         RequiredGB = $RequiredGB
         Sufficient = ($freeGB -ge $RequiredGB)
+    }
+}
+
+function Test-WindowsDockerImageDiskSpace {
+    <#
+    .SYNOPSIS
+        Check free space on Docker Desktop's image disk, if it differs from INSTALL_DIR.
+    .DESCRIPTION
+        Models and config are stored under INSTALL_DIR. Compose image pulls go
+        into Docker Desktop's VHDX, which is frequently on C:. Checking only
+        INSTALL_DIR lets a D: install pass preflight and then fail mid-pull.
+        When both paths are on the same drive, this check is a no-op success
+        because Test-DiskSpace on INSTALL_DIR already covered that volume.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallDir,
+        [Parameter(Mandatory = $true)][string]$DockerDataPath,
+        [int]$RequiredGB = 12
+    )
+
+    $installDrive = Get-WindowsPathDrive -Path $InstallDir
+    $dockerDrive = Get-WindowsPathDrive -Path $DockerDataPath
+    $space = Test-DiskSpace -Path $DockerDataPath -RequiredGB $RequiredGB
+    $sameDrive = ($installDrive -ne "" -and $installDrive -eq $dockerDrive)
+
+    return @{
+        DockerDataPath = $DockerDataPath
+        Drive          = $(if ($dockerDrive) { $dockerDrive } else { [string]$space.Drive })
+        InstallDrive   = $installDrive
+        SameAsInstall  = $sameDrive
+        FreeGB         = $space.FreeGB
+        RequiredGB     = $RequiredGB
+        Sufficient     = $(if ($sameDrive) { $true } else { [bool]$space.Sufficient })
     }
 }
 

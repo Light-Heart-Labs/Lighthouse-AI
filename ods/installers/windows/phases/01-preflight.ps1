@@ -3,7 +3,8 @@
 # ============================================================================
 # Part of: installers/windows/phases/
 # Purpose: Admin check, PowerShell version, Windows version, Docker Desktop,
-#          initial disk space, Ollama conflict, compose file presence.
+#          install-dir and Docker image-disk space, Ollama conflict, compose
+#          file presence.
 #
 # Reads (set by install-windows.ps1 before dot-sourcing):
 #   $installDir    -- target install path (for disk check)
@@ -80,8 +81,8 @@ if ($sourceRoot -match "^([A-Za-z]):") { $_sourceDrive = $Matches[1].ToUpperInva
 if ($installDir -match "^([A-Za-z]):") { $_installDrive = $Matches[1].ToUpperInvariant() }
 if ($_sourceDrive -and $_installDrive -and $_sourceDrive -ne $_installDrive) {
     Write-AIWarn "Source checkout is on ${_sourceDrive}: but the runtime install target is on ${_installDrive}:."
-    Write-AI "  To install the runtime on another drive, rerun with:"
-    Write-AI "  .\install.ps1 -InstallDir ${_sourceDrive}:\ods"
+    Write-AI "  Models and config will be stored on ${_installDrive}:."
+    Write-AI "  Docker images still use Docker Desktop's data disk (often C:), not ${_installDrive}:."
 }
 
 # ── Docker Desktop ───────────────────────────────────────────────────────────
@@ -272,21 +273,37 @@ if (-not $_shareOk) {
 Write-AISuccess "Docker Desktop file sharing OK"
 
 # ── Initial disk space check ─────────────────────────────────────────────────
-# 20 GB minimum before model size is known (tier-aware check happens in phase 04).
+# 20 GB minimum on INSTALL_DIR before model size is known (tier-aware check
+# happens in phase 04). Compose image pulls do not use this drive when Docker
+# Desktop's VHDX lives elsewhere (typically C:).
 $_disk = Test-DiskSpace -Path $installDir -RequiredGB 20
 Write-InfoBox "Disk free:" "$($_disk.FreeGB) GB on $($_disk.Drive)"
 if (-not $_disk.Sufficient) {
     Write-AIError "At least 20 GB free space is required. Found $($_disk.FreeGB) GB."
     Write-AI "  Install target checked: $installDir"
-    $_installDirHint = "<path-with-enough-space>\ods"
-    if ($sourceRoot -match "^([A-Za-z]):") {
-        $_installDirHint = "$($Matches[1].ToUpperInvariant()):\ods"
-    }
-    Write-AI "  Free up space on $($_disk.Drive), or rerun from the source checkout with:"
-    Write-AI "  .\install.ps1 -InstallDir $_installDirHint"
+    Write-AI "  Free space on $($_disk.Drive), or rerun with -InstallDir on a drive that has at least 20 GB free."
     throw "ODS_INSTALL_ABORTED"
 }
-Write-AISuccess "Disk space OK ($($_disk.FreeGB) GB free)"
+Write-AISuccess "Disk space OK ($($_disk.FreeGB) GB free on $($_disk.Drive))"
+
+$_dockerDataPath = Get-WindowsDockerDataPath
+$_dockerDisk = Test-WindowsDockerImageDiskSpace `
+    -InstallDir $installDir `
+    -DockerDataPath $_dockerDataPath `
+    -RequiredGB 12
+if ($_dockerDisk.SameAsInstall) {
+    Write-AI "Docker images share $($_disk.Drive) with the install target."
+} else {
+    Write-InfoBox "Docker disk:" "$($_dockerDisk.FreeGB) GB free on $($_dockerDisk.Drive) (images)"
+    if (-not $_dockerDisk.Sufficient) {
+        Write-AIError "Docker Desktop stores images on $($_dockerDisk.Drive), not at $installDir."
+        Write-AIError "At least $($_dockerDisk.RequiredGB) GB free is required there. Found $($_dockerDisk.FreeGB) GB."
+        Write-AI "  Docker data: $($_dockerDisk.DockerDataPath)"
+        Write-AI "  Free space on $($_dockerDisk.Drive), prune unused images, or move Docker Desktop's disk image."
+        throw "ODS_INSTALL_ABORTED"
+    }
+    Write-AISuccess "Docker disk OK ($($_dockerDisk.FreeGB) GB free on $($_dockerDisk.Drive))"
+}
 
 # ── Source file existence check ──────────────────────────────────────────────
 # Verify the compose base file is present in the source tree.
