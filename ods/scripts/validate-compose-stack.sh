@@ -67,6 +67,7 @@ fi
 # - Circular dependencies
 # - Invalid environment variable references
 validation_output=$(mktemp)
+trap 'rm -f "$validation_output"' EXIT
 if $DOCKER_COMPOSE_CMD $ENV_FILE_FLAG $COMPOSE_FLAGS config > "$validation_output" 2>&1; then
     if ! $QUIET; then
         echo "Compose stack validation passed"
@@ -74,7 +75,6 @@ if $DOCKER_COMPOSE_CMD $ENV_FILE_FLAG $COMPOSE_FLAGS config > "$validation_outpu
         service_count=$(grep -c "^  [a-z]" "$validation_output" || echo "0")
         echo "  Services defined: $service_count"
     fi
-    rm -f "$validation_output"
     exit 0
 else
     echo "Compose stack validation FAILED" >&2
@@ -83,6 +83,5 @@ else
     cat "$validation_output" >&2
     echo "" >&2
     echo "Compose flags: $COMPOSE_FLAGS" >&2
-    rm -f "$validation_output"
     exit 1
 fi
