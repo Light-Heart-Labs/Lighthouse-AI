@@ -76,7 +76,17 @@ upsert_env_value() {
     local key="$2"
     local value="$3"
     if grep -qE "^${key}=" "$env_path" 2>/dev/null; then
-        sed -i '' "s|^${key}=.*|${key}=${value}|" "$env_path"
+        # Escape sed's replacement-text metacharacters (& = whole match,
+        # \ = escape, and | = our chosen delimiter) before interpolating
+        # value into the substitution. Unescaped, a value containing '&'
+        # (common in OAuth-style URLs with query strings, e.g.
+        # RAG_OPENAI_API_BASE_URL) duplicates the matched line into the
+        # output instead of replacing it, and a value containing '|'
+        # breaks the sed expression outright — which aborts the caller
+        # under set -euo pipefail.
+        local escaped_value
+        escaped_value="$(printf '%s' "$value" | sed 's/[&/\|]/\\&/g')"
+        sed -i '' "s|^${key}=.*|${key}=${escaped_value}|" "$env_path"
     else
         printf '%s=%s\n' "$key" "$value" >> "$env_path"
     fi

@@ -396,7 +396,16 @@ upsert_env_value() {
     local key="$2"
     local value="$3"
     if grep -qE "^${key}=" "$env_file" 2>/dev/null; then
-        sed -i '' "s|^${key}=.*|${key}=${value}|" "$env_file"
+        # Escape sed's replacement-text metacharacters (& = whole match,
+        # \ = escape, and | = our chosen delimiter) before interpolating
+        # value into the substitution — see the matching fix in
+        # installers/macos/lib/env-generator.sh for the failure modes
+        # (values containing '&' silently duplicate the line instead of
+        # replacing it; values containing '|' break the sed expression
+        # outright, aborting the caller under set -euo pipefail).
+        local escaped_value
+        escaped_value="$(printf '%s' "$value" | sed 's/[&/\|]/\\&/g')"
+        sed -i '' "s|^${key}=.*|${key}=${escaped_value}|" "$env_file"
     else
         printf '%s=%s\n' "$key" "$value" >> "$env_file"
     fi
