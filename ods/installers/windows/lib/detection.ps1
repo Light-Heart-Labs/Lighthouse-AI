@@ -141,8 +141,8 @@ function Get-GpuInfo {
                 $lines = @($raw -split "`n" | Where-Object { $_.Trim() })
                 $first = $lines[0] -split ","
                 $gpuName = $first[0].Trim()
-                $vramStr = $first[1].Trim() -replace "[^\d]", ""
-                $vramMB  = [int]$vramStr
+                $vramField = $first[1].Trim()
+                $vramStr = $vramField -replace "[^\d]", ""
                 $driverVer = $first[2].Trim()
                 $computeCap = $first[3].Trim()
                 $gpuCount = $lines.Count
@@ -158,12 +158,24 @@ function Get-GpuInfo {
                     if ($ccMajor -ge 12) { $isBlackwell = $true }
                 }
 
+                # Unified memory detection (GB10, GB200): nvidia-smi reports
+                # "[N/A]" for memory.total when the GPU shares system RAM.
+                # Mirrors installers/lib/detection.sh's GPU_VRAM==0 fallback.
+                $memoryType = "discrete"
+                if ([string]::IsNullOrEmpty($vramStr)) {
+                    $memoryType = "unified"
+                    $systemRamGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1073741824)
+                    $vramMB = [int]($systemRamGB * 1024)
+                } else {
+                    $vramMB = [int]$vramStr
+                }
+
                 return @{
                     Backend       = "nvidia"
                     Name          = $gpuName
                     VramMB        = $vramMB
                     Count         = $gpuCount
-                    MemoryType    = "discrete"
+                    MemoryType    = $memoryType
                     DeviceId      = ""
                     DriverVersion = $driverVer
                     DriverMajor   = $driverMajor
