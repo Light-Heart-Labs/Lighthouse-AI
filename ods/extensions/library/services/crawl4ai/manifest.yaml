@@ -1,0 +1,66 @@
+schema_version: ods.services.v1
+
+service:
+  id: crawl4ai
+  name: Crawl4AI
+  aliases: [crawler, web-crawler]
+  container_name: ods-crawl4ai
+  container_uid: 999
+  host_env: CRAWL4AI_HOST
+  default_host: crawl4ai
+  port: 11235
+  external_port_env: CRAWL4AI_PORT
+  external_port_default: 11235
+  health: /health
+  ui_path: /playground
+  type: docker
+  gpu_backends: [all]
+  category: optional
+  compose_file: compose.yaml
+  depends_on: [litellm]
+  startup_timeout: 180
+  description: "Browser-based crawling and clean Markdown extraction for local agents and RAG."
+  env_vars:
+    - key: CRAWL4AI_API_TOKEN
+      required: true
+      secret: true
+      description: Token required to issue Crawl4AI API credentials
+    - key: CRAWL4AI_SECRET_KEY
+      required: true
+      secret: true
+      description: Secret used to sign Crawl4AI authentication tokens
+  llm:
+    consumes: true
+    route: gateway
+    pinning: none
+    probe:
+      kind: custom
+      path: /llm/job
+      auth: bearer
+  setup_hook: setup.sh
+
+features:
+  - id: crawl4ai-web-ingestion
+    name: Agent-Ready Web Ingestion
+    description: Crawl dynamic websites into clean Markdown and structured extraction results
+    icon: Globe2
+    category: search
+    requirements:
+      services: [crawl4ai, litellm]
+      vram_gb: 0
+      disk_gb: 4
+    enabled_services_all: [crawl4ai]
+    setup_time: ~3 minutes
+    priority: 33
+    launch:
+      type: service
+      service: crawl4ai
+      path: /playground
+    gpu_backends: [all]
+
+tags:
+  - crawling
+  - browser
+  - markdown
+  - rag
+  - agents

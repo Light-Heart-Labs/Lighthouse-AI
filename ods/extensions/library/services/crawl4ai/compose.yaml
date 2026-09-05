@@ -1,0 +1,52 @@
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai:0.9.2
+    container_name: ods-crawl4ai
+    restart: unless-stopped
+    user: appuser
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    read_only: true
+    shm_size: 1g
+    environment:
+      CRAWL4AI_API_TOKEN: "${CRAWL4AI_API_TOKEN:?CRAWL4AI_API_TOKEN must be set}"
+      SECRET_KEY: "${CRAWL4AI_SECRET_KEY:?CRAWL4AI_SECRET_KEY must be set}"
+      LLM_PROVIDER: openai/ods/current
+      LLM_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${CRAWL4AI_PORT:-11235}:11235"
+    tmpfs:
+      - /tmp:uid=999,gid=999,mode=1777
+      - /var/lib/redis:uid=999,gid=999,mode=0700
+      - /var/lib/crawl4ai/outputs:uid=999,gid=999,mode=0700
+      - /home/appuser/.crawl4ai:uid=999,gid=999,mode=0700
+      - /home/appuser/.cache/url_seeder:uid=999,gid=999,mode=0700
+      - /home/appuser/.gunicorn:uid=999,gid=999,mode=0700
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ods-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+          pids: 512
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+networks:
+  ods-network:
+    external: true
