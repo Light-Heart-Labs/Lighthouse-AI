@@ -134,6 +134,8 @@ def _skip_value(reader: _Reader, value_type: int, depth: int = 0) -> None:
             raise ValueError("GGUF array nesting too deep")
         item_type = reader.unpack("<I")
         length = reader.unpack("<Q")
+        if length > 1_000_000:
+            raise ValueError(f"GGUF array length {length} exceeds safety limit")
         for _ in range(length):
             _skip_value(reader, item_type, depth + 1)
         return
@@ -145,6 +147,8 @@ def _read_array(reader: _Reader, depth: int = 0) -> Any:
         raise ValueError("GGUF array nesting too deep")
     item_type = reader.unpack("<I")
     length = reader.unpack("<Q")
+    if length > 1_000_000:
+        raise ValueError(f"GGUF array length {length} exceeds safety limit")
     if item_type not in _STRUCTS and item_type not in (8, 9):
         raise ValueError(f"unsupported GGUF array type: {item_type}")
 

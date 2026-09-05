@@ -210,6 +210,22 @@ def test_shallow_nested_array_still_parses(tmp_path):
     assert result["metadata"]["nested.arr"] == [[[[0]]]]
 
 
+def test_excessive_array_length_degrades_gracefully(tmp_path):
+    path = _write(tmp_path, "huge_arr.gguf", build_gguf([
+        ("general.architecture", STR, "llama"),
+        ("huge.arr", ARR, (U32, [])),
+    ]))
+    # Patch array length byte in file payload to simulate corrupted 10_000_000 elements length
+    data = bytearray(path.read_bytes())
+    # Modify last QWORD (array length) to 10_000_000
+    struct.pack_into("<Q", data, len(data) - 8, 10_000_000)
+    path.write_bytes(bytes(data))
+
+    result = inspect_gguf(path)
+    assert result["readable"] is False
+    assert "exceeds safety limit" in result.get("error", "")
+
+
 def test_deeply_nested_array_degrades_without_recursion_error(tmp_path):
     # A pathologically nested array must not crash the parser (RecursionError
     # escaping the failure contract) — it degrades to a bounded-depth error.
