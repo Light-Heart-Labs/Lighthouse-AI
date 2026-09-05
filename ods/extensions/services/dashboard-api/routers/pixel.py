@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import AsyncIterator
@@ -17,6 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from host_agent_client import AgentClientError, async_request_json as request_agent_json
 from pixel_runtime_state import begin_pixel_stream, end_pixel_stream
 from security import verify_api_key
+
+
+logger = logging.getLogger(__name__)
 
 
 _DEFAULT_EDGE_URL = "http://pixel-edge:9595"
@@ -279,7 +283,10 @@ async def pixel_status() -> dict[str, object]:
         if available and model_support is not None:
             result["modelSupport"] = model_support
         return result
-    except (httpx.HTTPError, asyncio.TimeoutError):
+    except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        # Exception text and request objects can contain upstream credentials.
+        # Retain the failure phase/type without logging those sensitive values.
+        logger.warning("Pixel edge status request failed (%s)", type(exc).__name__)
         return {"available": False, "model": None, "detail": "Pixel edge is unavailable"}
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
         return {"available": False, "model": None, "detail": "Pixel edge returned an invalid response"}
@@ -463,6 +470,7 @@ async def pixel_chat_stream(request: Request, body: ChatStreamRequest) -> Stream
         upstream = await upstream_context.__aenter__()
     except (httpx.HTTPError, asyncio.TimeoutError) as exc:
         await client.aclose()
+        logger.warning("Pixel edge stream connection failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Pixel stream is unavailable") from exc
     if upstream.status_code != 200:
         await upstream_context.__aexit__(None, None, None)

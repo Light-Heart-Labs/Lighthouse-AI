@@ -296,6 +296,34 @@ async def test_status_is_disabled_without_a_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["status", "stream"])
+@pytest.mark.parametrize(
+    "error_type", [pixel.httpx.ConnectTimeout, pixel.httpx.ReadTimeout, pixel.httpx.ConnectError]
+)
+async def test_transport_diagnostics_log_type_without_sensitive_exception_text(
+    monkeypatch, caplog, phase, error_type
+):
+    async def fail_enter(_self):
+        raise error_type(f"private upstream details: Bearer {EDGE_KEY}")
+
+    monkeypatch.setattr(FakeStreamContext, "__aenter__", fail_enter)
+    monkeypatch.setattr(pixel.httpx, "AsyncClient", lambda **_kwargs: FakeClient(FakeResponse()))
+    if phase == "status":
+        result = await pixel.pixel_status()
+        assert result["available"] is False
+    else:
+        body = pixel.ChatStreamRequest(
+            chat_id="diagnostic-test", messages=[{"role": "user", "content": "hello"}]
+        )
+        with pytest.raises(HTTPException) as raised:
+            await pixel.pixel_chat_stream(ConnectedRequest(), body)
+        assert raised.value.status_code == 503
+    assert error_type.__name__ in caplog.text
+    assert EDGE_KEY not in caplog.text
+    assert "private upstream details" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_status_returns_only_fixed_projection():
     secret = "upstream-secret-must-not-appear"
     body = json.dumps({"data": [{"id": "pixel/default", "owned_by": secret}]}).encode()
