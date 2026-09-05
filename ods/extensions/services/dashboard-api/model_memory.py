@@ -134,6 +134,11 @@ def required_model_memory_gb(
     size_mb = _positive_number(
         weight_size_mb if weight_size_mb is not None else model.get("size_mb")
     )
+    if not size_mb:
+        params_b = estimated_param_billions(model)
+        if params_b:
+            size_mb = params_b * 650.0
+
     size_and_kv_gb = (
         (size_mb / 1024.0) + estimated_context_kv_gb(model, context_length)
         if size_mb
