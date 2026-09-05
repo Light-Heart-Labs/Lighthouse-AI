@@ -83,8 +83,9 @@ OVERLAY_MAP = {
 
 # --- Pass 1: Match known_gpus by device_id then name_patterns ---
 selected = None
-best_name_len = 0          # longest matching pattern wins (prevents "XT" matching "XTX")
-best_id_vram_diff = None   # closest VRAM wins for device_id-only fallback
+best_match_rank = 0        # exact id + name > exact id > name-only
+best_name_len = 0          # longest matching pattern wins (prevents broad aliases winning)
+best_id_vram_diff = None   # closest VRAM wins for otherwise-equal device-id matches
 combined_name = f"{gpu_name} {cpu_name}".strip().lower()
 
 for entry in db.get("known_gpus", []):
@@ -101,25 +102,37 @@ for entry in db.get("known_gpus", []):
     match_len = max((len(p) for p in matched_patterns), default=0)
 
     if id_matched and name_matched:
-        # Both match — prefer longest pattern to avoid "XT" matching "XTX"
-        if match_len > best_name_len:
-            selected = entry
-            best_name_len = match_len
-    elif id_matched and best_name_len == 0:
-        # Device ID matched but name didn't — use VRAM proximity as tiebreaker
-        entry_vram = entry.get("specs", {}).get("memory_mb", 0)
-        if vram_mb > 0:
-            diff = abs(entry_vram - vram_mb)
-        else:
-            # No VRAM info: prefer smallest card (under-provision is safe,
-            # over-provision crashes the model loader)
-            diff = entry_vram if entry_vram > 0 else float("inf")
-        if best_id_vram_diff is None or diff < best_id_vram_diff:
-            selected = entry
-            best_id_vram_diff = diff
-    elif name_matched and not selected:
+        match_rank = 3
+    elif id_matched:
+        match_rank = 2
+    elif name_matched:
+        match_rank = 1
+    else:
+        match_rank = 0
+    if match_rank == 0:
+        continue
+
+    entry_vram = entry.get("specs", {}).get("memory_mb", 0)
+    if vram_mb > 0:
+        id_vram_diff = abs(entry_vram - vram_mb)
+    else:
+        # No VRAM info: prefer the smallest device-id match. Under-provisioning
+        # is safer than selecting a model envelope the host cannot load.
+        id_vram_diff = entry_vram if entry_vram > 0 else float("inf")
+
+    better_match = match_rank > best_match_rank
+    if match_rank == best_match_rank == 3:
+        better_match = match_len > best_name_len
+    elif match_rank == best_match_rank == 2:
+        better_match = best_id_vram_diff is None or id_vram_diff < best_id_vram_diff
+    elif match_rank == best_match_rank == 1:
+        better_match = match_len > best_name_len
+
+    if better_match:
         selected = entry
+        best_match_rank = match_rank
         best_name_len = match_len
+        best_id_vram_diff = id_vram_diff if id_matched else None
 
 # --- Pass 2: Heuristic fallback (threshold-based, top-down) ---
 if not selected:

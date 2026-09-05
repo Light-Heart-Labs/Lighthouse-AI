@@ -101,6 +101,9 @@ jobs:
       - name: Tier Map Unit Tests
         run: bash tests/test-tier-map.sh
 
+      - name: Hardware Name Specificity Tests
+        run: bash tests/test-hardware-name-specificity.sh
+
       - name: Service Registry Tests
         run: bash tests/test-service-registry.sh
 
