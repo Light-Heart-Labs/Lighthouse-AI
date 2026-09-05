@@ -1364,6 +1364,7 @@ def test_render_env_preserves_commented_key_absent_from_values(commented_example
         "AUDIO_STT_OPENAI_API_KEY",
         "AUDIO_TTS_OPENAI_API_KEY",
         "RAG_OPENAI_API_KEY",
+        "ODS_TALK_VISION_KEY",
     ],
 )
 def test_production_schema_marks_provider_api_keys_secret(key):
