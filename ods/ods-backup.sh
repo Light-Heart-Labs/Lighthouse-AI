@@ -611,6 +611,7 @@ main() {
     local list_mode="false"
     local delete_id=""
     local verify_id=""
+    local dry_run="false"
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -659,6 +660,10 @@ main() {
                 description="$2"
                 shift 2
                 ;;
+            -n|--dry-run)
+                dry_run="true"
+                shift
+                ;;
             *)
                 log_error "Unknown option: $1"
                 usage
@@ -704,6 +709,24 @@ main() {
 
     # Create backup root
     mkdir -p "$BACKUP_ROOT"
+
+    # PR #6: Dry-run mode — show what would be backed up without doing it
+    if [[ "$dry_run" == "true" ]]; then
+        log_info "DRY RUN — showing what would be backed up:"
+        log_info "  Backup type: $backup_type"
+        log_info "  Compress: $compress"
+        log_info "  Output: $BACKUP_ROOT"
+        local est_bytes
+        est_bytes=$(estimate_backup_bytes "$backup_type")
+        log_info "  Estimated size: $(fmt_bytes "$est_bytes")"
+        local free
+        free=$(free_bytes_for_path "$BACKUP_ROOT")
+        log_info "  Available disk: $(fmt_bytes "$free")"
+        if [[ -n "$free" && "$free" -gt 0 && "$free" -lt "$est_bytes" ]]; then
+            log_warn "  WARNING: Not enough disk space for this backup!"
+        fi
+        exit 0
+    fi
 
     # Perform backup
     do_backup "$backup_type" "$compress" "$description"
