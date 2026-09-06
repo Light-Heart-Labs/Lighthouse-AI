@@ -2689,6 +2689,135 @@ test("routes explicit ODS facts through projections before mixed workspace work"
   assert.equal(call(guard, "exec", { event: { params: { command: "printf done" } } }), undefined);
 });
 
+const MIXED_HEALTH_CSV_PROMPT = "Please complete two small useful checks. First, create a new health-conversion-demo folder in your workspace with a synthetic five-row CSV using columns item,count: Desk lamp,2; Cable,5; Notebook,3; Coffee mug,1; Plant,4 (semicolons here separate rows). Convert it to JSON with count values as integers, and actually validate that there are five records and that counts sum to 15. Do not modify any existing files. Then inspect this ODS computer's current health read-only and briefly explain any unhealthy services or resource pressure you can actually verify. Do not install anything or restart/change services. Keep your final summary compact and distinguish the file-conversion results from the host health observations.";
+
+test("live mixed CSV and host health intent preserves both read-only host and workspace work", () => {
+  const requirements = userMessageOperationsRequirements([], MIXED_HEALTH_CSV_PROMPT);
+  assert.equal(requirements.required, true);
+  for (const action of ["host.services", "host.uptime", "host.cpu", "host.memory", "host.storage"]) {
+    assert.ok(requirements.actions.includes(action), action);
+  }
+  assert.ok(requirements.actions.every(action => action.startsWith("host.")));
+  assert.equal(userMessageRequestsHostCommand([], MIXED_HEALTH_CSV_PROMPT), false);
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: MIXED_HEALTH_CSV_PROMPT });
+  guard.observeModelCall({ runId: "run-1" }, { agentId: "pixel", runId: "run-1" });
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(call(guard, "tool_call", { event: { params: {
+      id: "write", args: { path: `health-conversion-demo/file-${index}.csv`, text: "item,count\nLamp,2\n" },
+    } } }).blockReason, OPERATIONS_REQUIRES_BROKER_REASON);
+  }
+  const host = call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: { actions: ["raw-shell"] } } } });
+  assert.notEqual(host?.block, true);
+  assert.deepEqual(host.params.args.actions, requirements.actions);
+  assert.equal(host.params.args.includeOdsStatus, true);
+  assert.equal(call(guard, "pixel_ops_run", { event: { params: {
+    target: "ods-host", action: "raw-shell", parameters: { command: "touch /tmp/not-authorized" },
+  } } }).block, true, "read-only health cannot authorize host mutation");
+});
+
+test("live health plus reporting is scoped and cannot authorize artifact-only or excluded host work", () => {
+  for (const prompt of [
+    "Inspect this ODS computer's current health read-only and explain your findings.",
+    "Check this computer's health, and briefly explain the observations.",
+  ]) {
+    assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+      required: true,
+      actions: ["host.uptime", "host.services", "host.cpu", "host.memory", "host.storage"],
+    });
+    assert.equal(userMessageRequestsHostCommand([], prompt), false);
+  }
+  for (const prompt of [
+    "Explain how to inspect this ODS computer's health.",
+    "Create a fictional report about this ODS computer's health and briefly explain it.",
+    "Write a script to inspect this computer's health and explain the script; do not run it.",
+    "Do not inspect this ODS computer's health; explain health checks only.",
+  ]) assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
+  const excluded = userMessageOperationsRequirements([], "Inspect this computer's health. Do not inspect or report memory or storage.");
+  assert.equal(excluded.required, true);
+  assert.ok(!excluded.actions.includes("host.memory"));
+  assert.ok(!excluded.actions.includes("host.storage"));
+  assert.deepEqual(userMessageOperationsRequirements([], "Inspect this computer's CPU health and explain it."), { required: true, actions: ["host.cpu"] });
+});
+
+test("explicit negative ODS status intent never creates a compulsory projection", () => {
+  const prompt = "For this request, do only a small workspace file conversion; do not inspect ODS status, host health or other machines. Create health-conversion-demo if it does not already exist, preserving any existing files. Create a five-row CSV with item,count columns and these synthetic rows: Desk lamp,2; Cable,5; Notebook,3; Coffee mug,1; Plant,4. Convert that CSV to JSON with integer count values, and actually run validation that there are five records and counts sum to 15. Show the output paths and the checks you executed. No installation or external services.";
+  assert.deepEqual(userMessageOdsToolRequirements([], prompt), []);
+  assert.equal(userMessageOperationsRequirements([], prompt).required, false);
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  assert.notEqual(call(guard, "tool_call", { event: { params: {
+    id: "write", args: { path: "health-conversion-demo/input.csv", text: "item,count\nDesk lamp,2\n" },
+  } } })?.block, true);
+  assert.equal(call(guard, "pixel_ods_status").blockReason, WORKSPACE_UNREQUESTED_PROJECTION_REASON);
+  for (const verb of ["inspect", "check", "observe", "report", "list"]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], `Create input.csv in the workspace. Do not ${verb} ODS status or ODS applications.`), []);
+  }
+});
+
+test("ODS projection correction belongs to a model round, not parallel sibling calls", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); return true; } });
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "Create result.txt in the workspace and verify it. What ODS model is active?" });
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  for (let index = 0; index < 10; index += 1) {
+    const blocked = call(guard, "tool_call", { event: { params: { id: "write", args: { path: `file-${index}.txt`, text: "fixture" } } } });
+    assert.match(blocked.blockReason, /call pixel_ods_status exactly once/);
+  }
+  assert.deepEqual(aborts, []);
+  guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+  assert.notEqual(call(guard, "tool_call", { event: { params: { id: "pixel_ods_status", args: {} } } })?.block, true);
+  assert.notEqual(call(guard, "write", { event: { params: { path: "result.txt", content: "fixture" } } })?.block, true);
+  assert.deepEqual(aborts, []);
+});
+
+test("ODS routing terminal cause survives verification fallback and aborts early-return tools next round", () => {
+  for (const [toolName, params] of [["tool_search", { query: "write" }], ["tool_call", { id: "reply_to_current", args: { text: "still working" } }], ["pixel_ods_status", {}]]) {
+    const aborts = [];
+    const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); return true; } });
+    const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+    guard.observeRun(context, "pixel", { prompt: "Create result.txt in the workspace and verify it. What ODS model is active?" });
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    assert.match(call(guard, "read", { event: { params: { path: "result.txt" } } }).blockReason, /call pixel_ods_status exactly once/);
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    assert.equal(call(guard, "read", { event: { params: { path: "result.txt" } } }).blockReason, ODS_TOOL_ROUTING_ABORT_REASON);
+    assert.equal(call(guard, "tool_call", { event: { params: { id: "write", args: { path: "result.txt", content: "fixture" } } } }).blockReason, ODS_TOOL_ROUTING_ABORT_REASON);
+    assert.deepEqual(guard.verificationForRun("run-1"), { status: "failed", text: ODS_TOOL_ROUTING_ABORT_REASON });
+    assert.deepEqual(aborts, []);
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    assert.equal(call(guard, toolName, { event: { params }, context: { sessionId: undefined } }).blockReason, ODS_TOOL_ROUTING_LOOP_ABORT_REASON);
+    assert.deepEqual(aborts, ["session-1"]);
+    assert.deepEqual(guard.verificationForRun("run-1"), { status: "failed", text: ODS_TOOL_ROUTING_LOOP_ABORT_REASON });
+  }
+});
+
+test("ODS projection terminal state is run-isolated and retries only a failed active abort", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({ abortRun(id) {
+    aborts.push(id);
+    if (aborts.length === 1) throw new Error("temporary abort failure");
+    return true;
+  } });
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "What ODS model is active?" });
+  guard.observeModelCall({ runId: "run-1" }, context);
+  call(guard, "read");
+  guard.observeModelCall({ runId: "run-1" }, context);
+  call(guard, "read");
+  guard.observeModelCall({ runId: "run-1" }, context);
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(call(guard, "tool_search").blockReason, ODS_TOOL_ROUTING_LOOP_ABORT_REASON);
+  }
+  assert.deepEqual(aborts, ["session-1", "session-1"], "successful abort is not repeated");
+  const other = { agentId: "pixel", runId: "run-other", sessionId: "session-other" };
+  guard.observeRun(other, "pixel", { prompt: "Create a CSV in the workspace." });
+  assert.notEqual(call(guard, "write", { context: other, event: {
+    runId: "run-other", params: { path: "other.csv", content: "item,count\nLamp,2\n" },
+  } })?.block, true);
+  assert.deepEqual(aborts, ["session-1", "session-1"]);
+});
+
 test("does not route unrelated model, app, or n8n implementation work", () => {
   const creativePrompt =
     "Create from scratch a novel single-file interactive voxel night-market scene in a new " +

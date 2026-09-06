@@ -3617,7 +3617,7 @@ function currentOwnerIntentText(messages, prompt = undefined) {
 function explicitlyRejectsOdsTool(text, toolPattern) {
   const actionNegation = new RegExp(
     `\\b(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\s+` +
-      `(?:call|invoke|query|run|use)\\b[^.!?;\\n]{0,80}\\b(?:${toolPattern})\\b`,
+      `(?:call|invoke|query|run|use|inspect|check|observe|report|list)\\b[^.!?;\\n]{0,80}\\b(?:${toolPattern})\\b`,
     "i"
   );
   const omissionNegation = new RegExp(
@@ -4051,7 +4051,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   // request to inspect this computer. Evaluate facets in the same clause as
   // the host inspection, including coordinated discovery requests.
   const hostIntentClauses = text.split(
-    /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:and|then)\s+(?=(?:find|discover|locate|detect|identify|list|look\s+for|scan)\b)/i
+    /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:and|then)\s+(?=(?:find|discover|locate|detect|identify|list|look\s+for|scan)\b)|\band\s+(?=(?:(?:briefly|then)\s+)?(?:explain|summari[sz]e|describe|report)\b)/i
   );
   const artifactOrExplanation = /\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i;
   const negatedObservationClause = (clause) => /^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don't|never|avoid|skip|omit|exclude)\b/i.test(clause);
@@ -4096,8 +4096,18 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /\b(?:full|complete|comprehensive|broad|thorough)\s+(?:host|machine|computer|system|inspection|inventory|survey|overview|profile)\b/i.test(
       text
     );
+  // Inspecting live health and then explaining the findings is not a how-to
+  // request. Keep this bounded to read-only health facets, not a full inventory
+  // or network disclosure. Artifact and negation clauses grant no authority.
+  const hostHealthInspection = !hostScopeFacetPatterns
+    .some((pattern) => pattern.test(localHostFacetText)) && hostIntentClauses.some((clause) =>
+    hostContextPattern.test(clause) &&
+    /\b(?:inspect|check|examine|measure)\b/i.test(clause) &&
+    /\b(?:health|unhealthy|resource pressure)\b/i.test(clause) &&
+    !artifactOrExplanation.test(clause) && !negatedObservationClause(clause));
   const broadHostExploration = hostContext && (hostExplorationIntent || naturalHostOverview) &&
-    (broadScopeIntent || !hostScopeFacetPatterns.some((pattern) => pattern.test(localHostFacetText)));
+    (broadScopeIntent || (!hostHealthInspection &&
+      !hostScopeFacetPatterns.some((pattern) => pattern.test(localHostFacetText))));
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionInventory = userMessageRequestsExtensionInventory(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
@@ -4116,6 +4126,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     !/\b(?:interfaces?|addresses?|routes?|routing|ports?|listeners?)\b/i.test(clause) &&
     !artifactOrExplanation.test(clause) && !negatedObservationClause(clause));
   const actions = [];
+  if (hostHealthInspection) {
+    actions.push("host.uptime", "host.services", "host.cpu", "host.memory", "host.storage");
+  }
   if (
     /\b(?:hostname|host identity)\b/i.test(text) ||
     (hostContext && /\b(?:machine|system)?\s*identity\b/i.test(text))
@@ -5095,7 +5108,10 @@ export function createToolLoopGuard({
         odsRoutingInitialized: false,
         odsRequiredTools: new Set(),
         odsRoutingBlocks: 0,
+        odsRoutingCorrectionRound: undefined,
         odsRoutingExhausted: false,
+        odsRoutingTerminalRound: undefined,
+        odsRoutingAborted: false,
         odsRoutingTerminalBlocks: 0,
         exactDownloadRequested: false,
         exactDownloadRequest: undefined,
@@ -5264,6 +5280,25 @@ export function createToolLoopGuard({
     // policy and deterministic routing active from runId alone; operations
     // that truly need a session still fail closed on the optional sessionId.
     const state = runId ? stateFor(runId) : undefined;
+    // A model must see a correction before it can ignore it. Terminal-round
+    // siblings stay blocked without aborting; the next model round is the
+    // actual abort boundary, before Tool Search and every other early return.
+    if (state?.odsRoutingExhausted) {
+      if ((state.operationsPromptRound > 0 &&
+           state.operationsPromptRound === state.odsRoutingTerminalRound) ||
+          (state.operationsPromptRound === 0 && state.odsRoutingTerminalBlocks++ === 0)) {
+        return { block: true, blockReason: ODS_TOOL_ROUTING_ABORT_REASON };
+      }
+      const activeSession = sessionId ?? state.currentSessionId;
+      if (!state.odsRoutingAborted && typeof activeSession === "string" && activeSession) {
+        try {
+          state.odsRoutingAborted = typeof abortRun === "function" && Boolean(abortRun(activeSession));
+        } catch (error) {
+          warn(`Pixel ODS-routing abort failed for run ${runId}: ${String(error)}`);
+        }
+      }
+      return { block: true, blockReason: ODS_TOOL_ROUTING_LOOP_ABORT_REASON };
+    }
     // Put this terminal fuse before every tool-specific return, including
     // Tool Search, reply controls, and workspace recovery adaptations. The
     // first offending round remains a recoverable routing correction. Only
@@ -6506,7 +6541,7 @@ export function createToolLoopGuard({
       // later model continuation that still ignores the boundary is aborted.
       state.operationsRoutingBlocks += 1;
       if (
-        state.operationsRoutingBlocks < 4 &&
+        (state.operationsPromptRound > 0 || state.operationsRoutingBlocks < 4) &&
         (state.operationsCorrectionPromptRound === undefined ||
           state.operationsCorrectionPromptRound === state.operationsPromptRound)
       ) {
@@ -6748,29 +6783,16 @@ export function createToolLoopGuard({
       return { block: true, blockReason: PRIVATE_NETWORK_LOOP_ABORT_REASON };
     }
 
-    if (state?.odsRoutingExhausted) {
-      if (state.odsRoutingTerminalBlocks === 0) {
-        state.odsRoutingTerminalBlocks = 1;
-        return { block: true, blockReason: ODS_TOOL_ROUTING_ABORT_REASON };
-      }
-      let aborted = false;
-      try {
-        aborted = typeof abortRun === "function" && Boolean(abortRun(sessionId));
-      } catch (error) {
-        warn(`Pixel ODS-routing abort failed for run ${runId}: ${String(error)}`);
-      }
-      warn(
-        `Pixel stopped a tool retry after an ODS-routing block for run ${runId}; active run aborted=${aborted}`
-      );
-      return { block: true, blockReason: ODS_TOOL_ROUTING_LOOP_ABORT_REASON };
-    }
-
     if (state?.odsRequiredTools.size > 0) {
       if (state.odsRequiredTools.has(effectiveToolName)) {
         state.odsRequiredTools.delete(effectiveToolName);
         state.odsRoutingBlocks = 0;
-      } else if (state.odsRoutingBlocks === 0) {
+        state.odsRoutingCorrectionRound = undefined;
+      } else if (state.odsRoutingBlocks === 0 ||
+          (state.operationsPromptRound > 0 &&
+           state.odsRoutingCorrectionRound === state.operationsPromptRound)) {
         state.odsRoutingBlocks = 1;
+        state.odsRoutingCorrectionRound = state.operationsPromptRound;
         const required = [...state.odsRequiredTools].join(" and ");
         return {
           block: true,
@@ -6780,6 +6802,7 @@ export function createToolLoopGuard({
         };
       } else {
         state.odsRoutingExhausted = true;
+        state.odsRoutingTerminalRound = state.operationsPromptRound;
         return { block: true, blockReason: ODS_TOOL_ROUTING_ABORT_REASON };
       }
     }
@@ -8189,6 +8212,10 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
+    if (state.odsRoutingExhausted) {
+      return { status: "failed", text: state.odsRoutingAborted
+        ? ODS_TOOL_ROUTING_LOOP_ABORT_REASON : ODS_TOOL_ROUTING_ABORT_REASON };
+    }
     if (state.unrequestedOperationsAborted) {
       return { status: "failed", text: UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON };
     }
