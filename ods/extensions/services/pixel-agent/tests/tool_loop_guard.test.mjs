@@ -9463,6 +9463,9 @@ test("shows named existing artwork without forcing replacement or claiming new a
     "Show me the Clockwork Tide artwork.",
     "Show me the artwork again.",
     "Open the existing animated illustration here.",
+    "Yes—show me the recipe app here so I can try changing the campers and saving an ingredient.",
+    "Show me the existing application.",
+    "Show me the recipe app in my workspace.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
     const guard = createToolLoopGuard();
@@ -9496,6 +9499,8 @@ test("new artwork requests still reject read-only reuse of existing creative byt
     "Make a new interactive artwork using the existing design notes.",
     "Show me an original interactive artwork.",
     "Design a new interactive artwork using the existing design notes.",
+    "Build a new app using the existing design notes.",
+    "Show me an original application.",
   ]) {
     const guard = createToolLoopGuard();
     guard.observeRun(

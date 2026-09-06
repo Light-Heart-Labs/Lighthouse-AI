@@ -4487,9 +4487,9 @@ function userMessageRequiresWorkspacePreviewAuthorship(
     /\b(?:design|make)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\b/i.test(text) ||
     /\b(?:from\s+scratch|novel|original)\b/i.test(text);
   const reuseExisting =
-    /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
-    /\b(?:artwork|animation|chart|diagram|game|illustration|site|website)\b[^.!?;\n]{0,48}\bin\s+(?:(?:my|the|our)\s+)?workspace\b/i.test(text) ||
-    /\b(?:show|open|view|preview)\s+(?:me\s+)?(?:the|that|this|our|my)\b[^.!?;\n]{0,64}\b(?:artwork|animation|chart|diagram|game|illustration|site|website)\b/i.test(text);
+    /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:apps?|applications?|artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
+    /\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b[^.!?;\n]{0,48}\bin\s+(?:(?:my|the|our)\s+)?workspace\b/i.test(text) ||
+    /\b(?:show|open|view|preview)\s+(?:me\s+)?(?:the|that|this|our|my)\b[^.!?;\n]{0,64}\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b/i.test(text);
   if (reuseExisting && !explicitCreation) return false;
   return create.test(text) && !rejectsCreation.test(text);
 }
