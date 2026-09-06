@@ -9785,6 +9785,48 @@ test("shows named existing artwork without forcing replacement or claiming new a
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
 
+test("publishes repaired multi-file websites without demanding whole-project rewrites", () => {
+  for (const prompt of [
+    'I tested Pocket Poster in the actual browser. Make title/subtitle layout fit the poster with margins, wrapping and adjusting font size as needed; include long unbroken text. Preserve literal escaping in the actual exported SVG. Check actual SVG output, then publish the updated pocket-poster/index.html website.',
+    'Make the title fit, then publish the corrected pocket-poster/index.html website.',
+    'Make the controls responsive and publish the repaired pocket-poster/index.html website.',
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel", { prompt }
+    );
+    const readParams = { path: "pocket-poster/index.html" };
+    call(guard, "read", { event: { params: readParams } });
+    afterCall(guard, "read", {
+      event: { params: readParams, result: { details: { status: "completed" } } },
+    });
+    const edit = { path: "pocket-poster/app.js", oldText: "oldLayout()", newText: "fitText()" };
+    call(guard, "edit", { event: { params: edit } });
+    afterCall(guard, "edit", {
+      event: { params: edit, result: { details: { status: "completed" } } },
+    });
+    const params = { relativeDirectory: "pocket-poster" };
+    assert.deepEqual(call(guard, "pixel_ods_workspace_preview", { event: { params } }), { params }, prompt);
+    const snapshot = workspacePreviewSnapshot("pocket-poster", [
+      { path: readParams.path, content: "<!doctype html><script src=app.js></script>" },
+      { path: "pocket-poster/app.js", content: "fitText()" },
+      { path: "pocket-poster/style.css", content: "body{margin:0}" },
+    ]);
+    afterCall(guard, "pixel_ods_workspace_preview", {
+      event: { params, result: { details: {
+        ...snapshot, schemaVersion: 1, kind: "ods-pixel-workspace-preview",
+        status: "succeeded", relativeDirectory: "pocket-poster", port: 9437,
+        url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+        httpStatus: 200, readbackVerified: true, executable: false, overwritten: false,
+      } } },
+    });
+    const verification = guard.verificationForRun("run-1");
+    assert.equal(verification.status, "passed", prompt);
+    assert.doesNotMatch(verification.text, /active model wrote every published file/);
+  }
+});
+
 test("new artwork requests still reject read-only reuse of existing creative bytes", () => {
   for (const prompt of [
     "Make a new interactive artwork using the existing design notes.",
@@ -9792,6 +9834,7 @@ test("new artwork requests still reject read-only reuse of existing creative byt
     "Design a new interactive artwork using the existing design notes.",
     "Build a new app using the existing design notes.",
     "Show me an original application.",
+    "Build a new original artwork and publish the updated new-artwork/index.html website.",
   ]) {
     const guard = createToolLoopGuard();
     guard.observeRun(

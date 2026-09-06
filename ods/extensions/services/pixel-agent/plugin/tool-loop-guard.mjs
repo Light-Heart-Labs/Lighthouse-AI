@@ -4605,8 +4605,10 @@ function userMessageRequiresWorkspacePreviewAuthorship(
     /\b(?:from\s+scratch|novel|original)\b/i.test(text);
   const reuseExisting =
     /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,96}\b(?:directory|folder)\b/i.test(text) ||
+    // Publishing a repaired named HTML artifact is reuse even when the edit
+    // instruction says "make the title fit". It need not rewrite every file.
     (hasWorkspaceHtmlTarget(text) &&
-      /\b(?:existing|previous|prior|already[- ]created)\b/i.test(text)) ||
+      /\b(?:existing|previous|prior|already[- ]created|updated|corrected|repaired|revised)\b/i.test(text)) ||
     /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:apps?|applications?|artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
     /\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b[^.!?;\n]{0,48}\bin\s+(?:(?:my|the|our)\s+)?workspace\b/i.test(text) ||
     /\b(?:show|open|view|preview)\s+(?:me\s+)?(?:the|that|this|our|my)\b[^.!?;\n]{0,64}\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b/i.test(text);
