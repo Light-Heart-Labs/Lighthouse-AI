@@ -9466,6 +9466,9 @@ test("shows named existing artwork without forcing replacement or claiming new a
     "Yes—show me the recipe app here so I can try changing the campers and saving an ingredient.",
     "Show me the existing application.",
     "Show me the recipe app in my workspace.",
+    "Show me the existing weather-scene/index.html preview here so I can try its sunny, rainy and pause controls.",
+    "Publish the existing weather-scene/index.html as a working interactive preview here now. I am explicitly requesting its preview.",
+    "Open clockwork-tide/index.html here.",
   ]) {
     assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
     const guard = createToolLoopGuard();
@@ -9491,6 +9494,10 @@ test("shows named existing artwork without forcing replacement or claiming new a
     "Show the artwork but do not publish it.",
     "Make an animated illustration without showing a preview.",
     "Read my artwork notes and summarize them.",
+    "Explain weather-scene/index.html without opening it.",
+    "Read weather-scene/index.html and summarize the source.",
+    "Do not publish weather-scene/index.html.",
+    "Show me the contents of README.md.",
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
 

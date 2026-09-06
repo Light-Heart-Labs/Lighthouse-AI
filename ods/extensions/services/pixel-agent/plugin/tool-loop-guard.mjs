@@ -4407,6 +4407,10 @@ export function userMessageRequestsWorkspaceMutation(messages, prompt = undefine
     .some((clause) => mutation.test(clause) && !rejection.test(clause));
 }
 
+function hasWorkspaceHtmlTarget(text) {
+  return /\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/i.test(text);
+}
+
 export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
@@ -4452,6 +4456,10 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     nonVisualImplementation
   ) return false;
   const directPreview =
+    // A dot inside index.html is part of the requested filename, not a
+    // sentence boundary between the preview action and its target.
+    (hasWorkspaceHtmlTarget(text) &&
+      /\b(?:preview|publish|serve|open|show|view)\b/i.test(text)) ||
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:artworks?|illustrations?|charts?|diagrams?|animations?|games?)\b/i.test(text) ||
     /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
     /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
@@ -4487,6 +4495,8 @@ function userMessageRequiresWorkspacePreviewAuthorship(
     /\b(?:design|make)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\b/i.test(text) ||
     /\b(?:from\s+scratch|novel|original)\b/i.test(text);
   const reuseExisting =
+    (hasWorkspaceHtmlTarget(text) &&
+      /\b(?:existing|previous|prior|already[- ]created)\b/i.test(text)) ||
     /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:apps?|applications?|artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
     /\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b[^.!?;\n]{0,48}\bin\s+(?:(?:my|the|our)\s+)?workspace\b/i.test(text) ||
     /\b(?:show|open|view|preview)\s+(?:me\s+)?(?:the|that|this|our|my)\b[^.!?;\n]{0,64}\b(?:apps?|applications?|artwork|animation|chart|diagram|game|illustration|site|website)\b/i.test(text);
