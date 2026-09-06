@@ -97,6 +97,13 @@ pass() { log "${GREEN}✓${NC} $1"; PASS=$((PASS+1)); }
 fail() { log "${RED}✗${NC} $1"; FAIL=$((FAIL+1)); }
 warn() { log "${YELLOW}⚠${NC} $1"; WARN=$((WARN+1)); }
 
+if ! : > "$LOG_FILE" 2>/dev/null; then
+    echo -e "${RED}✗ ERROR: Cannot write to log file.${NC}" >&2
+    echo -e "  Path: ${LOG_FILE}" >&2
+    echo -e "  Fix: Check permissions on directory: ${ODS_DIR}" >&2
+    exit 1
+fi
+
 echo "" > "$LOG_FILE"
 log "========================================"
 log "ODS Pre-flight Check"
