@@ -286,11 +286,11 @@ REMOTESCRIPT
   log "  Sessions: $session_count total, ${#to_remove[@]} to remove"
 
   if [ "${#to_remove[@]}" -gt 0 ]; then
-    local rm_args=""
+    local paths_to_remove=()
     for sid in "${to_remove[@]}"; do
-      rm_args="${rm_args} ${remote_dir}/${sid}.jsonl"
+      paths_to_remove+=("${remote_dir}/${sid}.jsonl")
     done
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "${host}" "rm -f ${rm_args}" 2>/dev/null || true
+    printf '%s\0' "${paths_to_remove[@]}" | ssh -o ConnectTimeout=5 -o BatchMode=yes "${host}" "xargs -0 rm -f" 2>/dev/null || true
     log "  [DONE] Removed ${#to_remove[@]} sessions on $host"
   else
     log "  [OK] No cleanup needed"
