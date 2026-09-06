@@ -52,6 +52,14 @@ services:
       - TS_USERSPACE=false
     volumes:
       - ./data/tailscale:/var/lib/tailscale:z
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     healthcheck:
       # `tailscale status` returns 0 if the daemon is up and authenticated,
       # 1 if not. Useful for "is this device on the tailnet right now."
