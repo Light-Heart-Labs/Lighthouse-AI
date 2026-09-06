@@ -4035,7 +4035,9 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
   const peer = patterns.map((pattern) => text.match(pattern)?.[1]).find(Boolean);
   if (
     !peer ||
-    /^(?:this|the|my|our|local|ODS|Pixel|computer|machine|host|system|network|Tailscale)$/i.test(peer) ||
+    // Resolving "its log path" names no network peer. Pronouns and articles
+    // must not grant a probe or divert ordinary workspace tools into the broker.
+    /^(?:a|an|it|its|they|them|their|your|this|that|these|those|the|my|our|local|ODS|Pixel|computer|machine|host|system|network|Tailscale)$/i.test(peer) ||
     peer.includes("..") ||
     peer.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))
   ) {

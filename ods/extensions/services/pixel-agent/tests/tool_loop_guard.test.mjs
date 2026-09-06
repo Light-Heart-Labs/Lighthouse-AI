@@ -2994,6 +2994,22 @@ test("classifies explicit local and SSH host commands without capturing guidance
   });
 });
 
+test("filesystem pronouns do not authorize network-peer probes", () => {
+  const prompt = "Repeat a bounded Stop-control test in a new autonomy-stop-replay directory. Write a Python standard-library program that appends one timestamp per second for at most three minutes to progress.log inside that directory, using the script location to resolve its log path. Run it as a tracked command. Keep monitoring it with the process tool; do not send a final reply while it is still running. I will press the ODS Stop button mid-run. Preserve the partial log and all previous files.";
+  for (const text of [prompt, "Check the module and resolve its path.", "Test the loader and resolve their relative paths."]) {
+    assert.equal(userMessageNetworkPeerRequest([], text), undefined, text);
+    assert.equal(userMessageOperationsRequirements([], text).required, false, text);
+  }
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  assert.notEqual(call(guard, "write", { event: { params: {
+    path: "autonomy-stop-replay/stop_test.py", content: "print('test')\n",
+  } } })?.block, true);
+  assert.deepEqual(userMessageNetworkPeerRequest([], "Resolve Strixy on my local network."), {
+    peer: "Strixy", ports: [22, 80, 443, 3389, 5985, 5986],
+  });
+});
+
 test("binds one owner-named private peer to bounded read-only reachability evidence", () => {
   const prompt =
     "Strixy is a Windows computer that should be online on my current local network. " +
