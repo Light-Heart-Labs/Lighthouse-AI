@@ -130,6 +130,14 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
     exit 1
 fi
 
+if command -v git >/dev/null 2>&1 && git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+        log_error "Safety abort: $INSTALL_DIR appears to be a source code checkout, not a deployed installation (it is a git working tree lacking a .env file)."
+        log_error "Refusing to rm -rf your source tree."
+        exit 1
+    fi
+fi
+
 log_info "Install directory: $INSTALL_DIR"
 $KEEP_MODELS && log_info "Keeping models (--keep-models)"
 $KEEP_DATA && log_info "Keeping user data (--keep-data)"
