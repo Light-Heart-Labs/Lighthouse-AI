@@ -10234,3 +10234,35 @@ test("an abort failure is contained and remains a blocked tool result", () => {
   assert.equal(result.blockReason, WEB_LOOP_ABORT_REASON);
   assert.match(warnings[0], /abort failed/);
 });
+
+
+test("general duplicate-file verification preserves a custom audit reply without certifying tests", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Create and run a useful file-audit utility in a new duplicate-demo workspace directory. Report duplicate file contents by SHA-256. Use the Python standard library and verify the results against the samples.",
+  });
+  for (const command of ["python3 audit_dups.py .", "sha256sum README.txt Report.txt"]) {
+    const params = { command, workdir: "/workspace/duplicate-demo" };
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", { event: { params, result: { details: { exitCode: 0 } } } });
+  }
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "none" });
+  assert.equal(reply(guard, { event: { payload: { text: "The audit and SHA-256 comparison found two matching groups." } } }), undefined);
+});
+
+test("future verification language does not hide an honest scheduling capability explanation", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Schedule a task to create schedule-demo/hello.txt in your workspace. Report the job identifier, then we will verify that it executed.",
+  });
+  assert.deepEqual(guard.verificationForRun("run-1"), { status: "none" });
+  assert.equal(reply(guard, { event: { payload: { text: "Scheduling is unavailable in this session; no job was created." } } }), undefined);
+});
+
+test("an explicit unittest requirement remains unsatisfied without a test run", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Work in /workspace/project. Create probe.py and test_probe.py, then verify them with unittest.",
+  });
+  assert.equal(reply(guard).payload.text, VERIFICATION_NOT_RUN_DELIVERY_PREFIX);
+});

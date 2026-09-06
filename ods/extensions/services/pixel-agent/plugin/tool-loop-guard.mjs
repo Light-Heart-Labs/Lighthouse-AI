@@ -7246,10 +7246,15 @@ export function createToolLoopGuard({
           /\bparsed\s+JSON\b|\bjson\.loads\b/i.test(
             currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
           );
+        // General verification can be a hash comparison, an inventory read,
+        // or a future follow-up. Only an explicit test-run request requires
+        // a recognized test-runner receipt. Unknown custom checks are not a
+        // formal pass, and recorded failed or pending checks still win.
         state.workspaceVerificationRequested = state.workspaceTaskRequested &&
-          /\b(?:(?:run|execute)\s+(?:the\s+)?(?:unit\s*)?tests?|verification|verify|test\s+suite)\b/i.test(
-            currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
-          );
+          (state.workspacePythonUnittestRequested ||
+            /\b(?:(?:run|execute)\s+(?:the\s+)?(?:unit\s*)?tests?|test\s+suite)\b/i.test(
+              currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
+            ));
         state.workspaceToolSearchRouted = false;
         state.workspaceToolSearchQueries.clear();
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
