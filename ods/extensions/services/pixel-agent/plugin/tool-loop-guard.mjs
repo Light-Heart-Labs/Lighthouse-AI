@@ -4549,9 +4549,17 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(text) &&
     !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
   const explicitDelivery = hasExplicitWorkspacePreviewDirective(text);
+  // An edit constraint does not veto an independently requested display.
+  // Keep negative compound requests closed ("never create and publish").
+  // A filename's dot is not a sentence boundary.
+  const independentDelivery = explicitDelivery && text
+    .split(/[!?;\n]+|\.(?=\s|$)/)
+    .some((clause) =>
+      !/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b/i.test(clause) &&
+      hasExplicitWorkspacePreviewDirective(clause));
   if (
     rejectsPreview ||
-    rejectsCreation ||
+    (rejectsCreation && !independentDelivery) ||
     nativeOnly ||
     (!explicitDelivery && (explanatoryOnly || nonVisualImplementation))
   ) return false;

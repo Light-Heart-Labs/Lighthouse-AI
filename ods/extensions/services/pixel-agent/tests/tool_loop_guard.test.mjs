@@ -10357,6 +10357,7 @@ test("explicit repair publication survives missing prior preview metadata", () =
   for (const prompt of [
     "Update the website and publish its preview.",
     "Fix the CSV parser defects and publish the updated pocket-budget/index.html website.",
+    "Do not make unrelated edits. Publish the existing pocket-budget/index.html website.",
   ]) {
     const guard = createToolLoopGuard();
     guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
@@ -10377,4 +10378,19 @@ test("explicit repair publication survives missing prior preview metadata", () =
   assert.equal(call(guard, "pixel_ods_workspace_preview", {
     event: { params: { relativeDirectory: "pocket-budget" } },
   })?.block, true, "A vague edit still needs the prior preview binding");
+});
+
+test("explicit publication survives an unrelated creation constraint", () => {
+  for (const prompt of [
+    "Repair the existing voxel-train website. Do not make more blind camera-offset changes. Run a focused check on the actual projection function, then publish the corrected voxel-train/index.html animation website.",
+    "Do not create replacement files. Display the existing pocket-budget/index.html website.",
+    "Do not rewrite the parser; publish the existing website preview.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+  for (const prompt of [
+    "Do not create and publish a website.",
+    "Do not create index.html and publish the website.",
+    "Never make a game and then publish its preview.",
+    "Repair the website but do not publish it.",
+    "Do not make camera changes or publish the scene.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
