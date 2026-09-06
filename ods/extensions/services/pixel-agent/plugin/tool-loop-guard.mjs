@@ -1749,7 +1749,10 @@ function processEvidence(step) {
   const lines = safeHostLines(step);
   if (!lines) return undefined;
   const entries = lines.map((line) => {
-    const match = line.match(/^([0-9]+)\s+([0-9]+)\s+([A-Za-z0-9_.+-]{1,64})\s+(\S{1,16})\s+([0-9.]+)\s+([0-9.]+)\s+([A-Za-z0-9_.+:@%()\/-]{1,128})$/);
+    // ps comm is one trailing field, not necessarily one word. Real process
+    // names can contain ordinary spaces. The broker supplies comm, not argv;
+    // keep the numeric prefix and bounded alphabet excluding markup/controls.
+    const match = line.match(/^([0-9]+)\s+([0-9]+)\s+([A-Za-z0-9_.+-]{1,64})\s+(\S{1,16})\s+([0-9.]+)\s+([0-9.]+)\s+([A-Za-z0-9_.+:@%()\/ -]{1,128})$/);
     if (!match) return undefined;
     const cpu = Number(match[5]);
     const memory = Number(match[6]);

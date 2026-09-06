@@ -4741,6 +4741,67 @@ test("binds every requested host fact to exact workflow actions and terminal out
   assert.doesNotMatch(text, /Model claimed success/);
 });
 
+test("preserves terminal host facts when a process comm name contains spaces", () => {
+  for (const command of ["demo worker", "demo  worker", "worker (main)"]) {
+    const guard = createToolLoopGuard();
+    const jobId = "ops-1234567890123-abcdef123456";
+    const steps = [
+      { id: "identity", target: "ods-host", action: "host.identity" },
+      { id: "processes", target: "ods-host", action: "host.processes" },
+    ];
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+      { prompt: "Report the ODS host hostname and important processes." }
+    );
+    afterCall(guard, "pixel_ops_workflow_submit", { event: {
+      params: { steps },
+      result: { details: { jobId, status: "submitted", kind: "workflow" } },
+    } });
+    afterCall(guard, "pixel_ops_job_wait", { event: {
+      params: { jobId },
+      result: { details: {
+        jobId, status: "succeeded", waitTimedOut: false,
+        steps: steps.map(({ id, ...step }) => ({
+          ...step, stepId: id, exitCode: 0,
+          stdout: id === "identity" ? "test-host\n" : `10 1 demo S 0.0 0.1 ${command}\n`,
+          stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+        })),
+      } },
+    } });
+    const result = guard.verificationForRun("run-1");
+    assert.equal(result.status, "passed", command);
+    assert.match(result.text, /Hostname: `test-host`/);
+    assert.ok(result.text.includes(`${command} (pid 10, 0% CPU, 0.1% memory)`));
+    assert.doesNotMatch(result.text, /did not obtain a matching terminal/);
+  }
+});
+
+test("space-bearing process names do not admit markup or control characters", () => {
+  for (const command of ["demo <script>", "demo\u001bworker", "demo `worker`", "demo\tworker", "x".repeat(129)]) {
+    const guard = createToolLoopGuard();
+    const jobId = "ops-1234567890123-abcdef123456";
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+      { prompt: "Report the ODS host processes." }
+    );
+    afterCall(guard, "pixel_ops_run", { event: {
+      params: { target: "ods-host", action: "host.processes" },
+      result: { details: { jobId, status: "submitted", kind: "action" } },
+    } });
+    afterCall(guard, "pixel_ops_job_wait", { event: {
+      params: { jobId },
+      result: { details: {
+        jobId, status: "succeeded", waitTimedOut: false,
+        steps: [{ stepId: "processes", target: "ods-host", action: "host.processes",
+          exitCode: 0, stdout: `10 1 demo S 0.0 0.1 ${command}\n`, stderr: "",
+          outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+        }],
+      } },
+    } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+  }
+});
+
 test("renders a structurally validated broad host inventory without command arguments or environments", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
