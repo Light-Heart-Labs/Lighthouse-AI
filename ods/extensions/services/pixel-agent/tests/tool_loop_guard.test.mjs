@@ -8821,6 +8821,17 @@ test("publishes an existing app without treating keep-unchanged instructions as 
   const prompt = "Publish the existing energy-dashboard directory again now. Keep the app and CSV unchanged; I want to use the preview.";
   assert.equal(userMessageRequestsWorkspacePreview([], prompt), true);
   assert.equal(userMessageRequestsWorkspaceVisualContinuation([], prompt), false);
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  const readParams = { path: "energy-dashboard/index.html" };
+  call(guard, "read", { event: { params: readParams } });
+  afterCall(guard, "read", {
+    event: { params: readParams, result: { details: { status: "completed" } } },
+  });
+  const previewParams = { relativeDirectory: "energy-dashboard" };
+  assert.deepEqual(call(guard, "pixel_ods_workspace_preview", {
+    event: { params: previewParams },
+  }), { params: previewParams }, "displaying an unchanged app must not require a fresh write");
 });
 
 test("keeps every visual category on the model-authored write path", () => {

@@ -4495,6 +4495,7 @@ function userMessageRequiresWorkspacePreviewAuthorship(
     /\b(?:design|make)\s+(?:(?:me|us)\s+)?(?:a|an|another|new)\b/i.test(text) ||
     /\b(?:from\s+scratch|novel|original)\b/i.test(text);
   const reuseExisting =
+    /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,96}\b(?:directory|folder)\b/i.test(text) ||
     (hasWorkspaceHtmlTarget(text) &&
       /\b(?:existing|previous|prior|already[- ]created)\b/i.test(text)) ||
     /\b(?:existing|previous|prior|already[- ]created)\b[^.!?;\n]{0,48}\b(?:apps?|applications?|artwork|animation|chart|design|diagram|files?|game|illustration|site|website)\b/i.test(text) ||
