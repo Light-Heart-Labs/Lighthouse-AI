@@ -10557,3 +10557,150 @@ test('host evidence recognizes read/get and curly-apostrophe exclusions', () => 
   const prompt = 'In the sandbox, run command -v python3. Don’t inspect the host OS.';
   assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
 });
+
+test("AND-chain completed verification clears the previous failed direct test", () => {
+  for (const toolName of ["exec", "tool_call"]) {
+    for (const command of [
+      "rm -f test_db_*.sqlite && python3 test_reading_list.py",
+      "mkdir -p fixtures && cp sample.json fixtures/ && python3 test_reading_list.py 2>&1",
+      "cd /workspace/project && touch ready && python3 test_reading_list.py",
+    ]) {
+      const guard = createToolLoopGuard();
+      const direct = { command: "python3 test_reading_list.py", workdir: "/workspace/project" };
+      call(guard, "exec", { event: { params: direct } });
+      afterCall(guard, "exec", { event: { params: direct, result: { details: { exitCode: 1 } } } });
+      assert.equal(guard.verificationForRun("run-1").status, "failed");
+      const args = { command, workdir: "/workspace/project" };
+      const params = toolName === "tool_call" ? { id: "exec", args } : args;
+      const result = { details: { status: "completed", exitCode: 0, aggregated: "Ran 4 tests\nOK" } };
+      const before = call(guard, toolName, { event: { params } });
+      assert.notEqual(before?.block, true, command);
+      afterCall(guard, toolName, { event: { params,
+        result: toolName === "tool_call" ? wrappedCoreResult("exec", result) : result } });
+      assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed" }, `${toolName}: ${command}`);
+      assert.equal(reply(guard), undefined);
+    }
+  }
+});
+
+test("AND-chain ambiguous or skip-capable results cannot clear a failed verification", () => {
+  const commands = [
+    "true || echo skip && python3 test_reading_list.py",
+    "echo setup | cat && python3 test_reading_list.py",
+    "echo setup; python3 test_reading_list.py",
+    "echo $(true) && python3 test_reading_list.py",
+    "echo `true` && python3 test_reading_list.py",
+    "echo setup > setup.log && python3 test_reading_list.py",
+    "echo setup && python3 test_reading_list.py > test.log",
+    "echo setup && python3 test_reading_list.py 2>&1 > /dev/null",
+    "echo 'setup && python3 test_reading_list.py'",
+    "echo \"setup && python3 test_reading_list.py\"",
+    "echo setup # && python3 test_reading_list.py",
+    "echo setup \\&& python3 test_reading_list.py",
+    "echo setup\n&& python3 test_reading_list.py",
+    "exit 0 && python3 test_reading_list.py",
+    "exec true && python3 test_reading_list.py",
+    "set -n && python3 test_reading_list.py",
+    "return 0 && python3 test_reading_list.py",
+    "trap true EXIT && python3 test_reading_list.py",
+    "eval true && python3 test_reading_list.py",
+    "echo setup && cd other && python3 test_reading_list.py",
+    "cd other && echo setup && python3 test_reading_list.py",
+    "cd /workspace/* && echo setup && python3 test_reading_list.py",
+    "cd /workspace/$(echo project) && echo setup && python3 test_reading_list.py",
+    "echo setup && && python3 test_reading_list.py",
+    "echo setup && python3 test_reading_list.py && echo done",
+  ];
+  for (const command of commands) {
+    const guard = createToolLoopGuard();
+    call(guard, "read");
+    afterCall(guard, "exec", { event: { params: { command: "python3 test_reading_list.py" },
+      result: { details: { exitCode: 1 } } } });
+    // Synthetic receipt classification only: none of these command strings runs.
+    afterCall(guard, "exec", { event: { params: { command }, result: { details: { exitCode: 0 } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed", command);
+  }
+});
+
+test("AND-chain classification does not loosen pre-execution authorization", () => {
+  for (const [command, reason] of [
+    ["rm -rf /workspace/project && python3 test_reading_list.py", RECURSIVE_DELETE_REQUIRES_OWNER_REASON],
+    ["python3 test_first.py && python3 test_reading_list.py", VERIFICATION_COMMAND_NOT_AUDITABLE_REASON],
+    ["python3 test_reading_list.py && echo done", VERIFICATION_COMMAND_NOT_AUDITABLE_REASON],
+  ]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (...args) => { prepared.push(args); return "must-not-run"; }, signal: () => true,
+    } });
+    assert.deepEqual(call(guard, "exec", { event: { params: { command } } }), { block: true, blockReason: reason });
+    assert.deepEqual(prepared, []);
+  }
+});
+
+test("AND-chain failure remains failed after an unrelated successful echo", () => {
+  const guard = createToolLoopGuard();
+  const params = { command: "mkdir -p fixtures && python3 test_reading_list.py" };
+  call(guard, "exec", { event: { params } });
+  afterCall(guard, "exec", { event: { params, result: { details: { exitCode: 1 } } } });
+  assert.equal(guard.verificationForRun("run-1").status, "failed");
+  afterCall(guard, "exec", { event: { params: { command: "echo done" }, result: { details: { exitCode: 0 } } } });
+  assert.equal(guard.verificationForRun("run-1").status, "failed");
+  assert.equal(reply(guard).payload.text, VERIFICATION_FAILED_DELIVERY_PREFIX);
+});
+
+test("AND-chain pending verification requires completion from its exact session", () => {
+  for (const exitCode of [0, 1]) {
+    const guard = createToolLoopGuard();
+    const params = { command: "mkdir -p fixtures && python3 test_reading_list.py" };
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", { event: { params, result: { details: { status: "running", sessionId: "chain-session" } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "pending");
+    afterCall(guard, "process", { event: { params: { action: "poll", sessionId: "other-session" },
+      result: { details: { status: "completed", sessionId: "other-session", exitCode: 0 } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "pending");
+    afterCall(guard, "process", { event: { params: { action: "poll", sessionId: "chain-session" },
+      result: { details: { status: "completed", sessionId: "chain-session", exitCode } } } });
+    assert.equal(guard.verificationForRun("run-1").status, exitCode === 0 ? "passed" : "failed");
+  }
+});
+
+test("AND-chain exit-zero unittest failures and empty receipts are not passing verification", () => {
+  for (const result of [
+    {},
+    { details: { status: "running" } },
+    { details: { exitCode: 0, aggregated: "Ran 0 tests\nOK" } },
+    { details: { exitCode: 0, aggregated: "FAIL: expected value\nAssertionError" } },
+    { details: { exitCode: 0, aggregated: "OK (expected failures=1)" } },
+  ]) {
+    const guard = createToolLoopGuard();
+    const params = { command: "rm -f test_db_*.sqlite && python3 test_reading_list.py" };
+    call(guard, "exec", { event: { params } });
+    afterCall(guard, "exec", { event: { params: { command: "python3 test_reading_list.py" }, result: { details: { exitCode: 1 } } } });
+    afterCall(guard, "exec", { event: { params, result } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed", JSON.stringify(result));
+  }
+});
+
+test("AND-chain cancellation wrapper retains verification and latest failure", () => {
+  for (const toolName of ["exec", "tool_call"]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (runId, command) => { prepared.push([runId, command]); return `controlled-command-${prepared.length}`; },
+      signal: () => true,
+    } });
+    const command = "mkdir -p fixtures && python3 test_reading_list.py 2>&1";
+    const args = { command, workdir: "/workspace/project" };
+    const params = toolName === "tool_call" ? { id: "exec", args } : args;
+    const wrapped = call(guard, toolName, { event: { params } });
+    assert.deepEqual(prepared, [["run-1", command]]);
+    assert.equal(toolName === "tool_call" ? wrapped.params.args.workdir : wrapped.params.workdir, "/workspace/project");
+    const result = { details: { exitCode: 0 } };
+    afterCall(guard, toolName, { event: { params: wrapped.params,
+      result: toolName === "tool_call" ? wrappedCoreResult("exec", result) : result } });
+    assert.equal(guard.verificationForRun("run-1").status, "passed");
+    afterCall(guard, "exec", { event: { params: { command: "python3 test_other.py" }, result: { details: { exitCode: 1 } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+    afterCall(guard, "exec", { event: { params: { command: "echo done" }, result: { details: { exitCode: 0 } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+  }
+});

@@ -938,9 +938,43 @@ function verificationCommandIsAuditable(params) {
   return !/(?:\r|\n|[|;<>`]|&&|\|\||\$\()/.test(parsed.withoutStderrMerge);
 }
 
+// This recognizes result evidence only; the pre-execution audit/authorization
+// gate still uses verificationCommandIsAuditable without accepting new syntax.
+function andChainVerificationParams(params) {
+  if (typeof params?.command !== "string" || /[\r\n]/.test(params.command)) return undefined;
+  const command = params.command.trim().replace(/\s+2>&1\s*$/i, "").trim();
+  const segments = command.split("&&").map((segment) => segment.trim());
+  if (segments.length < 2) return undefined;
+  // Deliberately support only literal simple words. Quotes, escapes, comments,
+  // substitutions, redirections and other shell operators require a parser.
+  if (segments.some((segment) => !/^[A-Za-z0-9._/*?=,:@%+\-]+(?:[ \t]+[A-Za-z0-9._/*?=,:@%+\-]+)*$/.test(segment))) {
+    return undefined;
+  }
+  let workdir = params.workdir;
+  const workspaceCd = segments[0].match(/^cd[ \t]+(\/workspace(?:\/[A-Za-z0-9._/-]+)?)$/);
+  if (workspaceCd) {
+    workdir = workspaceCd[1];
+    segments.shift();
+  }
+  const finalCommand = segments.pop();
+  // Shell builtins such as exit, exec, set, eval, trap and later cd commands
+  // can skip/mask the final test or change its cwd despite an exit-zero receipt.
+  // Restrict setup to ordinary commands that cannot change the parent shell.
+  if (!segments.length || segments.some((segment) => !/^(?:rm|mkdir|cp|mv|touch|echo|true)(?:[ \t]|$)/.test(segment))) {
+    return undefined;
+  }
+  const finalParams = { ...params, command: finalCommand, workdir };
+  return verificationCommand(finalParams) && verificationCommandIsAuditable(finalParams)
+    ? finalParams : undefined;
+}
+
 function verificationExecFingerprint(params) {
-  const parsed = verificationCommand(params);
-  if (!parsed || !verificationCommandIsAuditable(params)) return undefined;
+  let parsed = verificationCommand(params);
+  if (!parsed || !verificationCommandIsAuditable(params)) {
+    params = andChainVerificationParams(params);
+    if (!params) return undefined;
+    parsed = verificationCommand(params);
+  }
   const command = parsed.command
     .replace(/\s+2>&1\s*$/i, "")
     .replace(/\s+/g, " ");
@@ -7995,6 +8029,9 @@ export function createToolLoopGuard({
       if (verificationFingerprint) state.latestVerificationStatus = "pending";
       return;
     }
+    // An empty or nonterminal receipt is not evidence of a successful test.
+    if (verificationFingerprint && !execFailed(execEvent) &&
+        !Number.isInteger(execEvent?.result?.details?.exitCode)) return;
     const verificationFailed =
       execFailed(execEvent) ||
       (
