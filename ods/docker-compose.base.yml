@@ -53,17 +53,14 @@ services:
       - LLAMA_ARG_FLASH_ATTN=${LLAMA_ARG_FLASH_ATTN:-auto}
       - LLAMA_ARG_CACHE_TYPE_K=${LLAMA_ARG_CACHE_TYPE_K:-f16}
       - LLAMA_ARG_CACHE_TYPE_V=${LLAMA_ARG_CACHE_TYPE_V:-f16}
-      # Optional MoE expert CPU offload. Do not default to an empty value:
-      # llama.cpp parses this as an integer and exits if it is blank.
-      - LLAMA_ARG_N_CPU_MOE
-      # Optional long-context runtime flags. Leave unset unless a model
-      # profile explicitly requires them.
-      - LLAMA_ARG_NO_CACHE_PROMPT
-      - LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS
+      # Optional MoE expert CPU offload (integer, or unset). Set via .env if needed.
+      # LLAMA_ARG_N_CPU_MOE: set only if MoE offload is configured for the model
+      # Optional long-context runtime flags. Set via .env if model profile requires.
+      # LLAMA_ARG_NO_CACHE_PROMPT: set to "1" to disable prompt caching
+      # LLAMA_ARG_CHECKPOINT_EVERY_N_TOKENS: set to checkpoint interval if needed
       # Optional speculative decoding for GGUFs with llama.cpp MTP support.
-      # Leave unset unless the selected model/runtime explicitly supports it.
-      - LLAMA_ARG_SPEC_TYPE
-      - LLAMA_ARG_SPEC_DRAFT_N_MAX
+      # LLAMA_ARG_SPEC_TYPE: set to "draftmodel" if draft model is available
+      # LLAMA_ARG_SPEC_DRAFT_N_MAX: set to max draft tokens if using speculative decoding
     security_opt:
       - no-new-privileges:true
     logging: *default-logging
