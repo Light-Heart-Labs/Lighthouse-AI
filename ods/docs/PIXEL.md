@@ -456,8 +456,13 @@ act as a capability gate:
   `allow-same-origin`. The remote document can run its scripts and load its own
   immutable local assets, but it cannot inherit Dashboard cookies, DOM, or
   storage authority; the same CSP applies to the new-tab view. Both routes
-  block outbound connections, form submissions, popups, top-level navigation,
-  downloads, camera, microphone, and geolocation. Starting a
+  allow client-side form validation/submit handlers and browser downloads for
+  exports (for example, a clicked CSV download link). CSP still denies every
+  network form action with `form-action 'none'`. Both routes block external
+  connections, popups, top-level navigation, camera, microphone, and
+  geolocation. The standard `allow-downloads` permission enables browser-managed
+  downloads; it does not guarantee that every download required a user gesture,
+  and it grants no application execution or arbitrary host-file access. Starting a
   development server inside Pixel's disposable sandbox is explicitly rejected
   because that port is not the owner's browser-facing host.
 

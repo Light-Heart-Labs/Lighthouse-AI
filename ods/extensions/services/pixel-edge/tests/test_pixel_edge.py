@@ -381,8 +381,12 @@ class TestPreviewRelay(BaseEdgeTest):
                 hashlib.sha256(b"<button id=launch>Remote preview</button>").hexdigest(),
             )
             csp = resp.headers["Content-Security-Policy"]
-            self.assertIn("sandbox allow-scripts", csp)
+            self.assertIn("sandbox allow-scripts allow-forms allow-downloads;", csp)
             self.assertNotIn("allow-same-origin", csp)
+            self.assertNotIn("allow-popups", csp)
+            self.assertNotIn("allow-top-navigation", csp)
+            self.assertIn("form-action 'none'", csp)
+            self.assertIn("connect-src 'self'", csp)
             self.assertIn("frame-ancestors 'self'", csp)
         self.assertEqual(self.up_runner.app["preview_hosts"], ["pixel-preview.internal"])
 

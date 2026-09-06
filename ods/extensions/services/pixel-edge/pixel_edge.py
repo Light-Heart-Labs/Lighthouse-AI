@@ -963,7 +963,7 @@ async def _stream_upstream(
 
 
 _REMOTE_PREVIEW_CSP = (
-    "sandbox allow-scripts; default-src 'self' data: blob:; "
+    "sandbox allow-scripts allow-forms allow-downloads; default-src 'self' data: blob:; "
     "connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "
     "font-src 'self' data:; script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; "

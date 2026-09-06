@@ -197,13 +197,16 @@ export function resolvePreviewAccess(preview, browserLocation = globalThis.locat
   if (loopback || !/^https?:$/.test(browserLocation?.protocol || '')) {
     return {
       url: preview.url,
-      sandbox: 'allow-scripts allow-same-origin',
+      // Forms may run client-side submit handlers; the preview CSP still
+      // denies network form actions. Downloads support in-app export links.
+      sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
       route: 'loopback',
     }
   }
   return {
     url: `/pixel-preview/${preview.siteId}/`,
-    sandbox: 'allow-scripts',
+    // Keep the remote relay opaque even though it shares the Dashboard URL.
+    sandbox: 'allow-scripts allow-forms allow-downloads',
     route: 'private-dashboard',
   }
 }

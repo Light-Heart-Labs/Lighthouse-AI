@@ -146,6 +146,7 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
                 assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
                 assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
                 assert "connect-src 'none'" not in response.headers["Content-Security-Policy"]
+                assert "form-action 'none'" in response.headers["Content-Security-Policy"]
                 assert "frame-ancestors http://localhost:* http://127.0.0.1:*" in (
                     response.headers["Content-Security-Policy"]
                 )

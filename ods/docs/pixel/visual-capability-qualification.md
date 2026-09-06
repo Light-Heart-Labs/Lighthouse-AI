@@ -79,6 +79,11 @@ A qualifying result must meet all of these conditions:
    both omit same-origin authority while keeping scripts and immutable local
    assets usable; it must never send a client to its own loopback. Cross-site
    host/path pairs and unauthenticated relay requests are rejected.
+   Client-side form validation and submit handlers must work in both embedded
+   routes, including handlers that cancel submission with `preventDefault()`.
+   Network form actions remain forbidden by CSP. A clicked Blob/download link
+   must export the exact app-produced bytes without popups or top navigation.
+   Browser-managed download permission is not a user-gesture-only guarantee.
 5. The result is responsive, legible, keyboard reachable, and respects reduced
    motion where animation is nonessential. Touch controls are required for
    interactions that otherwise depend on hover or a physical keyboard.
@@ -103,6 +108,20 @@ result within 90 seconds on an otherwise idle supported laptop. Record slower
 results rather than deleting them; repeated misses are product defects to
 diagnose. Rich multi-file work may take longer, but it must emit visible
 progress and retain a bounded cancellation path.
+
+## Preview browser policy regression
+
+With Playwright and Chromium available, run from `ods/`:
+
+```sh
+node --test extensions/services/pixel-agent/tests/preview_browser.test.cjs
+```
+
+`PIXEL_TEST_CHROMIUM_EXECUTABLE` can select an existing Chromium executable.
+The test uses ephemeral loopback servers and the production iframe/CSP policies
+to exercise forms, exports, and containment in both preview modes. Its authored
+fixture is a browser-policy regression, not model capability evidence; retain
+separate live generated-app interaction results for qualification.
 
 ## Evidence packet
 

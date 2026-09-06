@@ -193,7 +193,7 @@ describe('Pixel', () => {
 
     const frame = await screen.findByTitle('Interactive Pixel preview')
     expect(frame).toHaveAttribute('src', preview.url)
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin')
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads')
     expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
     expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', preview.url)
 
@@ -211,7 +211,7 @@ describe('Pixel', () => {
       protocol: 'http:',
     })).toEqual({
       url: '/pixel-preview/site-0123456789abcdef01234567/',
-      sandbox: 'allow-scripts',
+      sandbox: 'allow-scripts allow-forms allow-downloads',
       route: 'private-dashboard',
     })
     expect(resolvePreviewAccess(preview, {
@@ -219,7 +219,7 @@ describe('Pixel', () => {
       protocol: 'http:',
     })).toEqual({
       url: preview.url,
-      sandbox: 'allow-scripts allow-same-origin',
+      sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
       route: 'loopback',
     })
   })
