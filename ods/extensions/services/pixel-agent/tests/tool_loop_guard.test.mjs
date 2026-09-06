@@ -8948,7 +8948,8 @@ test("recognizes only affirmative natural visual follow-ups", () => {
   }
 });
 
-test("binds a natural visual follow-up to the same session's verified artifact", () => {
+for (const mutationName of ["edit", "write"]) {
+test(`binds a natural visual follow-up via ${mutationName} to the same session's verified artifact`, () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -9021,6 +9022,13 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     blindEdit.blockReason,
     WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON
   );
+  const blindWrite = call(guard, "tool_call", {
+    ...run2,
+    event: { ...run2.event, params: { id: "write", args: {
+      path: "index.html", content: "<!doctype html><p>fast</p>",
+    } } },
+  });
+  assert.equal(blindWrite.blockReason, WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON);
 
   const read = call(guard, "tool_call", {
     ...run2,
@@ -9077,6 +9085,12 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   });
   assert.equal(escaped.block, true);
   assert.equal(escaped.blockReason, WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON);
+  const escapedWrite = call(guard, "tool_call", {
+    ...run2, event: { ...run2.event, params: { id: "write", args: {
+      path: "other-site/index.html", content: "<!doctype html><p>unrelated</p>",
+    } } },
+  });
+  assert.equal(escapedWrite.blockReason, WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON);
   const shell = call(guard, "tool_call", {
     ...run2,
     event: {
@@ -9087,34 +9101,46 @@ test("binds a natural visual follow-up to the same session's verified artifact",
   assert.equal(shell?.block, undefined);
   assert.equal(shell?.params?.args?.workdir, "/workspace/signal-garden");
 
+  const mutationArgs = mutationName === "write"
+    ? { path: "index.html", content: "<!doctype html><title>Signal Garden</title><p>fast</p>" }
+    : { path: "index.html", edits: [{ oldText: "slow", newText: "fast" }] };
   const edit = call(guard, "tool_call", {
     ...run2,
     event: {
       ...run2.event,
       toolCallId: "continuation-edit",
       params: {
-        id: "edit",
-        args: {
-          path: "index.html",
-          edits: [{ oldText: "slow", newText: "fast" }],
-        },
+        id: mutationName,
+        args: mutationArgs,
       },
     },
     context: { ...run2.context, toolCallId: "continuation-edit" },
   });
   assert.deepEqual(edit.params, {
-    id: "edit",
-    args: {
-      path: "signal-garden/index.html",
-      edits: [{ oldText: "slow", newText: "fast" }],
-    },
+    id: mutationName,
+    args: { ...mutationArgs, path: "signal-garden/index.html" },
   });
+  if (mutationName === "write") {
+    afterCall(guard, "tool_call", {
+      event: { runId: "run-2", toolCallId: "continuation-edit", params: edit.params,
+        result: wrappedCoreResult("write", { isError: true, details: { status: "error" } }) },
+      context: { ...run2.context, toolCallId: "continuation-edit" },
+    });
+    assert.equal(call(guard, "tool_call", {
+      ...run2, event: { ...run2.event, params: { id: "pixel_ods_workspace_preview",
+        args: { relativeDirectory: "signal-garden" } } },
+    }).blockReason, WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON);
+    assert.notEqual(call(guard, "tool_call", {
+      event: { runId: "run-2", toolCallId: "continuation-edit", params: edit.params },
+      context: { ...run2.context, toolCallId: "continuation-edit" },
+    })?.block, true, "a failed replacement can be retried");
+  }
   afterCall(guard, "tool_call", {
     event: {
       runId: "run-2",
       toolCallId: "continuation-edit",
       params: edit.params,
-      result: wrappedCoreResult("edit", { details: { status: "completed" } }),
+      result: wrappedCoreResult(mutationName, { details: { status: "completed" } }),
     },
     context: {
       runId: "run-2",
@@ -9123,6 +9149,11 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     },
   });
 
+  if (mutationName === "write") {
+    assert.equal(call(guard, "tool_call", {
+      ...run2, event: { ...run2.event, params: edit.params },
+    }).blockReason, REPEATED_WRITE_REQUIRES_PATCH_REASON);
+  }
   const preview = call(guard, "tool_call", {
     ...run2,
     event: {
@@ -9139,6 +9170,12 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     id: "pixel_ods_workspace_preview",
     args: { relativeDirectory: "signal-garden" },
   });
+  afterCall(guard, "tool_call", {
+    event: { runId: "run-2", toolCallId: "continuation-preview", params: preview.params,
+      result: wrappedPluginResult("pixel-ods", "pixel_ods_workspace_preview", { details: initialDetails }) },
+    context: { runId: "run-2", sessionId: "session-1", toolCallId: "continuation-preview" },
+  });
+  assert.notEqual(guard.verificationForRun("run-2").status, "passed", "a mutation attempt cannot validate an unchanged snapshot");
   const revisedDetails = {
     ...initialDetails,
     sha256: "c".repeat(64),
@@ -9182,6 +9219,7 @@ test("binds a natural visual follow-up to the same session's verified artifact",
     { params: { path: "signal-garden/index.html" } }
   );
 });
+}
 
 test("fresh-chat repair of an explicitly named workspace project can inspect and verify", () => {
   for (const verb of ["Repair", "Fix"]) {

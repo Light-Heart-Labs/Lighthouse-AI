@@ -154,13 +154,13 @@ export const WORKSPACE_PREVIEW_COMPLETE_REASON =
   "The workspace preview is already published and independently verified, and every owner-requested preview-file readback is complete. Do not call another tool or curl the preview URL; give the owner the concise final result now. ODS will attach the verified preview receipt and native side panel.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON =
-  "Pixel is updating the most recently verified visual artifact in this chat. Read the existing file inside that exact artifact directory before editing it; do not guess its contents, overwrite it with write, or create a replacement project.";
+  "Pixel is updating the most recently verified visual artifact in this chat. Read the existing file inside that exact artifact directory before editing or replacing it; do not guess its contents or create a replacement project.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON =
-  "Pixel has not yet completed the requested visual change. Make one focused edit to a file already read inside the bound artifact directory, then republish that same directory; do not publish an unchanged snapshot.";
+  "Pixel has not yet completed the requested visual change. Edit or replace a file already read inside the bound artifact directory, then republish that same directory; do not publish an unchanged snapshot.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON =
-  "Keep this visual follow-up in the bound artifact directory. Read existing files before focused edits, use sandbox exec/process for inspection and verification, then republish the same directory with pixel_ods_workspace_preview. Do not blindly overwrite it, create a replacement project, or modify another directory.";
+  "Keep this visual follow-up in the bound artifact directory. Read existing files before editing or replacing them, use sandbox exec/process for inspection and verification, then republish the same directory with pixel_ods_workspace_preview. Do not blindly overwrite files, create a replacement project, or modify another directory.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON =
   "Pixel could not find a readback-verified visual artifact bound to this chat, so it did not guess or modify unrelated workspace files. Ask the owner to build or republish the artifact first, or provide its exact workspace path explicitly.";
@@ -4671,6 +4671,10 @@ function workspacePreviewOutcome(event, expectedDirectory, state) {
   ) {
     return undefined;
   }
+  if (
+    state?.workspaceVisualContinuationRequested &&
+    details.sha256 === state.workspaceVisualContinuationOriginalSha256
+  ) return undefined;
   if (state?.workspacePreviewAuthorshipRequired) {
     const authored = workspacePreviewAuthoredSnapshot(state, expectedDirectory);
     const entryPath = `${expectedDirectory}/${details.entryFile}`;
@@ -5182,6 +5186,7 @@ export function createToolLoopGuard({
         workspaceVisualContinuationRequested: false,
         workspaceVisualContinuationUnavailable: false,
         workspaceVisualContinuationEdited: false,
+        workspaceVisualContinuationOriginalSha256: undefined,
         workspacePreviewInspectionRequested: false,
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
@@ -5885,7 +5890,7 @@ export function createToolLoopGuard({
           .split("/")
           .every((part) => WORKSPACE_PATH_COMPONENT.test(part));
       if (
-        !["read", "edit", "exec", "process", "tool_search", "tool_describe", WORKSPACE_PREVIEW_TOOL].includes(selectedToolName) ||
+        !["read", "write", "edit", "exec", "process", "tool_search", "tool_describe", WORKSPACE_PREVIEW_TOOL].includes(selectedToolName) ||
         (FILE_PATH_TOOLS.has(selectedToolName) && !insideContinuationDirectory)
       ) {
         return {
@@ -5894,7 +5899,7 @@ export function createToolLoopGuard({
         };
       }
       if (
-        selectedToolName === "edit" &&
+        ["edit", "write"].includes(selectedToolName) &&
         !state.successfulReadPaths.has(selectedPath)
       ) {
         return {
@@ -7116,6 +7121,9 @@ export function createToolLoopGuard({
             ? sessionPreviews.get(sessionId)
             : undefined;
         state.workspaceVisualContinuationRequested = Boolean(trustedSessionPreview);
+        if (trustedSessionPreview) {
+          state.workspaceVisualContinuationOriginalSha256 ??= trustedSessionPreview.sha256;
+        }
         state.workspaceVisualContinuationUnavailable =
           visualContinuationRequested && !trustedSessionPreview;
         state.workspacePreviewRequested = Boolean(trustedSessionPreview) ||
@@ -7406,10 +7414,11 @@ export function createToolLoopGuard({
     const completedEditPairs = successfulMutation?.name === "edit"
       ? editReplacementPairs(successfulMutation.event?.params)
       : [];
+    const completedVisualMutationPath = completedEditPath ?? completedWritePath;
     if (
-      completedEditPath &&
+      completedVisualMutationPath &&
       state.workspaceVisualContinuationRequested &&
-      completedEditPath.startsWith(`${state.workspaceTaskDirectory}/`)
+      completedVisualMutationPath.startsWith(`${state.workspaceTaskDirectory}/`)
     ) {
       state.workspaceVisualContinuationEdited = true;
     }
