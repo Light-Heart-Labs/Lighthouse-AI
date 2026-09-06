@@ -193,7 +193,7 @@ export function createPublicWebExtractTool({
   return {
     name: "pixel_ods_web_extract",
     description:
-      "Fetch one public HTTP(S) page through OpenClaw's strict SSRF guard, find a distinctive literal identifier such as Path.exists anywhere in the extracted page, and return only a bounded evidence window around it. Prefer one exact identifier; a short multi-keyword query is accepted only when at least 2-3 terms co-occur in one bounded window. Use once when web_fetch found the correct long page but its prefix was truncated before the requested detail. Never use for local/private/raw-IP destinations.",
+      "Fetch one public HTTP(S) page through OpenClaw's strict SSRF guard and return a bounded evidence window. Set query to the literal text to find, for example {url: 'https://docs.example.org/reference', query: '--parallel'} or query: 'Path.exists'. Prefer one exact identifier; a short multi-keyword query is accepted only when at least 2-3 terms co-occur in one bounded window. Use when web_fetch found the correct long page but its prefix was truncated before the requested detail. Never use for local/private/raw-IP destinations.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -210,7 +210,10 @@ export function createPublicWebExtractTool({
       let query;
       try {
         url = normalizedPublicUrl(params?.url);
-        query = normalizedQuery(params?.query);
+        // Some tool-call transports let the model use the descriptive noun
+        // "identifier" as the field name. Normalize that one unambiguous
+        // alias; an explicitly supplied query must still validate as written.
+        query = normalizedQuery(params?.query === undefined ? params?.identifier : params.query);
       } catch (error) {
         return textResult(`Pixel blocked targeted web extraction: ${error.message}`, {
           boundary: "public-web-read-only",

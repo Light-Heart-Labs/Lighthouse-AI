@@ -160,6 +160,25 @@ test("keeps URL schemas below llama.cpp's grammar repetition ceiling", async () 
   assert.match(result.content[0].text, /public HTTP\(S\) URL is required/);
 });
 
+test("recovers the observed identifier field without weakening query or URL validation", async () => {
+  const harness = fixture({ body: "Options\n--parallel N sets the number of server slots.\n" });
+  const result = await harness.tool.execute("identifier-alias", {
+    url: "https://docs.example.org/reference", identifier: "--parallel",
+  });
+  assert.equal(result.details.matched, true);
+  assert.equal(harness.calls.length, 1);
+  for (const params of [
+    { url: "https://docs.example.org/", query: null, identifier: "--parallel" },
+    { url: "https://docs.example.org/", identifier: "line\nbreak" },
+    { url: "http://127.0.0.1/", identifier: "--parallel" },
+  ]) {
+    const invalid = fixture();
+    const blocked = await invalid.tool.execute("invalid-alias", params);
+    assert.equal(blocked.details.matched, false);
+    assert.equal(invalid.calls.length, 0);
+  }
+});
+
 test("returns an explicit no-evidence result without guessing", async () => {
   const harness = fixture({ body: "This page contains something else." });
   const result = await harness.tool.execute("call-miss", {
