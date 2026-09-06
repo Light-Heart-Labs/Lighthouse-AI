@@ -270,9 +270,10 @@ reconcile_ods_managed_pixel_model() {
         log "ERROR: ODS-managed Pixel requires a promoted model context of at least 4096 tokens."
         return 1
     fi
-    target_max_tokens=4096
-    (( target_context / 2 < target_max_tokens )) \
-        && target_max_tokens="$((target_context / 2))"
+    target_max_tokens="$(_ods_pixel_default_output_tokens "$target_context")" || {
+        log "ERROR: ODS-managed Pixel received an invalid promoted context budget."
+        return 1
+    }
     target_reasoning=false
     reasoning_mode="$(read_env_value LLAMA_REASONING | tr '[:upper:]' '[:lower:]')"
     [[ -n "$reasoning_mode" ]] || reasoning_mode=off

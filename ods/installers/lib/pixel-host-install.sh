@@ -2,6 +2,18 @@
 # Install and verify Pixel's host-side ODS integration. Importing this file has
 # no side effects. Callers must have already selected ENABLE_PIXEL_RUNTIME=true.
 
+_ods_pixel_default_output_tokens() {
+    # Shared usability default, not an assertion of provider output capacity.
+    # Unknown model families remain usable; no model-name or reasoning policy.
+    local context max_tokens
+    [[ "$#" -eq 1 && "$1" =~ ^[0-9]{4,8}$ ]] || return 1
+    context="$((10#$1))"
+    (( context >= 4096 && context <= 10000000 )) || return 1
+    max_tokens="$((context / 4))"
+    (( max_tokens > 8192 )) && max_tokens=8192
+    printf '%s\n' "$max_tokens"
+}
+
 ods_pixel_install_owner() {
     local owner="${INSTALL_USER:-${SUDO_USER:-${USER:-}}}"
     [[ -n "$owner" && "$owner" != root && "$owner" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$ ]] || {
@@ -3261,14 +3273,10 @@ _ods_pixel_write_onboarding() {
         ai_bad "Pixel requires a model context of at least 4096 tokens."
         return 1
     fi
-    # Models need enough output room to emit a complete structured tool call
-    # containing an original file. Live 64K Qwen qualification proved that a
-    # fixed 4096-token ceiling can truncate a single-file SVG before the first
-    # write. Keep the ceiling model-agnostic and capability-derived: reserve
-    # three quarters of compact contexts for input, with an 8192-token output
-    # ceiling for larger contexts (matching ODS's Windows/macOS agent budget).
-    max_tokens="$((context / 4))"
-    (( max_tokens > 8192 )) && max_tokens=8192
+    max_tokens="$(_ods_pixel_default_output_tokens "$context")" || {
+        ai_bad "Pixel received an invalid model context budget."
+        return 1
+    }
     # This field controls the active OpenClaw reasoning path, not merely the
     # model family's theoretical capability. Keep the default no-think setting
     # false even for reasoning-capable models; an explicit operator setting
