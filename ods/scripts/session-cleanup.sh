@@ -56,6 +56,12 @@ if [ ! -d "$SESSIONS_DIR" ]; then
 fi
 
 # ── Python and index validation ────────────────────────────────
+# Record a snapshot timestamp before reading the active set. Any session
+# file newer than this reference will be assumed active to prevent deleting
+# sessions created during the cleanup cycle.
+REF_FILE="$SESSIONS_DIR/.cleanup-ref-$$"
+touch "$REF_FILE"
+trap 'rm -f "$REF_FILE"' EXIT
 # Resolve and validate before any cleanup mutation. Treating malformed or
 # partially-written JSON as an empty active set would otherwise delete every
 # .jsonl file as inactive.
@@ -142,6 +148,10 @@ REMOVED_BLOATED=0
 
 for f in "$SESSIONS_DIR"/*.jsonl; do
     [ -f "$f" ] || continue
+    if [[ "$f" -nt "$REF_FILE" ]]; then
+        echo "[$(date)] Skipping newly created session: $(basename "$f")"
+        continue
+    fi
     BASENAME=$(basename "$f" .jsonl)
 
     # Check if this session is active
