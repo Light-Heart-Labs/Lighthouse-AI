@@ -13,6 +13,10 @@ RestartSec=2
 TimeoutStopSec=30
 RuntimeDirectory=ods-pixel-preview
 RuntimeDirectoryMode=0750
+# Pixel Edge bind-mounts this directory. Preserve its inode across gateway
+# stop/start so the container sees the replacement sockets. The server checks
+# socket ownership and removes stale sockets itself; /run still clears on boot.
+RuntimeDirectoryPreserve=yes
 StateDirectory=ods-pixel-preview
 StateDirectoryMode=0700
 UMask=0077
