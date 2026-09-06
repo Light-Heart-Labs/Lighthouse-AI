@@ -1209,7 +1209,7 @@ if (not isinstance(normalized_compaction, dict)
         or not isinstance(normalized_agent_sandbox, dict)
         or not isinstance(normalized_sandbox_docker, dict)):
     raise SystemExit("live Pixel runtime policy is outside the ODS contract")
-normalized_agent_experimental["localModelLean"] = True
+normalized_agent_experimental["localModelLean"] = False
 normalized_pixel_config["modelContextWindow"] = normalized_context_window
 normalized_pixel_config["leanPrompt"] = normalized_lean_prompt
 # Structured Tool Search keeps the catalog compact for every model. Exact ODS
@@ -1293,6 +1293,7 @@ normalized_agent_tools["deny"] = [
 normalized_also_allow = [item for item in normalized_also_allow if item != "pixel_web_extract"]
 normalized_sandbox_allow = [item for item in normalized_sandbox_allow if item != "pixel_web_extract"]
 for extension_tool in (
+    "cron",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1300,6 +1301,7 @@ for extension_tool in (
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
 for permitted_tool in (
+    "cron",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1688,13 +1690,12 @@ updated_defaults["bootstrapMaxChars"] = 32000
 updated_defaults["bootstrapTotalMaxChars"] = 96000
 updated_defaults["contextInjection"] = "continuation-skip"
 updated_agent_context_limits = updated_agent.setdefault("contextLimits", {})
-# ODS always presents Pixel through a private local gateway, including when the
-# gateway's current route terminates at an owner-configured remote provider.
-# OpenClaw cannot infer that fact from the stable ``ods/current`` alias. Enable
-# its model-agnostic lean tool surface explicitly so small local models do not
-# receive every direct tool schema at once. Capabilities remain available
-# through structured Tool Search; this changes prompt shape, not authority.
-updated_agent_experimental["localModelLean"] = True
+# Tool Search below keeps schemas compact for every model. The separate
+# upstream localModelLean switch removes cron and browser from the catalog,
+# even when policy otherwise permits them. Keep that capability filter off;
+# model size must not silently remove core agent features. Existing explicit
+# tool denials, sandbox policy, and ODS authority checks still apply.
+updated_agent_experimental["localModelLean"] = False
 updated_tools["toolSearch"] = {
     "enabled": True,
     "mode": "tools",
@@ -1867,6 +1868,7 @@ updated_agent_tools["deny"] = [
 updated_also_allow = [item for item in updated_also_allow if item != "pixel_web_extract"]
 updated_sandbox_allow = [item for item in updated_sandbox_allow if item != "pixel_web_extract"]
 for extension_tool in (
+    "cron",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1874,6 +1876,7 @@ for extension_tool in (
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
 for permitted_tool in (
+    "cron",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
