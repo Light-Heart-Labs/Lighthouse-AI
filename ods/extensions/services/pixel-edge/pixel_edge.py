@@ -339,6 +339,47 @@ def _positive_host_inspection_clauses(text: str) -> list[str]:
     ]
 
 
+def _workspace_mutation_positions(text: str) -> set[int]:
+    """Find positive owner directives for coaching, not tool authorization."""
+    def mask_content(match):
+        value = match.group(0)
+        # A quoted destination is still a path; other quoted bytes are data.
+        if re.fullmatch(r"['\"`](/workspace(?:/[A-Za-z0-9._/-]+)?)['\"`]", value):
+            return " " + value[1:-1] + " "
+        return "".join("\n" if char == "\n" else " " for char in value)
+
+    instructions = re.sub(
+        r"```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(?m:^\s*>[^\n]*)|"
+        r"`[^`\n]*`|\"(?:\\.|[^\"\\])*(?:\"|$)|"
+        r"(?<!\w)'(?:\\.|[^'\\])*(?:'|$)|"
+        r"\u201c[^\u201d]*(?:\u201d|$)|(?<!\w)\u2018[^\u2019]*(?:\u2019|$)",
+        mask_content, text,
+    )
+    if not _WORKSPACE_MUTATION_SCOPE.search(instructions):
+        return set()
+    negated = re.compile(
+        r"^\s*(?:please\s+)?(?:do\s+not|don['\u2019]t|never|must\s+not|"
+        r"should\s+not|avoid|skip|omit|exclude|no)\b", re.IGNORECASE,
+    )
+    directive = re.compile(
+        r"(?:^|\band\s+)(?:(?:please|now|first|next|also)\s+)*"
+        r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|"
+        r"I\s+(?:want|need)\s+you\s+to\s+|you\s+(?:may|can|should|must)\s+)?"
+        r"(?P<verb>" + _WORKSPACE_MUTATION_INTENT.pattern + r")", re.IGNORECASE,
+    )
+    positions = set()
+    for clause in re.finditer(
+        r"(?:^|[.!?;\n]|\b(?:but|however|instead|then)\b)\s*"
+        r"(?P<clause>.*?)(?=$|[.!?;\n]|\b(?:but|however|instead|then)\b)",
+        instructions, re.IGNORECASE,
+    ):
+        value = clause.group("clause")
+        if not negated.search(value):
+            positions.update(clause.start("clause") + match.start("verb")
+                             for match in directive.finditer(value))
+    return positions
+
+
 def _with_interactive_delivery_contract(data: dict) -> dict:
     """Append the ODS delivery contract to the latest user content.
 
@@ -387,11 +428,10 @@ def _with_interactive_delivery_contract(data: dict) -> dict:
             "sandbox commands as host evidence.]"
         )
         contract += route
-    if (
-        _WORKSPACE_MUTATION_SCOPE.search(owner_text)
-        and _WORKSPACE_MUTATION_INTENT.search(owner_text)
-    ):
-        exact_file = _EXACT_SINGLE_LINE_FILE.search(owner_text)
+    mutation_positions = _workspace_mutation_positions(owner_text)
+    if mutation_positions:
+        exact_file = next((match for match in _EXACT_SINGLE_LINE_FILE.finditer(owner_text)
+                           if match.start() in mutation_positions), None)
         if exact_file:
             path = exact_file.group("path")
             content = exact_file.group("content") + "\n"

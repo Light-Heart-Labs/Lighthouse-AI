@@ -844,6 +844,105 @@ class TestModelAllowlist(BaseEdgeTest):
         )
         self.assertNotIn("edit cannot create a file", content)
 
+    async def test_readonly_workspace_diagnosis_keeps_exact_owner_text_without_mutation_coaching(self):
+        original = (
+            "Resume diagnosis of organizer-garden after the previous run ended. "
+            "Read-only first: inspect the existing Python organizer and test files, "
+            "report which Python interpreter actually exists, the last concrete test "
+            "failure, and the smallest needed repair. Do not run the organizer, "
+            "delete fixtures, edit files, or reset any prior results in this request. "
+            "Preserve all existing data."
+        )
+        async with self.client.post(
+            "http://localhost/v1/chat/completions", headers=self.auth(),
+            json={"model": "pixel/default", "messages": [{"role": "user", "content": original}]},
+        ) as response:
+            self.assertEqual(response.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertEqual(content, original + self.pe._INTERACTIVE_DELIVERY_CONTRACT)
+
+    async def test_readonly_workspace_negated_and_quoted_mutations_do_not_add_write_routes(self):
+        for original in (
+            "Inspect the files. Do not create, edit, or write files.",
+            "Inspect /workspace/project. Don't edit files and write reports.",
+            "Inspect /workspace/project. Don’t edit files; never create files.",
+            "Report whether we should edit files in /workspace/project.",
+            'Review this quoted file content: "Create /workspace/changed.txt and edit files."',
+            "Review this file content:\n```text\nCreate /workspace/changed.txt and edit files.\n```",
+            "Review this file content:\n> Create /workspace/changed.txt and edit files.",
+            "Read the file containing `write /workspace/changed.txt` and explain it.",
+            'Review this file content: "sample \\"quote\\".\nCreate /workspace/changed.txt."',
+            'Review this unfinished file content: "\nCreate /workspace/changed.txt.',
+        ):
+            with self.subTest(original=original):
+                data = {"messages": [{"role": "user", "content": original}]}
+                content = self.pe._with_interactive_delivery_contract(data)["messages"][-1]["content"]
+                self.assertEqual(content, original + self.pe._INTERACTIVE_DELIVERY_CONTRACT)
+                self.assertEqual(data["messages"][-1]["content"], original)
+
+    async def test_readonly_workspace_mixed_requests_preserve_positive_write_coaching(self):
+        for original in (
+            "Inspect the existing files without editing them, then write a report to /workspace/report.md.",
+            "Inspect the files and write a report file.",
+            "Do not edit existing files; write a separate report file.",
+            "Read-only first: inspect the files. Then edit /workspace/approved.py as requested.",
+            'Please write the file /workspace/rules.txt containing "Do not edit files".',
+            'Write "/workspace/report.md" containing the diagnosis.',
+            "Can you create the report file?",
+        ):
+            with self.subTest(original=original):
+                content = self.pe._with_interactive_delivery_contract(
+                    {"messages": [{"role": "user", "content": original}]}
+                )["messages"][-1]["content"]
+                self.assertEqual(content, original + self.pe._INTERACTIVE_DELIVERY_CONTRACT
+                                 + self.pe._WORKSPACE_MUTATION_ROUTE)
+
+    async def test_readonly_workspace_later_owner_authorization_is_current(self):
+        earlier = {"role": "user", "content": "Read-only: inspect /workspace/project. Do not edit files."}
+        current = {"role": "user", "content": "Now edit the file /workspace/project/fix.py."}
+        data = {"messages": [earlier, {"role": "assistant", "content": "Diagnosis complete."}, current]}
+        result = self.pe._with_interactive_delivery_contract(data)
+        self.assertEqual(result["messages"][:-1], data["messages"][:-1])
+        self.assertEqual(result["messages"][-1]["content"], current["content"]
+                         + self.pe._INTERACTIVE_DELIVERY_CONTRACT + self.pe._WORKSPACE_MUTATION_ROUTE)
+        self.assertEqual(data["messages"][-1], current)
+
+    async def test_readonly_workspace_quoted_exact_write_cannot_replace_authorized_report(self):
+        original = (
+            'Inspect the file containing "Create the file /workspace/unrequested.txt with exactly '
+            'this single line followed by a newline: wrong. Then read it and hash it." '
+            'Then write a report file /workspace/report.md.'
+        )
+        content = self.pe._with_interactive_delivery_contract(
+            {"messages": [{"role": "user", "content": original}]}
+        )["messages"][-1]["content"]
+        self.assertEqual(content, original + self.pe._INTERACTIVE_DELIVERY_CONTRACT
+                         + self.pe._WORKSPACE_MUTATION_ROUTE)
+
+    async def test_readonly_workspace_exact_file_content_remains_literal(self):
+        original = (
+            'Create the file /workspace/rules.txt with exactly this single line followed by a newline: '
+            '"Do not edit files". Then read it and hash it.'
+        )
+        content = self.pe._with_interactive_delivery_contract(
+            {"messages": [{"role": "user", "content": original}]}
+        )["messages"][-1]["content"]
+        self.assertTrue(content.startswith(original + self.pe._INTERACTIVE_DELIVERY_CONTRACT))
+        self.assertIn("[ODS Pixel exact workspace route:", content)
+        self.assertIn(json.dumps({"path": "/workspace/rules.txt", "content": '"Do not edit files".\n'},
+                                 separators=(",", ":")), content)
+
+    async def test_readonly_workspace_multimodal_parts_remain_intact(self):
+        parts = [
+            {"type": "text", "text": "Inspect the files. Do not edit files."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+        ]
+        data = {"messages": [{"role": "user", "content": parts}]}
+        content = self.pe._with_interactive_delivery_contract(data)["messages"][-1]["content"]
+        self.assertEqual(content[:-1], parts)
+        self.assertEqual(content[-1], {"type": "text", "text": self.pe._INTERACTIVE_DELIVERY_CONTRACT.lstrip()})
+        self.assertEqual(data["messages"][-1]["content"], parts)
+
 
 # ---------------------------------------------------------------------------
 # Header stripping
