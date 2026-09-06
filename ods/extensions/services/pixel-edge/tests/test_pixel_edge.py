@@ -1270,5 +1270,46 @@ class TestSanitizedErrors(BaseEdgeTest):
             pixel_edge._SOCKET_PATH = old
 
 
+class TestHostRequestIntent(BaseEdgeTest):
+    async def forwarded_content(self, prompt):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions", headers=self.auth(),
+            json={"model": "pixel/default", "messages": [{"role": "user", "content": prompt}]},
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            await resp.read()
+        return self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+
+    async def test_native_sandbox_request_does_not_revive_excluded_host_route(self):
+        for prompt in [
+            "The prior reply only reported the host OS and omitted the runtime checks. "
+            "In your sandbox workspace, execute exactly a small shell availability check for "
+            "node, nodejs, npm, bun, deno, python3 and git using command -v, plus pwd. "
+            "Return the actual output. Do not inspect the host operating system or use the "
+            "host inventory shortcut. No installations and no website.",
+            "In the sandbox, check for Python. Don\u2019t inspect the host OS.",
+        ]:
+            content = await self.forwarded_content(prompt)
+            self.assertIn(prompt, content)
+            self.assertIn("[ODS Pixel delivery requirement:", content)
+            self.assertNotIn("[ODS Pixel host inspection route:", content)
+
+    async def test_host_route_uses_only_positive_facets(self):
+        content = await self.forwarded_content(
+            "Check this system CPU and memory, but do not inspect the host network addresses."
+        )
+        self.assertIn('args {"actions":["host.memory","host.cpu"]}', content)
+        self.assertNotIn("host.network-addresses", content)
+
+    async def test_positive_followup_does_not_restore_excluded_os(self):
+        for prompt in [
+            "Do not inspect the host OS. Check the kernel and memory.",
+            "Don\u2019t inspect this machine OS, but report the kernel and memory.",
+        ]:
+            content = await self.forwarded_content(prompt)
+            self.assertIn('args {"actions":["host.kernel","host.memory"]}', content)
+            self.assertNotIn("host.os-release", content)
+
+
 if __name__ == "__main__":
     unittest.main()

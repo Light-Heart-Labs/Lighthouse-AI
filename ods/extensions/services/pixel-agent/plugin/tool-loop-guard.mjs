@@ -3786,7 +3786,7 @@ function workspacePreviewMkdirDirectory(params) {
 }
 
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
-  const text = currentUserText(messages, prompt);
+  const text = currentOwnerIntentText(messages, prompt);
   if (!text) return [];
   const genericOdsTool = String.raw`ODS\s+(?:read-only\s+)?(?:projection|tool)s?`;
   const statusTool =

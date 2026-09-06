@@ -313,6 +313,32 @@ def _empty_reply_fallback(data: dict) -> str:
     return _EMPTY_REPLY
 
 
+def _positive_host_inspection_clauses(text: str) -> list[str]:
+    """Select requested host facts without reviving excluded or historical ones."""
+    if not _HOST_INSPECTION_SCOPE.search(text):
+        return []
+    clauses = re.split(
+        r"[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|"
+        r"\b(?:but|however|instead)\s+|"
+        r"\band\s+(?=(?:do\s+not|don['\u2019]t|never|avoid|skip|omit|exclude)\b)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    negation = re.compile(
+        r"^\s*(?:(?:and|but|then)\s+)?(?:please\s+)?"
+        r"(?:do\s+not|don['\u2019]t|never|must\s+not|should\s+not|"
+        r"avoid|skip|omit|exclude|no)\b",
+        re.IGNORECASE,
+    )
+    return [
+        clause for clause in clauses
+        if not negation.search(clause)
+        and _HOST_INSPECTION_INTENT.search(clause)
+        and (_HOST_INSPECTION_SCOPE.search(clause)
+             or any(pattern.search(clause) for pattern, _ in _HOST_ACTION_RULES))
+    ]
+
+
 def _with_interactive_delivery_contract(data: dict) -> dict:
     """Append the ODS delivery contract to the latest user content.
 
@@ -325,16 +351,17 @@ def _with_interactive_delivery_contract(data: dict) -> dict:
     """
     owner_text = _latest_user_text(data)
     contract = _INTERACTIVE_DELIVERY_CONTRACT
+    host_clauses = _positive_host_inspection_clauses(owner_text)
     if (
-        _HOST_INSPECTION_SCOPE.search(owner_text)
-        and _HOST_INSPECTION_INTENT.search(owner_text)
+        host_clauses
         and not (_ARTIFACT_DRAFT_PREFIX.search(owner_text) and _ARTIFACT_NOUN.search(owner_text))
     ):
+        positive_host_text = " ".join(host_clauses)
         excludes_network_location = bool(_NETWORK_DISCLOSURE_EXCLUSION.search(owner_text))
         actions = [
             action
             for pattern, action in _HOST_ACTION_RULES
-            if pattern.search(owner_text)
+            if pattern.search(positive_host_text)
             and not (excludes_network_location and action in _ADDRESS_BEARING_HOST_ACTIONS)
         ]
         route = (

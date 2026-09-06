@@ -10515,6 +10515,41 @@ test('negative visual constraints preserve independent website requests', () => 
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
 
+test('native delivery suffix does not invent projection work during sandbox tool flow', () => {
+  const ownerPrompt = "The prior reply only reported the host OS and omitted the runtime checks. " +
+    "In your sandbox workspace, execute exactly a small shell availability check for " +
+    "node, nodejs, npm, bun, deno, python3 and git using command -v, plus pwd. " +
+    "Return the actual output. Do not inspect the host operating system or use the " +
+    "host inventory shortcut. No installations and no website.";
+  const suffix = '\n\n[ODS Pixel delivery requirement: Answer the owner\'s complete message above. If it asks for exact text, copy that full exact text. Do not answer with a generic acknowledgement. Do not output NO_REPLY.]' +
+    '\n[ODS Pixel host inspection route: Generic sandbox commands and status projections cannot establish host facts. Use the visible tool_call Tool Search control for the deferred Operations tools. Call tool_call exactly once with id pixel_ods_host_observe and args {"actions":["host.os-release"]}. This one read-only tool returns the terminal Operations receipt. After terminal host evidence, continue any separately required ODS projection or workspace step before answering. Do not use generic sandbox commands as host evidence.]';
+  for (const prompt of [ownerPrompt, ownerPrompt + suffix]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), []);
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: 'pixel', runId: 'run-1', sessionId: 'session-1' }, 'pixel', { prompt });
+    for (const command of ['command -v python3', 'pwd']) {
+      guard.observeModelCall({ runId: 'run-1' }, { agentId: 'pixel', runId: 'run-1' });
+      const params = { id: 'exec', args: { command } };
+      assert.notEqual(call(guard, 'tool_call', { event: { params } })?.block, true);
+      afterCall(guard, 'tool_call', { event: { params, result: wrappedCoreResult('exec', {
+        content: [{ type: 'text', text: command === 'pwd' ? '/workspace' : '/usr/bin/python3' }],
+        details: { exitCode: 0 },
+      }) } });
+    }
+  }
+  for (const [owner, tool] of [
+    ['What is the ODS status?', 'pixel_ods_status'], ['List the ODS apps.', 'pixel_ods_apps_list'],
+  ]) {
+    const prompt = owner + suffix;
+    assert.ok(userMessageOdsToolRequirements([], prompt).includes(tool));
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: 'pixel', runId: 'run-1', sessionId: 'session-1' }, 'pixel', { prompt });
+    const blocked = call(guard, 'read', { event: { params: { path: 'example.txt' } } });
+    assert.equal(blocked?.block, true);
+    assert.match(JSON.stringify(blocked), new RegExp(`call ${tool}`));
+  }
+});
+
 test('host evidence recognizes read/get and curly-apostrophe exclusions', () => {
   for (const prompt of ['Read the host OS release.', 'Get this machine hostname.']) {
     assert.equal(userMessageOperationsRequirements([], prompt).required, true, prompt);
