@@ -692,14 +692,10 @@ async def handle_chat_completions(request: web.Request):
         return await _private_url_response(request, data.get("stream") is True)
     empty_reply_fallback = _empty_reply_fallback(data)
     upstream_data = _with_interactive_delivery_contract(data)
-    if "temperature" not in upstream_data:
-        # Deterministic sampling is the most reliable shared default for an
-        # agent harness.  In particular, small local models can otherwise
-        # wander into protocol-marker loops even when the same prompt and tool
-        # surface are sound.  Preserve an explicit client value so advanced
-        # callers retain control without making the dashboard model-specific.
-        upstream_data = dict(upstream_data)
-        upstream_data["temperature"] = 0
+    # Let the selected model's runtime/profile supply omitted sampling values.
+    # A universal greedy override can defeat the model's recommended settings
+    # and cause repetitive generations. Explicit client settings pass through;
+    # tool authorization remains the responsibility of the broker and harness.
     request_token = object()
     request.app[_ACTIVE_REQUESTS_KEY].add(request_token)
     chat_id = data.get("user")

@@ -622,7 +622,7 @@ class TestModelAllowlist(BaseEdgeTest):
         self.assertEqual(content[-1]["type"], "text")
         self.assertIn("Answer the owner's complete message", content[-1]["text"])
 
-    async def test_owner_chat_defaults_to_deterministic_sampling(self):
+    async def test_owner_chat_preserves_model_sampling_defaults(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",
             headers=self.auth(),
@@ -632,7 +632,7 @@ class TestModelAllowlist(BaseEdgeTest):
             },
         ) as resp:
             self.assertEqual(resp.status, 200)
-        self.assertEqual(self.up_runner.app["chat_requests"][-1]["temperature"], 0)
+        self.assertNotIn("temperature", self.up_runner.app["chat_requests"][-1])
 
     async def test_explicit_sampling_temperature_is_preserved(self):
         async with self.client.post(
