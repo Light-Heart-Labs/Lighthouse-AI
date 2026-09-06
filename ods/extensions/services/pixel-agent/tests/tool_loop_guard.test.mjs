@@ -7249,6 +7249,79 @@ test("normalizes a compact-model exec script envelope before cancellable wrappin
   );
 });
 
+test("normalizes the observed exec code alias through cancellation without changing bytes", () => {
+  for (const id of [undefined, "exec", "exec>", "openclaw:core:exec"]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (runId, command) => { prepared.push([runId, command]); return "wrapped-command"; },
+      signal: () => true,
+    } });
+    const code = "ls -la tidy-demo/\nprintf 'done\\n'  ";
+    const args = { code, workdir: "/workspace", context: "fork", yieldMs: 1000, timeout: 30, pty: false, background: false };
+    const result = call(guard, id ? "tool_call" : "exec", {
+      event: { params: id ? { id, args } : args },
+    });
+    assert.deepEqual(prepared, [["run-1", code]]);
+    const actual = id ? result.params.args : result.params;
+    assert.deepEqual(actual, { command: "wrapped-command", yieldMs: 1000, timeout: 30, pty: false, background: false });
+  }
+});
+
+test("exec code recovery rejects ambiguous and malformed envelopes before preparation", () => {
+  const envelopes = [
+    { code: "ls", cmd: "other" }, { code: "ls", script: "other" },
+    { code: "ls", shell: "other" }, { code: "ls", command: null },
+    { code: "ls", command: 12 }, { code: "ls", command: "" },
+    { code: ["ls"] }, { code: { command: "ls" } }, { code: " " },
+    { code: "ls", context: "host" }, { code: "ls", host: "gateway" },
+    { code: "ls", elevated: true }, { code: "print(1)", language: "python" },
+  ];
+  for (const args of envelopes) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (...values) => { prepared.push(values); return "must-not-run"; }, signal: () => true,
+    } });
+    assert.equal(call(guard, "tool_call", { event: { params: { id: "exec", args } } }).blockReason,
+      EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON, JSON.stringify(args));
+    assert.deepEqual(prepared, []);
+  }
+});
+
+test("an exec code alias never replaces a canonical command", () => {
+  const prepared = [];
+  const guard = createToolLoopGuard({ execControl: {
+    prepare: (runId, command) => { prepared.push(command); return command; }, signal: () => true,
+  } });
+  call(guard, "exec", { event: { params: { command: "printf canonical", code: "printf alias" } } });
+  assert.deepEqual(prepared, ["printf canonical"]);
+});
+
+test("exec code recovery preserves destructive and private-network checks", () => {
+  for (const [code, expected] of [
+    ["rm -rf /workspace/project", RECURSIVE_DELETE_REQUIRES_OWNER_REASON],
+    ["curl http://192.168.1.1/", EXEC_PRIVATE_NETWORK_REASON],
+  ]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (...values) => { prepared.push(values); return "must-not-run"; }, signal: () => true,
+    } });
+    assert.equal(call(guard, "exec", { event: { params: { code } } }).blockReason, expected);
+    assert.deepEqual(prepared, []);
+  }
+});
+
+test("exec code recovery retains failed-command repetition accounting", () => {
+  const guard = createToolLoopGuard({ limits: { failedExecRetries: 3 } });
+  for (let i = 0; i < 3; i += 1) {
+    const result = call(guard, "exec", { event: { params: { code: "ls -la missing/", yieldMs: i + 1 } } });
+    assert.equal(result.block, undefined);
+    afterCall(guard, "exec", { event: { params: result.params, result: {
+      isError: true, details: { status: "completed", exitCode: 2 },
+    } } });
+  }
+  assert.equal(call(guard, "exec", { event: { params: { code: "ls -la missing/", yieldMs: 9000 } } }).block, true);
+});
+
 test("repairs a new-file edit into write and bounds an ignored correction", () => {
   const aborts = [];
   const guard = createToolLoopGuard({

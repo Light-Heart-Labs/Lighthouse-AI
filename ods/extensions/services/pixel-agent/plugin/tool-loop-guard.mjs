@@ -667,6 +667,24 @@ function normalizeWorkspaceParams(toolName, params) {
       changed = true;
     }
   }
+  // The 9B workspace agent repeatedly emitted {code: "ls -la tidy-demo/"}
+  // after choosing exec. Adapt that exact shell-tool envelope before retry
+  // accounting and cancellation. Interpreter, host, or conflicting alias
+  // fields remain invalid; do not let a later alias branch pick a winner.
+  if (toolName === "exec" && Object.hasOwn(params, "code") && typeof params.command !== "string") {
+    if (
+      params.command !== undefined ||
+      typeof params.code !== "string" ||
+      (params.context !== undefined && params.context !== "fork") ||
+      !Object.keys(params).every((key) =>
+        ["code", "context", "workdir", "yieldMs", "timeout", "pty", "background"].includes(key)
+      )
+    ) return undefined;
+    updated.command = params.code;
+    delete updated.code;
+    if (updated.context === "fork") delete updated.context;
+    changed = true;
+  }
   // Tool Search exposes the OpenClaw exec catalog to heterogeneous models.
   // Some otherwise capable models use the common `cmd` spelling learned from
   // other agent harnesses. Normalize that unambiguous alias before the
