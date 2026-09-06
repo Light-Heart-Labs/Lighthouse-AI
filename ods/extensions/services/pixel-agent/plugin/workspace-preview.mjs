@@ -148,17 +148,40 @@ function socketRequest(payload, socketPath = SOCKET_PATH) {
   });
 }
 
-function failedResult() {
+const FAILURE_MESSAGES = {
+  unsupported_file_type: "The project contains an unsupported preview file type. Inspect its file list and keep unrelated files outside the static site directory; CSV and TSV data files are supported.",
+  missing_entry: "The selected directory needs a nonempty index.html at its root. Check the directory and entry file before retrying.",
+  too_many_files: "The selected site exceeds 128 files. Keep dependencies, build caches, and unrelated files outside the published directory.",
+  snapshot_too_large: "The selected site exceeds 16 MiB. Reduce or optimize its static assets before retrying.",
+  unsafe_file: "A project file failed validation. Check for empty or oversized files (4 MiB maximum each), symlinks, hard links, unsafe names, or ownership/permission problems; do not blindly relax permissions.",
+  unsafe_directory: "The selected directory failed validation. Check its path, ownership, permissions, and symlinks; do not blindly relax permissions.",
+};
+
+function validatedFailureCode(value) {
+  if (
+    value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).sort().join("\n") === "boundary\nerror\nerrorCode\nkind\nschemaVersion\nstatus" &&
+    value.schemaVersion === 1 && value.kind === "ods-pixel-workspace-preview" &&
+    value.status === "failed" && value.boundary === BOUNDARY &&
+    value.error === "ODS workspace preview publication failed" &&
+    Object.hasOwn(FAILURE_MESSAGES, value.errorCode)
+  ) return value.errorCode;
+  return undefined;
+}
+
+function failedResult(code) {
   return {
     content: [{
       type: "text",
-      text:
-        "ODS could not publish a verified browser preview. Keep the site files in the workspace, correct the reported file or entry-point problem if one was returned, and do not claim a localhost URL is live.",
+      text: code
+        ? `ODS could not publish the preview. ${FAILURE_MESSAGES[code]} Do not claim a localhost URL is live until publication succeeds.`
+        : "ODS could not publish a verified browser preview. Keep the site files in the workspace, correct the reported file or entry-point problem if one was returned, and do not claim a localhost URL is live.",
     }],
     details: {
       schemaVersion: 1,
       kind: "ods-pixel-workspace-preview",
       status: "failed",
+      errorCode: code ?? "unavailable",
       boundary: BOUNDARY,
     },
     isError: true,
@@ -185,7 +208,10 @@ export function createWorkspacePreviewTool({ request = socketRequest } = {}) {
     execute: async (_toolCallId, params) => {
       try {
         const normalized = normalizeWorkspacePreviewParams(params);
-        const response = validResponse(await request(normalized), normalized);
+        const raw = await request(normalized);
+        const failureCode = validatedFailureCode(raw);
+        if (failureCode) return failedResult(failureCode);
+        const response = validResponse(raw, normalized);
         return {
           content: [{
             type: "text",

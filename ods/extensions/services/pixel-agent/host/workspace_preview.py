@@ -40,7 +40,7 @@ ALLOWED_SUFFIXES = frozenset(
     {
         ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg",
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
-        ".woff", ".woff2", ".ttf", ".txt", ".map",
+        ".woff", ".woff2", ".ttf", ".txt", ".map", ".csv", ".tsv",
     }
 )
 MAX_REQUEST_BYTES = 2048
@@ -63,6 +63,16 @@ CSP = (
 
 class PreviewError(Exception):
     """A generic fail-closed preview error."""
+
+
+PREVIEW_FAILURE_CODES = {
+    "unsupported preview file type": "unsupported_file_type",
+    "preview requires index.html": "missing_entry",
+    "preview contains too many files": "too_many_files",
+    "preview is too large": "snapshot_too_large",
+    "unsafe preview file": "unsafe_file",
+    "unsafe preview directory": "unsafe_directory",
+}
 
 
 def _parts(value: object) -> tuple[str, ...]:
@@ -164,10 +174,11 @@ def _source_files(
                 or info.st_uid != owner_uid
                 or info.st_mode & 0o022
                 or not 1 <= info.st_size <= MAX_FILE_BYTES
-                or pathlib.PurePosixPath(relative).suffix.lower() not in ALLOWED_SUFFIXES
                 or any(PATH_COMPONENT.fullmatch(part) is None for part in relative.split("/"))
             ):
                 raise PreviewError("unsafe preview file")
+            if pathlib.PurePosixPath(relative).suffix.lower() not in ALLOWED_SUFFIXES:
+                raise PreviewError("unsupported preview file type")
             files.append((relative, source, info))
             if len(files) > MAX_FILES:
                 raise PreviewError("preview contains too many files")
@@ -449,12 +460,13 @@ def _verify_http(port: int, site_id: str, entry_sha256: str) -> None:
         connection.close()
 
 
-def _error_result() -> dict[str, Any]:
+def _error_result(code: str = "unavailable") -> dict[str, Any]:
     return {
         "schemaVersion": SCHEMA_VERSION,
         "kind": KIND,
         "status": "failed",
         "error": "ODS workspace preview publication failed",
+        "errorCode": code if code in PREVIEW_FAILURE_CODES.values() else "unavailable",
         "boundary": BOUNDARY,
     }
 
@@ -513,7 +525,11 @@ def _serve_connection(
                     "readbackVerified": True,
                 }
             )
-    except (PreviewError, OSError, ValueError, TypeError, KeyError):
+    except PreviewError as error:
+        # Only fixed categories cross the socket, never arbitrary exception
+        # text, paths, file contents, or operating-system error details.
+        response = _error_result(PREVIEW_FAILURE_CODES.get(str(error), "unavailable"))
+    except (OSError, ValueError, TypeError, KeyError):
         response = _error_result()
     encoded = (json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n").encode()
     if len(encoded) > MAX_RESPONSE_BYTES:

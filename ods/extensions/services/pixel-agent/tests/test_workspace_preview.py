@@ -1,5 +1,6 @@
 import http.client
 import importlib.util
+import json
 import os
 import pathlib
 import socket
@@ -25,6 +26,70 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.socket_path)
 
 
+def test_snapshot_preserves_csv_and_tsv_app_data_and_prior_versions():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace, previews = root / "workspace", root / "previews"
+        site = workspace / "energy-dashboard"
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
+        previews.mkdir(mode=0o700)
+        data = {
+            "index.html": '<script src="app.js"></script>',
+            "app.js": 'fetch("data.csv").then(r => r.text())',
+            "style.css": "body{color:green}",
+            "data.csv": "day,kwh\nMonday,12.5\n",
+            "data.tsv": "day\tkwh\nMonday\t12.5\n",
+        }
+        for name, content in data.items():
+            (site / name).write_text(content)
+            (site / name).chmod(0o600)
+        first = MODULE.publish_snapshot(workspace, previews, site.name, os.getuid())
+        assert first["files"] == len(data)
+        for name, content in data.items():
+            assert (previews / first["siteId"] / name).read_text() == content
+        (site / "data.csv").write_text("day,kwh\nMonday,14.0\n")
+        second = MODULE.publish_snapshot(workspace, previews, site.name, os.getuid())
+        assert second["siteId"] != first["siteId"]
+        assert (previews / first["siteId"] / "data.csv").read_text() == data["data.csv"]
+
+
+def test_control_socket_reports_fixed_actionable_errors_without_host_paths():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        workspace, previews = root / "workspace", root / "previews"
+        site = workspace / "demo"
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
+        previews.mkdir(mode=0o700)
+        for name in ["style.css", "unsupported.exe"]:
+            (site / name).write_text("fixture, not executable")
+            (site / name).chmod(0o600)
+        for expected in ["unsupported_file_type", "missing_entry"]:
+            client, server = socket.socketpair()
+            thread = threading.Thread(target=MODULE._serve_connection, args=(server,), kwargs={
+                "workspace": workspace, "previews": previews,
+                "owner_uid": os.getuid(), "port": 9437,
+            })
+            thread.start()
+            try:
+                client.settimeout(5)
+                client.sendall(b'{"schemaVersion":1,"action":"publish","relativeDirectory":"demo"}\n')
+                client.shutdown(socket.SHUT_WR)
+                raw = client.makefile("rb").readline()
+                result = json.loads(raw)
+                assert result["status"] == "failed"
+                assert result["errorCode"] == expected
+                assert str(root).encode() not in raw
+                assert b"unsupported.exe" not in raw
+            finally:
+                thread.join(timeout=5)
+                client.close()
+                server.close()
+            if expected == "unsupported_file_type":
+                (site / "unsupported.exe").unlink()
+
+
 def test_snapshot_is_content_addressed_and_create_only():
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
@@ -32,7 +97,8 @@ def test_snapshot_is_content_addressed_and_create_only():
         previews = root / "previews"
         site = workspace / "demo-site"
         assets = site / "assets"
-        site.mkdir(parents=True, mode=0o700)
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
         assets.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
@@ -57,7 +123,8 @@ def test_snapshot_rejects_symlinks_and_missing_entrypoint():
         workspace = root / "workspace"
         previews = root / "previews"
         site = workspace / "demo-site"
-        site.mkdir(parents=True, mode=0o700)
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "styles.css").write_text("body{}", encoding="utf-8")
         os.chmod(site / "styles.css", 0o600)
@@ -99,7 +166,8 @@ def test_existing_snapshot_is_revalidated_before_receipt_reuse():
         workspace = root / "workspace"
         previews = root / "previews"
         site = workspace / "demo-site"
-        site.mkdir(parents=True, mode=0o700)
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "index.html").write_text("<h1>Verified</h1>", encoding="utf-8")
         os.chmod(site / "index.html", 0o600)
@@ -123,7 +191,8 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
         workspace = root / "workspace"
         previews = root / "previews"
         site = workspace / "demo-site"
-        site.mkdir(parents=True, mode=0o700)
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "index.html").write_text("<h1>Interactive</h1>", encoding="utf-8")
         os.chmod(site / "index.html", 0o600)
@@ -174,7 +243,8 @@ def test_unix_http_preview_accepts_only_the_internal_relay_authority():
         previews = root / "previews"
         site = workspace / "demo-site"
         socket_path = root / "preview.sock"
-        site.mkdir(parents=True, mode=0o700)
+        workspace.mkdir(mode=0o700)
+        site.mkdir(mode=0o700)
         previews.mkdir(mode=0o700)
         (site / "index.html").write_text("<button>Remote</button>", encoding="utf-8")
         os.chmod(site / "index.html", 0o600)

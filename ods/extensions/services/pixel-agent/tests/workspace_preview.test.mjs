@@ -139,3 +139,27 @@ test("fails closed when the host response contains an uncontracted field", async
   const result = await tool.execute("call-3", { relativeDirectory: "demo-site" });
   assert.equal(result.isError, true);
 });
+
+test("shows actionable fixed failure categories without echoing host exception text", async () => {
+  const failure = {
+    schemaVersion: 1, kind: "ods-pixel-workspace-preview", status: "failed",
+    boundary: testing.BOUNDARY, error: "ODS workspace preview publication failed",
+    errorCode: "unsupported_file_type",
+  };
+  const tool = createWorkspacePreviewTool({ request: async () => failure });
+  const result = await tool.execute("csv-failure", { relativeDirectory: "demo-site" });
+  assert.equal(result.details.errorCode, "unsupported_file_type");
+  assert.match(result.content[0].text, /CSV and TSV/);
+  for (const value of [
+    { ...failure, error: "private exception /home/private/token" },
+    { ...failure, errorCode: "/home/private/token" },
+    { ...failure, boundary: "wrong boundary" },
+    { ...failure, relativePath: "/home/private/token" },
+  ]) {
+    const invalid = createWorkspacePreviewTool({ request: async () => value });
+    const blocked = await invalid.execute("invalid", { relativeDirectory: "demo-site" });
+    assert.equal(blocked.isError, true);
+    assert.equal(blocked.details.errorCode, "unavailable");
+    assert.doesNotMatch(JSON.stringify(blocked), /\/home\/private|wrong boundary/);
+  }
+});
