@@ -157,7 +157,7 @@ describe('Pixel', () => {
     })).toBeNull()
   })
 
-  it('opens an interactive side panel only from a verified terminal marker', async () => {
+  it('restores the verified preview after reload and preserves an explicit close', async () => {
     const sha256 = 'a'.repeat(64)
     const siteId = `site-${sha256.slice(0, 24)}`
     const preview = {
@@ -184,7 +184,7 @@ describe('Pixel', () => {
       '[DONE]',
     ]))
 
-    render(<Pixel />)
+    const original = render(<Pixel />)
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
     fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), {
       target: { value: 'Build and show me a demo website.' },
@@ -197,7 +197,79 @@ describe('Pixel', () => {
     expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
     expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
 
+    await waitFor(() => expect(
+      JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1')).preview
+    ).toEqual(preview))
+    original.unmount()
+    globalThis.fetch.mockResolvedValue(response({ available: true }))
+    const restored = render(<Pixel />)
+    expect(await screen.findByTitle('Interactive Pixel preview')).toHaveAttribute('src', `/pixel-preview/${siteId}/`)
+    expect(globalThis.fetch.mock.calls.filter(([url]) => url === '/api/pixel/chat/stream')).toHaveLength(1)
+
     fireEvent.click(screen.getByTitle('Close preview'))
+    expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
+    await waitFor(() => expect(
+      JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1')).preview
+    ).toBeNull())
+    restored.unmount()
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
+    expect(screen.getByText(`Preview: ${preview.url}`)).toBeInTheDocument()
+  })
+
+  it.each([
+    { url: 'https://attacker.example/' },
+    { sha256: 42 },
+    { relativeDirectory: '../outside' },
+    { siteId: 'site-0123456789abcdef01234567' },
+  ])('keeps the conversation but rejects damaged cached preview metadata: %j', async (changed) => {
+    const sha256 = 'a'.repeat(64)
+    const siteId = `site-${sha256.slice(0, 24)}`
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1,
+      chatId: 'saved_preview',
+      messages: [{ role: 'user', content: 'Keep my work visible' }],
+      preview: {
+        schemaVersion: 1, kind: 'ods-pixel-workspace-preview',
+        relativeDirectory: 'demo', siteId, port: 9437,
+        url: `http://${siteId}.localhost:9437/${siteId}/`,
+        files: 1, bytes: 2048, sha256, entrySha256: 'b'.repeat(64),
+        ...changed,
+      },
+    }))
+    globalThis.fetch.mockResolvedValue(response({ available: true }))
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    expect(screen.getByText('Keep my work visible')).toBeInTheDocument()
+    expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
+  })
+
+  it('clears the stored preview when starting a new conversation', async () => {
+    const sha256 = 'a'.repeat(64)
+    const siteId = `site-${sha256.slice(0, 24)}`
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1, chatId: 'saved_preview', messages: [{ role: 'user', content: 'Old project' }],
+      preview: {
+        schemaVersion: 1, kind: 'ods-pixel-workspace-preview',
+        relativeDirectory: 'demo', siteId, port: 9437,
+        url: `http://${siteId}.localhost:9437/${siteId}/`,
+        files: 1, bytes: 2048, sha256, entrySha256: 'b'.repeat(64),
+      },
+    }))
+    globalThis.fetch.mockResolvedValue(response({ available: true }))
+    const restored = render(<Pixel />)
+    expect(await screen.findByTitle('Interactive Pixel preview')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('Start a new chat'))
+    await waitFor(() => {
+      const stored = JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1'))
+      expect(stored.preview).toBeNull()
+      expect(stored.messages).toEqual([])
+      expect(stored.chatId).not.toBe('saved_preview')
+    })
+    restored.unmount()
+    render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
     expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
   })
 

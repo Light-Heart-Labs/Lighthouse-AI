@@ -386,7 +386,19 @@ function loadStoredChat() {
       if (totalBytes > MAX_TOTAL_MESSAGE_BYTES) throw new Error('stored Pixel chat is too large')
       return { role: message.role, content: message.content }
     })
-    return { chatId: stored.chatId, messages }
+    // Reuse the terminal marker validator for persisted metadata. Never infer
+    // an iframe URL from conversation text, and always use the authenticated
+    // snapshot relay when restoring a preview.
+    let preview = null
+    try {
+      preview = parseVerifiedPreviewFrame({
+        choices: [{ finish_reason: 'stop' }],
+        pixel: { schemaVersion: 1, preview: stored.preview },
+      })
+    } catch {
+      // A damaged preview must not discard an otherwise valid conversation.
+    }
+    return { chatId: stored.chatId, messages, preview }
   } catch {
     return null
   }
@@ -420,7 +432,7 @@ export default function Pixel({ systemStatus = null }) {
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
   const [agentRuntime, setAgentRuntime] = useState(null)
   const [modelSupport, setModelSupport] = useState(null)
-  const [preview, setPreview] = useState(null)
+  const [preview, setPreview] = useState(() => initialChat?.preview || null)
   const [previewRefresh, setPreviewRefresh] = useState(0)
 
   const abortRef = useRef(null)
@@ -551,12 +563,13 @@ export default function Pixel({ systemStatus = null }) {
           role,
           content,
         })),
+        preview,
       }))
     } catch {
       // Conversation persistence is a convenience; chat remains usable when
       // storage is unavailable, full, or blocked by the browser.
     }
-  }, [messages, sending])
+  }, [messages, preview, sending])
 
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim()
