@@ -10451,3 +10451,74 @@ test("explicit publication resolves a pronoun to the named HTML artifact in its 
     'Fix the parser in source.py and publish it.',
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
+
+test("Python JSON API demo with explicit no-website does not require workspace preview", () => {
+  const prompt =
+    "Build a tiny Python JSON API demo in seed-api-demo using only the standard library. " +
+    "Provide GET /health and GET /seeds with an optional crop filter over three fictional records, " +
+    "return JSON 404 for unknown routes, and test the actual HTTP responses. " +
+    "Run it temporarily on an automatically selected localhost port inside your execution environment, " +
+    "make real requests, shut down that test server and verify the port no longer accepts connections. " +
+    "Preserve other projects; no dependencies, external services or published website are needed.";
+  // The word "website" appears in the prompt ("published website are needed") but it is
+  // negated by "no", so this must not trigger workspace preview authorship.
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);
+  // The prompt does not name /workspace so workspace tools are not auto-requested,
+  // but with a workspace path the same negation must hold.
+  const wsPrompt = "Work in /workspace/seed-api-demo. " + prompt;
+  assert.equal(userMessageRequestsWorkspacePreview([], wsPrompt), false);
+  assert.equal(userMessageRequestsWorkspaceTools([], wsPrompt), true);
+  assert.equal(userMessageRequestsWorkspaceMutation([], wsPrompt), true);
+});
+
+test("sandbox shell availability check with explicit host negation does not require Operations", () => {
+  const prompt =
+    "The prior reply only reported the host OS and omitted the runtime checks. " +
+    "In your sandbox workspace, execute exactly a small shell availability check for " +
+    "node, nodejs, npm, bun, deno, python3 and git using command -v, plus pwd. " +
+    "Return the actual output. Do not inspect the host operating system or use the " +
+    "host inventory shortcut. No installations and no website.";
+  // The phrase "Do not inspect the host operating system" is an explicit negation.
+  // The phrase "reported the host OS" is a statement about a prior reply, not a request.
+  // The task is sandbox workspace work, not host operations.
+  const ops = userMessageOperationsRequirements([], prompt);
+  assert.equal(ops.required, false,
+    "sandbox availability check with explicit host negation must not require Operations");
+});
+
+test("positive host OS request still triggers Operations after hostEvidence clause fix", () => {
+  // A legitimate positive request must still work
+  const prompt = "Report the host OS and kernel.";
+  const ops = userMessageOperationsRequirements([], prompt);
+  assert.equal(ops.required, true,
+    "positive host OS request must still require Operations");
+});
+
+test("mixed negation-and-positive host evidence resolves to the positive clause", () => {
+  // "Do not check the host OS. What is the kernel?" — the negation blocks the OS clause
+  // but the positive kernel question should still trigger.
+  const prompt = "Do not inspect the host OS. What is the kernel and architecture?";
+  const ops = userMessageOperationsRequirements([], prompt);
+  assert.equal(ops.required, true,
+    "positive kernel question after OS negation must still require Operations");
+});
+
+test('negative visual constraints preserve independent website requests', () => {
+  for (const prompt of [
+    'No dependencies are needed, but build a live website in /workspace/garden/index.html and publish it.',
+    'No dependencies are needed, but build a live website.',
+    'Build a Python JSON API; no published website is needed for the API. Then create and publish /workspace/docs/index.html.',
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+  for (const prompt of [
+    'Build a Python JSON API. No website is needed.',
+    'Create a Python CLI; no browser app, form or game is needed.',
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+});
+
+test('host evidence recognizes read/get and curly-apostrophe exclusions', () => {
+  for (const prompt of ['Read the host OS release.', 'Get this machine hostname.']) {
+    assert.equal(userMessageOperationsRequirements([], prompt).required, true, prompt);
+  }
+  const prompt = 'In the sandbox, run command -v python3. Don’t inspect the host OS.';
+  assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
+});

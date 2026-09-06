@@ -4104,10 +4104,27 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     messages,
     prompt
   );
-  const hostEvidence =
-    /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i.test(
-      text
-    ) && /\b(?:ODS|host|machine)\b/i.test(text);
+  const hostEvidenceClauses = text.split(
+    /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i
+  );
+  const hostEvidenceClauseNegation =
+    /^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|omit|exclude|no)\b/i;
+  // A clause that merely reports what a prior reply did is not a new host-evidence request.
+  // Require the non-negated clause to contain request language. Host context may be
+  // established in an earlier clause (e.g. "this laptop"); only the evidence facet
+  // must be in the requesting clause.
+  const hostEvidenceRequest =
+    /\b(?:what(?:['’]s|\s+is)?|which|tell|show|report|check|verify|identify|name|inspect|give|get|read|return|measure)\b/i;
+  const hostEvidenceFacet =
+    /\b(?:hostname|host identity|host platform|kernel|machine architecture|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?)\b/i;
+  const hostEvidenceLocalHost = /\b(?:ODS|host|machine)\b/i;
+  const hostEvidence = hostEvidenceClauses.some((clause) =>
+    !hostEvidenceClauseNegation.test(clause) &&
+    hostEvidenceRequest.test(clause) &&
+    hostEvidenceFacet.test(clause) &&
+    (hostEvidenceLocalHost.test(clause) ||
+      /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i.test(text))
+  );
   const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i;
   const hostContext = hostContextPattern.test(text);
   const hostScopeFacetPatterns = [
@@ -4128,7 +4145,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:and|then)\s+(?=(?:find|discover|locate|detect|identify|list|look\s+for|scan)\b)|\band\s+(?=(?:(?:briefly|then)\s+)?(?:explain|summari[sz]e|describe|report)\b)/i
   );
   const artifactOrExplanation = /\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i;
-  const negatedObservationClause = (clause) => /^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don't|never|avoid|skip|omit|exclude)\b/i.test(clause);
+  const negatedObservationClause = (clause) => /^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don['’]t|never|avoid|skip|omit|exclude)\b/i.test(clause);
   const networkDiscoveryClause = (clause) =>
     /\b(?:LAN|local\s+network)\b/i.test(clause) &&
     /\b(?:computers|machines|hosts|devices|peers)\b/i.test(clause) &&
@@ -4507,19 +4524,19 @@ function hasExplicitWorkspacePreviewDirective(text) {
 export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
-  const website =
-    /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i.test(text);
-  const browserInterface =
-    /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(text) ||
-    (/\bprototypes?\b/i.test(text) &&
-      /\b(?:browser|checkout|flow|form|interface|onboarding|screen|sign[- ]?up|ui|ux|web)\b/i.test(text));
-  // Inspecting installed applications is not a visual edit just because the
-  // owner says "do not remove or change anything". Count positive actions;
-  // a later "but", "instead", or "then" can start a separate requested action.
+  // Classify visual targets and actions from the same positive request text.
+  // A no-website constraint on a Python task is not a website request. Keep
+  // independent actions after "but", "instead", "then", or a sentence boundary.
   const actionText = text.replace(
-    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without|no)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
     " "
   );
+  const website =
+    /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i.test(actionText);
+  const browserInterface =
+    /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(actionText) ||
+    (/\bprototypes?\b/i.test(actionText) &&
+      /\b(?:browser|checkout|flow|form|interface|onboarding|screen|sign[- ]?up|ui|ux|web)\b/i.test(actionText));
   const buildAction =
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i;
   const reviseAction =
@@ -4533,11 +4550,11 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     .some((clause) => /\b(?:apps?|applications?)\b/i.test(clause) &&
       (buildAction.test(clause) || reviseAction.test(clause)));
   const browserVisual =
-    /\b(?:artworks?|animated\s+(?:art|illustrations?|scenes?)|interactive\s+(?:art|charts?|diagrams?))\b/i.test(text) ||
-    /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
-    /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*games?\b/i.test(text);
+    /\b(?:artworks?|animated\s+(?:art|illustrations?|scenes?)|interactive\s+(?:art|charts?|diagrams?))\b/i.test(actionText) ||
+    /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(actionText) ||
+    /\b(?:arcade|board|card|puzzle|racing|rhythm|strategy|word)?\s*games?\b/i.test(actionText);
   const explicitBrowser =
-    website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(text);
+    website || /\b(?:browser|canvas|html|svg|webgl)\b/i.test(actionText);
   const nativeImplementation =
     /\b(?:c\+\+|command[- ]?line|cli|desktop|java|kotlin|python|rust|swift|terminal)\b/i.test(text) ||
     /\bnative\s+(?:apps?|applications?|binar(?:y|ies)|code|programs?|services?|tools?)\b/i.test(text) ||
