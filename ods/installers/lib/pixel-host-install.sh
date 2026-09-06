@@ -1702,7 +1702,7 @@ updated_tools["toolSearch"] = {
     "searchDefaultLimit": 5,
     "maxSearchLimit": 10,
 }
-# The finalization hook consumes only the guard's per-run structured state and
+# The finalization hook consumes only per-run structured guard state and
 # does not inspect or persist conversation text. OpenClaw nevertheless requires
 # this explicit trust bit before any installed plugin may register the hook.
 updated_pixel_hooks["allowConversationAccess"] = True
@@ -1713,7 +1713,7 @@ if (type(context_window) is not int or type(model_max_tokens) is not int
     raise SystemExit("OpenClaw model limits are outside the ODS Pixel runtime contract")
 # Preserve complete upstream workspace contracts when the selected route can
 # carry and follow them. Small checkpoints and compact contexts receive the
-# plugin's equivalent concise core and on-demand capability contracts. This
+# equivalent concise plugin core and on-demand capability contracts. This
 # generic size/context profile never rejects a model or hides a callable tool.
 compact_context = context_window < 32768
 model_label = "{} {}".format(updated_model.get("id", ""), updated_model.get("name", "")).casefold()
@@ -1728,16 +1728,16 @@ updated_pixel_config["leanPrompt"] = lean_prompt
 updated_agent["bootstrapMaxChars"] = 2000 if lean_prompt else 14000
 updated_agent["bootstrapTotalMaxChars"] = 6000 if lean_prompt else 36000
 updated_agent["contextInjection"] = "never" if lean_prompt else "continuation-skip"
-# Bound each live tool result by the selected model's real context capacity.
+# Bound each live tool result by the real context capacity of the selected model.
 # This is capability-based prompt shaping, never a model allowlist: failures
-# retain OpenClaw's diagnostic head/tail projection and every tool remains
+# retain OpenClaw diagnostic head/tail projection and every tool remains
 # callable, while one large read or verbose suite cannot crowd out the next
 # model continuation on compact local contexts.
 updated_agent_context_limits["toolResultMaxChars"] = max(
     4000,
     min(16000, context_window // 4),
 )
-# OpenClaw's OpenAI-compatible transport applies a 1.25 input estimate after
+# The OpenClaw OpenAI-compatible transport applies a 1.25 input estimate after
 # the pre-prompt compaction check. Leave enough precheck headroom for the real
 # model output ceiling before that later transport clamp can reduce a
 # continuation to one token. This remains context-derived for every model and
@@ -1745,7 +1745,7 @@ updated_agent_context_limits["toolResultMaxChars"] = max(
 updated_compaction["reserveTokens"] = (
     context_window + 4 * model_max_tokens + 4
 ) // 5
-# OpenClaw's LLM-boundary estimate is character based and can undercount dense
+# The OpenClaw LLM-boundary estimate is character based and can undercount dense
 # tool transcripts. Its context-aware floor is intentionally capped to half of
 # a compact window; enable that same bound for the 8K-31K adaptive profiles so
 # compaction begins before a provider can end the continuation at length. A 4K
@@ -1754,7 +1754,7 @@ updated_compaction["reserveTokens"] = (
 updated_compaction["reserveTokensFloor"] = (
     context_window // 2 if 8192 <= context_window < 32768 else 0
 )
-# OpenClaw's fixed 20K keep-recent default is larger than every compact ODS
+# The fixed OpenClaw 20K keep-recent default is larger than every compact ODS
 # profile. Scale it for all contexts so compaction always drops real history
 # instead of writing an empty no-op summary and blocking the recovery retry.
 updated_compaction["keepRecentTokens"] = max(
