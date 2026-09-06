@@ -24,6 +24,8 @@ services:
       # NET_RAW: send raw packets (NAT traversal probes)
       - NET_ADMIN
       - NET_RAW
+    security_opt:
+      - no-new-privileges:true
     devices:
       # The TUN device is how Tailscale's userspace daemon hands packets
       # back to the kernel. Without this, tailscale up exits with
