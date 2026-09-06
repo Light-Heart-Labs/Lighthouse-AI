@@ -7022,6 +7022,40 @@ test("normalizes sandbox-root file paths and exec workdirs", () => {
   );
 });
 
+test("recovers the observed redundant workspace transport and retains cancellation", () => {
+  const command = "cat /workspace/inventory-merge-demo/merge_inventory.py";
+  const prepared = [];
+  const guard = createToolLoopGuard({ execControl: {
+    prepare: (runId, value) => { prepared.push([runId, value]); return "tracked-command"; },
+    signal: () => true,
+  } });
+  assert.deepEqual(call(guard, "tool_call", { event: { params: {
+    id: "tool_call", args: { id: "exec", args: { command, description: "Read current source" } },
+  } } }), { params: { id: "exec", args: { command: "tracked-command", description: "Read current source" } } });
+  assert.deepEqual(prepared, [["run-1", command]]);
+});
+
+test("redundant workspace transport cannot bypass existing execution boundaries", () => {
+  for (const [command, reason] of [
+    ["rm -rf /workspace/project", RECURSIVE_DELETE_REQUIRES_OWNER_REASON],
+    ["curl http://192.168.1.1/", EXEC_PRIVATE_NETWORK_REASON],
+  ]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (...args) => { prepared.push(args); return "must-not-run"; }, signal: () => true,
+    } });
+    assert.deepEqual(call(guard, "tool_call", { event: { params: {
+      id: "tool_call", args: { id: "openclaw:core:exec", args: { command } },
+    } } }), { block: true, blockReason: reason });
+    assert.deepEqual(prepared, []);
+  }
+  for (const params of [
+    { id: "tool_call", args: { id: "pixel_ods_host_command_propose", args: { command: "hostname" } } },
+    { id: "tool_call", args: { id: "exec", args: { command: "pwd" } }, extra: true },
+    { id: "tool_call", args: { id: "tool_call", args: { id: "exec", args: { command: "pwd" } } } },
+  ]) assert.equal(call(createToolLoopGuard(), "tool_call", { event: { params } }), undefined);
+});
+
 test("blocks recursive forced deletion unless the owner explicitly names the workspace tree", () => {
   const guard = createToolLoopGuard();
   const destructive = {

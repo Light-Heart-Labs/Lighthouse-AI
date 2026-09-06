@@ -630,6 +630,21 @@ function normalizeApplyPatchInput(params) {
 
 function normalizeWorkspaceParams(toolName, params) {
   if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
+  // A model may wrap the Tool Search transport in itself. Resolve only one
+  // exact redundant envelope around a known workspace tool, before the missing
+  // tool fuse can disable even corrected calls for the remainder of the turn.
+  // The resolved call still passes every ordinary workspace/host/cancel guard.
+  if (
+    toolName === "tool_call" && params.id === "tool_call" &&
+    Object.keys(params).length === 2 &&
+    params.args && typeof params.args === "object" && !Array.isArray(params.args) &&
+    Object.keys(params.args).length === 2 &&
+    typeof params.args.id === "string" &&
+    /^(?:openclaw:core:)?(?:read|write|edit|apply_patch|exec|process)$/.test(params.args.id) &&
+    params.args.args && typeof params.args.args === "object" && !Array.isArray(params.args.args)
+  ) {
+    return normalizeWorkspaceParams(toolName, params.args) ?? { ...params.args };
+  }
   const updated = { ...params };
   let changed = false;
   // Tool Search is the model-facing transport for core workspace tools. Some
