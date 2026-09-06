@@ -7,6 +7,7 @@ services:
       - no-new-privileges:true
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_KEY:-}
+      - DATABASE_URL=sqlite:////data/litellm/litellm.db
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
@@ -17,6 +18,7 @@ services:
       - TOKEN_SPY_URL=${TOKEN_SPY_URL:-http://token-spy:8080}
       - TOKEN_SPY_API_KEY=${TOKEN_SPY_API_KEY:-}
     volumes:
+      - ./data/litellm:/data/litellm:z
       - ./config/litellm/${ODS_MODE:-local}.yaml:/app/config.yaml:ro,z
       - ./config/litellm/switchboard.yaml:/app/switchboard.yaml:ro,z
       - ./extensions/services/litellm/select-config.sh:/app/ods-select-config.sh:ro,z
