@@ -51,10 +51,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  # Keep Pixel as the default model without making Open WebUI startup depend
+  # on an experimental runtime. Ordinary ODS models remain selectable.
   open-webui:
-    depends_on:
-      pixel-edge:
-        condition: service_healthy
     environment:
       ENABLE_OPENAI_API: "true"
       OPENAI_API_BASE_URLS: "http://pixel-edge:9595/v1;${OPEN_WEBUI_LLM_BASE_URL:-${LLM_API_URL:-http://llama-server:8080}/v1}"

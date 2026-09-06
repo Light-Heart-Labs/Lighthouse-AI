@@ -16,7 +16,7 @@ The trust chain is deliberately split:
    refuse a model switch while Dashboard or Open WebUI Pixel work is active.
 3. The host `pixel-agent` integration owns that socket and is the only component that reads and injects Pixel's full gateway credential.
 
-Pixel is a single-owner agent runtime. The default route is therefore intended for the ODS owner surface, not an untrusted multi-user Open WebUI deployment. Hermes and OpenCode remain available as explicit rollback paths.
+Pixel is a single-owner agent runtime. The default route is therefore intended for the ODS owner surface, not an untrusted multi-user Open WebUI deployment. Pixel is ODS's core conversational experience; Hermes, OpenCode and ordinary Open WebUI models remain available in parallel while Pixel matures. Open WebUI startup does not depend on Pixel health.
 
 Both socket directories are mounted read-only and have no TCP publication.
 `PIXEL_INGRESS_GID` grants the non-root container process access without making

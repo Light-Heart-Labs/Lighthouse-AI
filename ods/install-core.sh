@@ -108,9 +108,9 @@ ENABLE_VOICE=true
 ENABLE_WORKFLOWS=true
 ENABLE_RAG=true
 ENABLE_RECOMMENDED=true
-# Pixel is preferred automatically only on its qualified Linux hosts after a
-# separate written license agreement is acknowledged. Hermes stays enabled as
-# the portable fallback. OpenClaw is deprecated and remains explicit opt-in.
+# Pixel is the core conversational experience on qualified Linux hosts after a separate
+# written license agreement is acknowledged. Existing ODS tools remain available.
+# OpenClaw is deprecated and remains explicit opt-in.
 ENABLE_HERMES=true
 ENABLE_PIXEL="${ENABLE_PIXEL:-auto}"
 PIXEL_EXPLICIT=false
@@ -186,10 +186,10 @@ Options:
     --no-rag          Disable RAG / Qdrant
     --recommended     Enable LiteLLM + SearXNG + Token Spy support services
     --no-recommended  Disable recommended support services
-    --hermes          Enable Hermes Agent (portable fallback and rollback path)
+    --hermes          Enable Hermes Agent alongside Pixel
     --no-hermes       Disable Hermes Agent
-    --pixel           Require Pixel as the default agent (qualified Linux host and separate license required)
-    --no-pixel        Disable Pixel and use the configured fallback agent
+    --pixel           Enable Pixel alongside the existing ODS tools (qualified Linux host and separate license required)
+    --no-pixel        Disable Pixel; keep the other configured ODS tools
     --openclaw        Enable OpenClaw (DEPRECATED — see docs/MIGRATION-OPENCLAW-TO-HERMES.md)
     --no-openclaw     Disable OpenClaw
     --opencode        Enable the optional OpenCode browser IDE

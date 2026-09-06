@@ -252,8 +252,8 @@ See the [macOS Quickstart](ods/docs/MACOS-QUICKSTART.md) for details.
 - **Kokoro** — text-to-speech
 
 ### Agents & Automation
-- **Pixel** — preferred default agent on qualified Ubuntu 24.04/Debian 12 systemd hosts after separate written license authorization; appears as `pixel/default` in Open WebUI and as a Dashboard toolbar app
-- **Hermes Agent** — portable default and one-command rollback when Pixel is unavailable, unlicensed, or disabled; includes memory, skills, and a magic-link-gated proxy
+- **Pixel** — core conversational agent on qualified Ubuntu 24.04/Debian 12 systemd hosts after separate written license authorization; appears as `pixel/default` in Open WebUI and as a Dashboard toolbar app
+- **Hermes Agent** — independent general-purpose agent, available alongside Pixel; includes memory, skills, and a magic-link-gated proxy
 - **OpenClaw** — deprecated legacy autonomous agent, still opt-in during the migration window
 - **n8n** — workflow automation with 400+ integrations (Slack, email, databases, APIs)
 - **APE** — Agent Policy Engine for auditing and governing autonomous tool calls
@@ -440,7 +440,7 @@ Other tools get you part of the way. ODS gets you the whole way.
 | One-command install | Everything, auto-configured | LLM + chat only | LLM only |
 | Hardware auto-detect + model selection | NVIDIA + AMD Strix Halo + Apple Silicon + Intel Arc + CPU/cloud fallback | No | No |
 | AMD APU unified memory support | Platform-specific accelerated backend, selected by installer | Partial (Vulkan) | No |
-| Autonomous AI agents | Pixel preferred on qualified/licensed hosts; Hermes fallback; OpenClaw legacy opt-in | No | No |
+| Autonomous AI agents | Pixel at the heart of ODS on qualified/licensed hosts; Hermes available alongside it; OpenClaw legacy opt-in | No | No |
 | Workflow automation | n8n (400+ integrations) | No | No |
 | Voice (STT + TTS) | Whisper + Kokoro | No | No |
 | Image generation | ComfyUI | No | No |

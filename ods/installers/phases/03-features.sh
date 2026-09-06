@@ -71,7 +71,7 @@ if $INTERACTIVE && ! $DRY_RUN; then
         _phase03_prompt_bool ENABLE_VOICE "Enable voice (Whisper STT + Kokoro TTS)?"
         _phase03_prompt_bool ENABLE_WORKFLOWS "Enable n8n workflow automation?"
         _phase03_prompt_bool ENABLE_RAG "Enable Qdrant vector database (for RAG)?"
-        _phase03_prompt_bool ENABLE_HERMES "Enable Hermes Agent (portable Pixel fallback)?"
+        _phase03_prompt_bool ENABLE_HERMES "Enable Hermes Agent?"
         _phase03_prompt_bool ENABLE_OPENCLAW "Enable OpenClaw AI agent framework (DEPRECATED - Hermes replaces it)?"
         _phase03_prompt_bool ENABLE_OPENCODE "Enable the OpenCode browser IDE extension?"
         _phase03_prompt_bool ENABLE_COMFYUI "Enable image generation (ComfyUI + SDXL Lightning, ~6.5GB)?"
@@ -125,11 +125,11 @@ if [[ "$PIXEL_AGENT_MODE" == "pixel" ]]; then
         log "Pixel selected in adaptive mode on an untested local model; Hermes remains available as rollback when enabled"
     else
         ENABLE_PIXEL_RUNTIME=true
-        log "Pixel selected as the default ODS agent on the managed ODS model route; Hermes remains available as rollback when enabled"
+        log "Pixel enabled as the core conversational experience alongside existing ODS tools on the managed ODS model route; Hermes remains available as rollback when enabled"
     fi
     unset _pixel_model_route_class
 else
-    log "Pixel auto-gate selected Hermes fallback"
+    log "Pixel is unavailable or disabled; existing ODS tools remain available"
 fi
 export PIXEL_AGENT_MODE ENABLE_PIXEL_RUNTIME ENABLE_PIXEL
 

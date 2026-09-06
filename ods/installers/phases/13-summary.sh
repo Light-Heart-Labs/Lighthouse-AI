@@ -142,7 +142,7 @@ if [[ "${ODS_MODE:-local}" == "cloud" || "${ODS_MODE:-local}" == "lemonade" || "
 else
     echo "  • LLM API:       http://localhost:${SERVICE_PORTS[llama-server]:-11434}/v1  (llama-server)"
 fi
-[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  • Pixel Agent:   http://localhost:${SERVICE_PORTS[dashboard]:-3001}/pixel  (also the default Open WebUI model)"
+[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  • Pixel Agent:   http://localhost:${SERVICE_PORTS[dashboard]:-3001}/pixel  (core agent; default Open WebUI model)"
 [[ "${ENABLE_PERPLEXICA:-false}" == "true" ]] && echo "  • Perplexica:    http://localhost:${SERVICE_PORTS[perplexica]:-3004}"
 [[ "${ENABLE_COMFYUI:-false}" == "true" ]] && echo "  • ComfyUI:       http://localhost:${SERVICE_PORTS[comfyui]:-8188}"
 [[ "$ENABLE_HERMES" == "true" ]] && echo "  • Hermes (auth): http://localhost:${SERVICE_PORTS[hermes-proxy]:-9120}  (magic-link gated; not direct :9119)"
@@ -167,9 +167,9 @@ bootline
 echo "  • Tier: $TIER ($TIER_NAME)"
 echo "  • Model: $LLM_MODEL"
 if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then
-    echo "  • Default agent: Pixel (Open WebUI model: pixel/default)"
+    echo "  • Pixel core agent: enabled (default Open WebUI model: pixel/default)"
 elif [[ "${ENABLE_HERMES:-false}" == "true" ]]; then
-    echo "  • Default agent: Hermes (Pixel unavailable or disabled)"
+    echo "  • Hermes Agent: enabled"
 fi
 echo "  • Install dir: $INSTALL_DIR"
 echo ""
@@ -184,7 +184,7 @@ echo "  docker compose logs -f                     # View container logs"
 echo "  docker compose restart                     # Restart containers"
 echo "  systemctl --user list-timers               # Check maintenance timers"
 echo "  ods status                                 # Check service health"
-[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  bash install.sh --no-pixel --hermes         # Roll back the default agent to Hermes"
+[[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && echo "  bash install.sh --no-pixel --hermes         # Disable Pixel; keep Hermes enabled"
 echo ""
 
 if [[ -f "$LOG_FILE" ]]; then
@@ -451,7 +451,7 @@ echo ""
 echo -e "  ${BGRN}Dashboard${NC}    ${WHT}http://localhost:${DASHBOARD_PORT}${NC}"
 echo -e "  ${BGRN}Chat${NC}         ${WHT}http://localhost:${WEBUI_PORT}${NC}"
 [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]] && \
-echo -e "  ${BGRN}Pixel${NC}        ${WHT}http://localhost:${DASHBOARD_PORT}/pixel${NC}  ${AMB}(default in Open WebUI too)${NC}"
+echo -e "  ${BGRN}Pixel${NC}        ${WHT}http://localhost:${DASHBOARD_PORT}/pixel${NC}  ${AMB}(core agent; default in Open WebUI)${NC}"
 [[ "$ENABLE_HERMES" == "true" ]] && \
 echo -e "  ${BGRN}Hermes${NC}       ${WHT}http://localhost:${SERVICE_PORTS[hermes-proxy]:-9120}${NC}  ${AMB}(magic-link gated)${NC}"
 [[ "$ENABLE_OPENCLAW" == "true" ]] && \

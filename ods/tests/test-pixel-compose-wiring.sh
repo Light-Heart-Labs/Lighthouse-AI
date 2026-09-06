@@ -39,7 +39,7 @@ for required in (
     assert required in text, required
 webui = text.split("\n  open-webui:", 1)[1]
 webui = re.split(r"\n  [a-zA-Z0-9_-]+:", webui, maxsplit=1)[0]
-assert re.search(r"depends_on:\s+pixel-edge:\s+condition: service_healthy", webui)
+assert "depends_on:" not in webui
 for service in ("dashboard-api", "dashboard"):
     marker = f"\n  {service}:"
     if marker not in text:
@@ -80,7 +80,7 @@ assert edge["environment"]["PIXEL_PREVIEW_PROXY_KEY"] == "c" * 64
 assert edge["environment"]["PIXEL_PREVIEW_SOCKET"] == "/pixel-preview-runtime/http.sock"
 assert any(mount["target"] == "/pixel-preview-runtime" and mount["read_only"] for mount in edge["volumes"])
 webui = value["services"]["open-webui"]
-assert webui["depends_on"]["pixel-edge"]["condition"] == "service_healthy"
+assert "pixel-edge" not in webui.get("depends_on", {})
 assert webui["environment"]["OPENAI_API_BASE_URLS"].startswith("http://pixel-edge:9595/v1;")
 assert webui["environment"]["DEFAULT_MODELS"] == "pixel/default"
 suggestions = json.loads(webui["environment"]["DEFAULT_PROMPT_SUGGESTIONS"])

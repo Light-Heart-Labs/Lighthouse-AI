@@ -1,19 +1,24 @@
 # Pixel in ODS
 
-Pixel is ODS's preferred conversational agent on the narrow host and license
-path described here. It is exposed as the default `pixel/default` model in
-Open WebUI and as a dedicated **Pixel** app in the ODS Dashboard toolbar.
-Hermes remains installed by default as the portable fallback and rollback
-agent. Deprecated OpenClaw and the OpenCode coding UI remain separately
-selectable; this integration does not delete either one.
+Pixel is the heart of ODS's conversational experience and a core feature under
+active development. On the host and license path described here, it is the
+default `pixel/default` model in Open WebUI and has a dedicated **Pixel** app
+in the ODS Dashboard. The full goal is to create projects, use host tools,
+manage ODS, and carry out sustained work through conversation.
+
+The rollout is experimental: Hermes, OpenCode, Open WebUI and the other ODS
+applications remain available in parallel while Pixel matures. This integration
+does not require their removal or a Pixel-only core download. Hermes remains
+installed by default; OpenCode and deprecated OpenClaw remain separately
+selectable. Pixel's capability and model-flexibility goals are unchanged.
 
 Pixel does not maintain a model allowlist and ODS does not block chat or tool
 use behind a "Pixel-ready" verdict. Every model or remote provider that is
 callable through the active ODS Switchboard route is callable through Pixel.
 ODS still applies its ordinary hardware-fit and inference-readiness checks when
 it chooses a fresh install's default model; any agent-quality measurements are
-advisory capability evidence, not an access gate. Hermes is the rollback agent
-when the Pixel runtime, host, license, or authenticated gateway is unavailable,
+advisory capability evidence, not an access gate. Hermes remains independently
+available when the Pixel runtime, host, license, or authenticated gateway is unavailable,
 not a substitute selected merely because a callable model scored poorly on an
 agent probe.
 
@@ -41,9 +46,9 @@ This technical integration therefore fails closed:
 
 | Request | Qualified host | Written authorization acknowledged | Result |
 |---------|----------------|------------------------------------|--------|
-| `ENABLE_PIXEL=auto` (default) | Yes | Yes | Pixel is the default agent |
-| `ENABLE_PIXEL=auto` | No | Any | Hermes fallback; ODS installation continues |
-| `ENABLE_PIXEL=auto` | Yes | No | Hermes fallback; ODS installation continues |
+| `ENABLE_PIXEL=auto` (default) | Yes | Yes | Pixel is enabled as the core agent and Open WebUI's default model |
+| `ENABLE_PIXEL=auto` | No | Any | Pixel is skipped; existing ODS tools remain available |
+| `ENABLE_PIXEL=auto` | Yes | No | Pixel is skipped; existing ODS tools remain available |
 | `--pixel` | Yes | Yes | Pixel is required and installed |
 | `--pixel` | No | Any | Installer stops before changing the agent route |
 | `--pixel` | Yes | No | Installer stops before changing the agent route |
@@ -132,8 +137,9 @@ the final loopback hop, strips inbound headers, forces `openclaw/default`, and
 bounds request, response, stream, and timeout sizes.
 
 The edge and host ingress health checks fail closed unless the next hop is
-actually ready. Open WebUI is not allowed to advertise `pixel/default` while
-the private ingress is unavailable.
+actually ready. Open WebUI startup does not depend on Pixel health; its ordinary
+models remain selectable. Pixel requests fail closed when the private
+ingress is unavailable.
 
 ### Operations capability and exact downloads
 
@@ -301,8 +307,8 @@ non-interactive Git access should use the local-checkout form above.
 
 After a successful install:
 
-1. Open `http://localhost:3000`. New Open WebUI chats default to
-   `pixel/default`; the ordinary ODS model remains selectable.
+1. Open `http://localhost:3000`. New chats default to `pixel/default` when
+   Pixel is enabled; the ordinary ODS model remains selectable.
 2. Open `http://localhost:3001/pixel`, or choose **Pixel** in the Dashboard
    toolbar, for the dedicated streaming agent UI.
 3. Hermes remains at its authenticated proxy URL shown by the installer.

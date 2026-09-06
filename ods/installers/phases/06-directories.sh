@@ -368,7 +368,7 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
 
     _phase06_step "reconcile-pixel-compose"
     if ! ods_pixel_reconcile_installed_compose "$SCRIPT_DIR" "$INSTALL_DIR" "${ENABLE_PIXEL_RUNTIME:-false}"; then
-        error "Could not reconcile the installed Pixel Compose fragment with the selected default agent"
+        error "Could not reconcile the installed Pixel Compose fragment with the selected Pixel enablement"
     fi
 
     # ODSForge was retired from the shipped stack after Hermes became the
@@ -1235,7 +1235,7 @@ ODS_SESSION_SECRET=${ODS_SESSION_SECRET}
 HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
 $(if [[ "${ENABLE_PIXEL_RUNTIME:-false}" == "true" ]]; then cat << PIXEL_ENV
 
-#=== Pixel default agent (separate written license required) ===
+#=== Pixel core agent (separate written license required) ===
 PIXEL_AGENT_MODE=pixel
 PIXEL_LICENSE_ACCEPTED=true
 PIXEL_SOURCE_URL=$(dotenv_quote "$PIXEL_SOURCE_URL_VALUE")
