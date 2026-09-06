@@ -17,7 +17,7 @@ service:
   type: docker
   gpu_backends: [all]
   category: core
-  depends_on: []
+  depends_on: [remote-provider-ssh-tunnel]
   startup_check: true
   description: >
     Internal-only OpenAI-compatible egress boundary for optional remote LLM
