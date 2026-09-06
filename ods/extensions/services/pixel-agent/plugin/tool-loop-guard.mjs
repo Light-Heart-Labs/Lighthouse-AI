@@ -4491,10 +4491,17 @@ function hasExplicitWorkspacePreviewDirective(text) {
   const commands = text.matchAll(
     /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:display|preview|publish|republish|serve|open|show|view)\s+([^!?;\n]{1,512})/gi
   );
-  return [...commands].some(([, target]) =>
-    hasWorkspaceHtmlTarget(target) ||
-    /\b(?:website|site|web\s*page|frontend|preview|animation|illustration|scene|game|chart|diagram|svg)\b/i.test(target)
-  );
+  return [...commands].some((match) => {
+    const target = match[1];
+    if (hasWorkspaceHtmlTarget(target) ||
+      /\b(?:website|site|web\s*page|frontend|preview|animation|illustration|scene|game|chart|diagram|svg)\b/i.test(target)) return true;
+    // "Edit demo/index.html and publish it" names its target before the
+    // command. Bind that pronoun within this clause, not an earlier topic.
+    const precedingClause = text.slice(0, match.index)
+      .split(/[!?;\n]|\.(?=\s|$)/).at(-1);
+    return /^(?:it|this|that)(?:\s|[.!?;]|$)/i.test(target.trim()) &&
+      hasWorkspaceHtmlTarget(precedingClause);
+  });
 }
 
 export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {

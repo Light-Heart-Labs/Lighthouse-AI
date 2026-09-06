@@ -10437,3 +10437,17 @@ test("explicit publication survives an unrelated creation constraint", () => {
     "Do not make camera changes or publish the scene.",
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
 });
+
+test("explicit publication resolves a pronoun to the named HTML artifact in its clause", () => {
+  for (const prompt of [
+    'Distinguish Audio engine status from Playback stopped/playing. Make focused edits to the existing garden-grooves/index.html website and publish it.',
+    'Fix the parser in pocket-budget/index.html and then display it.',
+    'Inspect the engine in demo/index.html and publish that.',
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+  for (const prompt of [
+    'Explain the engine in demo/index.html. Explain why we should publish it.',
+    'Fix the engine in demo/index.html but do not publish it.',
+    'Read demo/index.html. Explain the engine and publish it.',
+    'Fix the parser in source.py and publish it.',
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+});
