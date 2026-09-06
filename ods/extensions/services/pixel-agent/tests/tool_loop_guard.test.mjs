@@ -8946,6 +8946,22 @@ test("classifies a requested website demo as a verified workspace preview", () =
   }
 });
 
+test("negated application changes do not turn an ODS inspection into a preview task", () => {
+  for (const request of [
+    "Inspect this ODS installation and tell me which applications are installed and running, which model Pixel is actually configured to use, and whether Open WebUI, Hermes, OpenCode, ComfyUI and n8n are present. Use actual ODS tools and distinguish unavailable information from confirmed facts. Do not install, remove or change anything.",
+    "List installed apps. Do not change their settings.",
+    "Inspect the dashboard without modifying or updating anything.",
+    "Check which apps are installed; don't remove or update them.",
+    "Inspect applications, but never add or remove anything.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], request), false, request);
+  for (const request of [
+    "Improve the website, but do not change its colors.",
+    "Build a web app without external services.",
+    "Inspect the apps and do not change them, but improve the website.",
+    "Keep the existing website and add a pause control. Do not remove the animation.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], request), true, request);
+});
+
 test("requires the model to author a game before publication", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(

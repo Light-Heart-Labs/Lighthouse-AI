@@ -4478,10 +4478,17 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(text) ||
     (/\bprototypes?\b/i.test(text) &&
       /\b(?:browser|checkout|flow|form|interface|onboarding|screen|sign[- ]?up|ui|ux|web)\b/i.test(text));
+  // Inspecting installed applications is not a visual edit just because the
+  // owner says "do not remove or change anything". Count positive actions;
+  // a later "but", "instead", or "then" can start a separate requested action.
+  const actionText = text.replace(
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
+    " "
+  );
   const build =
-    /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(text);
+    /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(actionText);
   const revise =
-    /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(text);
+    /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(actionText);
   const browserVisual =
     /\b(?:artworks?|animated\s+(?:art|illustrations?|scenes?)|interactive\s+(?:art|charts?|diagrams?))\b/i.test(text) ||
     /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
