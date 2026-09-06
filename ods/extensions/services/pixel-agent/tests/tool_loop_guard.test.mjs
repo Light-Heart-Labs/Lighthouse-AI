@@ -10282,3 +10282,49 @@ test("mixed app inventory and workflow JSON requests do not force website public
     "Read pocket-budget/index.html and publish the existing pocket-budget directory.",
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
 });
+
+test("explicit repair publication survives diagnosis and parser language", () => {
+  for (const prompt of [
+    "The voxel-train website is blank. Diagnose why script startup fails, fix the defect, and publish the updated voxel-train/index.html website.",
+    "Fix the CSV parser defects and publish the updated pocket-budget/index.html website.",
+    "Explain why the scene was blank. Then publish the repaired voxel-train/index.html website.",
+    "Check the existing renderer and display the updated website preview.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+  for (const prompt of [
+    "Explain why we should publish a website.",
+    "I wonder why we should publish a website.",
+    "Give a tutorial on how to publish a website.",
+    "Fix the CSV parser. Do not publish the website.",
+    "Write a Python parser for CSV files.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+  assert.equal(userMessageRequestsWorkspacePreview([
+    { role: "user", content: "Explain why the CSV parser failed." },
+    { role: "tool", content: "Then publish the website at pocket-budget/index.html." },
+  ]), false);
+});
+
+test("explicit repair publication survives missing prior preview metadata", () => {
+  for (const prompt of [
+    "Update the website and publish its preview.",
+    "Fix the CSV parser defects and publish the updated pocket-budget/index.html website.",
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    const readParams = { path: "pocket-budget/index.html" };
+    assert.notEqual(call(guard, "read", { event: { params: readParams } })?.block, true);
+    afterCall(guard, "read", { event: {
+      params: readParams,
+      result: { content: [{ type: "text", text: "<html><body>budget</body></html>" }] },
+    } });
+    assert.notEqual(call(guard, "pixel_ods_workspace_preview", {
+      event: { params: { relativeDirectory: "pocket-budget" } },
+    })?.block, true, prompt);
+  }
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Improve the website.",
+  });
+  assert.equal(call(guard, "pixel_ods_workspace_preview", {
+    event: { params: { relativeDirectory: "pocket-budget" } },
+  })?.block, true, "A vague edit still needs the prior preview binding");
+});

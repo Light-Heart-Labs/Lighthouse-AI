@@ -4468,6 +4468,18 @@ function hasWorkspaceHtmlTarget(text) {
   return /\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/i.test(text);
 }
 
+function hasExplicitWorkspacePreviewDirective(text) {
+  // A requested delivery action can follow a diagnosis or code repair. Do not
+  // mistake a subordinate "why we should publish" for that owner command.
+  const commands = text.matchAll(
+    /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:display|preview|publish|republish|serve|open|show|view)\s+([^!?;\n]{1,512})/gi
+  );
+  return [...commands].some(([, target]) =>
+    hasWorkspaceHtmlTarget(target) ||
+    /\b(?:website|site|web\s*page|frontend|preview|animation|illustration|scene|game|chart|diagram|svg)\b/i.test(target)
+  );
+}
+
 export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
@@ -4519,14 +4531,15 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const nonVisualImplementation =
     /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(text) &&
     !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
+  const explicitDelivery = hasExplicitWorkspacePreviewDirective(text);
   if (
     rejectsPreview ||
     rejectsCreation ||
     nativeOnly ||
-    explanatoryOnly ||
-    nonVisualImplementation
+    (!explicitDelivery && (explanatoryOnly || nonVisualImplementation))
   ) return false;
   const directPreview =
+    explicitDelivery ||
     // A dot inside index.html is part of the requested filename, not a
     // sentence boundary between the preview action and its target.
     (hasWorkspaceHtmlTarget(text) &&
@@ -7196,18 +7209,20 @@ export function createToolLoopGuard({
           visualContinuationRequested && typeof sessionId === "string" && sessionId
             ? sessionPreviews.get(sessionId)
             : undefined;
+        const previewRequested = userMessageRequestsWorkspacePreview(
+          event?.messages, event?.prompt
+        );
+        const explicitDelivery = previewRequested && hasExplicitWorkspacePreviewDirective(
+          currentOwnerIntentText(event?.messages, event?.prompt)
+        );
         state.workspaceVisualContinuationRequested = Boolean(trustedSessionPreview);
         if (trustedSessionPreview) {
           state.workspaceVisualContinuationOriginalSha256 ??= trustedSessionPreview.sha256;
         }
         state.workspaceVisualContinuationUnavailable =
-          visualContinuationRequested && !trustedSessionPreview;
+          visualContinuationRequested && !trustedSessionPreview && !explicitDelivery;
         state.workspacePreviewRequested = Boolean(trustedSessionPreview) ||
-          (!visualContinuationRequested &&
-            userMessageRequestsWorkspacePreview(
-              event?.messages,
-              event?.prompt
-            ));
+          ((!visualContinuationRequested || explicitDelivery) && previewRequested);
         state.workspacePreviewAuthorshipRequired = Boolean(
           state.workspacePreviewRequested &&
           !trustedSessionPreview &&
