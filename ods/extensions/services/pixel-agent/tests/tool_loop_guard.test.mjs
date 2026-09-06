@@ -10266,3 +10266,19 @@ test("an explicit unittest requirement remains unsatisfied without a test run", 
   });
   assert.equal(reply(guard).payload.text, VERIFICATION_NOT_RUN_DELIVERY_PREFIX);
 });
+
+
+test("mixed app inventory and workflow JSON requests do not force website publication", () => {
+  for (const prompt of [
+    "Inspect the installed ODS applications and service status to determine whether n8n is available. Then create an importable n8n workflow JSON in inventory-workflow-demo for a manual trigger and three fictional inventory rows, returning items that need restocking. If n8n is available with authorized access, run this new test workflow and report its actual result. If it is unavailable, explain the missing prerequisite and show where the JSON was saved. Do not install services, alter existing workflows, use external services, or send messages.",
+    "Inspect the installed ODS applications, then create a JSON workflow file in the workspace.",
+    "Inspect ODS applications and create a JSON file in the workspace.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+  for (const prompt of [
+    "Build an app for tracking inventory.",
+    "Inspect installed ODS applications. Then create a browser app for tracking inventory.",
+    "Improve the existing budget app and show its preview.",
+    "I want a new app for tracking inventory.",
+    "Read pocket-budget/index.html and publish the existing pocket-budget directory.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+});

@@ -4473,7 +4473,6 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   if (!text) return false;
   const website =
     /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i.test(text);
-  const application = /\b(?:apps?|applications?)\b/i.test(text);
   const browserInterface =
     /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(text) ||
     (/\bprototypes?\b/i.test(text) &&
@@ -4485,10 +4484,18 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
     " "
   );
-  const build =
-    /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i.test(actionText);
-  const revise =
-    /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i.test(actionText);
+  const buildAction =
+    /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i;
+  const reviseAction =
+    /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i;
+  const build = buildAction.test(actionText);
+  const revise = reviseAction.test(actionText);
+  // An app inventory in one clause does not become a browser-build request
+  // because a later clause asks for an unrelated JSON file or workflow.
+  const application = actionText
+    .split(/[.!?;\n]+|\b(?:and|then|but|however|instead)\s+(?=(?:build|create|develop|design|generate|implement|make|write|add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|tweak|update|work)\b)/i)
+    .some((clause) => /\b(?:apps?|applications?)\b/i.test(clause) &&
+      (buildAction.test(clause) || reviseAction.test(clause)));
   const browserVisual =
     /\b(?:artworks?|animated\s+(?:art|illustrations?|scenes?)|interactive\s+(?:art|charts?|diagrams?))\b/i.test(text) ||
     /\b(?:svgs?|breakout|brick[- ]?breakers?|browser[- ]?games?|canvas\s+(?:demos?|games?)|interactive\s+(?:demos?|experiences?|visuali[sz]ations?)|task\s+boards?|to-?do\s+(?:apps?|boards?|lists?)|video\s*games?|videogames?|visual\s+(?:demos?|showcases?)|visuali[sz]ations?|voxel(?:[- ](?:based|styles?))?|webgl\s+(?:demos?|scenes?))\b/i.test(text) ||
