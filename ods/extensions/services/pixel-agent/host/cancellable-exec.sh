@@ -1,7 +1,9 @@
 #!/bin/sh
 set -u
 
-control_root=/run/pixel-ods-control
+# The controller verifies this regular owner-owned file before invoking it.
+# Its directory contains the markers both on the host and at the sandbox mount.
+control_root="$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)" || exit 125
 marker_id="${1:-}"
 encoded_command="${2:-}"
 

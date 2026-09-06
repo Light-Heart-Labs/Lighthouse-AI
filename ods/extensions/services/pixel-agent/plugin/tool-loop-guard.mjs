@@ -383,13 +383,18 @@ function execMarkerId(runId) {
 
 export function createExecCancellationControl({
   root = path.join(homedir(), ".openclaw", ".ods-exec-control"),
+  executionHost = "sandbox",
 } = {}) {
+  if (executionHost !== "sandbox" && executionHost !== "gateway") {
+    throw new Error("invalid Pixel execution control host mode");
+  }
   const resolvedRoot = path.resolve(root);
+  const hostWrapper = path.join(resolvedRoot, "cancellable-exec.sh");
 
   function assertRoot() {
     const owner = typeof process.getuid === "function" ? process.getuid() : undefined;
     const rootInfo = fs.lstatSync(resolvedRoot);
-    const wrapperInfo = fs.lstatSync(path.join(resolvedRoot, "cancellable-exec.sh"));
+    const wrapperInfo = fs.lstatSync(hostWrapper);
     if (
       !rootInfo.isDirectory() ||
       rootInfo.isSymbolicLink() ||
@@ -421,7 +426,12 @@ export function createExecCancellationControl({
         if (error?.code !== "ENOENT") throw error;
       }
       const encoded = Buffer.from(command, "utf8").toString("base64");
-      return `${EXEC_CONTROL_WRAPPER} ${execMarkerId(runId)} ${encoded}`;
+      // Validate the owner-side file above even when execution uses its sandbox
+      // bind mount. Gateway execution uses that same verified file directly.
+      const wrapper = executionHost === "sandbox"
+        ? EXEC_CONTROL_WRAPPER
+        : `'${hostWrapper.replace(/'/g, "'\"'\"'")}'`;
+      return `${wrapper} ${execMarkerId(runId)} ${encoded}`;
     },
 
     signal(runId) {
