@@ -5563,6 +5563,96 @@ test("persists a trusted exact next step after each verified mixed-task boundary
   assert.equal(persistToolResult(guard, "tool_call", "read-call"), undefined);
 });
 
+test("allows requested host observations within the live extension setup request", () => {
+  const prompt = "I want to use n8n as an optional ODS extension on this machine. Check whether it is installed; if it is missing, install and enable it through ODS. Verify that the service is healthy and tell me how to open it. Keep the work local and do not connect external accounts or create public webhooks.";
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true, actions: ["host.services", "ods.extensions.list"],
+  });
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  assert.deepEqual(call(guard, "tool_call", {
+    event: { params: { id: "pixel_ods_host_observe", args: { actions: ["host.kernel"] } } },
+  }), { params: { id: "pixel_ods_host_observe", args: { actions: ["host.services"], includeOdsStatus: true } } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+});
+
+test("mixed host receipts do not satisfy the remaining extension work", () => {
+  const guard = createToolLoopGuard();
+  const prompt = "Inspect the ODS host hostname and list installed ODS extensions.";
+  assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+    required: true, actions: ["host.identity", "ods.extensions.list"],
+  });
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+  const params = { id: "pixel_ods_host_observe", args: { actions: ["host.identity"] } };
+  assert.deepEqual(call(guard, "tool_call", { event: { params } }), { params });
+  afterCall(guard, "tool_call", { event: { params, result: { details: {
+    tool: { id: "openclaw:pixel-ods:pixel_ods_host_observe", source: "openclaw", sourceName: "pixel-ods", name: "pixel_ods_host_observe" },
+    result: { details: {
+      jobId: "ops-1234567890123-abcdef123456", status: "succeeded", waitTimedOut: false,
+      steps: [{ stepId: "observe-1", target: "ods-host", action: "host.identity", exitCode: 0,
+        stdout: "light-worker\n", stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] }],
+    } },
+  } } } });
+  const verification = guard.verificationForRun("run-1");
+  assert.notEqual(verification.status, "passed");
+  assert.match(verification.text, /ods\.extensions\.list/);
+  assert.match(verification.text, /light-worker/);
+});
+
+for (const outcome of ["succeeded", "failed", "malformed"]) {
+  test(`mixed host and inventory evidence requires both valid receipts: ${outcome}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Inspect the ODS host hostname and list installed ODS extensions.",
+    });
+    const jobs = [
+      { id: "ops-1234567890123-abcdef123456", action: "host.identity", stdout: "light-worker\n" },
+      { id: "ops-1234567890124-abcdef123457", action: "ods.extensions.list", stdout: JSON.stringify({
+        schemaVersion: 1, kind: "ods-pixel-extension-inventory", outcome: "succeeded",
+        summary: { total: 1, installed: 1, enabled: 1, cliInstalled: 0, disabled: 0, stopped: 0,
+          unhealthy: 0, installing: 0, settingUp: 0, error: 0, notInstalled: 0, incompatible: 0 },
+        extensions: [{ id: "dashboard", name: "Dashboard", category: "core", status: "enabled", source: "core", installable: false }],
+        boundary: "Read-only live ODS extension inventory; it exposes only bounded status metadata and grants no installation, configuration, credential, Docker, or shell authority.",
+      }) + "\n" },
+    ];
+    for (const [index, job] of jobs.entries()) {
+      afterCall(guard, "pixel_ops_run", { event: {
+        params: { target: "ods-host", action: job.action },
+        result: { details: { jobId: job.id, status: "submitted", kind: "action" } },
+      } });
+      afterCall(guard, "pixel_ops_job_wait", { event: {
+        params: { jobId: job.id },
+        result: { details: { jobId: job.id, status: index === 1 && outcome === "failed" ? "failed" : "succeeded", waitTimedOut: false,
+          steps: [{ stepId: "step", target: "ods-host", action: job.action,
+            exitCode: index === 1 && outcome === "failed" ? 1 : 0,
+            stdout: index === 1 && outcome === "malformed" ? "installed everything" : job.stdout,
+            stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] }],
+        } },
+      } });
+    }
+    const result = guard.verificationForRun("run-1");
+    assert.equal(result.status, outcome === "succeeded" ? "passed" : "failed");
+    assert.match(result.text, /Hostname: `light-worker`/);
+    if (outcome === "succeeded") {
+      assert.match(result.text, /Catalog total: 1; installed: 1; enabled: 1/);
+      assert.match(result.text, /grants no installation/);
+    } else {
+      assert.doesNotMatch(result.text, /Catalog total/);
+    }
+  });
+}
+
+test("Operations requests can discover tools without granting sandbox host authority", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Inspect the ODS host hostname and list installed ODS extensions.",
+  });
+  assert.notEqual(call(guard, "tool_search", { event: { params: { query: "ODS extensions" } } })?.block, true);
+  assert.notEqual(call(guard, "tool_describe", { event: { params: { id: "pixel_ops_inventory" } } })?.block, true);
+  assert.equal(call(guard, "exec", { event: { params: { command: "hostname" } } })?.block, true);
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+});
+
 test("uses one replay-safe synchronous host observation and revises an incomplete natural final", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";

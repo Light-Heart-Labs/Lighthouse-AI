@@ -1573,20 +1573,17 @@ function operationsTerminalOutcome(event, submittedJobs) {
   };
 }
 
-function exactRequiredHostActions(state) {
-  if (
-    !state?.operationsRequired ||
-    state.operationsRequiredActions.size < 1 ||
-    ![...state.operationsRequiredActions].every((action) => action.startsWith("host."))
-  ) {
-    return undefined;
-  }
-  return [...state.operationsRequiredActions];
+function requiredHostObservationActions(state) {
+  if (!state?.operationsRequired) return undefined;
+  // Host evidence is one part of a mixed request. Keep every other required
+  // Operations action pending while observing only the requested host facts.
+  const actions = [...state.operationsRequiredActions].filter((action) => action.startsWith("host."));
+  return actions.length > 0 ? actions : undefined;
 }
 
 function synchronousHostObservationOutcome(event, state) {
   if (toolCallFailed(event)) return undefined;
-  const expectedActions = exactRequiredHostActions(state);
+  const expectedActions = requiredHostObservationActions(state);
   const observedActions = event?.params?.actions;
   const expectedPeer = expectedActions?.includes("host.network-peer")
     ? state?.operationsNetworkPeer
@@ -3463,6 +3460,48 @@ function operationsEvidenceText(
   lines.push("- Authority: read-only catalog projection; no installation or configuration authority.");
   lines.push(`- Broker job: \`${outcome.jobId}\`.`);
   return lines.join("\n");
+}
+
+function mixedHostInventoryVerification(state) {
+  const required = state.operationsRequiredActions;
+  const host = new Set(requiredHostObservationActions(state) ?? []);
+  if (!required.has("ods.extensions.list") || host.size === 0 || required.size !== host.size + 1) {
+    return undefined;
+  }
+  const jobs = state.operationsTerminalJobs;
+  // These are already receipt-validated terminal outcomes. Preserve each
+  // original job's status and ID when selecting its requested evidence.
+  if ([...jobs.values()].some((job) => job.actions.some(({ target, action }) =>
+    target !== "ods-host" || !required.has(action)
+  ))) return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+  const select = (actions) => new Map([...jobs].flatMap(([id, job]) => {
+    const selected = job.actions.filter(({ action }) => actions.has(action));
+    return selected.length ? [[id, {
+      ...job, actions: selected,
+      steps: job.steps.filter(({ action }) => actions.has(action)),
+    }]] : [];
+  }));
+  const hostJobs = select(host);
+  const inventoryJobs = select(new Set(["ods.extensions.list"]));
+  const hostText = operationsHostEvidenceText(host, hostJobs,
+    state.operationsOdsAppsProjection, state.operationsOdsStatusProjection);
+  const inventoryText = operationsEvidenceText(new Set(["ods.extensions.list"]), inventoryJobs);
+  const lines = [hostText, inventoryText].filter(Boolean);
+  if (!hostText) lines.push(`${OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX} Missing or unverified: ${[...host].map((action) => `\`${action}\``).join(", ")}.`);
+  if (!inventoryText) lines.push(`${OPERATIONS_MISSING_REQUIRED_DELIVERY_PREFIX} Missing or unverified: \`ods.extensions.list\`.`);
+  const projectionsReady =
+    (!state.operationsRequiresOdsAppsProjection || state.operationsOdsAppsProjection) &&
+    (!state.operationsRequiresOdsStatusProjection || state.operationsOdsStatusProjection);
+  if (state.operationsRequiresOdsAppsProjection && !state.operationsOdsAppsProjection) lines.push(OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT);
+  if (state.operationsRequiresOdsStatusProjection && !state.operationsOdsStatusProjection) lines.push(OPERATIONS_ODS_STATUS_UNAVAILABLE_TEXT);
+  if (state.operationsNetworkDiscoveryRequested) lines.push(NETWORK_DISCOVERY_UNVERIFIED_TEXT);
+  return {
+    status: hostText?.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) &&
+      inventoryText?.startsWith(OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX) &&
+      projectionsReady && !state.operationsNetworkDiscoveryRequested &&
+      !state.operationsWorkspaceContinuationRequested ? "passed" : "failed",
+    text: lines.join("\n"),
+  };
 }
 
 function webFetchWasTruncated(event) {
@@ -6229,7 +6268,7 @@ export function createToolLoopGuard({
       state?.operationsRequired &&
       effectiveToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL
     ) {
-      const actions = exactRequiredHostActions(state);
+      const actions = requiredHostObservationActions(state);
       if (!actions || state.operationsSubmittedJobs.size > 0) {
         return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
       }
@@ -6551,6 +6590,8 @@ export function createToolLoopGuard({
     } else if (
       state?.operationsRequired &&
       !OPERATIONS_TOOLS.has(toolName) &&
+      toolName !== "tool_search" &&
+      toolName !== "tool_describe" &&
       !operationsMayContinueInWorkspace
     ) {
       // One model response may contain several parallel tool calls. Return the
@@ -7929,7 +7970,7 @@ export function createToolLoopGuard({
         };
       }
     }
-    const requiredHostActions = exactRequiredHostActions(state);
+    const requiredHostActions = requiredHostObservationActions(state);
     if (state.operationsSubmittedJobs.size === 0) {
       if (!requiredHostActions) return undefined;
       return {
@@ -8344,6 +8385,8 @@ export function createToolLoopGuard({
       ) {
         return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
       }
+      const mixedVerification = mixedHostInventoryVerification(state);
+      if (mixedVerification) return mixedVerification;
       const evidenceText = operationsEvidenceText(
         state.operationsRequiredActions,
         state.operationsTerminalJobs,
