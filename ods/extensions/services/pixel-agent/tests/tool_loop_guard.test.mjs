@@ -8817,6 +8817,12 @@ test("requires the model to author a game before publication", () => {
   assert.match(generated.blockReason, /ODS-authored creative scaffold/);
 });
 
+test("publishes an existing app without treating keep-unchanged instructions as a visual edit", () => {
+  const prompt = "Publish the existing energy-dashboard directory again now. Keep the app and CSV unchanged; I want to use the preview.";
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), true);
+  assert.equal(userMessageRequestsWorkspaceVisualContinuation([], prompt), false);
+});
+
 test("keeps every visual category on the model-authored write path", () => {
   for (const prompt of [
     "Create an interactive SVG artwork called Tidal Atlas from scratch. Keep it self-contained, verify it, and publish it in the preview.",

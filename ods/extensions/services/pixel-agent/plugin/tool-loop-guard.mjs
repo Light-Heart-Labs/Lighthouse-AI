@@ -4537,8 +4537,10 @@ export function userMessageRequestsWorkspaceVisualContinuation(
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
   if (userMessageRequestsWorkspaceContinuation([], text)) return false;
+  // Keeping an app as-is is preservation, not a request to edit a prior preview.
+  // Other change verbs in the same request still identify a visual revision.
   const action =
-    /\b(?:add|animate|change|continue|edit|improve|keep|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
+    /\b(?:add|animate|change|continue|edit|improve|make|modify|polish|refresh|remove|republish|restyle|rework|speed\s+up|tweak|update)\b/i;
   const visualReference =
     /\b(?:existing|previous|prior|same|that|the|this)\s+(?:animated\s+)?(?:app|artifact|board|dashboard|demo|form|game|illustration|interface|page|preview|prototype|scene|site|svg|task\s+board|visual|voxel(?:\s+world)?|web\s*page|web\s*site|website)\b/i;
   const pronounReference =
