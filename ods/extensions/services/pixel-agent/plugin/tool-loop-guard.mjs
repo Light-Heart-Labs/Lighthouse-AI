@@ -4088,7 +4088,9 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
   const patterns = [
     /^\s*[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?\s+is\s+(?:an?\s+)?(?:Windows|Linux|macOS|Mac)?\s*(?:computer|machine|host|device)\b/i,
     /\b(?:computer|machine|host|device|peer)\s+(?:named|called)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
-    /\b(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    // A report such as "the initial Node probe used an old image" names no
+    // peer. Treat these words as commands only in an owner directive.
+    /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
     /\b(?:reachability|connectivity)\s+(?:of|to|for)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
   ];
   const peer = patterns.map((pattern) => text.match(pattern)?.[1]).find(Boolean);

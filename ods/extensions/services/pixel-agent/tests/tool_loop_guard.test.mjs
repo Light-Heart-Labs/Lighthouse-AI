@@ -10704,3 +10704,22 @@ test("AND-chain cancellation wrapper retains verification and latest failure", (
     assert.equal(guard.verificationForRun("run-1").status, "failed");
   }
 });
+
+
+test("past probe reports do not turn sandbox verification into network work", () => {
+  const prompt = "The initial Node probe used an existing sandbox container with the old image. I have now recreated only that sandbox using the qualified Node image and verified that the website and both verification files were preserved by hash. Retry node --version, npm --version, node --check csv-viewer-verification/extracted.js and node csv-viewer-verification/parser.test.js using sandbox exec. Inspect and report the actual results; keep the website and retained tests unchanged.";
+  for (const text of [prompt,
+    "The previous probe returned a timeout. Run the workspace tests.",
+    "A failed ping produced no result. Inspect the parser file.",
+    'Explain the words "probe used" in this local test report.',
+  ]) {
+    assert.equal(userMessageNetworkPeerRequest([], text), undefined, text);
+    assert.equal(userMessageOperationsRequirements([], text).required, false, text);
+  }
+  for (const text of [
+    "Probe Strixy on the local network ports 22 and 3389.",
+    "Could you please probe Strixy on the local network ports 22 and 3389?",
+    "I want you to probe Strixy on the local network ports 22 and 3389.",
+    "Read the local report, then probe Strixy on the LAN ports 22 and 3389.",
+  ]) assert.deepEqual(userMessageNetworkPeerRequest([], text), { peer: "Strixy", ports: [22, 3389] }, text);
+});
