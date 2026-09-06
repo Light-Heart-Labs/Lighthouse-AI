@@ -388,6 +388,7 @@ class TestPreviewRelay(BaseEdgeTest):
             self.assertIn("form-action 'none'", csp)
             self.assertIn("connect-src 'self'", csp)
             self.assertIn("frame-ancestors 'self'", csp)
+            self.assertEqual(resp.headers["Cross-Origin-Resource-Policy"], "cross-origin")
         self.assertEqual(self.up_runner.app["preview_hosts"], ["pixel-preview.internal"])
 
     async def test_preview_rejects_invalid_or_unknown_snapshot_paths(self):

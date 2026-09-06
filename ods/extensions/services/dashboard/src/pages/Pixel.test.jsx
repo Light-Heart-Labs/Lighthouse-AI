@@ -192,16 +192,16 @@ describe('Pixel', () => {
     fireEvent.click(screen.getByTitle('Send'))
 
     const frame = await screen.findByTitle('Interactive Pixel preview')
-    expect(frame).toHaveAttribute('src', preview.url)
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads')
+    expect(frame).toHaveAttribute('src', `/pixel-preview/${siteId}/`)
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads')
     expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
-    expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', preview.url)
+    expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
 
     fireEvent.click(screen.getByTitle('Close preview'))
     expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
   })
 
-  it('uses the authenticated Dashboard preview route with an opaque sandbox remotely', () => {
+  it('uses the authenticated relay for LAN and forwarded loopback dashboards', () => {
     const preview = {
       siteId: 'site-0123456789abcdef01234567',
       url: 'http://site-0123456789abcdef01234567.localhost:9437/site-0123456789abcdef01234567/',
@@ -214,14 +214,13 @@ describe('Pixel', () => {
       sandbox: 'allow-scripts allow-forms allow-downloads',
       route: 'private-dashboard',
     })
-    expect(resolvePreviewAccess(preview, {
-      hostname: 'localhost',
-      protocol: 'http:',
-    })).toEqual({
-      url: preview.url,
-      sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
-      route: 'loopback',
-    })
+    for (const hostname of ['localhost', '127.0.0.1', '[::1]', '::1']) {
+      expect(resolvePreviewAccess(preview, { hostname, protocol: 'http:' })).toEqual({
+        url: `/pixel-preview/${preview.siteId}/`,
+        sandbox: 'allow-scripts allow-forms allow-downloads',
+        route: 'private-dashboard',
+      })
+    }
   })
 
   it('does not open a preview from model-authored localhost text', async () => {

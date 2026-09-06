@@ -185,27 +185,13 @@ export function parseVerifiedPreviewFrame(frame) {
   return { ...preview }
 }
 
-export function resolvePreviewAccess(preview, browserLocation = globalThis.location) {
+export function resolvePreviewAccess(preview) {
   if (!preview) return null
-  const hostname = typeof browserLocation?.hostname === 'string'
-    ? browserLocation.hostname.toLowerCase()
-    : ''
-  const loopback = hostname === 'localhost'
-    || hostname === '127.0.0.1'
-    || hostname === '[::1]'
-    || hostname === '::1'
-  if (loopback || !/^https?:$/.test(browserLocation?.protocol || '')) {
-    return {
-      url: preview.url,
-      // Forms may run client-side submit handlers; the preview CSP still
-      // denies network form actions. Downloads support in-app export links.
-      sandbox: 'allow-scripts allow-same-origin allow-forms allow-downloads',
-      route: 'loopback',
-    }
-  }
   return {
     url: `/pixel-preview/${preview.siteId}/`,
-    // Keep the remote relay opaque even though it shares the Dashboard URL.
+    // A loopback dashboard can be an SSH forward to another machine. Use its
+    // authenticated relay rather than assuming the viewer hosts the snapshot.
+    // Keep it opaque even though it shares the Dashboard URL.
     sandbox: 'allow-scripts allow-forms allow-downloads',
     route: 'private-dashboard',
   }

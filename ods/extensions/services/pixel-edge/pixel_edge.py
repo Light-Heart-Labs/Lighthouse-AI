@@ -1031,7 +1031,11 @@ async def handle_preview(request: web.Request):
         "Cache-Control": "no-store",
         "Content-Security-Policy": _REMOTE_PREVIEW_CSP,
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Resource-Policy": "same-origin",
+        # The preview document has an opaque sandbox origin. Its own CSS and
+        # scripts are cross-origin loads even on the same Dashboard route.
+        # These digest-verified snapshot bytes carry no portal authority;
+        # retain the opaque CSP sandbox and the proxy authentication above.
+        "Cross-Origin-Resource-Policy": "cross-origin",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",

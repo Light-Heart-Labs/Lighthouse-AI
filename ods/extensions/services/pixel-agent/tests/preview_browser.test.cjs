@@ -24,6 +24,9 @@ function pythonStringConstant(file, name) {
 }
 const localCsp = pythonStringConstant(path.join(services, 'pixel-agent/host/workspace_preview.py'), 'CSP');
 const remoteCsp = pythonStringConstant(path.join(services, 'pixel-edge/pixel_edge.py'), '_REMOTE_PREVIEW_CSP');
+const edgeSource = fs.readFileSync(path.join(services, 'pixel-edge/pixel_edge.py'), 'utf8');
+const remoteCorp = edgeSource.match(/"Cross-Origin-Resource-Policy": "([^"]+)"/)?.[1];
+assert.ok(remoteCorp, 'use the actual preview resource policy');
 async function listen(handler) {
   const server = http.createServer(handler);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -33,6 +36,8 @@ const origin = server => `http://127.0.0.1:${server.address().port}`;
 
 function fixture(external) {
   return `<!doctype html><meta charset="utf-8"><title>Preview policy fixture</title>
+<link rel="stylesheet" href="fixture.css"><script src="fixture.js" defer></script>
+<output id="asset">unloaded</output>
 <form id="client"><label>Habit<input id="habit" required></label><button>Add habit</button></form>
 <ul id="items"></ul><output id="added">0</output>
 <form id="networkForm" action="${external}/submitted" method="post"><input name="test" value="fixture-only"><button>External submit</button></form>
@@ -74,7 +79,11 @@ test('embedded preview forms/exports work with network and parent boundaries int
   const dashboard = await listen((req,res)=>{
     if(req.method==='POST') parentPosts++;
     if(req.url.startsWith('/pixel-preview/')) {
-      res.writeHead(200,{'content-type':'text/html','content-security-policy':remoteCsp});res.end(bytes);return;
+      const asset = req.url.endsWith('/fixture.js') ? ['text/javascript', "document.querySelector('#asset').textContent='loaded'"]
+        : req.url.endsWith('/fixture.css') ? ['text/css', '#asset { color: rgb(1, 2, 3); }']
+          : ['text/html', bytes];
+      res.writeHead(200,{'content-type':asset[0],'content-security-policy':remoteCsp,
+        'cross-origin-resource-policy':remoteCorp});res.end(asset[1]);return;
     }
     res.writeHead(200,{'content-type':'text/html'});
     res.end(`<p id="canary">unchanged</p><iframe title="Policy fixture" src="${selected.url}" sandbox="${selected.sandbox}"></iframe>`);
@@ -84,7 +93,8 @@ test('embedded preview forms/exports work with network and parent boundaries int
   const receipt={siteId,url:`http://${siteId}.localhost:${dedicated.address().port}/${siteId}/`};
   for(const remote of [false,true]) {
     await t.test(remote?'opaque authenticated-relay policy':'dedicated preview origin policy',async()=>{
-      selected=resolvePreviewAccess(receipt,{hostname:remote?'dashboard.lan':'localhost',protocol:'http:'});
+      selected=remote ? resolvePreviewAccess(receipt,{hostname:'127.0.0.1',protocol:'http:'})
+        : {url:receipt.url,sandbox:'allow-scripts allow-same-origin allow-forms allow-downloads'};
       assert.ok(selected.sandbox.includes('allow-forms'));
       assert.ok(selected.sandbox.includes('allow-downloads'));
       assert.equal(selected.sandbox.includes('allow-same-origin'),!remote);
@@ -95,6 +105,10 @@ test('embedded preview forms/exports work with network and parent boundaries int
         await page.goto(origin(dashboard),{waitUntil:'load'});
         const frame=page.frames().find(f=>f.parentFrame());
         assert.ok(frame);
+        if(remote) {
+          await frame.waitForFunction(()=>document.querySelector('#asset').textContent==='loaded', null, {timeout: 3000});
+          assert.equal(await frame.locator('#asset').evaluate(el=>getComputedStyle(el).color), 'rgb(1, 2, 3)');
+        }
         await frame.getByRole('button',{name:'Add habit',exact:true}).click();
         assert.equal(await frame.locator('#added').textContent(),'0','required validation still applies');
         await frame.getByLabel('Habit',{exact:true}).fill('Read a book');
