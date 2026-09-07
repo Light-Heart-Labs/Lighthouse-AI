@@ -37,8 +37,8 @@ export function statusToolText(projection) {
     ? "unknown"
     : projection.ods_version;
   const runtime = projection.runtime === null
-    ? "Loaded model: unavailable; context length: unavailable."
-    : `Loaded model: ${projection.runtime.model}; context length: ${projection.runtime.context_length} tokens.`;
+    ? "Reported model setting: unavailable; context setting: unavailable."
+    : `Reported model setting: ${projection.runtime.model}; context setting: ${projection.runtime.context_length} tokens. This projection reads configuration or launch metadata; it does not verify which model the inference server currently has loaded.`;
   return [
     `Pixel availability: ${pixelAvailability} (ingress ${availability(projection.ingress_ready)}; gateway ${reachability(projection.gateway_reachable)}).`,
     `ODS version: ${version}.`,

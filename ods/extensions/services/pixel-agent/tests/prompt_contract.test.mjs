@@ -394,7 +394,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /do not rerun an unchanged green suite/);
   assert.match(result.appendSystemContext, /use pixel_ods_status first for ODS health/);
   assert.match(result.appendSystemContext, /projected Docker application counts/);
-  assert.match(result.appendSystemContext, /active model, or its context window/);
+  assert.match(result.appendSystemContext, /reported model\/context settings/);
+  assert.match(result.appendSystemContext, /do not claim they verify the loaded model/);
   assert.match(result.appendSystemContext, /pixel_ods_status is sufficient/);
   assert.match(result.appendSystemContext, /do not also call pixel_ods_apps_list/);
   assert.match(result.appendSystemContext, /counts allowlisted Docker applications/);

@@ -50,8 +50,10 @@ test("status result states each bounded host fact in natural language", () => {
   assert.match(text, /gateway reachable/);
   assert.match(text, /Docker: ok/);
   assert.match(text, /ODS version: 2\.6\.0/);
-  assert.match(text, /Loaded model: Qwen3\.5-9B-Q4_K_M\.gguf/);
-  assert.match(text, /context length: 32768 tokens/);
+  assert.match(text, /Reported model setting: Qwen3\.5-9B-Q4_K_M\.gguf/);
+  assert.match(text, /context setting: 32768 tokens/);
+  assert.match(text, /does not verify which model the inference server currently has loaded/);
+  assert.doesNotMatch(text, /Loaded model:/);
   assert.match(text, /Projected Docker applications online: 2 of 2/);
   assert.match(text, /not the Dashboard's total ODS service count/);
   assert.match(text, /Services without a Docker container are not represented/);
@@ -64,7 +66,7 @@ test("status result states each bounded host fact in natural language", () => {
 test("unknown version and runtime stay explicit instead of being guessed", () => {
   const text = statusToolText({ ...projection, ods_version: "unknown", runtime: null });
   assert.match(text, /ODS version: unknown/);
-  assert.match(text, /Loaded model: unavailable; context length: unavailable/);
+  assert.match(text, /Reported model setting: unavailable; context setting: unavailable/);
 });
 
 test("empty and unavailable projections stay explicit and non-authoritative", () => {
