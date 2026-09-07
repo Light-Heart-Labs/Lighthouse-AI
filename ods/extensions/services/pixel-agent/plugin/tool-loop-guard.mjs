@@ -4664,7 +4664,7 @@ function hasExplicitWorkspacePreviewDirective(text) {
   return [...commands].some((match) => {
     const target = match[1];
     if (hasWorkspaceHtmlTarget(target) ||
-      /\b(?:website|site|web\s*page|frontend|preview|animation|illustration|scene|game|chart|diagram|svg)\b/i.test(target)) return true;
+      /\b(?:website|site|web\s*page|frontend|dashboard|preview|animation|illustration|scene|game|chart|diagram|svg)\b/i.test(target)) return true;
     // "Edit demo/index.html and publish it" names its target before the
     // command. Bind that pronoun within this clause, not an earlier topic.
     const precedingClause = text.slice(0, match.index)
@@ -4720,8 +4720,9 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const requestedArtifactChange =
     /\b(?:build|create|develop|design|generate|implement|write|edit|fix|repair|modify|update|publish|republish|serve)\b/i.test(actionText);
   if (browserToolUse && browserInteraction && !requestedArtifactChange) return false;
-  const website =
-    /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i.test(actionText);
+  const websitePattern =
+    /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i;
+  const website = websitePattern.test(actionText);
   const browserInterface =
     /\b(?:forms?|user\s+interfaces?|ui\s+demos?|wireframes?)\b/i.test(actionText) ||
     (/\bprototypes?\b/i.test(actionText) &&
@@ -4734,6 +4735,12 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:add|change|continue|edit|improve|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i;
   const build = buildAction.test(actionText);
   const revise = reviseAction.test(actionText);
+  // Feedback about the previous website must not turn an independent file or
+  // scheduled-work request into a mandatory website build.
+  const websiteAction = actionText
+    .split(/[!?;\n]+|\.(?=\s|$)/)
+    .some((clause) => websitePattern.test(clause) &&
+      (buildAction.test(clause) || reviseAction.test(clause)));
   // A timer or another named utility can be explicitly requested as HTML
   // without using a fixed vocabulary of website/app names. Bind its creation
   // to the same sentence so an earlier saved HTML file grants no authority.
@@ -4804,7 +4811,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:show|display|preview)\b[^.!?;\n]{0,64}\bhere\b/i.test(text) &&
     /\b(?:controls?|interacti(?:ve|on)|keyboard|mobile|phone|touch)\b/i.test(text);
   return directPreview || unreachableLocalPreview || interactiveDelivery ||
-    ((website || application || browserInterface || htmlCreation) && (build || revise)) ||
+    websiteAction ||
+    ((application || browserInterface || htmlCreation) && (build || revise)) ||
     (browserVisual && build);
 }
 

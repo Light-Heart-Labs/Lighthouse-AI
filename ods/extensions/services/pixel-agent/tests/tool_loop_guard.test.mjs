@@ -191,6 +191,14 @@ function seedNamedPreview(guard) {
   return { write, params, details };
 }
 
+test("prior website feedback does not require a preview for new scheduled file work", () => {
+  const prompt = "The actual badge website now labels Play as motion off and explains the system reduced-motion preference. Preserve it. Test your real scheduled-work capability: create one one-time task for about two minutes from now to write /workspace/scheduled-check-lab/result.json containing a short greeting, the actual execution UTC time and the task ID if available. Use an actual scheduling tool if available; do not simulate scheduling with an exec sleep loop. Avoid duplicate jobs, do not modify other files, and do not configure an external notification channel. Return the real job ID and due time, or the exact missing capability. This is one bounded local task, not a recurring schedule.";
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);
+  assert.equal(userMessageRequestsWorkspacePreview([], "The website looks good. Now create /workspace/notes-lab/notes.txt containing a greeting."), false);
+  assert.equal(userMessageRequestsWorkspacePreview([], "Create an accessible website at /workspace/demo/index.html."), true);
+  assert.equal(userMessageRequestsWorkspacePreview([], "The last task succeeded. Improve the website and publish it."), true);
+});
+
 for (const prompt of [
   "Inspect the actual event handlers/state update ordering, repair synchronous export filtering and visible validation, and publish the existing log-viewer-lab. Do not repeat a claimed fix without verifying the relevant code path.",
   "Publish the existing log-viewer-lab unchanged.",
