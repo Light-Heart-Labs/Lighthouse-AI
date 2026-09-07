@@ -6887,6 +6887,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_proof()
         elif self.path == "/v1/pixel/providers/save":
             self._handle_pixel_providers(save=True)
+        elif self.path in {"/v1/pixel/advice/start", "/v1/pixel/advice/status", "/v1/pixel/advice/cancel"}:
+            self._handle_pixel_advice(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke", "/v1/pixel/inference-sharing/start", "/v1/pixel/inference-sharing/stop"}:
             self._handle_pixel_sharing(self.path.rsplit('/', 1)[1])
         elif self.path == "/v1/runtime/lemonade/ensure":
@@ -6963,6 +6965,43 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 503, {'error': 'Sharing is unavailable'}, no_store=True)
             return
         json_response(self, 202 if action in {'start', 'stop'} else 200, result, no_store=True)
+
+    def _handle_pixel_advice(self, action):
+        """Explicit owner-reviewed inference job, not an agent/tool endpoint."""
+        if not check_auth(self):
+            return
+        from pixel_provider.store import MAX_BYTES, StoreError, decode_document
+        try:
+            from pixel_provider.advice_jobs import get_manager
+            lengths = self.headers.get_all('Content-Length', [])
+            if (len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,9}', lengths[0])
+                    or self.headers.get('Transfer-Encoding') is not None):
+                raise StoreError('invalid-advice-request')
+            length = int(lengths[0])
+            if not 0 < length <= MAX_BYTES:
+                raise StoreError('invalid-advice-request')
+            previous = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(10)
+                raw = self.rfile.read(length)
+            finally:
+                self.connection.settimeout(previous)
+            if len(raw) != length:
+                raise StoreError('invalid-advice-request')
+            body = decode_document(raw)
+            manager = get_manager(DATA_DIR)
+            if action == 'start':
+                result = manager.start(body)
+            else:
+                if not isinstance(body, dict) or set(body) != {'jobId'}:
+                    raise StoreError('invalid-advice-request')
+                result = getattr(manager, action)(body['jobId'])
+            json_response(self, 202 if action == 'start' else 200, result, no_store=True)
+        except StoreError as exc:
+            status = 409 if exc.code in {'stale-revision', 'advice-request-conflict', 'advice-busy', 'advisor-not-selected'} else 400
+            json_response(self, status, {'error': 'Advisory request failed', 'code': exc.code}, no_store=True)
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            json_response(self, 503, {'error': 'Advisory service unavailable'}, no_store=True)
 
     def _handle_pixel_providers(self, *, save):
         """Provider Settings only; does not activate routes or change privileges."""

@@ -325,6 +325,51 @@ read/final output, with exactly one write. Repeated with a turn-unique provider
 identity. Separate real Pixel partial-SSE and 401 fixtures produced no tool calls
 and no backup calls; both returned failure. Production config remained unchanged.
 
+### Manual advisory request (candidate, not leader handoff)
+
+Pixel's **Ask for advice** panel sends only an explicitly written capsule and a
+fixed advisory instruction to the saved advisor. It never copies the chat,
+files, memory, tools, or credentials for other providers. The selected advisor,
+model, endpoint and saved revision are displayed before submission. Cloud advice
+requires both explicit capsule-transfer consent and acceptance of unknown cost;
+this is not a dollar budget or a zero-cost claim. Paid cloud is not qualified.
+
+One attempt is allowed, with no fallback, a 16 KiB capsule limit, conservative
+context checks, a configured output cap and a deadline. Responses containing
+tool calls are rejected. Plain-text advice is marked untrusted; the owner can
+explicitly paste it into the chat composer without sending. The leader and
+execution permissions are unchanged. Automatic escalation and leader handoff
+are separate, unfinished integrations.
+
+The authenticated dashboard endpoints are `POST /api/pixel/advice/start`,
+`status` and `cancel`, forwarded to the host-agent's corresponding
+`/v1/pixel/advice/` endpoints. A request UUID is claimed durably before model
+admission. Private POSIX files retain public request metadata and the result,
+but not the submitted capsule or plaintext provider key. Two stable OS-lock
+slots bound concurrent jobs across cooperating host-agent processes. A retry
+with the same UUID cannot replay a model call; interrupted jobs remain
+interrupted. Reusing a UUID with a different request is rejected.
+
+Only the opaque job UUID is persisted by the browser component. Reload checks
+that job rather than submitting again. Closing the panel does not cancel the
+request; **Stop advice** is explicit. Unknown start/stop outcomes require checking
+the tracked job. Forgetting tracking does not stop a request or erase host
+evidence. Cancelling discards a late answer; it cannot undo upstream work or
+charges. Host evidence requires an explicit future retention/deletion workflow.
+
+This candidate currently requires a POSIX host-agent interpreter with Python
+3.11+, `httpx` and `fastapi`. Normal host-agent installation does not yet provision
+this optional runtime; do not claim fresh-install advisory readiness. The
+default agent's provider activation and an advisor-to-leader execution journey
+are also still pending. Existing installs are not changed by saving profiles.
+
+An isolated actual dashboard/host fixture completed a real Tower2 GLM advisory
+request, recovered its result after reload without another call, and pasted it
+without sending. A controlled delayed upstream demonstrated cancellation after
+fixing a disconnect-consuming test middleware; the failed observation is
+retained. A real-TCP regression separately checks upstream socket closure.
+These checks are not a production deployment or native-platform qualification.
+
 ### Automated checks
 
 Run the focused, service-independent contract tests from `ods/`:

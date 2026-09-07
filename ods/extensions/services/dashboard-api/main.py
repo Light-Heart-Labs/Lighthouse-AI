@@ -76,6 +76,7 @@ from routers import (
     node,
     pixel,
     pixel_providers,
+    pixel_advice,
     pixel_sharing,
 )
 from settings import (
@@ -1189,6 +1190,7 @@ app.include_router(usage.router)
 app.include_router(node.router)
 app.include_router(pixel.router)
 app.include_router(pixel_providers.router)
+app.include_router(pixel_advice.router)
 app.include_router(pixel_sharing.router)
 
 
