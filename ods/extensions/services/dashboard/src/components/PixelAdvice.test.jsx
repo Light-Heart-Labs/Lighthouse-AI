@@ -109,3 +109,28 @@ it('keeps keyboard focus in the dialog and Escape returns it to the trigger', as
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Ask for advice' })).toHaveFocus()
 })
+
+it('ignores an old pending status response after forgetting and starting a new job', async () => {
+  localStorage.setItem(key, id)
+  let finishOldStatus
+  const nextId = '0a15e657-bb03-4364-96e0-e9fb8aeb5b76'
+  const { fetchMock } = await setup({ post: async url => {
+    if (url.endsWith('/status')) return new Promise(resolve => { finishOldStatus = resolve })
+    if (url.endsWith('/cancel')) throw new Error('Unconfirmed stop')
+    return response({ ...job(), jobId: nextId, result: { text: 'Current advice' } })
+  } })
+  await waitFor(() => expect(finishOldStatus).toBeTypeOf('function'))
+  fireEvent.click(screen.getByRole('button', { name: 'Stop advice' }))
+  await screen.findByRole('alert')
+  fireEvent.click(screen.getByRole('button', { name: 'Forget tracking (does not stop the request)' }))
+  globalThis.crypto.randomUUID.mockReturnValue(nextId)
+  await screen.findByLabelText('Capsule to send')
+  fireEvent.change(screen.getByLabelText('Capsule to send'), { target: { value: 'New scope' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send reviewed capsule' }))
+  await screen.findByText('Current advice')
+  finishOldStatus(response(job()))
+  await waitFor(() => expect(screen.getByText('Current advice')).toBeInTheDocument())
+  expect(screen.queryByText('<img src=x onerror=alert(1)> Advice')).not.toBeInTheDocument()
+  expect(localStorage.getItem(key)).toBe(nextId)
+  expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/start'))).toHaveLength(1)
+})
