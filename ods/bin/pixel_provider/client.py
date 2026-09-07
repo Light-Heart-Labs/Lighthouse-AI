@@ -1,7 +1,7 @@
 """Fresh, isolated Pixel client preparation through the exact pinned renderer.
 
-Does not modify an existing install, install services, change privileges, or
-execute an agent turn. Canonical onboarding/env inputs survive regeneration.
+Preparation does not modify an existing install, install services or change
+privileges. Agent turns require an explicit run. Canonical inputs are retained.
 """
 import hashlib
 from contextlib import contextmanager, nullcontext
