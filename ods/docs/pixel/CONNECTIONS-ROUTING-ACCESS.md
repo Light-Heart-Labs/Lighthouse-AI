@@ -138,10 +138,16 @@ client. Keys are stored only as SHA-256 hashes in owner-private state, separate
 from outgoing provider credentials. Expiry, revocation, admission/rate limits,
 an output cap and a total request deadline are enforced. Rate/concurrency
 counters are single-process admission controls, not durable billing quotas.
+The process admits at most eight concurrent requests and caps each response at
+2 MiB. Full responses are not persisted; provider output-token caps remain
+backend-enforced rather than inferred from SSE byte counts.
 
 Model/route preconditions are checked again after the router's queue drains.
 A model change fails with 409 rather than silently running a queued request on
 the replacement model. Legacy callers without pins keep their alias behavior.
+Pinned requests also reject a backend-reported model identity mismatch instead
+of hiding it through public alias rewriting. A mid-stream mismatch terminates
+the stream; already delivered output cannot be withdrawn.
 Disconnect and revocation cancel both the façade request and its downstream
 router request; response ownership releases sockets and admission even when a
 stream never starts or a close fails. Backend cancellation is cooperative:

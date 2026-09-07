@@ -177,6 +177,45 @@ def test_close_failure_still_releases_admission(connect):
             assert client.post('/v1/chat/completions', json=body(), headers=auth).status_code == 503
 
 
+def test_rate_limit_is_per_device(connect, state):
+    store, _ = state
+    doc = store.load()
+    doc['devices'][0]['requestsPerMinute'] = 1
+    store.save(doc, expected_revision=doc['revision'])
+    with connect() as (client, auth):
+        assert client.get('/v1/models',headers=auth).status_code == 200
+        assert client.get('/v1/models',headers=auth).status_code == 429
+
+
+def test_total_deadline_cancels_pending_upstream(connect, state):
+    store, _ = state
+    doc = store.load()
+    doc['devices'][0]['deadlineSeconds'] = 1
+    store.save(doc, expected_revision=doc['revision'])
+    cancelled = []
+    async def handler(request):
+        if request.method == 'GET':
+            return backend(request)
+        try:
+            await asyncio.sleep(5)
+        finally:
+            cancelled.append(True)
+    with connect(handler) as (client, auth):
+        start = time.monotonic()
+        assert client.post('/v1/chat/completions',json=body(),headers=auth).status_code == 504
+        assert time.monotonic()-start < 3 and cancelled == [True]
+
+
+def test_response_byte_cap_releases_upstream(connect, monkeypatch):
+    monkeypatch.setattr(gateway, 'MAX_RESPONSE_BYTES', 32)
+    stream = Stream([b'x'*33])
+    def handler(request):
+        return backend(request) if request.method == 'GET' else httpx.Response(200,stream=stream)
+    with connect(handler) as (client, auth):
+        assert client.post('/v1/chat/completions',json=body(),headers=auth).status_code == 502
+        assert stream.closed
+
+
 def test_pending_headers_cancel_on_revoke(connect, state):
     store, _ = state
     cancelled = []
@@ -230,6 +269,8 @@ def test_asgi_disconnect_closes_upstream_and_releases_slot(state, streaming):
                     sent.append(message)
                 request_task = asyncio.create_task(app(scope, receiving.get, send))
                 await asyncio.wait_for(first_chunk.wait(), 2)
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='http://test') as probe:
+                    assert (await probe.get('/v1/models',headers={'Authorization':'Bearer '+token})).status_code == 429
                 await receiving.put({'type':'http.disconnect'})
                 await asyncio.wait_for(request_task, 2)
                 assert closed.is_set()

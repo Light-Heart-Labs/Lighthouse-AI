@@ -865,7 +865,7 @@ async def _while_connected(request, operation):
         stopped = True
         with anyio.CancelScope(shield=True):
             watcher.cancel()
-            with suppress(asyncio.CancelledError):
+            with suppress(asyncio.CancelledError, Exception):
                 await watcher
             if not work.done():
                 work.cancel()
@@ -1117,7 +1117,8 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
     # admission/queueing and before any upstream bytes are sent. Legacy clients
     # omit all three headers and retain their existing alias behavior.
     pin_names = ("x-ods-expected-catalog", "x-ods-expected-model", "x-ods-expected-route")
-    if any(name in request.headers for name in pin_names):
+    pinned_route = any(name in request.headers for name in pin_names)
+    if pinned_route:
         values = [request.headers.getlist(name) for name in pin_names]
         if (any(len(value) != 1 or not value[0] for value in values)
                 or not re.fullmatch(r"0|[1-9][0-9]{0,15}", values[2][0])
@@ -1183,9 +1184,16 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                 completed = False
                 try:
                     async for chunk in upstream.aiter_bytes():
-                        for event in rewriter.feed(chunk):
+                        before = len(rewriter.models)
+                        events = rewriter.feed(chunk)
+                        if pinned_route and any(model != route['runtimeModelId'] for model in rewriter.models[before:]):
+                            raise RouterError(502, 'response_identity_mismatch', 'Backend response identity changed')
+                        for event in events:
                             yield event
+                    before = len(rewriter.models)
                     tail = rewriter.finish()
+                    if pinned_route and any(model != route['runtimeModelId'] for model in rewriter.models[before:]):
+                        raise RouterError(502, 'response_identity_mismatch', 'Backend response identity changed')
                     if tail:
                         yield tail
                     completed = True
@@ -1278,6 +1286,10 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
             content = json.dumps(parsed).encode("utf-8")
     except (ValueError, UnicodeDecodeError):
         pass
+
+    if pinned_route and 200 <= upstream.status_code < 300 and response_model != route['runtimeModelId']:
+        return JSONResponse({'error': {'message': 'Backend response identity changed',
+            'type': 'response_identity_mismatch', 'code': '502'}}, status_code=502, headers=ods_headers), False
 
     if probe_id:
         _record_evidence({**evidence_base,

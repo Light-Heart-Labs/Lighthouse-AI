@@ -1,6 +1,8 @@
+import asyncio
 import threading
 import time
 
+import httpx
 import pytest
 from test_router import router  # noqa: F401
 
@@ -59,6 +61,28 @@ def test_matching_pin_200_one_call(router, valid_pins):
     assert resp.status_code == 200
     assert len(calls) == 1
     assert calls[0]["model"] == "Concrete.gguf"
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+def test_backend_reported_identity_change_is_not_hidden_by_alias(router, valid_pins, streaming):
+    mod, client, write_state, _calls = router
+    write_state()
+    def handler(request):
+        if streaming:
+            return httpx.Response(200, content=b'data: {"model":"Wrong.gguf","choices":[]}\n\ndata: [DONE]\n\n',
+                headers={'content-type':'text/event-stream'})
+        return httpx.Response(200,json={'model':'Wrong.gguf','choices':[]})
+    asyncio.run(mod.app.state.http.aclose())
+    mod.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    body = {'model':'ods/shared','messages':[{'role':'user','content':'synthetic'}],'stream':streaming}
+    if streaming:
+        with pytest.raises(mod.RouterError,match='Backend response identity changed'):
+            client.post('/v1/chat/completions',json=body,headers=valid_pins)
+    else:
+        response = client.post('/v1/chat/completions',json=body,headers=valid_pins)
+        assert response.status_code == 502
+        assert response.json()['error']['type'] == 'response_identity_mismatch'
+    assert mod._inflight == 0
 
 
 @pytest.mark.parametrize("field", ["catalog", "model", "route"])
