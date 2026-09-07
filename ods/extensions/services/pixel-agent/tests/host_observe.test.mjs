@@ -95,6 +95,8 @@ test("extension read preserves a queued job after timeout and rejects mutable or
       { action: "search", query: "all", serviceId: "comfyui" },
       { action: "list", approval: true },
       { action: "inspect", serviceId: "../comfyui" },
+      { action: "search", query: "x".repeat(81) },
+      { action: "search", query: "all\nextra" },
     ]) {
       assert.equal((await tool.execute("invalid", params)).isError, true);
     }

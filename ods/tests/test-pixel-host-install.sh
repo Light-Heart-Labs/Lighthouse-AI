@@ -675,7 +675,7 @@ import importlib.util,json,sys
 catalog=json.load(open(sys.argv[1]))
 assert catalog["schemaVersion"] == 1 and catalog["kind"] == "ods-pixel-extension-catalog"
 assert len(catalog["sourceSha256"]) == 64
-assert catalog["extensions"] == [{"category":"optional","dependsOn":["litellm"],"description":"Private notebooks for data science.","featureNames":["Interactive Notebooks"],"gpuBackends":["amd","nvidia"],"id":"notebook","name":"Notebook Lab","optionalConfiguration":["NOTEBOOK_THEME"],"requiredConfiguration":["NOTEBOOK_TOKEN"],"tags":["data-science","notebook"]}]
+assert catalog["extensions"] == [{"catalogSource":"library","configurationScope":"declared-environment-keys","category":"optional","dependsOn":["litellm"],"description":"Private notebooks for data science.","featureNames":["Interactive Notebooks"],"gpuBackends":["amd","nvidia"],"id":"notebook","name":"Notebook Lab","optionalConfiguration":["NOTEBOOK_THEME"],"requiredConfiguration":["NOTEBOOK_TOKEN"],"tags":["data-science","notebook"]}]
 spec=importlib.util.spec_from_file_location("extension_search",sys.argv[2]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 assert [item["id"] for item in module._matches(catalog["extensions"],"data science")] == ["notebook"]
 assert [item["id"] for item in module._matches(catalog["extensions"],"all")] == ["notebook"]

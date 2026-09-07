@@ -3065,7 +3065,10 @@ function extensionCatalogResult(step, submittedAction) {
   const identifiers = new Set();
   const matches = [];
   for (const entry of value.matches) {
-    if (!exactKeys(entry, entryKeys)) return undefined;
+    const scoped = Object.prototype.hasOwnProperty.call(entry ?? {}, "catalogSource");
+    if (!exactKeys(entry, scoped ? [...entryKeys, "catalogSource", "configurationScope"] : entryKeys)) return undefined;
+    if (scoped && (!["library", "builtin"].includes(entry.catalogSource) ||
+        entry.configurationScope !== "declared-environment-keys")) return undefined;
     const id = boundedCatalogString(entry.id, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64);
     const name = boundedCatalogString(
       entry.name,
@@ -3090,6 +3093,8 @@ function extensionCatalogResult(step, submittedAction) {
     identifiers.add(id);
     matches.push({
       id,
+      catalogSource: entry.catalogSource ?? "library",
+      configurationScope: "declared-environment-keys",
       name,
       description,
       category,
@@ -3160,8 +3165,12 @@ function extensionLifecycleResult(step, submittedAction) {
     "requiredConfiguration", "optionalConfiguration", "missingConfiguration",
     "rollback", "boundary",
   ];
+  const scopedConfiguration = Object.prototype.hasOwnProperty.call(value ?? {}, "configurationScope");
+  if (scopedConfiguration) topKeys.push("configurationScope", "runtimeRequirementsVerified");
   if (
     !exactKeys(value, topKeys) ||
+    (scopedConfiguration && (value.configurationScope !== "declared-environment-keys" ||
+      value.runtimeRequirementsVerified !== false)) ||
     value.schemaVersion !== 1 ||
     value.kind !== "ods-pixel-extension-lifecycle" ||
     value.boundary !== EXTENSION_LIFECYCLE_BOUNDARY ||
@@ -3420,6 +3429,7 @@ function extensionInspectionEvidence(step, action, jobId) {
     result.outcome === "failed"
       ? "- Required configuration could not be established by this failed inspection."
       : `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+    "- Configuration scope: declared environment keys only. Runtime prerequisites and features have not been verified by this inspection.",
     "- This inspection made no change and grants no installation or configuration authority.",
     `- Broker job: \`${jobId}\`.`,
   ].join("\n");
@@ -3714,6 +3724,7 @@ function operationsEvidenceText(
       lines.push(`- Match ${index + 1}: \`${match.name}\` (\`${match.id}\`).`);
       lines.push(`  - What it does: ${JSON.stringify(description)}.`);
       lines.push(`  - Category: \`${match.category}\`; GPU backends: ${compactList(match.gpuBackends)}.`);
+      lines.push(`  - Catalog source: \`${match.catalogSource}\`.`);
       lines.push(`  - Dependencies: ${compactList(match.dependsOn)}.`);
       lines.push(`  - Required configuration keys: ${compactList(match.requiredConfiguration)}.`);
       lines.push(`  - Optional configuration keys: ${compactList(match.optionalConfiguration)}.`);
@@ -3722,6 +3733,7 @@ function operationsEvidenceText(
     lines.push("- Matches: none.");
   }
   lines.push("- Installed/enabled state: not included in this read-only catalog receipt; Pixel will inspect one exact extension ID before any lifecycle action.");
+  lines.push("- Configuration scope: declared environment keys only, not exhaustive runtime prerequisites. No match establishes only absence from this catalog snapshot.");
   lines.push("- Authority: read-only catalog projection; no installation or configuration authority.");
   lines.push(`- Broker job: \`${outcome.jobId}\`.`);
   return lines.join("\n");
