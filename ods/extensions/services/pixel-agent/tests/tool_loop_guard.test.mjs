@@ -24,6 +24,7 @@ import {
   WORKSPACE_PREVIEW_REQUIRES_FILES_REASON,
   CLIENT_CANCELLED_REASON,
   DEFAULT_WEB_TOOL_LIMITS,
+  canonicalGitHubSourceMatches,
   EXEC_PRIVATE_NETWORK_REASON,
   EXACT_DOWNLOAD_LOOP_ABORT_REASON,
   EXACT_DOWNLOAD_REQUIRES_BROKER_REASON,
@@ -7418,20 +7419,13 @@ test("terminates an ignored ODS projection correction instead of looping", () =>
   assert.deepEqual(aborts, ["session-1"]);
 });
 
-test("uses a small balanced web budget by default", () => {
-  assert.deepEqual(DEFAULT_WEB_TOOL_LIMITS, {
-    search: 2,
-    fetch: 2,
-    total: 4,
-    failedExecRetries: 3,
-    failedVerificationAttempts: 6,
-  });
+test("default research admits multiple sources and still enforces a finite budget", () => {
+  assert.deepEqual(DEFAULT_WEB_TOOL_LIMITS, {search: 8, fetch: 24, total: 32, failedExecRetries: 3, failedVerificationAttempts: 6});
   const guard = createToolLoopGuard();
-  assert.equal(call(guard, "web_search"), undefined);
-  assert.equal(call(guard, "web_fetch"), undefined);
-  assert.equal(call(guard, "web_search"), undefined);
-  assert.equal(call(guard, "web_fetch"), undefined);
+  for (let i = 0; i < 8; i++) assert.equal(call(guard, "web_search", {event: {params: {query: `question ${i}`}}}), undefined);
+  for (let i = 0; i < 24; i++) assert.equal(call(guard, "web_fetch", {event: {params: {url: `https://docs.example.org/page-${i}`}}}), undefined);
   assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  assert.equal(call(guard, "write", {event: {params: {path: "report.md", content: "Recorded findings"}}}), undefined);
 });
 
 test("extracts only an explicitly identified public GitHub repository", () => {
@@ -7479,53 +7473,13 @@ test("extracts only an explicitly identified public GitHub repository", () => {
   );
 });
 
-test("redirects search to an owner-identified canonical GitHub source once", () => {
+test("repository research can search before reading a non-README canonical source", () => {
   const guard = createToolLoopGuard();
-  const context = {
-    agentId: "pixel",
-    runId: "run-1",
-    sessionId: "session-1",
-  };
-  guard.observeRun(context, "pixel", {
-    prompt: "Research the official Osmantic/ODS GitHub repository.",
-    messages: [{ role: "user", content: "old request" }],
-  });
-  const redirected = call(guard, "web_search");
-  assert.equal(redirected.block, true);
-  assert.match(redirected.blockReason, new RegExp(GITHUB_CANONICAL_SOURCE_PREFIX));
-  assert.match(redirected.blockReason, /https:\/\/github\.com\/Osmantic\/ODS/);
-  assert.match(
-    redirected.blockReason,
-    /https:\/\/raw\.githubusercontent\.com\/Osmantic\/ODS\/HEAD\/README\.md/
-  );
-  assert.equal(
-    call(guard, "web_fetch", {
-      event: {
-        params: {
-          url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
-        },
-      },
-    }),
-    undefined
-  );
-  afterCall(guard, "web_fetch", {
-    event: {
-      params: {
-        url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
-      },
-      result: {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: 200,
-              text: "Turn your computer into a private AI server.",
-            }),
-          },
-        ],
-      },
-    },
-  });
+  guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Research the official Osmantic/ODS GitHub repository."});
+  assert.equal(call(guard, "web_search", {event: {params: {query: "Osmantic ODS installation"}}}), undefined);
+  const params = {url: "https://api.github.com/repos/Osmantic/ODS/contents/docs/PIXEL.md"};
+  assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params, result: {details: {status: 200}}}});
   assert.equal(reply(guard), undefined);
 });
 
@@ -7545,29 +7499,20 @@ test("replaces GitHub repository claims when the model skipped the canonical REA
   assert.deepEqual(terminal.payload.metadata, { preserved: true });
 });
 
-test("fails closed after the canonical GitHub README fetch fails", () => {
+test("failed README preserves missing-evidence reporting while permitting source recovery", () => {
   const guard = createToolLoopGuard();
-  guard.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    { prompt: "Research the official Osmantic/ODS GitHub repository." }
-  );
-  const params = {
-    url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md",
-  };
-  assert.equal(call(guard, "web_fetch", { event: { params } }), undefined);
-  afterCall(guard, "web_fetch", {
-    event: { params, result: { isError: true, details: { status: 404 } } },
-  });
-  assert.equal(
-    call(guard, "web_search").blockReason,
-    GITHUB_CANONICAL_FETCH_FAILED_REASON
-  );
-  assert.equal(reply(guard).payload.text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
-  assert.deepEqual(guard.verificationForRun("run-1"), {
-    status: "failed",
-    text: GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX,
-  });
+  guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Research the official Osmantic/ODS GitHub repository."});
+  const missing = {url: "https://raw.githubusercontent.com/Osmantic/ODS/HEAD/README.md"};
+  assert.equal(call(guard, "web_fetch", {event: {params: missing}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params: missing, result: {isError: true, details: {status: 404}}}});
+  assert.equal(guard.verificationForRun("run-1").text, GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX);
+  assert.equal(call(guard, "web_search"), undefined);
+  const recovered = {url: "https://github.com/Osmantic/ODS"};
+  assert.equal(call(guard, "web_fetch", {event: {params: recovered}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params: recovered, result: {details: {status: 200}}}});
+  assert.equal(guard.verificationForRun("run-1").status, "none");
+  afterCall(guard, "web_fetch", {event: {params: missing, result: {isError: true, details: {status: 404}}}});
+  assert.equal(guard.verificationForRun("run-1").status, "none", "later failure does not erase a successful source read");
 });
 
 test("allows an exact named GitHub file after a truncated canonical README", () => {
@@ -7607,19 +7552,10 @@ test("allows an exact named GitHub file after a truncated canonical README", () 
   );
 });
 
-test("ends canonical-source research when the model ignores the exact redirect", () => {
-  const guard = createToolLoopGuard();
-  guard.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    {
-      messages: [
-        { role: "user", content: "Use GitHub repository Osmantic/ODS as the source." },
-      ],
-    }
-  );
-  assert.match(call(guard, "web_search").blockReason, /canonical public GitHub source/);
-  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+test("canonical source matching rejects unrelated repositories and origins", () => {
+  const repository = "https://github.com/Osmantic/ODS";
+  for (const source of [repository, `${repository}/issues/3385`, "https://raw.githubusercontent.com/osmantic/ods/main/README.md", "https://api.github.com/repos/Osmantic/ODS/contents/docs"]) assert.equal(canonicalGitHubSourceMatches(source, repository), true, source);
+  for (const source of ["http://github.com/Osmantic/ODS", "https://user:secret@github.com/Osmantic/ODS", "https://github.com:444/Osmantic/ODS", "https://github.com.evil.example/Osmantic/ODS", "https://github.com/Osmantic/ODS-other", "https://raw.githubusercontent.com/other/ODS/main/README.md", "https://api.github.com/users/Osmantic/ODS", "https://github.com/Osmantic%2FODS", "not a URL"]) assert.equal(canonicalGitHubSourceMatches(source, repository), false, source);
 });
 
 test("counts targeted public extraction as a bounded fetch", () => {
@@ -7800,25 +7736,23 @@ test("allows different public pages within the normal budget", () => {
   );
 });
 
-test("allows only same-page targeted extraction after a successful truncated fetch", () => {
-  const guard = createToolLoopGuard();
-  const params = {
-    url: "https://docs.python.org/3/library/pathlib.html#pathlib.Path.exists",
-  };
-  assert.equal(call(guard, "web_fetch", { event: { params } }), undefined);
-  afterCall(guard, "web_fetch", {
-    event: {
-      params,
-      result: { details: { status: 200, truncated: true } },
-    },
-  });
-  assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
-  assert.equal(
-    call(guard, "pixel_ods_web_extract", {
-      event: { params: { ...params, query: "Path.exists" } },
-    }),
-    undefined
-  );
+test("native truncated-page and 404 sequence can fetch corrected docs and save a report", () => {
+  for (const wrapped of [false, true]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Use official documentation to check setup requirements. Save a checklist and read it back."});
+    const invoke = (name, args) => wrapped ? call(guard, "tool_call", {event: {params: {id: name, args}}}) : call(guard, name, {event: {params: args}});
+    const first = {url: "https://github.com/Comfy-Org/ComfyUI"};
+    assert.equal(invoke("web_fetch", first), undefined);
+    afterCall(guard, "web_fetch", {event: {params: first, result: {details: {status: 200, truncated: true}}}});
+    const missing = {url: "https://docs.comfy.org/install-guide/manual"};
+    assert.equal(invoke("web_fetch", missing), undefined);
+    afterCall(guard, "web_fetch", {event: {params: missing, result: {isError: true, details: {status: 404}}}});
+    assert.equal(invoke("web_fetch", {url: "https://docs.comfy.org/installation/manual_install.md"}), undefined);
+    assert.equal(invoke("web_fetch", {url: "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/master/README.md"}), undefined);
+    assert.equal(invoke("pixel_ods_web_extract", {url: "https://docs.comfy.org/installation/manual_install.md", query: "Python"}), undefined);
+    assert.equal(invoke("write", {path: "checklist.md", content: "Only evidence read from the returned sources."}), undefined);
+    assert.equal(invoke("read", {path: "checklist.md"}), undefined);
+  }
 });
 
 test("dispatches deferred extraction after truncation and still counts the inner fetches", () => {
@@ -7842,85 +7776,41 @@ test("dispatches deferred extraction after truncation and still counts the inner
   }
 });
 
-test("deferred extraction retains URL scope and private destination checks after truncation", () => {
-  for (const url of ["https://example.com/other", "http://127.0.0.1/private"]) {
-    const guard = createToolLoopGuard();
-    const params = { url: "https://docs.python.org/3/library/pathlib.html" };
-    call(guard, "web_fetch", { event: { params } });
-    afterCall(guard, "web_fetch", {
-      event: { params, result: { details: { status: 200, truncated: true } } },
-    });
-    const result = call(guard, "tool_call", {
-      event: { params: {
-        id: "openclaw:pixel-ods:pixel_ods_web_extract",
-        args: { url, query: "Path.glob" },
-      } },
-    });
-    assert.equal(result.blockReason, url.startsWith("http://127.")
-      ? WEB_FETCH_PUBLIC_ONLY_REASON : WEB_FETCH_TRUNCATED_PIVOT_REASON);
-  }
-});
-
-test("recognizes serialized built-in fetch details before enforcing the targeted pivot", () => {
+test("truncation does not loosen the public-only destination boundary", () => {
   const guard = createToolLoopGuard();
-  const params = { url: "https://docs.python.org/3/library/pathlib.html" };
-  assert.equal(call(guard, "web_fetch", { event: { params } }), undefined);
-  afterCall(guard, "web_fetch", {
-    event: {
-      params,
-      result: {
-        content: [
-          { type: "text", text: JSON.stringify({ status: 200, truncated: true }) },
-        ],
-      },
-    },
-  });
-  assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
+  const params = {url: "https://docs.example.org/reference"};
+  assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params, result: {details: {status: 200, truncated: true}}}});
+  assert.equal(call(guard, "pixel_ods_web_extract", {event: {params: {url: "http://127.0.0.1/private", query: "token"}}}).blockReason, WEB_FETCH_PUBLIC_ONLY_REASON);
 });
 
-test("truncated research permits report delivery before another web call", () => {
-  for (const wrapped of [false, true]) {
-    const guard = createToolLoopGuard();
-    const url = "https://docs.python.org/3/library/csv.html";
-    const params = { url };
-    call(guard, "web_fetch", { event: { params } });
-    afterCall(guard, "web_fetch", {
-      event: { params, result: { details: { status: 200, truncated: true } } },
-    });
-    const invoke = (name, args) => wrapped
-      ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args } } })
-      : call(guard, name, { event: { params: args } });
-    assert.notEqual(invoke("write", { path: "research/README.md", content: "Verified prefix; later sections not read." })?.block, true);
-    assert.notEqual(invoke("read", { path: "research/README.md" })?.block, true);
-    // A local deliverable does not discard the bounded web continuation.
-    assert.equal(invoke("web_fetch", { url: "https://docs.python.org/3/library/json.html" }).blockReason,
-      WEB_FETCH_TRUNCATED_PIVOT_REASON);
-    assert.notEqual(invoke("pixel_ods_web_extract", { url, query: "reader" })?.block, true);
-    if (wrapped) {
-      assert.equal(call(guard, "pixel_ods_web_extract", { event: { params: { url, query: "reader" } } }), undefined);
-    }
-  }
+test("serialized truncation leaves selection of another source open", () => {
+  const guard = createToolLoopGuard();
+  const params = {url: "https://docs.example.org/reference"};
+  assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params, result: {content: [{type: "text", text: JSON.stringify({status: 200, truncated: true})}]}}});
+  assert.equal(call(guard, "web_search", {event: {params: {query: "official manual installation"}}}), undefined);
 });
 
-test("makes a second wrong tool after a truncated fetch terminal", () => {
-  const aborts = [];
-  const guard = createToolLoopGuard({
-    abortRun: (sessionId) => {
-      aborts.push(sessionId);
-      return true;
-    },
-  });
-  const params = { url: "https://docs.python.org/3/library/pathlib.html" };
-  call(guard, "web_fetch", { event: { params } });
-  afterCall(guard, "web_fetch", {
-    event: { params, result: { details: { status: 200, truncated: true } } },
-  });
-  assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
-  assert.equal(call(guard, "web_fetch", { event: { params } }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "read"), undefined);
+test("report delivery and different extraction queries can be interleaved", () => {
+  const guard = createToolLoopGuard();
+  const params = {url: "https://docs.example.org/reference"};
+  assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params, result: {details: {status: 200, truncated: true}}}});
+  assert.equal(call(guard, "write", {event: {params: {path: "report.md", content: "Partial findings"}}}), undefined);
+  for (const query of ["Installation", "Configuration"]) assert.equal(call(guard, "pixel_ods_web_extract", {event: {params: {...params, query}}}), undefined);
+  assert.equal(call(guard, "read", {event: {params: {path: "report.md"}}}), undefined);
+});
+
+test("changing research strategy after truncation does not manufacture budget exhaustion", () => {
+  const guard = createToolLoopGuard({limits: {search: 2, fetch: 3, total: 4}});
+  const params = {url: "https://docs.example.org/reference"};
+  assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
+  afterCall(guard, "web_fetch", {event: {params, result: {details: {status: 200, truncated: true}}}});
+  assert.equal(call(guard, "web_search"), undefined);
+  assert.equal(call(guard, "web_fetch", {event: {params: {url: "https://other.example.org/guide"}}}), undefined);
+  assert.equal(call(guard, "pixel_ods_web_extract", {event: {params: {...params, query: "install"}}}), undefined);
   assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "web_search").blockReason, WEB_LOOP_ABORT_REASON);
-  assert.deepEqual(aborts, ["session-1"]);
 });
 
 test("does not require targeted extraction after an untruncated or failed fetch", () => {

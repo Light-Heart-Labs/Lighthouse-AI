@@ -16,9 +16,9 @@ import path from "node:path";
 import { isIP } from "node:net";
 
 export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
-  search: 2,
-  fetch: 2,
-  total: 4,
+  search: 8,
+  fetch: 24,
+  total: 32,
   failedExecRetries: 3,
   failedVerificationAttempts: 6,
 });
@@ -34,10 +34,10 @@ export const WEB_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another web tool after the bounded research budget was exhausted. Start a fresh message to continue with a narrower research question.";
 
 export const WEB_FETCH_REPEAT_PIVOT_REASON =
-  "Pixel already fetched this public page in this response. Do not repeat web_fetch or narrate a retry. If the needed detail was beyond the returned prefix, call pixel_ods_web_extract now with the same URL and a distinctive literal method or section name; otherwise answer from the evidence already returned.";
+  "Pixel already fetched this public page in this response. Avoid repeating that fetch. Use the returned evidence, target a missing detail with pixel_ods_web_extract, or choose another relevant source. Other authorized work may continue.";
 
 export const WEB_FETCH_TRUNCATED_PIVOT_REASON =
-  "The fetched public page was truncated. Use evidence already present, or call pixel_ods_web_extract with that same page URL and a distinctive literal method or section name before further web research. Other authorized work may continue, including saving verified findings; do not claim unread content was verified.";
+  "The fetched public page was truncated. Only the returned content is evidence. Choose targeted extraction, another relevant source, or continue other authorized work; do not claim unread content was verified.";
 
 export const WEB_FETCH_PUBLIC_ONLY_REASON =
   "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames and must not contact local, private, or raw-IP destinations. Do not call another tool in this turn; explain the boundary to the user.";
@@ -46,10 +46,10 @@ export const GITHUB_CANONICAL_SOURCE_PREFIX =
   "Pixel already has the owner's identified canonical public GitHub source:";
 
 export const GITHUB_CANONICAL_FETCH_FAILED_REASON =
-  "Pixel could not fetch the owner's identified canonical GitHub README. Do not call another tool in this turn or answer repository facts from memory; state that the requested source could not be verified.";
+  "The attempted GitHub source was not fetched successfully. Other sources and authorized work remain available; distinguish unread information from verified findings.";
 
 export const GITHUB_SOURCE_UNVERIFIED_DELIVERY_PREFIX =
-  "Pixel could not verify the requested GitHub repository because its identified canonical README was not successfully fetched in this response. No repository claims are verified; please retry.";
+  "Pixel did not successfully read a source belonging to the requested GitHub repository in this response. Repository claims remain unverified; the workspace and other collected evidence are preserved.";
 
 export const EXEC_PRIVATE_NETWORK_REASON =
   "Pixel blocked this command because shell execution cannot be used to contact local, private, or raw-IP HTTP(S) destinations. Do not call another tool in this turn; explain the boundary to the user.";
@@ -3781,30 +3781,23 @@ function mixedHostInventoryVerification(state) {
   };
 }
 
-function webFetchWasTruncated(event) {
-  if (event?.error) return false;
-  const details = event?.result?.details;
-  if (
-    details &&
-    typeof details === "object" &&
-    !Array.isArray(details) &&
-    details.truncated === true &&
-    details.status === 200
-  ) {
-    return true;
-  }
-  const content = event?.result?.content;
-  if (!Array.isArray(content)) return false;
-  for (const part of content) {
-    if (!part || typeof part !== "object" || typeof part.text !== "string") continue;
-    try {
-      const parsed = JSON.parse(part.text);
-      if (parsed?.truncated === true && parsed?.status === 200) return true;
-    } catch {
-      // Non-JSON tool text cannot establish a successful truncated fetch.
-    }
-  }
-  return false;
+export function canonicalGitHubSourceMatches(source, repository) {
+  try {
+    const expected = new URL(repository);
+    const actual = new URL(source);
+    if (expected.protocol !== "https:" || expected.hostname !== "github.com" ||
+        expected.username || expected.password || expected.port ||
+        actual.protocol !== "https:" || actual.username || actual.password || actual.port) return false;
+    const repo = expected.pathname.split("/").filter(Boolean);
+    if (repo.length !== 2 || repo.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part))) return false;
+    let parts = actual.pathname.split("/").filter(Boolean);
+    if (actual.hostname === "api.github.com") {
+      if (parts[0] !== "repos") return false;
+      parts = parts.slice(1);
+    } else if (!["github.com", "raw.githubusercontent.com"].includes(actual.hostname)) return false;
+    return parts.length >= 2 && parts.slice(0, 2).every((part, index) =>
+      part.toLowerCase() === repo[index].toLowerCase());
+  } catch { return false; }
 }
 
 function canonicalWebFetchSucceeded(event) {
@@ -5691,14 +5684,8 @@ export function createToolLoopGuard({
         clientCancelled: false,
         fetchedUrls: new Set(),
         fetchPivots: new Set(),
-        targetedExtractPending: undefined,
-        targetedExtractBlocks: 0,
         githubCanonicalUrl: undefined,
-        githubReadmeUrl: undefined,
-        githubFileUrl: undefined,
         githubCanonicalSatisfied: false,
-        githubCanonicalFailed: false,
-        githubCanonicalBlocks: 0,
         odsRoutingInitialized: false,
         odsRequestedTools: new Set(),
         odsRequiredTools: new Set(),
@@ -7488,66 +7475,9 @@ export function createToolLoopGuard({
       return { block: true, blockReason: EXEC_PRIVATE_NETWORK_REASON };
     }
 
-    if (state?.targetedExtractPending && WEB_TOOLS.has(selectedToolName)) {
-      // Tool Search dispatch reaches this gate before the selected tool's own
-      // hook. Compare its actual tool and arguments, not the dispatch wrapper.
-      const requestedUrl = canonicalFetchUrl(selectedEvent);
-      const exactGitHubFileContinuation =
-        selectedToolName === "web_fetch" &&
-        state.githubFileUrl &&
-        requestedUrl === state.githubFileUrl &&
-        state.targetedExtractPending === state.githubReadmeUrl;
-      if (exactGitHubFileContinuation) {
-        // The owner explicitly named this validated file in the same canonical
-        // repository. A truncated README may already contain the requested
-        // repository description, so allow the exact second source instead of
-        // forcing an irrelevant same-page extraction.
-        state.targetedExtractPending = undefined;
-        state.targetedExtractBlocks = 0;
-      } else if (
-        selectedToolName === "pixel_ods_web_extract" &&
-        requestedUrl === state.targetedExtractPending
-      ) {
-        state.targetedExtractPending = undefined;
-        state.targetedExtractBlocks = 0;
-      } else if (state.targetedExtractBlocks === 0) {
-        state.targetedExtractBlocks = 1;
-        return { block: true, blockReason: WEB_FETCH_TRUNCATED_PIVOT_REASON };
-      } else {
-        state.targetedExtractPending = undefined;
-        state.webExhausted = true;
-        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
-      }
-    }
-
-    if (
-      state?.githubCanonicalUrl &&
-      !state.githubCanonicalSatisfied &&
-      WEB_TOOLS.has(toolName)
-    ) {
-      if (state.githubCanonicalFailed) {
-        state.webExhausted = true;
-        return { block: true, blockReason: GITHUB_CANONICAL_FETCH_FAILED_REASON };
-      }
-      const requestedUrl = canonicalFetchUrl(event);
-      if (
-        toolName === "web_fetch" &&
-        requestedUrl === state.githubReadmeUrl
-      ) {
-        state.githubCanonicalBlocks = 0;
-      } else if (state.githubCanonicalBlocks === 0) {
-        state.githubCanonicalBlocks = 1;
-        return {
-          block: true,
-          blockReason:
-            `${GITHUB_CANONICAL_SOURCE_PREFIX} ${state.githubCanonicalUrl}. ` +
-            `Do not search or narrate a retry. Call web_fetch once with exactly ${state.githubReadmeUrl} now.`,
-        };
-      } else {
-        state.webExhausted = true;
-        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
-      }
-    }
+    // Truncation and source selection are research observations, not authority
+    // boundaries. Let the model select another page, search, or extraction;
+    // the ordinary per-run budget and duplicate-call guard still apply.
 
     if (WEB_TOOLS.has(toolName) && (!runId || !sessionId)) {
       return {
@@ -7943,8 +7873,6 @@ export function createToolLoopGuard({
       if (githubUrl) {
         if (!state.githubCanonicalUrl) {
           state.githubCanonicalUrl = githubUrl;
-          state.githubReadmeUrl = githubReadmeUrl(githubUrl);
-          state.githubFileUrl = userMessageGitHubFileUrl(event?.messages, event?.prompt);
         }
       }
     }
@@ -8450,12 +8378,13 @@ export function createToolLoopGuard({
       }
     }
     if (
-      state.githubReadmeUrl &&
-      toolName === "web_fetch" &&
-      canonicalFetchUrl(event) === state.githubReadmeUrl
+      state.githubCanonicalUrl && toolName === "web_fetch" &&
+      canonicalGitHubSourceMatches(canonicalFetchUrl(event), state.githubCanonicalUrl) &&
+      canonicalWebFetchSucceeded(event)
     ) {
-      state.githubCanonicalSatisfied = canonicalWebFetchSucceeded(event);
-      state.githubCanonicalFailed = !state.githubCanonicalSatisfied;
+      // A README, repository page, raw source, or repository API response can
+      // establish a successful source read. A later failure cannot erase it.
+      state.githubCanonicalSatisfied = true;
     }
     if (toolName === "process") {
       const completion = completedProcessResult(event);
@@ -8502,14 +8431,6 @@ export function createToolLoopGuard({
     // A successful file mutation permits another identical command, but does
     // not erase the run-wide failed-verification count. This distinguishes a
     // useful repair cycle from unbounded edit/test churn.
-    if (toolName === "web_fetch" && webFetchWasTruncated(event)) {
-      const fetchUrl = canonicalFetchUrl(event);
-      if (fetchUrl) {
-        state.targetedExtractPending = fetchUrl;
-        state.targetedExtractBlocks = 0;
-      }
-      return;
-    }
     const wrappedExecEvent = toolName === "tool_call"
       ? toolSearchSelectedToolEvent(event, "exec", "core") ??
         (event?.params?.id === "exec"
