@@ -3176,7 +3176,7 @@ function extensionLifecycleResult(step, submittedAction) {
     value.boundary !== EXTENSION_LIFECYCLE_BOUNDARY ||
     value.action !== expectedAction ||
     value.extensionId !== submittedParameters.serviceId ||
-    !["ready", "blocked", "noop", "succeeded", "failed"].includes(value.outcome) ||
+    !["ready", "inspected", "blocked", "noop", "succeeded", "failed"].includes(value.outcome) ||
     !EXTENSION_LIFECYCLE_STATUSES.has(value.previousStatus) ||
     !EXTENSION_LIFECYCLE_STATUSES.has(value.currentStatus) ||
     typeof value.changed !== "boolean" ||
@@ -3201,12 +3201,12 @@ function extensionLifecycleResult(step, submittedAction) {
   }
   if (expectedAction === "inspect") {
     if (
-      !["ready", "blocked", "failed"].includes(value.outcome) ||
+      !["ready", "inspected", "blocked", "failed"].includes(value.outcome) ||
       value.currentStatus !== value.previousStatus ||
       value.changed ||
       value.externalEffectOccurred ||
       value.rollback.attempted ||
-      (value.outcome !== "failed" && (value.outcome === "ready") !== (missing.length === 0))
+      (value.outcome !== "failed" && ["ready", "inspected"].includes(value.outcome) !== (missing.length === 0))
     ) {
       return undefined;
     }
@@ -3391,7 +3391,7 @@ function parsedLifecycleOutcome(terminalJobs, action) {
 
 function inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction) {
   const action = mutationAction?.replace(/^ods\.extensions\./, "");
-  return inspection?.result?.outcome === "ready" &&
+  return ["ready", "inspected"].includes(inspection?.result?.outcome) &&
     EXTENSION_LIFECYCLE_SUCCESS.get(action)?.has(inspection.result.currentStatus) === true;
 }
 
@@ -3497,7 +3497,7 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
     return `Pixel's ODS extension inspection job reached terminal status ${inspectionOutcome.status}. No lifecycle change was accepted. Job: ${inspectionOutcome.jobId}.${plan}`;
   }
   const inspection = parsedLifecycleOutcome(terminalJobs, "ods.extensions.inspect");
-  if (!inspection || !["ready", "blocked"].includes(inspection.result.outcome)) return undefined;
+  if (!inspection || !["ready", "inspected", "blocked"].includes(inspection.result.outcome)) return undefined;
   if (inspection.result.outcome === "blocked") {
     if (terminalJobs.size !== 1) return undefined;
     return [
@@ -7271,7 +7271,7 @@ export function createToolLoopGuard({
             );
             if (
               !inspection ||
-              inspection.result.outcome !== "ready" ||
+              !["ready", "inspected"].includes(inspection.result.outcome) ||
               inspection.result.extensionId !== lifecycle.serviceId
             ) {
               return {

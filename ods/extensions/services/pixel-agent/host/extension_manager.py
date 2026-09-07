@@ -545,12 +545,12 @@ def _execute(
     missing = [key for key in required if not values.get(key)]
 
     if action == "inspect":
-        # "ready" retains its protocol meaning: no declared environment key
-        # is missing. It is not a claim that the extension is ready to use.
+        # A completed read cannot establish runtime readiness. In particular,
+        # an absent environment specification does not mean no setup is needed.
         return _public_result(
             action=action,
             extension_id=extension_id,
-            outcome="ready" if not missing else "blocked",
+            outcome="inspected" if not missing else "blocked",
             previous_status=previous_status,
             current_status=previous_status,
             changed=False,

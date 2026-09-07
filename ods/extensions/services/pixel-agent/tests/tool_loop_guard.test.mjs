@@ -2320,7 +2320,7 @@ test("native extension inspection preserves declared scope and refuses invented 
     afterCall(guard, "pixel_ods_extensions", { event: { params, result: { details: {
       jobId: "ops-1234567890123-dddddddddddd", status: "succeeded", waitTimedOut: false,
       steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
-        extensionId: "comfyui", configurationScope: "declared-environment-keys", runtimeRequirementsVerified,
+        extensionId: "comfyui", outcome: "inspected", configurationScope: "declared-environment-keys", runtimeRequirementsVerified,
       }))],
     } } } });
     const verification = guard.deliveryVerificationForRun("run-1");

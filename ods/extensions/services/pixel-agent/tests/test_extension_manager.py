@@ -69,6 +69,7 @@ class ExtensionManagerTests(unittest.TestCase):
                 self.assertEqual(result["configurationScope"], "declared-environment-keys")
                 self.assertIs(result["runtimeRequirementsVerified"], False)
                 self.assertEqual(result["currentStatus"], state)
+                self.assertEqual(result["outcome"], "blocked" if keys and not configured else "inspected")
                 self.assertEqual(result["missingConfiguration"], list(keys) if not configured else [])
                 self.assertFalse(result["changed"])
                 self.assertNotIn("private-test-value", json.dumps(result))
