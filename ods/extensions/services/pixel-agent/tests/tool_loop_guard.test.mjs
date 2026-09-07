@@ -10767,3 +10767,33 @@ test("past probe reports do not turn sandbox verification into network work", ()
     "Read the local report, then probe Strixy on the LAN ports 22 and 3389.",
   ]) assert.deepEqual(userMessageNetworkPeerRequest([], text), { peer: "Strixy", ports: [22, 3389] }, text);
 });
+
+test("workspace requests do not combine unrelated clauses into app or extension inventories", () => {
+  const converter = "Create a useful offline interactive unit converter at /workspace/unit-lab/index.html for temperature, length and mass, with clear source/target units, a swap control, keyboard operation and visible input validation. Preserve existing apps. Build and publish the HTML website through the ODS preview so I can test Fahrenheit32 to Celsius0, miles1 to kilometers1.609344, and invalid input. Use no external resources.";
+  const files = "Demonstrate a safe file-organization workflow entirely inside a new /workspace/file-lab directory. First create six small demo files across txt,csv andmd extensions with distinct contents. Then organize copies into labeled subfolders, produce a manifest containing original path, copy path and SHA256, and verify that every copied file matches its source. Keep the originals. Use available file or execution tools, report exact files created and actual verification output, and explain any unavailable capability instead of inventing results. Do not access personal files or change system settings.";
+  for (const prompt of [
+    converter,
+    files,
+    "Preserve existing apps; publish my website through the ODS preview.",
+    "Build an app in ODS with an inventory screen and sample source files.",
+    "List file extensions used in the source files under /workspace/file-lab.",
+    "Write demo files under /workspace/lab. Do not list installed ODS extensions.",
+  ]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), [], prompt);
+    assert.equal(userMessageRequestsExtensionInventory([], prompt), false, prompt);
+    assert.equal(userMessageOperationsRequirements([], prompt).required, false, prompt);
+  }
+  for (const prompt of [
+    "List the ODS apps.",
+    "Which apps are installed in ODS?",
+    "ODS apps",
+    "Preserve my app. Show me the ODS applications, then build /workspace/lab/index.html.",
+  ]) assert.ok(userMessageOdsToolRequirements([], prompt).includes("pixel_ods_apps_list"), prompt);
+  for (const prompt of [
+    "List installed ODS extensions.",
+    "Organize demo file extensions in /workspace/lab. Then report which ODS extensions are enabled.",
+  ]) {
+    assert.equal(userMessageRequestsExtensionInventory([], prompt), true, prompt);
+    assert.equal(userMessageOperationsRequirements([], prompt).required, true, prompt);
+  }
+});

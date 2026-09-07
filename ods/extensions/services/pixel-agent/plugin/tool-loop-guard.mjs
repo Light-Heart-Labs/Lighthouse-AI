@@ -3880,11 +3880,20 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const asksNamedServiceInventory =
     /\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b[^.!?;\n]{0,120}\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text) ||
     /\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text);
+  // A saved app and ODS may be mentioned in separate instructions, such as
+  // "Preserve existing apps. Publish through the ODS preview." Require an
+  // actual inventory request in the same clause before forcing a projection.
+  const asksOdsAppInventory = text.split(/[!?;\n]+|\.(?=\s|$)/).some((clause) =>
+    !/^\s*(?:please\s+)?(?:do\s+not|don['’]t|never|avoid|skip|omit)\b/i.test(clause) &&
+    (/\bODS\b.{0,80}\b(?:apps?|applications?)\b/i.test(clause) ||
+      /\b(?:apps?|applications?)\b.{0,80}\bODS\b/i.test(clause)) &&
+    (/(?:^\s*|\b(?:and|then|also)\s+)(?:please\s+)?(?:which|what|where|list|show|inspect|audit|inventory|report|tell\s+me)\b/i.test(clause) ||
+      /^\s*(?:please\s+)?ODS\s+(?:apps?|applications?)\s*$/i.test(clause))
+  );
   const asksApps =
     !rejectsApps &&
     (/\bpixel_ods_apps_list\b/i.test(text) ||
-      /\bODS\b.{0,80}\b(?:apps?|applications?)\b/i.test(text) ||
-      /\b(?:apps?|applications?)\b.{0,80}\bODS\b/i.test(text) ||
+      asksOdsAppInventory ||
       /\bODS(?:\s+(?:app|application|service)s?)?\s+(?:links?|URLs?)\b/i.test(text) ||
       /\bconfigured\s+(?:app\s+)?(?:links?|URLs?)\b.{0,48}\bODS\b/i.test(text) ||
       (/\b(?:n8n|Open\s*WebUI|Perplexica|SearXNG|LiteLLM|Hermes)\b/i.test(text) &&
@@ -4024,7 +4033,22 @@ export function userMessageRequestsExtensionInventory(messages, prompt = undefin
     /\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status|state|source|core|optional)\b/i;
   const inventoryIntent =
     /\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b/i;
-  return /\b(?:ODS\s+)?extensions?\b/i.test(text) && extensionState.test(text) && inventoryIntent.test(text);
+  // File extensions and a later request to report source hashes are unrelated
+  // to installed ODS extensions. Do not combine those clauses into host work.
+  const clauses = text.split(/[!?;\n]+|\.(?=\s|$)/).filter((clause) =>
+    !/^\s*(?:please\s+)?(?:do\s+not|don['’]t|never|avoid|skip|omit)\b/i.test(clause) &&
+    !/\b(?:file|filename)\s+extensions?\b/i.test(clause));
+  return clauses.some((clause) =>
+    /\b(?:ODS\s+)?extensions?\b/i.test(clause) &&
+    extensionState.test(clause) && inventoryIntent.test(clause)
+  ) || (
+    // Preserve ordinary follow-ups: "Use n8n as an ODS extension. Check
+    // whether it is installed." A file suffix cannot establish this scope.
+    clauses.some((clause) => /\bODS\s+extensions?\b/i.test(clause)) &&
+    clauses.some((clause) =>
+      /\b(?:check|verify|which|what|list|show|inspect|report|tell\s+me)\b/i.test(clause) &&
+      /\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped)\b/i.test(clause))
+  );
 }
 
 export function userMessageExtensionCatalogExactQuery(messages, prompt = undefined) {
