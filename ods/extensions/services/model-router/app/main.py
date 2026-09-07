@@ -63,9 +63,7 @@ MAX_QUEUE_DEPTH = int(os.environ.get("ODS_ROUTER_MAX_QUEUE_DEPTH", "64"))
 QUEUE_WAIT_SECONDS = int(os.environ.get("ODS_ROUTER_QUEUE_WAIT_SECONDS", "60"))
 UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("ODS_ROUTER_UPSTREAM_TIMEOUT", "600"))
 UPSTREAM_MAX_CONNECTIONS = max(
-    1, int(os.environ.get(
-        "ODS_ROUTER_UPSTREAM_MAX_CONNECTIONS", str(MAX_QUEUE_DEPTH)
-    ))
+    1, int(os.environ.get("ODS_ROUTER_UPSTREAM_MAX_CONNECTIONS", str(MAX_QUEUE_DEPTH)))
 )
 UPSTREAM_MAX_KEEPALIVE = max(
     0, int(os.environ.get("ODS_ROUTER_UPSTREAM_MAX_KEEPALIVE", "20"))
@@ -88,8 +86,16 @@ FORWARD_PATHS = {
 }
 
 _HOP_BY_HOP = {
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailer", "transfer-encoding", "upgrade", "host", "authorization",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "authorization",
     "content-length",
 }
 
@@ -100,12 +106,13 @@ _PROBE_RE = re.compile(
 _SSE_DELIMITER_RE = re.compile(rb"(?:\r\n|\r|\n)(?:\r\n|\r|\n)")
 _CHAT_TEMPLATE_ARTIFACTS = (
     re.compile(r"<\|im_start\|>\s*(?:assistant|user|system|tool)?\s*<\|im_end\|>"),
-    re.compile(r"<\|start_header_id\|>\s*(?:assistant|user|system|tool)?\s*<\|end_header_id\|>"),
+    re.compile(
+        r"<\|start_header_id\|>\s*(?:assistant|user|system|tool)?\s*<\|end_header_id\|>"
+    ),
     re.compile(r"<\|(?:im_start|im_end|eot_id|endoftext|end)\|>"),
 )
 
-app = FastAPI(title="ODS Model Router", docs_url=None, redoc_url=None,
-              openapi_url=None)
+app = FastAPI(title="ODS Model Router", docs_url=None, redoc_url=None, openapi_url=None)
 
 _inflight = 0
 _inflight_lock = asyncio.Lock()
@@ -130,9 +137,7 @@ class _TelemetrySink:
         self.api_key = api_key
         self.enabled = bool(self.url and self.api_key)
         self.queue: asyncio.Queue[dict[str, Any]] | None = (
-            asyncio.Queue(maxsize=TELEMETRY_QUEUE_DEPTH)
-            if self.enabled
-            else None
+            asyncio.Queue(maxsize=TELEMETRY_QUEUE_DEPTH) if self.enabled else None
         )
         self.client = client
         self.task: asyncio.Task[None] | None = None
@@ -146,9 +151,7 @@ class _TelemetrySink:
                 follow_redirects=False,
                 timeout=TELEMETRY_TIMEOUT_SECONDS,
             )
-        self.task = asyncio.create_task(
-            self._run(), name="model-router-token-spy"
-        )
+        self.task = asyncio.create_task(self._run(), name="model-router-token-spy")
 
     def emit(self, event: dict[str, Any]) -> bool:
         if self.queue is None:
@@ -227,9 +230,7 @@ def _usage_from_response(payload: Any) -> tuple[dict[str, int], str]:
         "cache_read_tokens": _nonnegative_int(
             prompt_details.get("cached_tokens", usage.get("cache_read_tokens", 0))
         ),
-        "cache_write_tokens": _nonnegative_int(
-            usage.get("cache_write_tokens", 0)
-        ),
+        "cache_write_tokens": _nonnegative_int(usage.get("cache_write_tokens", 0)),
     }
 
     stop_reason = source.get("stop_reason") or source.get("status") or ""
@@ -261,11 +262,7 @@ def _build_telemetry_event(
 ) -> dict[str, Any]:
     messages = payload.get("messages")
     messages = messages if isinstance(messages, list) else []
-    roles = [
-        item.get("role")
-        for item in messages
-        if isinstance(item, dict)
-    ]
+    roles = [item.get("role") for item in messages if isinstance(item, dict)]
     tools = payload.get("tools")
     tools = tools if isinstance(tools, list) else []
     return {
@@ -278,9 +275,7 @@ def _build_telemetry_event(
         "user_message_count": min(roles.count("user"), 100_000),
         "assistant_message_count": min(roles.count("assistant"), 100_000),
         "tool_count": min(len(tools), 100_000),
-        "input_tokens": min(
-            _nonnegative_int(usage.get("input_tokens")), 2_000_000_000
-        ),
+        "input_tokens": min(_nonnegative_int(usage.get("input_tokens")), 2_000_000_000),
         "output_tokens": min(
             _nonnegative_int(usage.get("output_tokens")), 2_000_000_000
         ),
@@ -348,11 +343,7 @@ def _load_endpoints() -> dict[str, dict[str, Any]]:
 
 
 def _has_keys(value: Any, required: set[str], allowed: set[str]) -> bool:
-    return (
-        isinstance(value, dict)
-        and required <= set(value)
-        and set(value) <= allowed
-    )
+    return isinstance(value, dict) and required <= set(value) and set(value) <= allowed
 
 
 def _is_nonnegative_int(value: Any) -> bool:
@@ -362,13 +353,18 @@ def _is_nonnegative_int(value: Any) -> bool:
 def _validate_state_schema(doc: Any) -> bool:
     """Validate the checked-in ``ods.model-state.v1`` contract."""
     root_keys = {
-        "schema", "seq", "routeSeq", "operation", "desired", "active",
-        "history", "availability",
+        "schema",
+        "seq",
+        "routeSeq",
+        "operation",
+        "desired",
+        "active",
+        "history",
+        "availability",
     }
     if not _has_keys(
         doc,
-        {"schema", "seq", "routeSeq", "desired", "active", "history",
-         "availability"},
+        {"schema", "seq", "routeSeq", "desired", "active", "history", "availability"},
         root_keys,
     ):
         return False
@@ -388,16 +384,25 @@ def _validate_state_schema(doc: Any) -> bool:
         if not isinstance(operation["id"], str) or not operation["id"]:
             return False
         if operation["phase"] not in {
-            "requested", "staging", "verifying", "publishing", "flipping",
-            "serving", "failed", "rolling_back",
+            "requested",
+            "staging",
+            "verifying",
+            "publishing",
+            "flipping",
+            "serving",
+            "failed",
+            "rolling_back",
         }:
             return False
         if not isinstance(operation["requestedModelId"], str):
             return False
         if not isinstance(operation["startedAt"], str):
             return False
-        if "error" in operation and operation["error"] is not None \
-                and not isinstance(operation["error"], str):
+        if (
+            "error" in operation
+            and operation["error"] is not None
+            and not isinstance(operation["error"], str)
+        ):
             return False
 
     desired = doc["desired"]
@@ -410,13 +415,30 @@ def _validate_state_schema(doc: Any) -> bool:
     active = doc["active"]
     if active is not None:
         active_keys = {
-            "routeSeq", "catalogId", "runtimeModelId", "publicModel", "backend",
-            "contextLength", "capabilities", "verifiedAt", "reconstructed", "proof",
+            "routeSeq",
+            "catalogId",
+            "runtimeModelId",
+            "publicModel",
+            "backend",
+            "contextLength",
+            "capabilities",
+            "verifiedAt",
+            "reconstructed",
+            "proof",
         }
         if not _has_keys(
             active,
-            {"routeSeq", "catalogId", "runtimeModelId", "publicModel", "backend",
-             "contextLength", "capabilities", "verifiedAt", "proof"},
+            {
+                "routeSeq",
+                "catalogId",
+                "runtimeModelId",
+                "publicModel",
+                "backend",
+                "contextLength",
+                "capabilities",
+                "verifiedAt",
+                "proof",
+            },
             active_keys,
         ):
             return False
@@ -427,7 +449,9 @@ def _validate_state_schema(doc: Any) -> bool:
                 return False
         if not _is_nonnegative_int(active["contextLength"]):
             return False
-        if active["verifiedAt"] is not None and not isinstance(active["verifiedAt"], str):
+        if active["verifiedAt"] is not None and not isinstance(
+            active["verifiedAt"], str
+        ):
             return False
         if "reconstructed" in active and type(active["reconstructed"]) is not bool:
             return False
@@ -441,8 +465,11 @@ def _validate_state_schema(doc: Any) -> bool:
             return False
         if not isinstance(backend["endpointId"], str) or not backend["endpointId"]:
             return False
-        if "nativeRoute" in backend and backend["nativeRoute"] is not None \
-                and not isinstance(backend["nativeRoute"], str):
+        if (
+            "nativeRoute" in backend
+            and backend["nativeRoute"] is not None
+            and not isinstance(backend["nativeRoute"], str)
+        ):
             return False
 
         capabilities = active["capabilities"]
@@ -465,7 +492,10 @@ def _validate_state_schema(doc: Any) -> bool:
         return False
     for entry in history:
         if not isinstance(entry, dict) or not {
-            "routeSeq", "catalogId", "runtimeModelId", "verifiedAt"
+            "routeSeq",
+            "catalogId",
+            "runtimeModelId",
+            "verifiedAt",
         } <= set(entry):
             return False
         if not _is_nonnegative_int(entry["routeSeq"]):
@@ -484,8 +514,9 @@ def _validate_state_schema(doc: Any) -> bool:
         return False
     if availability["mode"] not in {"serve_active", "queue"}:
         return False
-    if availability["queueDeadline"] is not None \
-            and not isinstance(availability["queueDeadline"], str):
+    if availability["queueDeadline"] is not None and not isinstance(
+        availability["queueDeadline"], str
+    ):
         return False
     return True
 
@@ -542,14 +573,17 @@ def _active_route() -> dict[str, Any]:
     doc = _read_state()
     active = (doc or {}).get("active")
     if not isinstance(active, dict):
-        raise RouterError(503, "no_active_route",
-                          "No verified active model route is available yet")
+        raise RouterError(
+            503, "no_active_route", "No verified active model route is available yet"
+        )
     endpoint_id = str(((active.get("backend") or {}).get("endpointId")) or "")
     endpoint = _load_endpoints().get(endpoint_id)
     if endpoint is None:
-        raise RouterError(503, "endpoint_not_allowlisted",
-                          f"Active endpointId {endpoint_id!r} is not in the "
-                          "router allowlist")
+        raise RouterError(
+            503,
+            "endpoint_not_allowlisted",
+            f"Active endpointId {endpoint_id!r} is not in the router allowlist",
+        )
     availability = (doc or {}).get("availability") or {}
     return {
         "routeSeq": int(active.get("routeSeq") or 0),
@@ -569,8 +603,9 @@ def _record_evidence(record: dict[str, Any]) -> None:
     _evidence[record["probeId"]] = record
     while len(_evidence) > EVIDENCE_LIMIT:
         _evidence.popitem(last=False)
-    stale = [k for k, v in _evidence.items()
-             if now - v["storedAt"] > EVIDENCE_TTL_SECONDS]
+    stale = [
+        k for k, v in _evidence.items() if now - v["storedAt"] > EVIDENCE_TTL_SECONDS
+    ]
     for key in stale:
         _evidence.pop(key, None)
 
@@ -611,10 +646,15 @@ def _verify_probe_marker(body_text: str) -> str | None:
     if len(matches) != 1:
         return None
     probe_id, signature = matches[0]
-    expected = base64.urlsafe_b64encode(
-        hmac.new(probe_key.encode("utf-8"), probe_id.encode("utf-8"),
-                 hashlib.sha256).digest()
-    ).rstrip(b"=").decode("ascii")
+    expected = (
+        base64.urlsafe_b64encode(
+            hmac.new(
+                probe_key.encode("utf-8"), probe_id.encode("utf-8"), hashlib.sha256
+            ).digest()
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
     if not hmac.compare_digest(expected, signature):
         return None
     return probe_id
@@ -687,7 +727,7 @@ def _rewrite_sse_event(
     saw_done = False
     for line in event.splitlines(keepends=True):
         content = line.rstrip(b"\r\n")
-        ending = line[len(content):]
+        ending = line[len(content) :]
         if content.startswith(b"data:"):
             payload = content[5:].strip()
             if payload == b"[DONE]":
@@ -704,9 +744,8 @@ def _rewrite_sse_event(
                             models.append(obj["model"])
                         obj["model"] = alias
                     _sanitize_choice_content(obj)
-                    content = (
-                        b"data: "
-                        + json.dumps(obj, separators=(",", ":")).encode("utf-8")
+                    content = b"data: " + json.dumps(obj, separators=(",", ":")).encode(
+                        "utf-8"
                     )
         out_lines.append(content + ending)
     return b"".join(out_lines), models, payloads, saw_done
@@ -762,9 +801,9 @@ class _SSERewriter:
         self.buffer += chunk
         output: list[bytes] = []
         while match := _SSE_DELIMITER_RE.search(self.buffer):
-            event = self.buffer[:match.start()]
-            delimiter = self.buffer[match.start():match.end()]
-            self.buffer = self.buffer[match.end():]
+            event = self.buffer[: match.start()]
+            delimiter = self.buffer[match.start() : match.end()]
+            self.buffer = self.buffer[match.end() :]
             rewritten, models, payloads, saw_done = _rewrite_sse_event(
                 event, self.alias
             )
@@ -791,8 +830,9 @@ async def _read_bounded_body(request: Request) -> bytes:
     if content_length:
         try:
             if int(content_length) > MAX_BODY_BYTES:
-                raise RouterError(413, "payload_too_large",
-                                  "Request body exceeds the router limit")
+                raise RouterError(
+                    413, "payload_too_large", "Request body exceeds the router limit"
+                )
         except ValueError:
             pass
     chunks: list[bytes] = []
@@ -800,8 +840,9 @@ async def _read_bounded_body(request: Request) -> bytes:
     async for chunk in request.stream():
         size += len(chunk)
         if size > MAX_BODY_BYTES:
-            raise RouterError(413, "payload_too_large",
-                              "Request body exceeds the router limit")
+            raise RouterError(
+                413, "payload_too_large", "Request body exceeds the router limit"
+            )
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -827,18 +868,28 @@ async def health() -> dict[str, Any]:
         "routeSeq": (doc or {}).get("routeSeq"),
         "instanceId": INSTANCE_ID,
         "probeKeyConfigured": bool(_current_probe_key()),
+        "inflight_requests": _inflight,
+        "connection_pool_usage": {
+            "max_connections": UPSTREAM_MAX_CONNECTIONS,
+            "active_connections": getattr(
+                getattr(app.state, "http", None), "limits", {}
+            ).get("max_connections", "unknown"),
+        },
     }
 
 
 @app.get("/v1/models")
 async def list_models() -> dict[str, Any]:
-    data = [{"id": alias, "object": "model", "owned_by": "ods"}
-            for alias in PUBLIC_ALIASES]
+    data = [
+        {"id": alias, "object": "model", "owned_by": "ods"} for alias in PUBLIC_ALIASES
+    ]
     try:
         route = _active_route()
-        metadata = {"routedModel": route["runtimeModelId"],
-                    "backend": route["backendKind"],
-                    "routeSeq": route["routeSeq"]}
+        metadata = {
+            "routedModel": route["runtimeModelId"],
+            "backend": route["backendKind"],
+            "routeSeq": route["routeSeq"],
+        }
     except RouterError:
         metadata = {"routedModel": None, "backend": None, "routeSeq": None}
     return {"object": "list", "data": data, "ods": metadata}
@@ -856,15 +907,22 @@ async def route_evidence(probe_id: str, request: Request) -> Response:
     return JSONResponse(public)
 
 
-@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE",
-                                             "PATCH", "HEAD", "OPTIONS", "CONNECT"])
+@app.api_route(
+    "/{full_path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT"],
+)
 async def forward(full_path: str, request: Request) -> Response:
     path = "/" + full_path
     method = FORWARD_PATHS.get(path)
     if method is None or request.method != method:
         return JSONResponse(
-            {"error": {"message": f"Path not served by the ODS model router: {path}",
-                       "type": "not_forwarded", "code": "404"}},
+            {
+                "error": {
+                    "message": f"Path not served by the ODS model router: {path}",
+                    "type": "not_forwarded",
+                    "code": "404",
+                }
+            },
             status_code=404,
         )
 
@@ -872,8 +930,13 @@ async def forward(full_path: str, request: Request) -> Response:
         body = await _read_bounded_body(request)
     except RouterError as exc:
         return JSONResponse(
-            {"error": {"message": exc.message, "type": exc.code,
-                       "code": str(exc.status)}},
+            {
+                "error": {
+                    "message": exc.message,
+                    "type": exc.code,
+                    "code": str(exc.status),
+                }
+            },
             status_code=exc.status,
         )
     try:
@@ -882,8 +945,13 @@ async def forward(full_path: str, request: Request) -> Response:
             raise ValueError("body must be a JSON object")
     except (ValueError, UnicodeDecodeError) as exc:
         return JSONResponse(
-            {"error": {"message": f"Invalid JSON body: {exc}",
-                       "type": "invalid_request_error", "code": "400"}},
+            {
+                "error": {
+                    "message": f"Invalid JSON body: {exc}",
+                    "type": "invalid_request_error",
+                    "code": "400",
+                }
+            },
             status_code=400,
         )
 
@@ -893,15 +961,22 @@ async def forward(full_path: str, request: Request) -> Response:
     async with _inflight_lock:
         if _inflight >= MAX_QUEUE_DEPTH:
             return JSONResponse(
-                {"error": {"message": "Router queue is full",
-                           "type": "overloaded", "code": "503"}},
-                status_code=503, headers={"Retry-After": "5"},
+                {
+                    "error": {
+                        "message": "Router queue is full",
+                        "type": "overloaded",
+                        "code": "503",
+                    }
+                },
+                status_code=503,
+                headers={"Retry-After": "5"},
             )
         _inflight += 1
     stream_owns_admission = False
     try:
-        response, stream_owns_admission = await _forward_inner(
-            request, path, payload, requested_alias, body
+        response, stream_owns_admission = await asyncio.wait_for(
+            _forward_inner(request, path, payload, requested_alias, body),
+            timeout=UPSTREAM_TIMEOUT_SECONDS,
         )
         return response
     finally:
@@ -909,17 +984,26 @@ async def forward(full_path: str, request: Request) -> Response:
             await _release_admission()
 
 
-async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
-                         requested_alias: str,
-                         raw_body: bytes) -> tuple[Response, bool]:
+async def _forward_inner(
+    request: Request,
+    path: str,
+    payload: dict[str, Any],
+    requested_alias: str,
+    raw_body: bytes,
+) -> tuple[Response, bool]:
     deadline = time.monotonic() + QUEUE_WAIT_SECONDS
     while True:
         try:
             route = _active_route()
         except RouterError as exc:
             return JSONResponse(
-                {"error": {"message": exc.message, "type": exc.code,
-                           "code": str(exc.status)}},
+                {
+                    "error": {
+                        "message": exc.message,
+                        "type": exc.code,
+                        "code": str(exc.status),
+                    }
+                },
                 status_code=exc.status,
                 headers={"Retry-After": "5"} if exc.status == 503 else {},
             ), False
@@ -927,9 +1011,15 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
             break
         if time.monotonic() >= deadline:
             return JSONResponse(
-                {"error": {"message": "A model swap is in progress",
-                           "type": "model_swap_in_progress", "code": "503"}},
-                status_code=503, headers={"Retry-After": "10"},
+                {
+                    "error": {
+                        "message": "A model swap is in progress",
+                        "type": "model_swap_in_progress",
+                        "code": "503",
+                    }
+                },
+                status_code=503,
+                headers={"Retry-After": "10"},
             ), False
         await asyncio.sleep(0.25)
 
@@ -967,8 +1057,11 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
     try:
         if is_stream:
             upstream_request = client.build_request(
-                "POST", url, content=json.dumps(payload).encode("utf-8"),
-                headers=headers, timeout=UPSTREAM_TIMEOUT_SECONDS,
+                "POST",
+                url,
+                content=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                timeout=UPSTREAM_TIMEOUT_SECONDS,
             )
             upstream = await client.send(upstream_request, stream=True)
             lemonade_route = upstream.headers.get("x-lemonade-route")
@@ -986,6 +1079,9 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                     if tail:
                         yield tail
                     completed = True
+                except asyncio.CancelledError:
+                    logger.info("Request cancelled; cleaning up stream")
+                    raise
                 finally:
                     await upstream.aclose()
                     if (
@@ -998,53 +1094,72 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                             for model in rewriter.models
                         )
                     ):
-                        _record_evidence({
-                            **evidence_base,
-                            "status": upstream.status_code,
-                            "responseModel": route["runtimeModelId"],
-                            "lemonadeRoute": lemonade_route,
-                        })
+                        _record_evidence(
+                            {
+                                **evidence_base,
+                                "status": upstream.status_code,
+                                "responseModel": route["runtimeModelId"],
+                                "lemonadeRoute": lemonade_route,
+                            }
+                        )
                     if (
                         completed
                         and rewriter.completed
                         and 200 <= upstream.status_code < 300
                     ):
-                        _emit_telemetry(_build_telemetry_event(
-                            payload,
-                            raw_body_bytes=len(raw_body),
-                            model=route["runtimeModelId"],
-                            backend=route["backendKind"],
-                            path=path,
-                            duration_ms=int(
-                                (time.monotonic() - telemetry_started) * 1000
-                            ),
-                            usage=rewriter.usage,
-                            stop_reason=rewriter.stop_reason,
-                        ))
+                        _emit_telemetry(
+                            _build_telemetry_event(
+                                payload,
+                                raw_body_bytes=len(raw_body),
+                                model=route["runtimeModelId"],
+                                backend=route["backendKind"],
+                                path=path,
+                                duration_ms=int(
+                                    (time.monotonic() - telemetry_started) * 1000
+                                ),
+                                usage=rewriter.usage,
+                                stop_reason=rewriter.stop_reason,
+                            )
+                        )
                     await _release_admission()
 
-            media_type = upstream.headers.get("content-type",
-                                              "text/event-stream")
+            media_type = upstream.headers.get("content-type", "text/event-stream")
             return StreamingResponse(
-                stream_body(), status_code=upstream.status_code,
-                media_type=media_type, headers=ods_headers,
+                stream_body(),
+                status_code=upstream.status_code,
+                media_type=media_type,
+                headers=ods_headers,
             ), True
 
         upstream = await client.post(
-            url, content=json.dumps(payload).encode("utf-8"), headers=headers,
+            url,
+            content=json.dumps(payload).encode("utf-8"),
+            headers=headers,
             timeout=UPSTREAM_TIMEOUT_SECONDS,
         )
     except httpx.TimeoutException:
         return JSONResponse(
-            {"error": {"message": "Upstream model runtime timed out",
-                       "type": "upstream_timeout", "code": "504"}},
-            status_code=504, headers=ods_headers,
+            {
+                "error": {
+                    "message": "Upstream model runtime timed out",
+                    "type": "upstream_timeout",
+                    "code": "504",
+                }
+            },
+            status_code=504,
+            headers=ods_headers,
         ), False
     except httpx.HTTPError as exc:
         return JSONResponse(
-            {"error": {"message": f"Upstream model runtime unavailable: {exc}",
-                       "type": "upstream_unavailable", "code": "502"}},
-            status_code=502, headers=ods_headers,
+            {
+                "error": {
+                    "message": f"Upstream model runtime unavailable: {exc}",
+                    "type": "upstream_unavailable",
+                    "code": "502",
+                }
+            },
+            status_code=502,
+            headers=ods_headers,
         ), False
 
     lemonade_route = upstream.headers.get("x-lemonade-route")
@@ -1070,35 +1185,47 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
             _sanitize_choice_content(parsed)
             lemonade_meta = parsed.get("x_lemonade_route")
             if lemonade_meta is not None:
-                ods_headers.setdefault("X-Lemonade-Route",
-                                       json.dumps(lemonade_meta)
-                                       if not isinstance(lemonade_meta, str)
-                                       else lemonade_meta)
+                ods_headers.setdefault(
+                    "X-Lemonade-Route",
+                    json.dumps(lemonade_meta)
+                    if not isinstance(lemonade_meta, str)
+                    else lemonade_meta,
+                )
             content = json.dumps(parsed).encode("utf-8")
     except (ValueError, UnicodeDecodeError):
         pass
 
     if probe_id:
-        _record_evidence({**evidence_base,
-                          "status": upstream.status_code,
-                          "responseModel": str(response_model or ""),
-                          "lemonadeRoute": lemonade_route})
+        _record_evidence(
+            {
+                **evidence_base,
+                "status": upstream.status_code,
+                "responseModel": str(response_model or ""),
+                "lemonadeRoute": lemonade_route,
+            }
+        )
 
     if 200 <= upstream.status_code < 300:
-        _emit_telemetry(_build_telemetry_event(
-            payload,
-            raw_body_bytes=len(raw_body),
-            model=route["runtimeModelId"],
-            backend=route["backendKind"],
-            path=path,
-            duration_ms=int((time.monotonic() - telemetry_started) * 1000),
-            usage=response_usage,
-            stop_reason=stop_reason,
-        ))
+        _emit_telemetry(
+            _build_telemetry_event(
+                payload,
+                raw_body_bytes=len(raw_body),
+                model=route["runtimeModelId"],
+                backend=route["backendKind"],
+                path=path,
+                duration_ms=int((time.monotonic() - telemetry_started) * 1000),
+                usage=response_usage,
+                stop_reason=stop_reason,
+            )
+        )
 
     media_type = upstream.headers.get("content-type", "application/json")
-    return Response(content=content, status_code=upstream.status_code,
-                    media_type=media_type, headers=ods_headers), False
+    return Response(
+        content=content,
+        status_code=upstream.status_code,
+        media_type=media_type,
+        headers=ods_headers,
+    ), False
 
 
 @app.on_event("startup")

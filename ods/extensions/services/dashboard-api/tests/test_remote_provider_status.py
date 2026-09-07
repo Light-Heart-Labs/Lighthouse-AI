@@ -1224,6 +1224,8 @@ def test_remote_provider_probe_reports_nonfatal_proof_record_failure(
     assert "ssh-identity" not in dumped
 
 
+
+
 def test_remote_provider_probe_preserves_sanitized_egress_errors(
     test_client,
     monkeypatch,
@@ -1258,7 +1260,11 @@ def test_remote_provider_probe_preserves_sanitized_egress_errors(
         async def post(self, _url):
             return FakeResponse()
 
-    monkeypatch.setattr(rps.httpx, "AsyncClient", FakeAsyncClient)
+    async def fake_get_egress_client(*args, **kwargs):
+        return FakeAsyncClient()
+
+    # Mock the get_egress_client function in the remote_provider_status module
+    monkeypatch.setattr(rps, "get_egress_client", fake_get_egress_client)
 
     resp = test_client.post(
         "/api/remote-provider/probe",
@@ -1275,7 +1281,6 @@ def test_remote_provider_probe_preserves_sanitized_egress_errors(
     }
     assert "unit-test-provider-token" not in dumped
     assert "ssh-identity" not in dumped
-
 
 def test_remote_provider_apply_requires_auth(test_client):
     resp = test_client.post("/api/remote-provider/apply", json=_lifecycle_payload())

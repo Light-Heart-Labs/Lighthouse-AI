@@ -115,9 +115,17 @@ async def _fetch_hermes_token(session: aiohttp.ClientSession) -> str:
     return match.group(1)
 
 
-async def _connect_ws(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocketResponse:
-    token = await _fetch_hermes_token(session)
-    ws_base = _base_url().replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+async def _connect_ws(
+    session: aiohttp.ClientSession,
+) -> aiohttp.ClientWebSocketResponse:
+    if os.environ.get("HERMES_SAFE_MODE") == "1":
+        token = ""
+    else:
+        token = await _fetch_hermes_token(session)
+
+    ws_base = (
+        _base_url().replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    )
     url = f"{ws_base}/api/ws?token={token}"
     try:
         return await session.ws_connect(url)
@@ -125,27 +133,39 @@ async def _connect_ws(session: aiohttp.ClientSession) -> aiohttp.ClientWebSocket
         raise HermesUnavailable("Hermes JSON-RPC websocket is not reachable") from exc
 
 
-async def _recv_json(ws: aiohttp.ClientWebSocketResponse, timeout: float) -> dict[str, Any]:
+async def _recv_json(
+    ws: aiohttp.ClientWebSocketResponse, timeout: float
+) -> dict[str, Any]:
     msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
     if msg.type == aiohttp.WSMsgType.TEXT:
         try:
             return json.loads(msg.data)
         except json.JSONDecodeError as exc:
             raise HermesBridgeError("Hermes sent malformed JSON") from exc
-    if msg.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+    if msg.type in {
+        aiohttp.WSMsgType.CLOSE,
+        aiohttp.WSMsgType.CLOSED,
+        aiohttp.WSMsgType.ERROR,
+    }:
         raise HermesUnavailable("Hermes websocket closed")
     return {}
 
 
-async def _create_session_on_ws(ws: aiohttp.ClientWebSocketResponse, *, timeout: float = 30) -> str:
+async def _create_session_on_ws(
+    ws: aiohttp.ClientWebSocketResponse, *, timeout: float = 30
+) -> str:
     """Run session.create over an already-open WS and return the session_id."""
     request_id = "ods-talk-create"
-    await ws.send_str(json.dumps({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": "session.create",
-        "params": {},
-    }))
+    await ws.send_str(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "session.create",
+                "params": {},
+            }
+        )
+    )
     while True:
         frame = await _recv_json(ws, timeout)
         if frame.get("id") != request_id:
@@ -158,7 +178,9 @@ async def _create_session_on_ws(ws: aiohttp.ClientWebSocketResponse, *, timeout:
             raise HermesBridgeError(message or "Hermes session.create failed")
         result = frame.get("result")
         if not isinstance(result, dict):
-            raise HermesBridgeError("Hermes session.create returned an unexpected shape")
+            raise HermesBridgeError(
+                "Hermes session.create returned an unexpected shape"
+            )
         session_id = str(result.get("session_id") or result.get("id") or "").strip()
         if not session_id:
             raise HermesBridgeError("Hermes did not return a session id")
@@ -179,6 +201,7 @@ class _HermesConnection:
     and the SPA's UI already enforces "wait for the previous reply" — this
     is the server-side belt to that suspenders.
     """
+
     http_session: aiohttp.ClientSession
     ws: aiohttp.ClientWebSocketResponse
     session_id: str
@@ -197,7 +220,9 @@ class _HermesConnection:
         try:
             await self.http_session.close()
         except Exception:  # pragma: no cover
-            logger.debug("http_session.close raised during pool eviction", exc_info=True)
+            logger.debug(
+                "http_session.close raised during pool eviction", exc_info=True
+            )
 
 
 _CONNECTION_POOL: dict[str, _HermesConnection] = {}
@@ -230,7 +255,11 @@ async def _open_connection(session_key: str) -> _HermesConnection:
         await http_session.close()
         raise
     conn = _HermesConnection(http_session=http_session, ws=ws, session_id=session_id)
-    logger.info("hermes-bridge: opened pooled connection for %s (session_id=%s)", session_key[:8], session_id)
+    logger.info(
+        "hermes-bridge: opened pooled connection for %s (session_id=%s)",
+        session_key[:8],
+        session_id,
+    )
     return conn
 
 
@@ -351,7 +380,9 @@ async def shutdown_pool() -> None:
 
 
 async def _submit_on_connection(
-    conn: _HermesConnection, text: str, timeout_seconds: int,
+    conn: _HermesConnection,
+    text: str,
+    timeout_seconds: int,
 ) -> AsyncIterator[dict[str, Any]]:
     """Send one prompt on an already-open pooled connection and yield events.
 
@@ -363,19 +394,25 @@ async def _submit_on_connection(
     request_id = f"ods-talk-prompt-{int(time.monotonic() * 1000)}"
     try:
         conn.last_used = time.monotonic()
-        await conn.ws.send_str(json.dumps({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "prompt.submit",
-            "params": {"session_id": conn.session_id, "text": text},
-        }))
+        await conn.ws.send_str(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "prompt.submit",
+                    "params": {"session_id": conn.session_id, "text": text},
+                }
+            )
+        )
     except (aiohttp.ClientError, ConnectionResetError, ConnectionError) as exc:
         # Pooled WS was closed under us between the freshness check and this
         # send (Hermes restart, network blip, idle timeout that hadn't been
         # noticed yet). Surface as HermesConnectionStale so stream_prompt
         # evicts the pool entry + retries on a fresh connection. This is the
         # only transparent-retry case because the prompt was not submitted.
-        raise HermesConnectionStale(f"Hermes WS closed before prompt submit: {exc}") from exc
+        raise HermesConnectionStale(
+            f"Hermes WS closed before prompt submit: {exc}"
+        ) from exc
 
     chunks: list[str] = []
     while True:
@@ -423,33 +460,47 @@ async def _submit_on_connection(
             # the SSE-layer side are for older `tool.start`-style events
             # that some builds may still emit; this branch handles the
             # newer status.update path.
-            status_text = payload.get("text") if isinstance(payload.get("text"), str) else None
+            status_text = (
+                payload.get("text") if isinstance(payload.get("text"), str) else None
+            )
             if status_text:
                 yield {
                     "type": "status",
                     "label": status_text,
-                    "kind": payload.get("kind") if isinstance(payload.get("kind"), str) else None,
+                    "kind": payload.get("kind")
+                    if isinstance(payload.get("kind"), str)
+                    else None,
                 }
         elif event_type == "tool.start":
             # Older-build path: Hermes may also emit explicit tool.start
             # events with name + context. We translate those into status
             # frames via the SSE layer's _label_for_tool() mapping.
-            tool_name = payload.get("name") if isinstance(payload.get("name"), str) else None
+            tool_name = (
+                payload.get("name") if isinstance(payload.get("name"), str) else None
+            )
             if tool_name:
                 yield {
                     "type": "tool_start",
                     "tool": tool_name,
-                    "detail": payload.get("context") if isinstance(payload.get("context"), str) else None,
+                    "detail": payload.get("context")
+                    if isinstance(payload.get("context"), str)
+                    else None,
                 }
         elif event_type == "tool.complete":
             # Older-build path companion: tool finished, clear the caption.
-            tool_name = payload.get("name") if isinstance(payload.get("name"), str) else None
+            tool_name = (
+                payload.get("name") if isinstance(payload.get("name"), str) else None
+            )
             if tool_name:
                 yield {
                     "type": "tool_complete",
                     "tool": tool_name,
-                    "duration_s": payload.get("duration_s") if isinstance(payload.get("duration_s"), (int, float)) else None,
-                    "summary": payload.get("summary") if isinstance(payload.get("summary"), str) else None,
+                    "duration_s": payload.get("duration_s")
+                    if isinstance(payload.get("duration_s"), (int, float))
+                    else None,
+                    "summary": payload.get("summary")
+                    if isinstance(payload.get("summary"), str)
+                    else None,
                 }
         elif event_type == "message.complete":
             final_text = payload.get("text")
@@ -461,11 +512,17 @@ async def _submit_on_connection(
                 "session_id": conn.session_id,
                 "text": final_text.strip(),
                 "status": str(payload.get("status") or "ok"),
-                "warning": payload.get("warning") if isinstance(payload.get("warning"), str) else None,
+                "warning": payload.get("warning")
+                if isinstance(payload.get("warning"), str)
+                else None,
             }
             return
         elif event_type == "error":
-            message = payload.get("message") if isinstance(payload.get("message"), str) else "Hermes reported an error"
+            message = (
+                payload.get("message")
+                if isinstance(payload.get("message"), str)
+                else "Hermes reported an error"
+            )
             raise HermesBridgeError(message)
 
 
@@ -553,7 +610,9 @@ async def submit_prompt(session_key: str, text: str) -> HermesReply:
             warning = event.get("warning")
     if not session_id and not final_text:
         raise HermesBridgeError("Hermes did not finish the response.")
-    return HermesReply(session_id=session_id, text=final_text, status=status, warning=warning)
+    return HermesReply(
+        session_id=session_id, text=final_text, status=status, warning=warning
+    )
 
 
 # -------- legacy compat shims (kept so existing tests keep importing OK) --------

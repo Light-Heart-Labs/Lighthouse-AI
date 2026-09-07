@@ -157,6 +157,12 @@ fi
 
 # 1. Stop and remove Docker containers
 log_info "Stopping Docker containers..."
+
+# Cache sudo credentials to avoid multiple password prompts
+if command -v sudo >/dev/null 2>&1; then
+    sudo -v || true
+fi
+
 cd "$INSTALL_DIR" 2>/dev/null || true
 if command -v docker &>/dev/null; then
     # Use ODS's resolved compose stack. The repo does not ship a

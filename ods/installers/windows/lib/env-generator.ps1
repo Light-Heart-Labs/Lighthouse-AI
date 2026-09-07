@@ -84,14 +84,17 @@ function Get-ODSEffectiveContainerMemoryGB {
     if ($DockerRamGB -gt 0) {
         return $DockerRamGB
     }
-    return [Math]::Max(0, $SystemRamGB)
+    # Unknown Docker VM size. Do not treat host RAM as container RAM — Docker
+    # Desktop / WSL2 VMs are often 4–8 GiB on a 32–64 GiB Windows box, and a
+    # 60G llama memory limit OOMs the engine.
+    return 0
 }
 
 function Get-ODSDefaultNvidiaLlamaMemoryLimit {
     param([int]$AvailableRamGB)
 
     if ($AvailableRamGB -le 0) {
-        return "64G"
+        return "8G"
     }
 
     $reserveGB = $(if ($AvailableRamGB -lt 16) { 3 } else { 4 })
