@@ -1,0 +1,121 @@
+"""Custody and retry behavior for the ODS-owned runtime repair installer."""
+
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+if os.name != "posix":
+    pytest.skip("managed OpenClaw host repair uses POSIX ownership", allow_module_level=True)
+
+ROOT = Path(__file__).parents[1]
+spec = importlib.util.spec_from_file_location("openclaw_tool_recovery", ROOT / "host/openclaw_tool_recovery.py")
+repair_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(repair_module)
+
+
+@pytest.fixture
+def installation(tmp_path):
+    runtime = tmp_path / "runtime"
+    (runtime / "dist").mkdir(parents=True)
+    (runtime / "package.json").write_text(json.dumps({"name": "openclaw", "version": repair_module.VERSION}))
+    original = b"before();\nunchanged();\n"
+    patched = b"after();\nunchanged();\n"
+    module = runtime / "dist" / repair_module.MODULE
+    module.write_bytes(original)
+    module.chmod(0o644)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"sourceSha256": hashlib.sha256(original).hexdigest(),
+                                    "patchedSha256": hashlib.sha256(patched).hexdigest(),
+                                    "replacements": [["before();", "after();"]]}))
+    state = tmp_path / "state"
+    return runtime, state, manifest, module, original, patched
+
+
+def run(installation, **kwargs):
+    runtime, state, manifest, *_ = installation
+    return repair_module.repair(runtime, state, manifest_path=manifest, **kwargs)
+
+
+def test_apply_reapply_restore_preserve_bytes_permissions_and_backup(installation):
+    _, state, _, module, original, patched = installation
+    assert run(installation)["status"] == "changed"
+    assert module.read_bytes() == patched
+    assert module.stat().st_mode & 0o777 == 0o644
+    backup = next(state.glob("*.js"))
+    assert backup.read_bytes() == original
+    assert backup.stat().st_mode & 0o777 == 0o600
+    assert run(installation)["status"] == "unchanged"
+    assert run(installation, restore=True)["status"] == "changed"
+    assert module.read_bytes() == original
+    assert run(installation, restore=True)["status"] == "unchanged"
+
+
+def test_later_runtime_changes_are_not_overwritten_by_restore(installation):
+    run(installation)
+    module = installation[3]
+    module.write_bytes(b"independent package update")
+    with pytest.raises(ValueError, match="differs from reviewed"):
+        run(installation, restore=True)
+    assert module.read_bytes() == b"independent package update"
+
+
+def test_changed_backup_is_not_used(installation):
+    run(installation)
+    next(installation[1].glob("*.js")).write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="backup hash mismatch"):
+        run(installation, restore=True)
+    assert installation[3].read_bytes() == installation[5]
+
+
+def test_interrupted_patched_state_reconstructs_only_reviewed_backup(installation):
+    installation[3].write_bytes(installation[5])
+    assert run(installation)["status"] == "unchanged"
+    assert next(installation[1].glob("*.js")).read_bytes() == installation[4]
+    assert json.loads((installation[1] / "receipt.json").read_text())["desiredSha256"] == hashlib.sha256(installation[5]).hexdigest()
+
+
+def test_source_symlink_and_shared_writes_rejected(installation, tmp_path):
+    module = installation[3]
+    target = tmp_path / "elsewhere"
+    target.write_bytes(installation[4])
+    module.unlink()
+    module.symlink_to(target)
+    with pytest.raises(ValueError, match="owner-controlled"):
+        run(installation)
+    assert target.read_bytes() == installation[4]
+    module.unlink()
+    module.write_bytes(installation[4])
+    module.chmod(0o666)
+    with pytest.raises(ValueError, match="owner-controlled"):
+        run(installation)
+
+
+def test_failed_atomic_replace_leaves_original_and_retryable_custody(installation, monkeypatch):
+    replace = repair_module.os.replace
+    module = installation[3]
+
+    def fail_module(source, destination):
+        if Path(destination) == module:
+            raise OSError("simulated write failure")
+        return replace(source, destination)
+
+    monkeypatch.setattr(repair_module.os, "replace", fail_module)
+    with pytest.raises(OSError, match="simulated"):
+        run(installation)
+    assert module.read_bytes() == installation[4]
+    assert next(installation[1].glob("*.js")).read_bytes() == installation[4]
+    assert list(module.parent.glob(".ods-repair-*")) == []
+    monkeypatch.setattr(repair_module.os, "replace", replace)
+    assert run(installation)["status"] == "changed"
+
+
+def test_other_runtime_versions_are_untouched(installation):
+    runtime = installation[0]
+    (runtime / "package.json").write_text(json.dumps({"name": "openclaw", "version": "future"}))
+    assert run(installation) == {"status": "not-applicable", "version": "future"}
+    assert installation[3].read_bytes() == installation[4]
+    assert not installation[1].exists()

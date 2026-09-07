@@ -1,0 +1,130 @@
+"""ODS compatibility repair for OpenClaw 2026.6.33 unknown-tool recovery.
+
+The reviewed transformation is bound to exact original and replacement bytes.
+OpenClaw's other detectors and limits are unchanged. An owner-private backup
+and receipt retain provenance; --restore refuses to overwrite later changes.
+"""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import tempfile
+
+MANIFEST = Path(__file__).with_name("openclaw-tool-recovery.json")
+MODULE = "tool-loop-detection-C0oQKkXZ.js"
+VERSION = "2026.6.33"
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def read_regular(path):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.getuid() or info.st_mode & 0o022):
+        raise ValueError("runtime repair requires owner-controlled regular files")
+    return path.read_bytes(), stat.S_IMODE(info.st_mode)
+
+
+def atomic_write(path, data, mode=0o600):
+    fd, temporary = tempfile.mkstemp(prefix=".ods-repair-", dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST):
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    package = json.loads((runtime_root / "package.json").read_text(encoding="utf-8"))
+    if package.get("name") != "openclaw":
+        raise ValueError("runtime repair target is not OpenClaw")
+    if package.get("version") != VERSION:
+        return {"status": "not-applicable", "version": package.get("version")}
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = state_dir.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise ValueError("runtime repair state must be an owner-private directory")
+    lock_fd = os.open(state_dir / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        module = runtime_root / "dist" / MODULE
+        current, mode = read_regular(module)
+        before = manifest["sourceSha256"]
+        after = manifest["patchedSha256"]
+        current_hash = digest(current)
+        if current_hash not in {before, after}:
+            raise ValueError("OpenClaw recovery module differs from reviewed bytes")
+        original = current.decode("utf-8")
+        if current_hash == after:
+            for old, new in reversed(manifest["replacements"]):
+                if original.count(new) != 1:
+                    raise ValueError("runtime repair cannot recover reviewed baseline")
+                original = original.replace(new, old)
+        original = original.encode("utf-8")
+        if digest(original) != before:
+            raise ValueError("runtime repair baseline hash mismatch")
+        backup = state_dir / (before + ".js")
+        if backup.exists() or backup.is_symlink():
+            saved, _ = read_regular(backup)
+            if digest(saved) != before:
+                raise ValueError("runtime repair backup hash mismatch")
+        else:
+            atomic_write(backup, original)
+        candidate = original.decode("utf-8")
+        for old, new in manifest["replacements"]:
+            if candidate.count(old) != 1:
+                raise ValueError("runtime repair transformation is not unique")
+            candidate = candidate.replace(old, new)
+        candidate = candidate.encode("utf-8")
+        if digest(candidate) != after:
+            raise ValueError("runtime repair candidate hash mismatch")
+        target = original if restore else candidate
+        receipt = {"schemaVersion": 1, "version": VERSION, "module": MODULE,
+                   "sourceSha256": before, "patchedSha256": after,
+                   "backup": backup.name, "desiredSha256": digest(target)}
+        receipt_path = state_dir / "receipt.json"
+        # Record custody before changing executable bytes, including interrupted
+        # attempts. A rerun recovers only the two reviewed byte states.
+        atomic_write(receipt_path, json.dumps(receipt, sort_keys=True).encode())
+        changed = current != target
+        if changed:
+            latest, _ = read_regular(module)
+            if latest != current:
+                raise ValueError("runtime changed while preparing recovery repair")
+            atomic_write(module, target, mode)
+        if digest(read_regular(module)[0]) != digest(target):
+            raise ValueError("runtime repair readback failed")
+        return {**receipt, "status": "changed" if changed else "unchanged",
+                "restored": restore}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--openclaw-bin", required=True, type=Path)
+    parser.add_argument("--state-dir", required=True, type=Path)
+    parser.add_argument("--restore", action="store_true")
+    args = parser.parse_args()
+    runtime_root = args.openclaw_bin.resolve(strict=True).parent
+    print(json.dumps(repair(runtime_root, args.state_dir, restore=args.restore)))
+
+
+if __name__ == "__main__":
+    main()
