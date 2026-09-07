@@ -88,10 +88,10 @@ export const EDIT_CREATE_LOOP_ABORT_REASON =
   "Pixel stopped this response because it kept retrying edit after the new-file write correction. The workspace is preserved; start a fresh message to retry with write.";
 
 export const REPEATED_WRITE_REQUIRES_PATCH_REASON =
-  "That file was already written successfully in this turn. Preserve it and use edit or apply_patch for the smallest relevant correction; do not rewrite the whole file.";
+  "The write content matches what was previously recorded for that path in this turn. Use edit or apply_patch for the smallest relevant correction instead of rewriting the whole file with identical content; the file on disk may have been deleted or changed externally.";
 
 export const REPEATED_WRITE_RETRY_EXHAUSTED_REASON =
-  "Pixel blocked a repeated full-file rewrite after directing a focused edit. Do not call another tool in this turn. The existing file is preserved; start a fresh message and continue with edit or apply_patch.";
+  "Pixel blocked a second identical-content rewrite of that path after already directing a focused edit. Do not call another tool in this turn; start a fresh message and continue with edit or apply_patch.";
 
 export const FOCUSED_EDIT_REQUIRED_REASON =
   "This edit repeats a large existing file in oldText and newText. Preserve context and make only the smallest unique replacements with edit, or use a focused apply_patch; do not resend the whole file.";
@@ -338,7 +338,7 @@ const WORKSPACE_TOOL_SEARCH_QUERY = "write read edit apply_patch exec process";
 const WORKSPACE_INSPECTION_COMPLETE_REASON =
   "The workspace inspection already completed and returned the directory, kernel, and listing; do not search, list, read the directory, or poll again. Continue the owner's requested task now. If the owner requested new files, call tool_call with id openclaw:core:write and args containing the first workspace-relative path and its full content. Do not call exec or process before that write.";
 const FAILED_TEST_READ_REPAIR_REASON =
-  "The verification command failed. Preserve the owner's explicit behavior contract: correct a test only when its expectation contradicts the owner; otherwise repair the implementation, and never weaken an assertion merely to match broken output. A blank label such as `Invalid integer:` is not a helpful empty-input message. Do not reread a file you just authored or run another diagnostic when the failure already contains actual and expected evidence. Apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If that evidence is insufficient, give the owner a visible blocker instead of repeating reads or tests.";
+  "The verification command failed. Preserve the owner's explicit behavior contract: correct a test only when its expectation contradicts the owner; otherwise repair the implementation, and never weaken an assertion merely to match broken output. A blank label such as `Invalid integer:` is not a helpful empty-input message. When the failure already contains actual and expected evidence, apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If the failure is a missing-file error for a file you previously wrote, recreate it before rerunning. If evidence is insufficient, read the relevant file or run a focused diagnostic, then repair and rerun verification. Report an unresolved blocker honestly when the available tools cannot resolve it.";
 const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ops_download_stage",
   "pixel_ops_job_get",
@@ -5441,7 +5441,6 @@ export function createToolLoopGuard({
         workspaceToolSearchQueries: new Set(),
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
-        failedTestReadCorrections: 0,
         invalidUnittestBlocks: 0,
         invalidParsedJsonBlocks: 0,
         noOpEditBlocks: 0,
@@ -6251,35 +6250,40 @@ export function createToolLoopGuard({
       return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
     }
     if (state) {
-      const selectedReadPath = selectedToolName === "read"
-        ? normalizeWorkspaceFilePath(selectedParams?.path)
-        : undefined;
-      if (
-        state.latestVerificationStatus === "failed" &&
-        selectedReadPath &&
-        state.successfulWritePaths.has(selectedReadPath) &&
-        /(?:^|\/)test[^/]*\.[A-Za-z0-9]+$/i.test(selectedReadPath)
-      ) {
-        if (state.failedTestReadCorrections === 0) {
-          state.failedTestReadCorrections = 1;
-          return { block: true, blockReason: FAILED_TEST_READ_REPAIR_REASON };
-        }
-        state.codingExhausted = true;
-        state.codingTerminalBlocks = 1;
-        return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
-      }
       const writePath = selectedToolName === "write"
         ? normalizeWorkspaceFilePath(selectedParams?.path)
         : undefined;
       if (writePath && state.successfulWritePaths.has(writePath)) {
-        const blocks = state.repeatedWriteBlocks.get(writePath) ?? 0;
-        state.repeatedWriteBlocks.set(writePath, blocks + 1);
-        if (blocks === 0) {
-          return { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON };
+        const previousContent =
+          state.successfulWriteContentByPath.get(writePath);
+        const newContent = selectedParams?.content;
+        /* Only block a repeated write when the content is identical
+         * (true no-progress loop).  A materially different write is
+         * allowed because the file may have been deleted, externally
+         * modified, or needs a complete rewrite that CAS cannot handle.
+         * The CAS adaptation above still converts bounded workspace-task
+         * repairs to compare-and-swap edits when possible. */
+        if (
+          typeof previousContent === "string" &&
+          typeof newContent === "string" &&
+          previousContent === newContent
+        ) {
+          const blocks =
+            state.repeatedWriteBlocks.get(writePath) ?? 0;
+          state.repeatedWriteBlocks.set(writePath, blocks + 1);
+          if (blocks === 0) {
+            return {
+              block: true,
+              blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON,
+            };
+          }
+          state.codingExhausted = true;
+          state.codingTerminalBlocks = 1;
+          return {
+            block: true,
+            blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
+          };
         }
-        state.codingExhausted = true;
-        state.codingTerminalBlocks = 1;
-        return { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON };
       }
       if (selectedToolName === "edit" && noOpEdit(selectedParams)) {
         if (state.noOpEditBlocks === 0) {
@@ -7705,6 +7709,47 @@ export function createToolLoopGuard({
       : undefined;
     if (completedReadPath) {
       state.successfulReadPaths.add(completedReadPath);
+    }
+    /* Missing-file recovery: when a read of a path we previously wrote fails
+     * with a structurally matched ENOENT/no-such-file error, invalidate only
+     * that path's stale write-content / compare-swap / repeated-write state
+     * so recreating it (even with identical original bytes) is allowed.
+     * Do not invalidate on unrelated/ambiguous read errors. */
+    const failedRead =
+      completedRead && toolCallFailed(completedRead)
+        ? completedRead
+        : undefined;
+    if (failedRead) {
+      const readPath = normalizeWorkspaceFilePath(failedRead.params?.path);
+      const result = failedRead.result;
+      const details = result?.details;
+      const missingDetails = details && typeof details === "object" &&
+        !Array.isArray(details) ? details : undefined;
+      const detailsPathMatches = missingDetails?.path === undefined ||
+        normalizeWorkspaceFilePath(missingDetails.path) === readPath;
+      const hasStructuredEnoent = missingDetails?.code === "ENOENT" &&
+        detailsPathMatches;
+      // A read can fail for a dependency rather than the requested file.
+      // Match the whole error and its path, never a filename substring.
+      const hasTextMissingFileEvidence =
+        (!missingDetails?.code || missingDetails.code === "ENOENT") &&
+        detailsPathMatches && Array.isArray(result?.content) &&
+        result.content.some((block) => {
+          if (block?.type !== "text" || typeof block.text !== "string") return false;
+          const text = block.text.trim();
+          const match = text.match(/^(?:Error:\s*)?ENOENT:\s*no such file or directory, (?:open|stat|lstat) ['"]([^'"\r\n]+)['"]$/i) ||
+            text.match(/^Error:\s*(?:File not found|No such file or directory): (.+)$/i);
+          return Boolean(match && normalizeWorkspaceFilePath(match[1]) === readPath);
+        });
+      if (
+        readPath &&
+        (hasStructuredEnoent || hasTextMissingFileEvidence) &&
+        state.successfulWritePaths.has(readPath)
+      ) {
+        state.successfulWriteContentByPath.delete(readPath);
+        state.repeatedWriteBlocks.delete(readPath);
+        state.compareSwapRepairCounts.delete(readPath);
+      }
     }
     const wrappedPreviewEvent =
       toolName === "tool_call" &&

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -591,7 +591,7 @@ test("rejects identical edits as bounded no-progress repairs", () => {
   );
 });
 
-test("requires focused edits after a successful write without narrowing workspace authority", () => {
+test("allows materially different repeated writes while blocking identical no-progress loops", () => {
   const guard = createToolLoopGuard();
   const firstWrite = call(guard, "tool_call", {
     event: {
@@ -610,14 +610,26 @@ test("requires focused edits after a successful write without narrowing workspac
     },
   });
 
-  assert.deepEqual(
-    call(guard, "tool_call", {
-      event: {
-        params: { id: "write", args: { path: "cache.py", content: "replacement\n" } },
-      },
-    }),
-    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
-  );
+  // A materially different rewrite is allowed (file may have been deleted,
+  // externally modified, or need a complete replacement that CAS cannot handle).
+  const replacement = call(guard, "tool_call", {
+    event: {
+      toolCallId: "write-replacement",
+      params: { id: "write", args: { path: "cache.py", content: "replacement\n" } },
+    },
+    context: { toolCallId: "write-replacement" },
+  });
+  assert.ok(!replacement || !replacement.block,
+    "replacement write with different content is not blocked");
+  afterCall(guard, "tool_call", {
+    event: {
+      params: replacement?.params ?? { id: "write", args: { path: "cache.py", content: "replacement\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 11 bytes to cache.py" }],
+      }),
+    },
+  });
+  // edit and apply_patch remain available for targeted corrections.
   assert.deepEqual(
     call(guard, "tool_call", {
       event: {
@@ -645,10 +657,19 @@ test("requires focused edits after a successful write without narrowing workspac
     }),
     undefined
   );
+  // An identical-content repeated write is still blocked (true no-progress loop).
   assert.deepEqual(
     call(guard, "tool_call", {
       event: {
-        params: { id: "write", args: { path: "cache.py", content: "replacement again\n" } },
+        params: { id: "write", args: { path: "cache.py", content: "replacement\n" } },
+      },
+    }),
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
+  );
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "cache.py", content: "replacement\n" } },
       },
     }),
     { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON }
@@ -753,10 +774,19 @@ test("turns bounded post-failure rewrites of run-created files into compare-and-
   afterCall(guard, "exec", {
     event: { params: verification, result: { isError: true, details: { exitCode: 1 } } },
   });
+  // After CAS repairs are exhausted, a materially different write is still
+  // allowed because the file may have been deleted or CAS evidence is stale.
+  const postCasWrite = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "probe.py", content: "value = 5\n" } },
+    },
+  });
+  assert.equal(postCasWrite.block, undefined, "post-CAS write with different content is allowed");
+  // But an identical-content repeat of the last tracked content is blocked.
   assert.deepEqual(
     call(guard, "tool_call", {
       event: {
-        params: { id: "write", args: { path: "probe.py", content: "value = 5\n" } },
+        params: { id: "write", args: { path: "probe.py", content: "value = 4\n" } },
       },
     }),
     { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
@@ -1698,15 +1728,12 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     cwd: "/workspace/project",
   });
 
+  // Reading a failing test after verification failure is now allowed as a
+  // normal repair step; the agent may need to see what it wrote to diagnose.
   const rereadTest = call(guard, "tool_call", {
     event: { params: { id: "read", args: { path: "test_normalize_name.py" } } },
   });
-  assert.equal(rereadTest.block, true);
-  assert.match(rereadTest.blockReason, /verification command failed/);
-  assert.match(
-    rereadTest.blockReason,
-    /file implicated by the failure \(test or implementation\)/
-  );
+  assert.equal(rereadTest.block, undefined, "reading a failing test is permitted");
 });
 
 test("binds writes under a naturally named new workspace directory", () => {
@@ -10870,4 +10897,593 @@ test("browser tool interaction and preservation do not demand website delivery",
     "Preserve other apps while you build a new browser app in /workspace/demo/index.html.",
     "Preserve existing apps; publish my website through the ODS preview.",
   ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+});
+
+// ---- Missing-file recovery regressions ----
+
+test("missing-file recovery: write -> explicit ENOENT read -> identical recreate is allowed", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  // Write the file
+  const writeResult = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "cache.py", content: "value = 42\n" } },
+    },
+    context: { toolCallId: "w1" },
+  });
+  assert.ok(!writeResult || !writeResult.block, "initial write is not blocked");
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "cache.py", content: "value = 42\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 11 bytes to cache.py" }],
+      }),
+    },
+  });
+
+  // Without a missing-file read, a second identical write IS blocked
+  const blockedBeforeRecovery = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "cache.py", content: "value = 42\n" } },
+    },
+  });
+  assert.deepEqual(
+    blockedBeforeRecovery,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "identical write blocked before recovery"
+  );
+
+  // Now the file has been deleted (e.g. by a test script). Agent tries to read it
+  // and gets an explicit ENOENT error.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "cache.py" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        details: { code: "ENOENT" },
+      }),
+    },
+  });
+
+  // After ENOENT evidence, an identical-content recreate is now allowed
+  const recreateAfterEnoent = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "cache.py", content: "value = 42\n" } },
+    },
+  });
+  assert.ok(
+    !recreateAfterEnoent || !recreateAfterEnoent.block,
+    "identical recreate after ENOENT read is allowed"
+  );
+
+  // Verify the write actually goes through
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "cache.py", content: "value = 42\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 11 bytes to cache.py" }],
+      }),
+    },
+  });
+});
+
+test("missing-file recovery: text-based missing-file error also invalidates stale state", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  // Write the file
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "data.txt", content: "original\n" } },
+    },
+    context: { toolCallId: "w2" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "data.txt", content: "original\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 8 bytes to data.txt" }],
+      }),
+    },
+  });
+
+  // Read fails with text-based "not found" error
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "data.txt" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        content: [{ type: "text", text: "Error: File not found: data.txt" }],
+      }),
+    },
+  });
+
+  // Identical-content write must now be allowed
+  const r = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "data.txt", content: "original\n" } },
+    },
+  });
+  assert.ok(!r || !r.block, "identical write allowed after text-based missing-file error");
+});
+
+test("missing-file recovery: unrelated read error does NOT invalidate write state", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  // Write the file
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "safe.py", content: "print('ok')\n" } },
+    },
+    context: { toolCallId: "w3" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "safe.py", content: "print('ok')\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 12 bytes to safe.py" }],
+      }),
+    },
+  });
+
+  // A failed read of a DIFFERENT path (permission denied, network error, etc.)
+  // must NOT invalidate safe.py's write state
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "other.py" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        details: { exitCode: 13 },
+      }),
+    },
+  });
+
+  // safe.py's identical write must STILL be blocked
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "safe.py", content: "print('ok')\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "unrelated read error must not invalidate write state"
+  );
+});
+
+test("missing-file recovery: ambiguous read error (no ENOENT) does NOT invalidate", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "strict.py", content: "x = 1\n" } },
+    },
+    context: { toolCallId: "w4" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "strict.py", content: "x = 1\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 5 bytes to strict.py" }],
+      }),
+    },
+  });
+
+  // Read fails with a generic error that does NOT contain ENOENT/not-found evidence
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "strict.py" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        details: { exitCode: 1 },
+      }),
+    },
+  });
+
+  // Must still block the identical write
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "strict.py", content: "x = 1\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "ambiguous read error must not invalidate write state"
+  );
+});
+
+test("identical write no-op protection: without missing-file evidence, identical writes remain blocked", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "nop.py", content: "a = 1\n" } },
+    },
+    context: { toolCallId: "w5" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "nop.py", content: "a = 1\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 5 bytes to nop.py" }],
+      }),
+    },
+  });
+
+  // Different content is allowed (not identical to tracked content)
+  const diff = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "nop.py", content: "a = 2\n" } },
+    },
+  });
+  assert.ok(!diff || !diff.block, "different content is allowed");
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "nop.py", content: "a = 2\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 5 bytes to nop.py" }],
+      }),
+    },
+  });
+
+  // Now identical to tracked content (a = 2) is blocked
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "nop.py", content: "a = 2\n" } },
+      },
+    }),
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
+  );
+
+  // Second identical retry → REPEATED_WRITE_RETRY_EXHAUSTED_REASON
+  assert.deepEqual(
+    call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "nop.py", content: "a = 2\n" } },
+      },
+    }),
+    { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON }
+  );
+});
+
+test("missing-file recovery: conflicting-path error does NOT invalidate (ENOENT mentions a different file)", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "target.py", content: "x = 1\n" } },
+    },
+    context: { toolCallId: "wc1" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "target.py", content: "x = 1\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 5 bytes to target.py" }],
+      }),
+    },
+  });
+
+  // Read of target.py fails with EACCES but error text mentions a DIFFERENT file (other.conf) as ENOENT.
+  // This must NOT invalidate target.py's write state.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "target.py" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        details: { code: "EACCES" },
+        content: [{ type: "text", text: "Error: EACCES: permission denied, open '/workspace/project/target.py'; also see ENOENT for other.conf" }],
+      }),
+    },
+  });
+
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "target.py", content: "x = 1\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "EACCES with unrelated ENOENT mention must not invalidate target.py"
+  );
+});
+
+test("missing-file recovery: ambiguous prose (not a real error) does NOT invalidate", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "doc.md", content: "# Hello\n" } },
+    },
+    context: { toolCallId: "wa1" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "doc.md", content: "# Hello\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 7 bytes to doc.md" }],
+      }),
+    },
+  });
+
+  // Read fails with a generic error whose text contains the word "not found" but is not
+  // in the OpenClaw error format (no "Error:" prefix) and does not mention the path.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "doc.md" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        content: [{ type: "text", text: "The search returned nothing. File not found in index." }],
+      }),
+    },
+  });
+
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "doc.md", content: "# Hello\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "ambiguous prose without Error: prefix must not invalidate"
+  );
+});
+
+test("missing-file recovery: wrong wrapped tool (exec ENOENT) does NOT invalidate read state", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "script.sh", content: "#!/bin/sh\n" } },
+    },
+    context: { toolCallId: "we1" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "script.sh", content: "#!/bin/sh\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 10 bytes to script.sh" }],
+      }),
+    },
+  });
+
+  // A failed exec (not a read) that happens to mention ENOENT must not
+  // be treated as missing-file evidence for script.sh.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "exec", args: { command: "cat script.sh" } },
+      result: wrappedCoreResult("exec", {
+        isError: true,
+        details: { exitCode: 1 },
+        content: [{ type: "text", text: "cat: script.sh: No such file or directory" }],
+      }),
+    },
+  });
+
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "script.sh", content: "#!/bin/sh\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "exec ENOENT must not be treated as read missing-file evidence"
+  );
+});
+
+test("missing-file recovery: unrelated-path error (ENOENT on different file) does NOT invalidate", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "app.py", content: "main()\n" } },
+    },
+    context: { toolCallId: "wu1" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "app.py", content: "main()\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 6 bytes to app.py" }],
+      }),
+    },
+  });
+
+  // Read of a completely different path fails with ENOENT text that mentions
+  // a file path unrelated to app.py.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "other.txt" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        content: [{ type: "text", text: "Error: File not found: /workspace/project/missing.txt" }],
+      }),
+    },
+  });
+
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "app.py", content: "main()\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "ENOENT on a different path must not invalidate app.py"
+  );
+});
+
+test("missing-file recovery: details: null must not throw (typeof null is object)", () => {
+  const guard = createToolLoopGuard({
+    workspaceRoot: "/workspace/project",
+  });
+
+  call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "null_details.py", content: "x = 1\n" } },
+    },
+    context: { toolCallId: "wn1" },
+  });
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "null_details.py", content: "x = 1\n" } },
+      result: wrappedCoreResult("write", {
+        content: [{ type: "text", text: "Successfully wrote 5 bytes to null_details.py" }],
+      }),
+    },
+  });
+
+  // Read fails with details explicitly set to null — must not throw.
+  afterCall(guard, "tool_call", {
+    event: {
+      params: { id: "read", args: { path: "null_details.py" } },
+      result: wrappedCoreResult("read", {
+        isError: true,
+        details: null,
+      }),
+    },
+  });
+
+  // Write must still be blocked (no missing-file evidence when details is null)
+  const stillBlocked = call(guard, "tool_call", {
+    event: {
+      params: { id: "write", args: { path: "null_details.py", content: "x = 1\n" } },
+    },
+  });
+  assert.deepEqual(
+    stillBlocked,
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+    "details:null must not throw and must not invalidate write state"
+  );
+});
+
+test("missing-file recovery: actual filesystem write -> delete -> read ENOENT -> recreate -> verify", () => {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), "enoent-regression-"));
+  try {
+    const guard = createToolLoopGuard({
+      workspaceRoot: tmpDir,
+    });
+
+    // Write the file to disk (real filesystem)
+    const realPath = path.join(tmpDir, "regression.txt");
+    writeFileSync(realPath, "original content\n");
+
+    // Simulate a successful write in the guard
+    call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "regression.txt", content: "original content\n" } },
+      },
+      context: { toolCallId: "wfs1" },
+    });
+    afterCall(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "regression.txt", content: "original content\n" } },
+        result: wrappedCoreResult("write", {
+          content: [{ type: "text", text: "Successfully wrote 16 bytes to regression.txt" }],
+        }),
+      },
+    });
+
+    // Verify identical write is blocked before deletion
+    const blockedBefore = call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "regression.txt", content: "original content\n" } },
+      },
+    });
+    assert.deepEqual(
+      blockedBefore,
+      { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON },
+      "identical write blocked before deletion"
+    );
+
+    // Actually delete the file from disk
+    rmSync(realPath);
+    assert.ok(!statSync(realPath, { throwIfNoEntry: false }), "file actually deleted");
+
+    // Obtain an actual filesystem ENOENT before notifying the guard.
+    let missingError;
+    try { readFileSync(realPath); } catch (error) { missingError = error; }
+    assert.equal(missingError?.code, "ENOENT");
+    assert.equal(missingError?.path, realPath);
+    afterCall(guard, "tool_call", {
+      event: {
+        params: { id: "read", args: { path: "regression.txt" } },
+        result: wrappedCoreResult("read", {
+          isError: true,
+          details: { code: missingError.code },
+        }),
+      },
+    });
+
+    // Identical-content recreate must now be allowed
+    const recreate = call(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "regression.txt", content: "original content\n" } },
+      },
+    });
+    assert.ok(
+      !recreate || !recreate.block,
+      "identical recreate after real deletion + ENOENT is allowed"
+    );
+
+    // Complete the recreate
+    afterCall(guard, "tool_call", {
+      event: {
+        params: { id: "write", args: { path: "regression.txt", content: "original content\n" } },
+        result: wrappedCoreResult("write", {
+          content: [{ type: "text", text: "Successfully wrote 16 bytes to regression.txt" }],
+        }),
+      },
+    });
+
+    // Actually write the file back to disk
+    writeFileSync(realPath, "original content\n");
+    const stat = statSync(realPath, { throwIfNoEntry: false });
+    assert.ok(stat && stat.isFile(), "file actually recreated on disk");
+    assert.equal(readFileSync(realPath, "utf8"), "original content\n");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+
+test("missing-file evidence binds the exact read path and error code", async (t) => {
+  for (const [name, result, allowed] of [
+    ["similar filename", {isError:true, content:[{type:"text",text:"Error: File not found: other-target.py"}]}, false],
+    ["different structured path", {isError:true,details:{code:"ENOENT",path:"other.py"}}, false],
+    ["conflicting error code", {isError:true,details:{code:"EACCES"},content:[{type:"text",text:"Error: File not found: target.py"}]}, false],
+    ["unrelated prose", {isError:true,content:[{type:"text",text:"While reading target.py: Error: File not found: dependency.py"}]}, false],
+    ["actual Node read error", {isError:true,content:[{type:"text",text:"ENOENT: no such file or directory, open '/workspace/target.py'"}]}, true],
+    ["exact structured path", {isError:true,details:{code:"ENOENT",path:"/workspace/target.py"}}, true],
+  ]) await t.test(name, () => {
+    const guard=createToolLoopGuard();
+    const params={id:"write",args:{path:"target.py",content:"x = 1\n"}};
+    call(guard,"tool_call",{event:{params}});
+    afterCall(guard,"tool_call",{event:{params,result:wrappedCoreResult("write",{content:[{type:"text",text:"Successfully wrote 6 bytes to target.py"}]})}});
+    afterCall(guard,"tool_call",{event:{params:{id:"read",args:{path:"target.py"}},result:wrappedCoreResult("read",result)}});
+    const next=call(guard,"tool_call",{event:{params}});
+    assert.equal(Boolean(next?.block), !allowed);
+  });
 });
