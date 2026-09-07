@@ -3925,6 +3925,7 @@ export function userMessageRequestsExtensionCatalog(messages, prompt = undefined
     /\b(?:extension|extensions)\s+catalog\b/i.test(text) ||
     /\b(?:search|browse|find)\b[^.!?;\n]{0,80}\b(?:installable|supported|available)?\s*(?:ODS\s+)?extensions?\b/i.test(text) ||
     /\binstallable\b[^.!?;\n]{0,80}\b(?:ODS\s+)?extensions?\b/i.test(text);
+  if (!explicitCatalog && userMessageExtensionLifecycleIntent(messages, prompt)) return false;
   if (requestsLiveState && !explicitCatalog) return false;
   return (
     explicitCatalog ||
@@ -4068,12 +4069,20 @@ export function userMessageExtensionCatalogExactQuery(messages, prompt = undefin
 }
 
 export function userMessageExtensionLifecycleIntent(messages, prompt = undefined) {
-  const text = currentUserText(messages, prompt);
+  const text = currentOwnerIntentText(messages, prompt);
   if (!text) return undefined;
   const match = text.match(
     /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:(?:installed|existing|enabled|disabled)\s+)?(?:ODS\s+)?extension\s+(?:(?:with\s+)?(?:the\s+)?(?:exact\s+)?id\s+)?[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
+  ) ?? text.match(
+    /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?[`"']?((?!ODS\b|extension\b)[a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})[`"']?\s+(?:as\s+(?:an?\s+)?|(?:as\s+)?the\s+)?(?:ODS\s+)?extension\b/i
   );
   if (!match) return undefined;
+  // Naming the extension before its type is ordinary owner language. It
+  // still selects one exact ID and the same inspected, approval-bound action.
+  // A quoted explanation or negated request must not select a lifecycle task.
+  const prefix = text.slice(0, match.index).split(/[!?;\n]|\.(?=\s|$)/).at(-1);
+  if (/\b(?:not|don['’]t|never|avoid|skip|without|explain|example|tutorial)\b/i.test(prefix) ||
+      /[`"']\s*$/.test(prefix)) return undefined;
   const requested = match[1].toLowerCase();
   return {
     action: requested === "uninstall" ? "remove" : requested,

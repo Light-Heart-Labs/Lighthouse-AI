@@ -3996,6 +3996,27 @@ test("binds Operations continuation only to one exact current-message job and pl
   );
 });
 
+test("routes ID-first extension requests without treating explanations as lifecycle authority", () => {
+  const prompt = "Install Gitea as an ODS extension on this test instance using the supported ODS extension manager. Use its normal local defaults, verify its actual service health, and give me the local URL. Preserve existing services and data. Do not create external accounts or send messages.";
+  assert.deepEqual(userMessageExtensionLifecycleIntent([], prompt),
+    { action: "install", serviceId: "gitea" });
+  assert.deepEqual(userMessageOperationsRequirements([], prompt),
+    { required: true, actions: ["ods.extensions.inspect", "ods.extensions.install"] });
+  for (const [request, expected] of [
+    ["Enable the `vendor.crewai` ODS extension.", { action: "enable", serviceId: "vendor.crewai" }],
+    ["Uninstall n8n as an extension.", { action: "remove", serviceId: "n8n" }],
+    ["Disable Gitea extension.", { action: "disable", serviceId: "gitea" }],
+  ]) assert.deepEqual(userMessageExtensionLifecycleIntent([], request), expected);
+  for (const request of [
+    "Do not install Gitea as an ODS extension.",
+    "Don't enable the ODS extension gitea.",
+    "Explain how to install Gitea as an ODS extension.",
+    'The example says "install Gitea as an ODS extension". Only describe it.',
+    `Install ${"a".repeat(65)} as an ODS extension.`,
+    "Inspect Gitea extension state without installing anything.",
+  ]) assert.equal(userMessageExtensionLifecycleIntent([], request), undefined, request);
+});
+
 test("routes one local host command to a canonical immutable approval proposal", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
