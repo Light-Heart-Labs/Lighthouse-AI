@@ -105,6 +105,16 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       {env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true});
     let log = ''; child.stdout.on('data', b => { log += b; }); child.stderr.on('data', b => { log += b; });
     const exit = once(child, 'exit');
+    const closed = once(child, 'close');
+    let stopping;
+    const stopGateway = () => stopping ??= (async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try { process.kill(-child.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        await Promise.race([exit, delay(3000)]);
+        if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL');
+      }
+      await closed;
+    })();
     try {
       let ready = false;
       for (let i = 0; i < 200 && child.exitCode === null; i++) {
@@ -175,6 +185,10 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       } else {
         for (const request of requests) assert.ok(runs.some(run => request.auth === 'Bearer fixture-lease-' + run.runId));
       }
+      // Inspect durable state after the sole gateway writer has exited and its
+      // streams have closed. Scanning a live sessions.json atomic replacement
+      // can race a temporary file rename, and misses writes made on shutdown.
+      await stopGateway();
       const privateState = join(root, 'state');
       for (const item of readdirSync(privateState, {recursive: true, withFileTypes: true})) {
         if (item.isFile()) {
@@ -187,17 +201,12 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       writeFileSync(join(root, 'result.json'), JSON.stringify({runtime: '2026.6.33', requests: 5,
         nativeSessionCount: 3, turns: 5, toolEffects: 1, deniedWithoutInference: true,
         perRunCredentials: true, maxParallelActive, credentialsNotPersisted: true, privateWorker: workerMode,
-        exactReleaseCount: 5, gatewayPid: child.pid}));
+        exactReleaseCount: 5, gatewayPid: child.pid, gatewayStoppedBeforeStateScan: true}));
       console.log('Evidence:', root);
     } finally {
+      await stopGateway();
       writeFileSync(join(root, 'gateway.log'), log, {mode: 0o600});
       writeFileSync(join(root, 'requests.json'), JSON.stringify(requests), {mode: 0o600});
-      if (child.exitCode === null) {
-        process.kill(-child.pid, 'SIGTERM');
-        await Promise.race([exit, delay(3000)]);
-        if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL');
-      }
-      await exit;
     }
     } finally {
       upstream.closeAllConnections(); await new Promise(r => upstream.close(r));
