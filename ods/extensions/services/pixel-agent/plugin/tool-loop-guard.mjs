@@ -4794,7 +4794,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   // A no-website constraint on a Python task is not a website request. Keep
   // independent actions after "but", "instead", "then", or a sentence boundary.
   const actionText = text.replace(
-    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without|no)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
+    /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|not\s+a\s+request\s+to|avoid|skip|without|no)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
     " "
   ).replace(
     /\b(?:preserve|keep)\s+(?:(?:all|my|the|these|those|other|existing|current|saved|working)\s+)*(?:apps?|applications?)\b(?:\s+unchanged)?/gi,
@@ -4804,9 +4804,9 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   // replace its result with a demand to create and publish new site files.
   // An independent build, revision or publication still requests delivery.
   const browserToolUse =
-    /\b(?:browser|playwright|chromium)\b[^.!?;\n]{0,64}\b(?:tools?|automation|capabilit(?:y|ies))\b/i.test(actionText) ||
+    /\b(?:browser|playwright|chromium)\b[^.!?;\n]{0,64}\b(?:tools?|automation|capabilit(?:y|ies)|profiles?|inspection)\b/i.test(actionText) ||
     /\b(?:use|using)\b[^.!?;\n]{0,40}\b(?:browser|playwright|chromium)\b/i.test(actionText);
-  const browserInteraction = /\b(?:click|exercise|interact|test|navigate|browse)\b/i.test(actionText);
+  const browserInteraction = /\b(?:click|exercise|interact|test|navigate|browse|open|inspect|inspection|capture|screenshot|snapshot)\b/i.test(actionText);
   const requestedArtifactChange =
     /\b(?:build|create|develop|design|generate|implement|write|edit|fix|repair|modify|update|publish|republish|serve)\b/i.test(actionText);
   if (browserToolUse && browserInteraction && !requestedArtifactChange) return false;

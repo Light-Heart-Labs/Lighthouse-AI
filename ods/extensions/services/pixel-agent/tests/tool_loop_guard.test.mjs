@@ -11360,6 +11360,24 @@ test("workspace requests do not combine unrelated clauses into app or extension 
   }
 });
 
+test("browser screenshots and read-only follow-ups preserve the browser answer", () => {
+  for (const prompt of [
+    "Use the configured isolated browser profile ods-qualification to open the published voxel-waterfall-lab preview at http://127.0.0.1:3001/pixel-preview/site-eea5acf51ccc56ae9458eb74/ . Capture one screenshot, then obtain the page's accessible snapshot or title using a further browser tool call. Report the actual page title and controls from textual browser evidence. If this model cannot inspect images, say so; do not claim visual observations from the screenshot. Leave the website files and all settings unchanged.",
+    "Continue the read-only browser inspection in the same isolated tab. Get its textual console errors and an accessible snapshot now, after the screenshot from the previous turn. Report only that observed browser evidence, including any rendering error. This is not a request to build, edit or publish a website; preserve every file and setting.",
+    "Use the browser tools to open the site at http://127.0.0.1:3001/ and capture one screenshot, then get the page title with a further browser tool call.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "browser-session" }, "pixel", { prompt });
+    assert.equal(reply(guard, { event: { payload: { text: "Observed page title: Voxel Waterfall Lab." } } }), undefined, prompt);
+  }
+  for (const prompt of [
+    "Use the browser profile to capture a screenshot, then repair and publish the website.",
+    "This is not a request to build a website; instead publish the existing demo/index.html.",
+    "Use browser inspection to check this website, then build a new dashboard and publish it.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+});
+
 test("browser tool interaction and preservation do not demand website delivery", () => {
   const nonDelivery = [
     "Test the actual browser capability available to you in this ODS installation. Discover the exact browser tool, then if available use it to open the existing unit-lab preview and exercise a0Cto32F conversion. Use an isolated browser; do not attach personal browser profiles. Report actual tool results. If the capability is unavailable, identify the concrete missing tool or runtime from its result rather than claiming a browser test or substituting HTTP readback.",
