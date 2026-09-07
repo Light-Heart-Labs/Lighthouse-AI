@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { render } from '../test/test-utils'
 import { act } from '@testing-library/react'
 
@@ -219,6 +219,44 @@ describe('Pixel', () => {
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
     expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open the verified preview' })).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
+  })
+
+  it('renders agent tables and task lists while keeping unsafe content inert', async () => {
+    const content = [
+      '**Files in log-lab:**',
+      '| File | Size | Description |',
+      '|------|-----:|-------------|',
+      '| `log_analyzer.py` | 7263 B | Unicode 世界 |',
+      '| [unsafe](javascript:alert%281%29) | 0 | <img src=x onerror="alert(1)"> |',
+      '',
+      '- [x] Export completed',
+      '- [ ] Review output',
+      '',
+      '```python',
+      'print("hello")',
+      '```',
+    ].join('\n')
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1,
+      chatId: 'table-regression',
+      messages: [{ role: 'assistant', content }],
+    }))
+    globalThis.fetch.mockResolvedValue(response({ available: true, model: 'pixel/default' }))
+    const { container } = render(<Pixel />)
+    await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
+    const table = screen.getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'File' })).toBeInTheDocument()
+    expect(within(table).getByRole('cell', { name: '7263 B' })).toBeInTheDocument()
+    expect(within(table).getByText('log_analyzer.py').tagName).toBe('CODE')
+    expect(within(table).getByText('Unicode 世界')).toBeInTheDocument()
+    expect(within(table).queryByRole('link', { name: 'unsafe' })).not.toBeInTheDocument()
+    expect(container.querySelector('img[src="x"]')).toBeNull()
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes).toHaveLength(2)
+    expect(checkboxes[0]).toBeChecked()
+    expect(checkboxes[1]).not.toBeChecked()
+    checkboxes.forEach(checkbox => expect(checkbox).toBeDisabled())
+    expect(container.querySelector('pre code')).toHaveTextContent('print("hello")')
   })
 
   it.each([

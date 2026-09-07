@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Link } from 'react-router-dom'
 import {
   AlertCircle,
@@ -29,10 +30,15 @@ const MARKDOWN_COMPONENTS = {
   li: ({ children }) => <li className="break-words">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  code: ({ inline, children }) => inline
-    ? <code className="rounded border border-theme-border bg-theme-bg/70 px-1 py-0.5 font-mono text-[13px] text-theme-text">{children}</code>
-    : <code className="block whitespace-pre-wrap break-words rounded bg-theme-bg/70 p-2 font-mono text-[13px] text-theme-text">{children}</code>,
-  pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded border border-theme-border bg-theme-bg/70">{children}</pre>,
+  code: ({ children }) => <code className="rounded bg-theme-bg/70 px-1 py-0.5 font-mono text-[13px] text-theme-text">{children}</code>,
+  pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded border border-theme-border bg-theme-bg/70 [&>code]:block [&>code]:p-2">{children}</pre>,
+  table: ({ children }) => (
+    <div role="region" aria-label="Scrollable table" tabIndex={0} className="my-3 max-w-full overflow-x-auto rounded border border-theme-border">
+      <table className="w-full border-collapse text-left text-sm">{children}</table>
+    </div>
+  ),
+  th: ({ children, style }) => <th scope="col" style={style} className="border-b border-theme-border bg-theme-bg/70 px-3 py-2 font-semibold">{children}</th>,
+  td: ({ children, style }) => <td style={style} className="border-b border-theme-border px-3 py-2 align-top [overflow-wrap:anywhere]">{children}</td>,
   a: ({ href, children }) => {
     const safe = typeof href === 'string' && /^https?:\/\//i.test(href)
     // The viewer may reach ODS through a remote host or SSH forward. A local
@@ -1035,7 +1041,7 @@ export default function Pixel({ systemStatus = null }) {
               )}
               {message.role === 'assistant' && message.content ? (
                 <>
-                  <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>
                   <OperationsApprovalCard content={message.content} />
                 </>
               ) : (
