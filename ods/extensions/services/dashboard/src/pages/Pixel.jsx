@@ -35,8 +35,15 @@ const MARKDOWN_COMPONENTS = {
   pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded border border-theme-border bg-theme-bg/70">{children}</pre>,
   a: ({ href, children }) => {
     const safe = typeof href === 'string' && /^https?:\/\//i.test(href)
+    // The viewer may reach ODS through a remote host or SSH forward. A local
+    // snapshot URL in a reply must use the same authenticated dashboard relay
+    // as the preview pane, including after the pane is closed or chat restored.
+    const snapshot = safe && href.match(/^http:\/\/(site-[a-f0-9]{24})\.localhost:([1-9][0-9]{0,4})\/\1\/$/)
+    const target = snapshot && Number(snapshot[2]) <= 65535
+      ? `/pixel-preview/${snapshot[1]}/`
+      : href
     return safe
-      ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-theme-accent-light underline">{children}</a>
+      ? <a href={target} target="_blank" rel="noopener noreferrer" className="text-theme-accent-light underline">{children}</a>
       : <span>{children}</span>
   },
 }

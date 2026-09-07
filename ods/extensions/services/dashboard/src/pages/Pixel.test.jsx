@@ -176,7 +176,7 @@ describe('Pixel', () => {
       response({ available: true, model: 'pixel/default', detail: 'local' })
     )
     globalThis.fetch.mockResolvedValueOnce(sseResponse([
-      JSON.stringify({ choices: [{ delta: { content: `Preview: ${preview.url}` } }] }),
+      JSON.stringify({ choices: [{ delta: { content: `[Open the verified preview](${preview.url})\n\n[Documentation](https://example.com/docs)\n\n[Other host](http://${siteId}.localhost.example.com:9437/${siteId}/)` } }] }),
       JSON.stringify({
         choices: [{ delta: {}, finish_reason: 'stop' }],
         pixel: { schemaVersion: 1, preview },
@@ -196,6 +196,9 @@ describe('Pixel', () => {
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads')
     expect(screen.getByText('Host verified · 3 files')).toBeInTheDocument()
     expect(screen.getByTitle('Open preview in a new tab')).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
+    expect(screen.getByRole('link', { name: 'Open the verified preview' })).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
+    expect(screen.getByRole('link', { name: 'Documentation' })).toHaveAttribute('href', 'https://example.com/docs')
+    expect(screen.getByRole('link', { name: 'Other host' })).toHaveAttribute('href', `http://${siteId}.localhost.example.com:9437/${siteId}/`)
 
     await waitFor(() => expect(
       JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1')).preview
@@ -215,7 +218,7 @@ describe('Pixel', () => {
     render(<Pixel />)
     await waitFor(() => expect(screen.getByText('Available')).toBeInTheDocument())
     expect(screen.queryByTitle('Interactive Pixel preview')).not.toBeInTheDocument()
-    expect(screen.getByText(`Preview: ${preview.url}`)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open the verified preview' })).toHaveAttribute('href', `/pixel-preview/${siteId}/`)
   })
 
   it.each([
