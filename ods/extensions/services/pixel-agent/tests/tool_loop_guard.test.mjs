@@ -12212,3 +12212,100 @@ test("outer workdir recovery preserves existing execution boundaries", () => {
     assert.deepEqual(prepared, []);
   }
 });
+
+test("normalizes the common write filePath alias across direct and nested core file tools", () => {
+  // Exact captured native failure shape: tool_call args {filePath, content}
+  // failed closed with Missing required parameter:path. The direct form must
+  // forward canonical path with every content byte preserved.
+  const direct = call(createToolLoopGuard(), "write", {
+    event: { params: { filePath: "/workspace/report.txt", content: "line1\nline2\n" } },
+  });
+  assert.deepEqual(direct, {
+    params: { path: "report.txt", content: "line1\nline2\n" },
+  });
+
+  // Same captured envelope under bare and openclaw:core: nested ids.
+  for (const id of ["write", "openclaw:core:write"]) {
+    const nested = call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id, args: { filePath: "/workspace/report.txt", content: "body" } } },
+    });
+    assert.deepEqual(nested, {
+      params: { id, args: { path: "report.txt", content: "body" } },
+    });
+    assert.equal(nested.params.args.filePath, undefined);
+  }
+
+  // The read tool passes the same rules, direct and nested.
+  const directRead = call(createToolLoopGuard(), "read", {
+    event: { params: { filePath: "notes.md" } },
+  });
+  assert.deepEqual(directRead, { params: { path: "notes.md" } });
+  for (const id of ["read", "openclaw:core:read"]) {
+    const nestedRead = call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id, args: { filePath: "/workspace/notes.md" } } },
+    });
+    assert.deepEqual(nestedRead, {
+      params: { id, args: { path: "notes.md" } },
+    });
+  }
+
+  // Do not resolve conflicting fields; leave ordinary core validation intact.
+  const canonicalWins = call(createToolLoopGuard(), "write", {
+    event: { params: { path: "ok.txt", filePath: "other.txt", content: "c" } },
+  });
+  assert.equal(canonicalWins, undefined);
+
+  // Nonstring or empty aliases are not winners; nothing is forwarded. A
+  // whitespace-only alias is not empty and forwards exactly like the
+  // equivalent canonical whitespace path, so downstream sees no difference.
+  for (const bad of [12, null, ["a"], ""]) {
+    const malformed = call(createToolLoopGuard(), "write", {
+      event: { params: { filePath: bad, content: "x" } },
+    });
+    assert.equal(malformed, undefined);
+  }
+
+  // The alias composes with the existing text->content and oldText/newText
+  // ->edits adaptations instead of defeating them.
+  const aliasedText = call(createToolLoopGuard(), "write", {
+    event: { params: { filePath: "x.txt", text: "body" } },
+  });
+  assert.deepEqual(aliasedText, { params: { path: "x.txt", content: "body" } });
+
+  const aliasedEdit = call(createToolLoopGuard(), "edit", {
+    event: { params: { filePath: "/workspace/notes.md", oldText: "a", newText: "b" } },
+  });
+  assert.deepEqual(aliasedEdit, {
+    params: { path: "notes.md", edits: [{ oldText: "a", newText: "b" }] },
+  });
+
+  // An escaping alias and the identical canonical input must behave exactly
+  // the same. Actual absolute-path sandbox enforcement lives downstream in the
+  // core tool host layer; this guard forwards both rather than blocking.
+  const escapedAlias = call(createToolLoopGuard(), "write", {
+    event: { params: { filePath: "/workspace/../escape.txt", content: "e" } },
+  });
+  const escapedCanonical = call(createToolLoopGuard(), "write", {
+    event: { params: { path: "/workspace/../escape.txt", content: "e" } },
+  });
+  assert.deepEqual(escapedAlias, { params: { path: "../escape.txt", content: "e" } });
+  assert.deepEqual(escapedCanonical, { params: { path: "../escape.txt", content: "e" } });
+
+  // Unrelated tool ids never get the alias adaptation.
+  const unrelatedExec = call(createToolLoopGuard(), "exec", {
+    event: { params: { filePath: "ls -la" } },
+  });
+  assert.equal(unrelatedExec.block, true);
+
+  const processPassthrough = call(createToolLoopGuard(), "process", {
+    event: { params: { filePath: "x" } },
+  });
+  assert.equal(processPassthrough, undefined);
+
+  for (const id of ["openclaw:other:write", "pixel_ods_operations_submit"]) {
+    const foreign = call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id, args: { filePath: "x.txt", content: "x" } } },
+    });
+    assert.equal(foreign, undefined);
+  }
+});

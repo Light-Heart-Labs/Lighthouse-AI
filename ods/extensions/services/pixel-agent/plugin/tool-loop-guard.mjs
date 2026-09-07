@@ -829,6 +829,21 @@ function normalizeWorkspaceParams(toolName, params) {
       changed = true;
     }
   }
+  // Native file tasks sometimes use filePath instead of the core path field.
+  // Recover an unambiguous alias through the same normalization and checks as
+  // canonical input. Leave an existing path and malformed aliases untouched;
+  // the core tool host still enforces the filesystem sandbox.
+  if (
+    FILE_PATH_TOOLS.has(toolName) &&
+    Object.hasOwn(params, "filePath") &&
+    !Object.hasOwn(params, "path") &&
+    typeof params.filePath === "string" &&
+    params.filePath !== ""
+  ) {
+    updated.path = normalizeWorkspaceFilePath(params.filePath);
+    delete updated.filePath;
+    changed = true;
+  }
   if (FILE_PATH_TOOLS.has(toolName) && typeof params.path === "string") {
     const path = normalizeWorkspaceFilePath(params.path);
     if (path !== params.path) {
@@ -838,7 +853,7 @@ function normalizeWorkspaceParams(toolName, params) {
   }
   if (
     toolName === "write" &&
-    Object.keys(params).sort().join("\u0000") === ["path", "text"].sort().join("\u0000") &&
+    Object.keys(updated).sort().join("\u0000") === ["path", "text"].sort().join("\u0000") &&
     typeof params.text === "string"
   ) {
     updated.content = params.text;
@@ -847,7 +862,7 @@ function normalizeWorkspaceParams(toolName, params) {
   }
   if (
     toolName === "edit" &&
-    typeof params.path === "string" &&
+    typeof updated.path === "string" &&
     typeof params.oldText === "string" &&
     typeof params.newText === "string"
   ) {
