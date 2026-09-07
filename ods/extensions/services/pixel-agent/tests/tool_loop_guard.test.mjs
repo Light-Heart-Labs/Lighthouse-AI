@@ -1257,6 +1257,24 @@ test("adapts an exact readback alias and injects workdir after a direct successf
   );
 });
 
+test("read-only HTML diagnosis does not acquire preview or mutation coaching from a negated verb list", () => {
+  const prompt = "The focused notes repair also reached the output limit. Do only this bounded read-only diagnosis now: find the Markdown list rendering replacement in /workspace/notes-garden/index.html, print at most 15 relevant lines, and identify which regex capture is used. Use at most two tools and a short final answer. Do not edit, publish, run the app, or read the whole file.";
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);
+  assert.equal(userMessageRequestsWorkspaceMutation([], prompt), false);
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "notes-diagnosis" }, "pixel", { prompt });
+  const params = { id: "exec", args: { command: "sed -n '310,320p' notes-garden/index.html", workdir: "/workspace" } };
+  assert.notEqual(call(guard, "tool_call", { event: { toolCallId: "notes-read", params } })?.block, true);
+  const result = wrappedCoreResult("exec", {
+    content: [{ type: "text", text: "buf.push(listTag==='ol'?m[2]:m[1]);" }],
+    details: { status: "completed", exitCode: 0 },
+  });
+  afterCall(guard, "tool_call", { event: { toolCallId: "notes-read", params, result } });
+  const persisted = persistToolResult(guard, "tool_call", "notes-read", result);
+  assert.doesNotMatch(JSON.stringify(persisted), /Call tool_call next with id openclaw:core:write/);
+  assert.notEqual(guard.verificationForRun("run-1")?.status, "failed");
+});
+
 test("binds a preserved owner file and recovers a compact-model workdir envelope", () => {
   const guard = createToolLoopGuard();
   const prompt =

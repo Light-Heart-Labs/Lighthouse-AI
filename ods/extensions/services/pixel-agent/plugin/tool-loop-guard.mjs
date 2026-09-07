@@ -4618,7 +4618,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const nonVisualImplementation =
     /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(text) &&
     !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
-  const explicitDelivery = hasExplicitWorkspacePreviewDirective(text);
+  const explicitDelivery = hasExplicitWorkspacePreviewDirective(actionText);
   // An edit constraint does not veto an independently requested display.
   // Keep negative compound requests closed ("never create and publish").
   // A filename's dot is not a sentence boundary.
@@ -4637,12 +4637,14 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     explicitDelivery ||
     // A dot inside index.html is part of the requested filename, not a
     // sentence boundary between the preview action and its target.
-    (hasWorkspaceHtmlTarget(text) &&
-      /\b(?:preview|publish|serve|open|show|view)\b/i.test(text)) ||
-    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:artworks?|illustrations?|charts?|diagrams?|animations?|games?)\b/i.test(text) ||
-    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(text) ||
-    /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(text) ||
-    /\b(?:open|publish|refresh|republish|serve|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(text);
+    // Delivery verbs in a rejected list ("do not edit, publish, or run")
+    // are constraints, even when another clause names an HTML file.
+    (hasWorkspaceHtmlTarget(actionText) &&
+      /\b(?:preview|publish|serve|open|show|view)\b/i.test(actionText)) ||
+    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:artworks?|illustrations?|charts?|diagrams?|animations?|games?)\b/i.test(actionText) ||
+    /\b(?:preview|publish|serve|open|show|view)\b[^.!?;\n]{0,96}\b(?:site|website|web\s*page|frontend)\b/i.test(actionText) ||
+    /\b(?:site|website|web\s*page|frontend)\b[^.!?;\n]{0,96}\b(?:preview|publish|serve|open|show|view)\b/i.test(actionText) ||
+    /\b(?:open|publish|refresh|republish|serve|show|view)\b[^.!?;\n]{0,96}\b(?:live\s+)?(?:preview|site|website|web\s*page|frontend)\b/i.test(actionText);
   const unreachableLocalPreview =
     /\b(?:localhost|local\s+host)\b/i.test(text) &&
     /\b(?:not\s+(?:seeing|loading|opening|working)|can(?:not|'t)\s+(?:see|load|open|reach)|investigate|fix)\b/i.test(text);
