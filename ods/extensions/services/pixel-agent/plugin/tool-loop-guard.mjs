@@ -5579,6 +5579,7 @@ export function createToolLoopGuard({
         githubCanonicalFailed: false,
         githubCanonicalBlocks: 0,
         odsRoutingInitialized: false,
+        odsRequestedTools: new Set(),
         odsRequiredTools: new Set(),
         odsRoutingBlocks: 0,
         odsRoutingCorrectionRound: undefined,
@@ -6629,6 +6630,7 @@ export function createToolLoopGuard({
       state?.workspaceTaskRequested &&
       !state.operationsRequired &&
       state.odsRequiredTools.size === 0 &&
+      !state.odsRequestedTools.has(effectiveToolName) &&
       (effectiveToolName === "pixel_ods_status" ||
         effectiveToolName === "pixel_ods_apps_list")
     ) {
@@ -7752,6 +7754,9 @@ export function createToolLoopGuard({
       if (!state.operationsRequired && !state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);
         if (requirements.length > 0) {
+          // Outstanding routing work is consumed by the outer Tool Search hook.
+          // Keep the original request for the nested call and subsequent reads.
+          state.odsRequestedTools = new Set(requirements);
           state.odsRequiredTools = new Set(requirements);
           state.odsRoutingInitialized = true;
         }

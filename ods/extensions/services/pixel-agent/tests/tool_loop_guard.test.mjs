@@ -290,6 +290,32 @@ function call(guard, toolName, overrides = {}) {
   return guard.beforeToolCall(event, context, "pixel");
 }
 
+for (const [requested, other, prompt] of [
+  ["pixel_ods_status", "pixel_ods_apps_list", "Check ODS health, then create /workspace/audit/status.json. Do not list ODS apps."],
+  ["pixel_ods_apps_list", "pixel_ods_status", "List the ODS app URLs, then create /workspace/audit/apps.json. Do not inspect ODS status."],
+]) {
+  test(`requested projection survives Tool Search reentry: ${requested}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel",
+      { prompt }
+    );
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), [requested]);
+    assert.equal(userMessageRequestsWorkspaceTools([], prompt), true);
+    assert.equal(call(guard, "tool_call", {
+      event: { params: { id: `openclaw:plugin:pixel-ods:${requested}`, args: {} } },
+    }), undefined);
+    // Tool Search dispatch re-enters the hook for the actual selected tool.
+    assert.equal(call(guard, requested), undefined);
+    assert.equal(call(guard, requested), undefined);
+    assert.equal(call(guard, other)?.block, true);
+    assert.equal(call(guard, "tool_call", {
+      event: { params: { id: `openclaw:plugin:pixel-ods:${other}`, args: {} } },
+    })?.block, true);
+  });
+}
+
 function afterCall(guard, toolName, overrides = {}) {
   const event = {
     toolName,
