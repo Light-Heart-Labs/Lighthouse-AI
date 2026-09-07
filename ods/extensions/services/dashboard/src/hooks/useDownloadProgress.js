@@ -33,6 +33,8 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
   const progressRequestRef = useRef(0)
   const latestAppliedProgressRequestRef = useRef(0)
   const cancelInFlightRef = useRef(false)
+  const lastTerminalKeyRef = useRef(null)
+  const dismissedTerminalKeyRef = useRef(null)
 
   const fetchProgress = useCallback(async () => {
     const requestId = ++progressRequestRef.current
@@ -45,6 +47,7 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
       latestAppliedProgressRequestRef.current = requestId
       
       if (data.status === 'downloading' || data.status === 'verifying') {
+        dismissedTerminalKeyRef.current = null
         const downloaded = data.bytesDownloaded || 0
         const total = data.bytesTotal || 0
         const rawPercent = total > 0 ? (downloaded / total) * 100 : 0
@@ -83,6 +86,9 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
       } else if (TERMINAL_DOWNLOAD_STATUSES.has(data.status)) {
         setIsDownloading(false)
         setCancelError(null)
+        const terminalKey = JSON.stringify([data.status, data.model, data.updatedAt, data.error, data.message])
+        lastTerminalKeyRef.current = terminalKey
+        if (terminalKey === dismissedTerminalKeyRef.current) return data
         setProgress({
           status: data.status,
           error: data.error || data.message || (data.status === 'cancelled' ? 'Download cancelled' : 'Download failed'),
@@ -163,6 +169,7 @@ export function useDownloadProgress(pollIntervalMs = 1000) {
   }, [fetchProgress])
 
   const clearTerminal = useCallback(() => {
+    dismissedTerminalKeyRef.current = lastTerminalKeyRef.current
     setProgress(current => isTerminalProgress(current) ? null : current)
     setCancelError(null)
   }, [])
