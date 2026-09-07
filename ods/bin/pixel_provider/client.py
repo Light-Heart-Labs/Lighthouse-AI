@@ -4,6 +4,7 @@ Does not modify an existing install, install services, change privileges, or
 execute an agent turn. Canonical onboarding/env inputs survive regeneration.
 """
 import hashlib
+from contextlib import contextmanager, nullcontext
 import io
 import json
 import os
@@ -232,16 +233,40 @@ def load_client(directory):
         raise StoreError('invalid-client-record') from None
 
 
-def run_client(directory, message, *, timeout=240):
+@contextmanager
+def _run_lock(directory):
+    import fcntl
+    fd = os.open(directory/'.client-run.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            raise StoreError('unsafe-client-lock')
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise StoreError('client-busy') from None
+        yield fd
+    finally:
+        os.close(fd)  # Keep the stable lock inode; never unlink it on release.
+
+
+def run_client(directory, message, *, timeout=240, _adapter=None):
     """One explicit embedded turn; no global gateway or service activation."""
     directory,record = load_client(directory)
+    with _run_lock(directory) as run_fd:
+        return _run_locked(directory,record,message,timeout=timeout,_adapter=_adapter,_lock_fd=run_fd)
+
+
+def _run_locked(directory,record,message,*,timeout,_adapter,_lock_fd):
     if threading.current_thread() is not threading.main_thread():
         raise StoreError('client-run-requires-main-thread')
     if (not isinstance(message,str) or not message.strip() or '\0' in message
             or len(message.encode()) > MAX_BYTES or type(timeout) is not int or not 1 <= timeout <= 900):
         raise StoreError('invalid-client-message')
-    connection = normalize_connection(decode_document(read_private(directory/'connection.json')))
-    probe_connection(connection,confirmed_endpoint=connection['baseUrl'])
+    if _adapter is None:
+        connection = normalize_connection(decode_document(read_private(directory/'connection.json')))
+        probe_connection(connection,confirmed_endpoint=connection['baseUrl'])
     env = _render_environment(directory/'pixel-source',directory)
     # Installed runtimes may change independently of the prepared source/config.
     executable = Path(env['OPENCLAW_BIN'])
@@ -258,8 +283,25 @@ def run_client(directory, message, *, timeout=240):
     _write_private(run/'message.txt',message.encode())
     args = [env['OPENCLAW_BIN'],'agent','--local','--agent',record['agentId'],'--session-id',session_id,
         '--message-file',str(run/'message.txt'),'--timeout',str(timeout),'--json']
-    if env.get('PIXEL_MODEL_REASONING','').lower() in ('0','false','off','no'):
-        args.extend(['--thinking','off'])
+    with _adapter.activate(run,env,record['agentId']) if _adapter else nullcontext(env) as effective_env:
+        if effective_env.get('PIXEL_MODEL_REASONING','').lower() in ('0','false','off','no'):
+            args.extend(['--thinking','off'])
+        output,error,exit_code,interrupted = _run_process(args,effective_env,directory,timeout,lock_fd=_lock_fd)
+    _write_private(run/'output.json',output)
+    _write_private(run/'stderr.txt',error)
+    try:
+        result = json.loads(output)
+    except ValueError:
+        result = None
+    response = {'status':'interrupted' if interrupted else 'process-exited','exitCode':exit_code,
+        'sessionId':session_id,'evidence':str(run),'result':result}
+    if _adapter:
+        response['providerRuntime'] = {'revision':_adapter.config['revision'],'status':_adapter.status}
+    _write_private(run/'result.json',_json(response))
+    return response
+
+
+def _run_process(args,env,directory,timeout,*,lock_fd=None):
     child = None
     interrupted = False
     requested = False
@@ -273,7 +315,9 @@ def run_client(directory, message, *, timeout=240):
         signal.signal(number,interrupt)
     try:
         try:
-            child = subprocess.Popen(args,env=env,cwd=directory,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            # Keep admission held by the agent too if this supervisor crashes.
+            child = subprocess.Popen(args,env=env,cwd=directory,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                start_new_session=True,pass_fds=() if lock_fd is None else (lock_fd,))
             if requested:
                 raise KeyboardInterrupt
             output,error = child.communicate(timeout=timeout+15)
@@ -297,13 +341,4 @@ def run_client(directory, message, *, timeout=240):
     finally:
         for number,handler in previous.items():
             signal.signal(number,handler)
-    _write_private(run/'output.json',output)
-    _write_private(run/'stderr.txt',error)
-    try:
-        result = json.loads(output)
-    except ValueError:
-        result = None
-    response = {'status':'interrupted' if interrupted else 'process-exited','exitCode':child.returncode,
-        'sessionId':session_id,'evidence':str(run),'result':result}
-    _write_private(run/'result.json',_json(response))
-    return response
+    return output,error,child.returncode,interrupted

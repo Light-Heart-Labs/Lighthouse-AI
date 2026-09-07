@@ -22,12 +22,19 @@ def main():
     parser.add_argument('--listen-port',type=int,default=4005)
     parser.add_argument('--message-file',help='Owner-private UTF-8 task for a prepared client')
     parser.add_argument('--timeout',type=int,default=240)
+    parser.add_argument('--provider-directory',help='Owner-private ODS pixel-providers Settings directory for this turn')
+    parser.add_argument('--provider-revision',type=int,help='Exact saved provider-policy revision to activate')
+    parser.add_argument('--confirm-provider-policy',action='store_true',help='Activate this policy for this explicit turn only')
+    parser.add_argument('--allow-cloud-transfer',action='store_true',help='Authorize configured cloud recipients to receive this turn and its tool history')
     parser.add_argument('--directory',help='New, non-existing private client directory')
     parser.add_argument('--pixel-repository',help='Local Osmantic/Pixel Git repository containing the ODS pinned commit')
     parser.add_argument('--openclaw-bin',help='Installed OpenClaw executable; no installation or upgrade is performed')
     parser.add_argument('--reasoning',choices=('on','off'),help='Explicit model reasoning capability; never guessed from its name')
     parser.add_argument('--sandbox-image',default='openclaw-sandbox:bookworm-slim')
     args = parser.parse_args()
+    if args.action != 'run' and (args.provider_directory or args.provider_revision is not None
+            or args.confirm_provider_policy or args.allow_cloud_transfer):
+        parser.error('provider activation options apply only to run')
     if args.action in ('probe','prepare') and not all((args.connection_file,args.confirm_endpoint)):
         parser.error('probe/prepare require --connection-file and --confirm-endpoint')
     if args.action == 'tunnel' and not args.ssh_target:
@@ -41,7 +48,14 @@ def main():
             run_tunnel(ssh_bin=args.ssh_bin,target=args.ssh_target,remote_port=args.remote_port,listen_port=args.listen_port)
             return 0
         if args.action == 'run':
-            result = run_client(args.directory,read_private(args.message_file).decode(),timeout=args.timeout)
+            adapter = None
+            if args.provider_directory:
+                from pixel_provider.runtime_session import ProviderSession
+                adapter = ProviderSession(args.provider_directory,expected_revision=args.provider_revision,
+                    confirmed=args.confirm_provider_policy,allow_cloud=args.allow_cloud_transfer)
+            elif args.provider_revision is not None or args.confirm_provider_policy or args.allow_cloud_transfer:
+                parser.error('provider activation options require --provider-directory')
+            result = run_client(args.directory,read_private(args.message_file).decode(),timeout=args.timeout,_adapter=adapter)
             print(json.dumps(result,indent=2))
             return 0 if result['exitCode'] == 0 and result['status'] == 'process-exited' else 1
         connection = normalize_connection(decode_document(read_private(args.connection_file)))

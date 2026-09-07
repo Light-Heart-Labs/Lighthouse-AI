@@ -3,7 +3,8 @@
 Status: development in PR #3818, stacked on ODS PR #3385. The Settings UI,
 POSIX credential vault, inference-only sharing perimeter and host owner controls
 are implemented, including guided host sharing and an isolated POSIX client CLI.
-Pixel provider runtime activation, cloud failover, Full Access and complete
+Turn-scoped provider runtime activation is available for the isolated client.
+Default Pixel/UI activation, advisory/handoff escalation, Full Access and complete
 cross-platform guided onboarding remain pending. Sharing is disabled by default.
 
 ## Independent settings
@@ -263,6 +264,66 @@ directory was created. The temporary routing policy was synthetic, not a
 production route migration. The run-owned sandbox and tunnel/server processes
 were removed; private evidence and workspace artifacts were retained. This
 qualifies this isolated client journey only, not full feature or release readiness.
+
+### Explicit per-turn provider policy
+
+An existing isolated client can use the owner-private provider Settings directory
+for one explicitly approved turn. Install the optional runtime dependencies from
+`extensions/services/pixel-inference/requirements.txt` in the Python environment
+used to launch the helper. The default paired-client path does not need them.
+
+```sh
+python3 ods/bin/ods-pixel-connect run --directory /private/new-client \
+  --message-file /private/task.txt \
+  --provider-directory /path/to/ODS/data/pixel-providers \
+  --provider-revision 4 --confirm-provider-policy
+```
+
+The directory must be on the execution host and owned by the caller. This is not
+permission to copy server credentials onto other devices. Remote clients can
+instead use scoped inference connections as configured provider endpoints.
+If automatic roles include cloud providers, `--allow-cloud-transfer` additionally
+confirms that this turn's conversation and tool history may reach those configured
+recipients. No paid cloud call is part of the default behavior or qualification.
+
+The runner freezes the selected revision and credentials, creates a private
+per-turn configuration overlay and loopback `ods/pixel` inference route, and
+starts the existing pinned Pixel agent. It does not rewrite canonical client
+configuration, change global ODS aliases, restart production services, or grant
+tools/access. A stable private admission lock prevents overlapping helper turns;
+the agent inherits the lock so a supervisor crash does not immediately admit
+another helper turn. A turn-unique provider identity avoids runtime-cache reuse.
+This lock is not the cross-entry-point production admission controller.
+
+Only the leader and ordered backups participate automatically. Advisor and
+handoff roles remain stored but are not executed by this path. Eligible backups
+must support the required tools/media/reasoning and at least the leader's
+configured context and requested output budget. No history or tool result is
+trimmed to make a smaller backup fit. This conservative compatibility rule is
+not a tokenizer-based estimate of the request's precise size.
+
+Recovery is per model request, not a replay of the agent turn. Selected transient
+statuses (429/500/502/503/504) and transport failures share one attempt/deadline
+budget; an unavailable endpoint has a 30-second per-turn cooldown. Authentication,
+configuration, TLS verification, redirects and policy refusals do not trigger
+automatic provider switching. Exhaustion stops the lease and returns a
+non-retryable structured error, preventing SDK retries from multiplying calls.
+SSE may retry before response bytes are committed, never after. Partial-stream
+failure remains an interruption; no other provider's stream is spliced in.
+
+Private run evidence includes the effective public policy revision and content-free
+provider transition events. `completed` in these events means a transport response
+completed, not that the task succeeded. Runtime shutdown is separately recorded.
+The current adapter speaks OpenAI-compatible chat completions; a configured
+LiteLLM-compatible endpoint can provide translation, but its own hidden retries
+must be disabled. Direct vendor-specific protocols, durable crash checkpoints,
+cost budgets, default-runtime/UI activation and full guided repair remain pending.
+
+A real isolated laptop Pixel completed one write, then a fixture leader returned
+503. Physical Tower2 GLM received the preserved tool result and continued with
+read/final output, with exactly one write. Repeated with a turn-unique provider
+identity. Separate real Pixel partial-SSE and 401 fixtures produced no tool calls
+and no backup calls; both returned failure. Production config remained unchanged.
 
 ### Automated checks
 

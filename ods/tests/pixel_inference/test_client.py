@@ -109,6 +109,32 @@ def test_revoked_preflight_no_spawn(client_dir,monkeypatch):
     assert not (client_dir/'runs').exists()
 
 
+def test_client_run_admission_lock_precedes_model_call(client_dir,monkeypatch):
+    monkeypatch.setattr(mod,'probe_connection',lambda *a,**kw: pytest.fail('busy client made model request'))
+    with mod._run_lock(client_dir):
+        with pytest.raises(mod.StoreError,match='client-busy'):
+            mod.run_client(client_dir,'hello')
+    assert not (client_dir/'runs').exists()
+    assert (client_dir/'.client-run.lock').is_file()
+
+
+def test_agent_inherits_admission_if_supervisor_closes_its_handle(client_dir):
+    with mod._run_lock(client_dir) as fd:
+        child = subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.buffer.read(1)'],
+            pass_fds=(fd,),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        with pytest.raises(mod.StoreError,match='client-busy'):
+            with mod._run_lock(client_dir):
+                pass
+        child.communicate(b'x',timeout=3)
+        assert child.returncode == 0
+        with mod._run_lock(client_dir):
+            pass
+    finally:
+        if child.poll() is None:
+            child.kill(); child.wait()
+
+
 def test_ambient_profile_not_inherited(client_dir,monkeypatch):
     for name in ('OPENCLAW_AGENT_DIR','OPENCLAW_PROFILE','PIXEL_AGENT_TOOL_ALLOWLIST','XDG_DATA_HOME'):
         monkeypatch.setenv(name,'must-not-be-used')
@@ -141,6 +167,7 @@ def test_turn_evidence_and_timeout(client_dir,monkeypatch,slow):
     assert (Path(result['evidence'])/'result.json').is_file()
     assert mod.read_private(Path(result['evidence'])/'message.txt') == b'hello'
     assert captured[0][1]['start_new_session'] is True
+    assert len(captured[0][1]['pass_fds']) == 1
     assert captured[0][0][0][-2:] == ['--thinking','off']
     assert killed == ([(Child.pid,signal.SIGTERM),(Child.pid,signal.SIGKILL)] if slow else [])
     assert signal.getsignal(signal.SIGTERM) == previous
