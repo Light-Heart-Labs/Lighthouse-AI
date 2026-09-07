@@ -1,9 +1,9 @@
 # Pixel connections, provider roles and access modes
 
-Status: development in PR #3818, stacked on ODS PR #3385. The current contracts
-and Settings backend do not activate remote inference, cloud failover or Full
-Access. The Settings UI and POSIX credential vault are implemented; runtime
-activation, sharing/pairing and native-platform storage remain pending.
+Status: development in PR #3818, stacked on ODS PR #3385. The Settings UI,
+POSIX credential vault, inference-only sharing perimeter and host owner controls
+are implemented. Guided sharing/pairing, Pixel provider runtime activation,
+cloud failover and Full Access remain pending. Sharing is disabled by default.
 
 ## Independent settings
 
@@ -102,6 +102,62 @@ Full Access permits whatever the selected OS account can do. Restoring sandbox
 policy does not undo host changes, transmitted data or persistence. WSL access
 is not proof of Windows Administrator or native desktop control.
 
+## Implemented inference sharing perimeter (not guided setup)
+
+The optional `pixel-inference` service ships as `compose.yaml.disabled`. It is
+not included in normal fresh installs. Its sole host binding is loopback port
+4005 (configurable with `PIXEL_INFERENCE_PORT`), regardless of `BIND_ADDRESS`.
+Reach it over an explicitly authenticated SSH tunnel or separately configured
+TLS ingress; do not expose the model router, Pixel gateway or dashboard owner
+credential to clients. The service needs owner-provisioned private state first.
+
+Host-owner endpoints:
+
+- `GET /v1/pixel/inference-sharing`: public grants and verified active identity;
+  absent state is disabled, with no migration or automatic directory creation.
+- `POST .../issue`: `{expectedRevision, settings}`. Settings contain `label`,
+  `catalogId`, `runtimeModelId`, `ttlSeconds`, `maxConcurrent`, `maxOutputTokens`,
+  `deadlineSeconds`, `requestsPerMinute`. The identity must match the host's
+  current verified local route. The 256-bit device key is returned only here.
+- `POST .../enable`: `{expectedRevision, enabled}`. This changes the admission
+  switch, not Compose/service activation; enabling requires verified identity.
+- `POST .../revoke`: `{expectedRevision, deviceId}`. Revocation and disabling
+  remain available when no model is active. Stale revisions return 409.
+
+All use the existing host-owner authentication, bounded strict JSON and
+`Cache-Control: no-store`. Their `runtime.status: not-probed` is not a claim
+that the sharing service is installed or listening. Dashboard controls and
+guided service activation/import are still pending.
+
+Device keys authorize only `GET /v1/models` and `POST /v1/chat/completions` with
+model `ods/shared`. They do not authorize agent execution, model management,
+file access or key issuance. Requests cannot supply arbitrary destinations,
+authorization headers, external media URLs or backend template overrides.
+Function tools and inline image data are permitted; execution stays with the
+client. Keys are stored only as SHA-256 hashes in owner-private state, separate
+from outgoing provider credentials. Expiry, revocation, admission/rate limits,
+an output cap and a total request deadline are enforced. Rate/concurrency
+counters are single-process admission controls, not durable billing quotas.
+
+Model/route preconditions are checked again after the router's queue drains.
+A model change fails with 409 rather than silently running a queued request on
+the replacement model. Legacy callers without pins keep their alias behavior.
+Disconnect and revocation cancel both the façade request and its downstream
+router request; response ownership releases sockets and admission even when a
+stream never starts or a close fails. Backend cancellation is cooperative:
+closing the inference transport cannot undo work already performed remotely.
+
+The container mounts the entire owner-private state directory read-only, so
+atomic revocation updates remain visible. It drops capabilities and runs under
+the ODS owner's numeric UID/GID. Build-context allowlisting excludes install
+data, `.env`, models and unrelated services. This does not isolate the grant
+store from a malicious process already running as that same OS owner.
+
+Disposable source integration has completed real JSON and SSE inference on
+Tower2's GLM model, model-identity checks and post-call revocation. The routing
+state in that test was synthetic. This is not installed Pixel, laptop pairing,
+production deployment or native-privilege acceptance.
+
 ## Development validation
 
 Run the focused, service-independent contract tests from `ods/`:
@@ -109,6 +165,18 @@ Run the focused, service-independent contract tests from `ods/`:
 ```sh
 python3 -m unittest discover -s tests -p 'test_pixel_*.py' -v
 ```
+
+Sharing tests run separately with pytest and the inference service requirements:
+
+```sh
+python3 -m pytest tests/pixel_inference -q
+python3 -m pytest extensions/services/pixel-inference/tests -q
+python3 -m pytest extensions/services/model-router/tests -q
+```
+
+The CI contract job covers Python 3.11 and 3.12, including disconnect before
+headers, JSON/SSE bodies, both queue states, response/disconnect races, key
+revocation and model changes while queued. No paid provider is contacted.
 
 Dashboard tests use the API's existing runtime and test requirements:
 

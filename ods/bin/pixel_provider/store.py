@@ -100,6 +100,7 @@ def _private(metadata, *, directory=False):
 
 
 class ProviderStore:
+    config_name = CONFIG_NAME
     def __init__(self, directory, *, validator=None, default_factory=None):
         from .config import default_config, normalize_config
         # Do not resolve symlinks away before inspecting custody.
@@ -167,7 +168,7 @@ class ProviderStore:
 
     def _load(self, directory_fd):
         try:
-            fd = self._open_file(directory_fd, CONFIG_NAME)
+            fd = self._open_file(directory_fd, self.config_name)
         except FileNotFoundError:
             value = self._validate(self.default_factory())
             if value["revision"] != 0:
@@ -189,6 +190,27 @@ class ProviderStore:
     def load(self):
         with self._locked(False) as directory_fd:
             return self._load(directory_fd)
+
+    def read_snapshot(self):
+        """Read an atomically replaced document from a read-only service mount.
+
+        No lock file is created or opened for writing. Writers still use flock
+        and atomic replace; readers get one complete revision, not a read/modify
+        transaction. Intended for revocation polling by the owner-UID service.
+        """
+        if fcntl is None or not hasattr(os, "O_NOFOLLOW"):
+            raise StoreError("unsupported-platform")
+        fd = None
+        try:
+            fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            if not _private(os.fstat(fd), directory=True):
+                raise StoreError("unsafe-directory")
+            return self._load(fd)
+        except OSError:
+            raise StoreError("storage-unavailable") from None
+        finally:
+            if fd is not None:
+                os.close(fd)
 
     def save(self, document, *, expected_revision):
         if type(expected_revision) is not int or not 0 <= expected_revision < 2**53 - 1:
@@ -239,7 +261,7 @@ class ProviderStore:
             original = os.fstat(directory_fd)
             if not _private(bound, directory=True) or (bound.st_dev, bound.st_ino) != (original.st_dev, original.st_ino):
                 raise StoreError("directory-replaced")
-            os.replace(temp_name, CONFIG_NAME, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            os.replace(temp_name, self.config_name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
             replaced = True
             os.fsync(directory_fd)
         except OSError:

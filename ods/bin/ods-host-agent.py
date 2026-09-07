@@ -1996,6 +1996,29 @@ def _switchboard_state_path() -> Path:
     return INSTALL_DIR / "data" / "model-state.json"
 
 
+def _pixel_share_active_route():
+    """Only locally verified identity; never an arbitrary client-chosen route."""
+    if _switchboard_state is None:
+        return None
+    path = _switchboard_state_path()
+    if _switchboard_state_needs_current_env_verification(path):
+        return None
+    doc, errors = _switchboard_state.read_state(path)
+    if errors or not isinstance(doc, dict):
+        return None
+    active = doc.get('active')
+    if not isinstance(active, dict):
+        return None
+    proof = active.get('proof', {})
+    env = load_env(INSTALL_DIR / '.env')
+    if (env.get('ODS_MODE', 'local') != 'local' or not _switchboard_state.migrate_env_identity(env)
+            or active.get('reconstructed') is True or not active.get('verifiedAt')
+            or proof.get('completion') is not True or proof.get('identity') != active.get('runtimeModelId')
+            or active.get('routeSeq') != doc.get('routeSeq') or doc['routeSeq'] > doc['seq']):
+        return None
+    return {key: active[key] for key in ('catalogId', 'runtimeModelId', 'routeSeq')}
+
+
 def _project_switchboard_agent_viability(payload: dict) -> None:
     """Project the verified active route's identity and Pixel viability.
 
@@ -5805,11 +5828,13 @@ def _start_enable_retry(handler, service_id: str, lock: threading.Lock) -> None:
         raise
 
 
-def json_response(handler, code: int, body: dict):
+def json_response(handler, code: int, body: dict, *, no_store=False):
     payload = json.dumps(body).encode("utf-8")
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(payload)))
+    if no_store:
+        handler.send_header("Cache-Control", "no-store")
     if getattr(handler, "close_connection", False):
         handler.send_header("Connection", "close")
     handler.end_headers()
@@ -6299,6 +6324,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_ops_status(parse_qs(parsed.query, keep_blank_values=True))
         elif path == "/v1/pixel/providers":
             self._handle_pixel_providers(save=False)
+        elif path == "/v1/pixel/inference-sharing":
+            self._handle_pixel_sharing()
         elif path == "/v1/host/port":
             self._handle_host_port_status(parse_qs(parsed.query))
         elif path == "/v1/setup/state":
@@ -6782,6 +6809,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_proof()
         elif self.path == "/v1/pixel/providers/save":
             self._handle_pixel_providers(save=True)
+        elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke"}:
+            self._handle_pixel_sharing(self.path.rsplit('/', 1)[1])
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
         elif self.path == "/v1/model/delete":
@@ -6802,6 +6831,47 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_network_wifi_forget()
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_pixel_sharing(self, action=None):
+        if not check_auth(self):
+            return
+        from pixel_provider.sharing_host_api import get_sharing, change_sharing
+        from pixel_provider.store import MAX_BYTES, StoreError, decode_document
+        try:
+            body = None
+            if action is not None:
+                lengths = self.headers.get_all('Content-Length', [])
+                if (len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,9}', lengths[0])
+                        or self.headers.get('Transfer-Encoding') is not None):
+                    raise StoreError('invalid-request')
+                length = int(lengths[0])
+                if length > MAX_BYTES:
+                    json_response(self, 413, {'error': 'Sharing request exceeds size limit'}, no_store=True)
+                    return
+                if length == 0:
+                    raise StoreError('invalid-request')
+                old_timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(10)
+                    raw = self.rfile.read(length)
+                finally:
+                    self.connection.settimeout(old_timeout)
+                if len(raw) != length:
+                    raise StoreError('malformed-json')
+                body = decode_document(raw)
+            route = _pixel_share_active_route()
+            result = (get_sharing(DATA_DIR, route) if action is None else
+                      change_sharing(DATA_DIR, action, body, route))
+        except StoreError as exc:
+            status = 409 if exc.code in {'stale-revision', 'active-route-changed'} else 503
+            if action is not None and exc.code in {'invalid-request', 'invalid-config', 'malformed-json'}:
+                status = 400
+            json_response(self, status, {'error': 'Sharing request failed', 'code': exc.code}, no_store=True)
+            return
+        except (OSError, ValueError, TypeError, RecursionError):
+            json_response(self, 503, {'error': 'Sharing is unavailable'}, no_store=True)
+            return
+        json_response(self, 200, result, no_store=True)
 
     def _handle_pixel_providers(self, *, save):
         """Provider Settings only; does not activate routes or change privileges."""
