@@ -10831,3 +10831,22 @@ test("workspace requests do not combine unrelated clauses into app or extension 
     assert.equal(userMessageOperationsRequirements([], prompt).required, true, prompt);
   }
 });
+
+test("browser tool interaction and preservation do not demand website delivery", () => {
+  const nonDelivery = [
+    "Test the actual browser capability available to you in this ODS installation. Discover the exact browser tool, then if available use it to open the existing unit-lab preview and exercise a0Cto32F conversion. Use an isolated browser; do not attach personal browser profiles. Report actual tool results. If the capability is unavailable, identify the concrete missing tool or runtime from its result rather than claiming a browser test or substituting HTTP readback.",
+    "Track a bounded goal for this task using your available goal/plan tools: create a small text-processing utility in /workspace/text-lab that counts lines,words andcharacters inUTF8files, then verify it on empty text,Hello world,and aUnicode sample. Save a short verification report. Work only in that folder, preserve other apps, and mark the goal complete only after actual tool-based checks pass. Show the final goal status and the real check results.",
+    "Use the browser tool to navigate to the existing preview and click its Reset button.",
+    "Use an isolated browser to exercise the current website and report the actual results.",
+    "Create a text-processing utility in /workspace/text-lab. Work in that folder, preserve other apps, and report results.",
+  ];
+  for (const prompt of nonDelivery) assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+  for (const prompt of [
+    "Build a website, use the browser tool to test it and publish it.",
+    "Use the browser tool to test the existing website, then repair and publish it.",
+    "Publish the existing preview.",
+    "Show me the existing weather-scene/index.html preview here so I can try its controls.",
+    "Preserve other apps while you build a new browser app in /workspace/demo/index.html.",
+    "Preserve existing apps; publish my website through the ODS preview.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, prompt);
+});

@@ -4606,7 +4606,20 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
   const actionText = text.replace(
     /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without|no)\b(?:(?!\b(?:but|instead|then)\b)[^.!?;\n])*/gi,
     " "
+  ).replace(
+    /\b(?:preserve|keep)\s+(?:(?:all|my|the|these|those|other|existing|current|saved|working)\s+)*(?:apps?|applications?)\b(?:\s+unchanged)?/gi,
+    " "
   );
+  // Driving a browser against an existing page is a tool operation. Do not
+  // replace its result with a demand to create and publish new site files.
+  // An independent build, revision or publication still requests delivery.
+  const browserToolUse =
+    /\b(?:browser|playwright|chromium)\b[^.!?;\n]{0,64}\b(?:tools?|automation|capabilit(?:y|ies))\b/i.test(actionText) ||
+    /\b(?:use|using)\b[^.!?;\n]{0,40}\b(?:browser|playwright|chromium)\b/i.test(actionText);
+  const browserInteraction = /\b(?:click|exercise|interact|test|navigate|browse)\b/i.test(actionText);
+  const requestedArtifactChange =
+    /\b(?:build|create|develop|design|generate|implement|write|edit|fix|repair|modify|update|publish|republish|serve)\b/i.test(actionText);
+  if (browserToolUse && browserInteraction && !requestedArtifactChange) return false;
   const website =
     /\b(?:browser\b[^.!?;\n]{0,32}\bapps?|dashboards?|frontends?|landing\s+pages?|portals?|sites?|web\b[^.!?;\n]{0,32}\bapps?|web\s*pages?|websites?)\b/i.test(actionText);
   const browserInterface =
