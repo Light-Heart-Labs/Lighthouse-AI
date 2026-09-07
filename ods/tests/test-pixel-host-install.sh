@@ -1126,6 +1126,9 @@ provider = value["models"]["providers"][provider_id]
 assert provider["timeoutSeconds"] == 1800
 model = provider["models"][0]
 assert agent["experimental"] == {"localModelLean": False}
+for tool in ("create_goal", "get_goal", "update_goal", "update_plan"):
+    assert tool in value["tools"]["alsoAllow"]
+    assert tool in value["tools"]["sandbox"]["tools"]["allow"]
 compact_context = model["contextWindow"] < 32768
 model_label = "{} {}".format(model.get("id", ""), model.get("name", "")).casefold()
 small_model = any(
@@ -1227,6 +1230,7 @@ check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_recovery_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_config_matches_live "$owner" "$runtime_home" "$runtime_recovery_candidate"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); required={"create_goal","get_goal","update_goal","update_plan"}; assert required.issubset(v["tools"]["alsoAllow"]) and required.issubset(v["tools"]["sandbox"]["tools"]["allow"])' "$runtime_config"
 check test -z "$(find "$runtime_home/.openclaw" -maxdepth 1 -name '.ods-pixel-runtime-budget.*' -print -quit)"
 
 runtime_compact_config="$runtime_home/.openclaw/compact-context.json"

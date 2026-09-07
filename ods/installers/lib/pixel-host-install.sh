@@ -1293,7 +1293,7 @@ normalized_agent_tools["deny"] = [
 normalized_also_allow = [item for item in normalized_also_allow if item != "pixel_web_extract"]
 normalized_sandbox_allow = [item for item in normalized_sandbox_allow if item != "pixel_web_extract"]
 for extension_tool in (
-    "cron",
+    "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1301,7 +1301,7 @@ for extension_tool in (
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
 for permitted_tool in (
-    "cron",
+    "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1868,7 +1868,7 @@ updated_agent_tools["deny"] = [
 updated_also_allow = [item for item in updated_also_allow if item != "pixel_web_extract"]
 updated_sandbox_allow = [item for item in updated_sandbox_allow if item != "pixel_web_extract"]
 for extension_tool in (
-    "cron",
+    "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
@@ -1876,7 +1876,7 @@ for extension_tool in (
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
 for permitted_tool in (
-    "cron",
+    "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
     "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
