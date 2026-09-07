@@ -4342,6 +4342,30 @@ _remote_provider_probe_configured() {
     rm -f "$response_file"; trap - INT TERM HUP
 }
 
+cmd_refresh_models() {
+    check_install; cd "$INSTALL_DIR"
+    local subcommand="${1:-discover}"
+
+    case "$subcommand" in
+        discover|refresh)
+            echo "Scanning $INSTALL_DIR/data/models for new GGUF models..."
+            if python3 "$SCRIPT_DIR/scripts/auto-discover-models.py"; then
+                echo -e "${GREEN}✓${NC} Model configuration updated"
+                echo ""
+                echo "Available models in:"
+                echo "  • llama-server: ods/config/llama-server/models.ini"
+                echo "  • litellm: ods/config/litellm/local.yaml, hybrid.yaml"
+                return 0
+            else
+                error "Failed to discover models. Check that Python 3 is installed."
+            fi
+            ;;
+        *)
+            error "Unknown subcommand: $subcommand. Use 'ods refresh-models discover' to scan for new models."
+            ;;
+    esac
+}
+
 cmd_remote_provider_peer_models() {
     local subcmd="${1:-list}"
     shift || true
@@ -6570,6 +6594,7 @@ case "${1:-help}" in
     preset|p)    shift; cmd_preset "$@" ;;
     mode|m)      shift; cmd_mode "$@" ;;
     model)       shift; cmd_model "$@" ;;
+    refresh-models) shift; cmd_refresh_models "$@" ;;
     remote-provider) shift; cmd_remote_provider "$@" ;;
     stt)         shift; cmd_stt "$@" ;;
     backup)      shift; cmd_backup "$@" ;;
