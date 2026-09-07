@@ -65,7 +65,7 @@
       "id": "comfyui.nvidia-runtime",
       "type": "image",
       "path": "extensions/services/comfyui/Dockerfile",
-      "value": "nvidia/cuda:12.8.0-runtime-ubuntu22.04"
+      "value": "nvidia/cuda:13.2.0-runtime-ubuntu22.04"
     },
     {
       "id": "dashboard.node",
