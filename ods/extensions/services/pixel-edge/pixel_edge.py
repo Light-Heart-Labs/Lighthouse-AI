@@ -5,6 +5,8 @@ Routes:
   GET  /preview/<site>/<path> — bearer-auth, immutable preview UDS relay
   GET  /v1/models             — bearer-auth, synthetic listing only
   GET  /v1/activity           — bearer-auth, content-free active-turn count
+  GET  /v1/transition         — owner-service-auth, durable gate capability/status
+  POST /v1/transition/{acquire,release,recover} — owner-service-auth, bound gate control
   POST /v1/chat/completions   — bearer-auth, model rewrite, SSE passthrough
 
 All other paths/methods return 404 (catch-all).
@@ -22,6 +24,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 from aiohttp import web, ClientSession, UnixConnector, ClientTimeout
+from transition_gate import TransitionGate, GateError, strict_json, valid_binding
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -202,6 +205,7 @@ _ADDRESS_BEARING_HOST_ACTIONS = {
 }
 _CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
 _ACTIVE_REQUESTS_KEY = web.AppKey("pixel_active_requests", set)
+_TRANSITION_GATE_KEY = web.AppKey("pixel_transition_gate", TransitionGate)
 
 
 def _validate_config() -> str:
@@ -724,6 +728,44 @@ async def handle_activity(request: web.Request):
     return web.json_response({"active": streams > 0, "streams": streams})
 
 
+async def handle_transition(request: web.Request):
+    # Reuse the server-injected Dashboard credential, never the model/chat key.
+    # This credential already authenticates the private preview relay and must
+    # remain inaccessible to browsers, model text, and generated artifacts.
+    fail = _check_preview_auth(request)
+    if fail is not None:
+        return fail
+    if request.query_string:
+        return web.json_response({"error": "query parameters are not allowed"}, status=400)
+    gate = request.app[_TRANSITION_GATE_KEY]
+    if request.method in ("GET", "HEAD"):
+        return web.json_response(await gate.status(), headers={"Cache-Control": "no-store"})
+    if request.content_type != "application/json":
+        return web.json_response({"error": "Content-Type must be application/json"}, status=415)
+    raw = bytearray()
+    try:
+        async for chunk in request.content.iter_chunked(512):
+            raw.extend(chunk)
+            if len(raw) > 1024:
+                return web.json_response({"error": "request too large"}, status=413)
+        data = strict_json(raw)
+    except (ValueError, OSError, RecursionError):
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    if (not isinstance(data, dict) or set(data) != {"token", "revision"}
+            or not all(valid_binding(value) for value in data.values())):
+        return web.json_response({"error": "exact token and revision bindings required"}, status=400)
+    try:
+        operation = request.match_info["operation"]
+        if operation == "release":
+            result = await gate.release(data["token"], data["revision"])
+        else:
+            result = await gate.acquire(data["token"], data["revision"], recover=operation == "recover")
+    except GateError as exc:
+        return web.json_response({"error": exc.reason}, status=exc.status,
+                                 headers={"Cache-Control": "no-store"})
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+
 async def handle_chat_completions(request: web.Request):
     fail = _check_auth(request)
     if fail is not None:
@@ -755,8 +797,6 @@ async def handle_chat_completions(request: web.Request):
     req_model = data.get("model", "")
     if req_model not in _ALLOWED_MODELS:
         return web.json_response({"error": "model not allowed"}, status=400)
-    if _private_url_access_requested(data):
-        return await _private_url_response(request, data.get("stream") is True)
     empty_reply_fallback = _empty_reply_fallback(data)
     upstream_data = _with_interactive_delivery_contract(data)
     # Let the selected model's runtime/profile supply omitted sampling values.
@@ -764,23 +804,27 @@ async def handle_chat_completions(request: web.Request):
     # and cause repetitive generations. Explicit client settings pass through;
     # tool authorization remains the responsibility of the broker and harness.
     request_token = object()
-    request.app[_ACTIVE_REQUESTS_KEY].add(request_token)
     chat_id = data.get("user")
     cancel_event = None
-    if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
-        cancel_event = asyncio.Event()
-        request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
     upstream_data["model"] = _UPSTREAM_REWRITE
 
     fwd_headers = _sanitize_headers(dict(request.headers))
     fwd_headers["Content-Type"] = "application/json"
 
-    connector = UnixConnector(path=_SOCKET_PATH)
-    timeout = ClientTimeout(total=_TOTAL_TIMEOUT,
-                            sock_connect=_CONNECT_TIMEOUT,
-                            sock_read=_SOCK_READ_TIMEOUT)
-
     try:
+        await request.app[_TRANSITION_GATE_KEY].admit(request_token)
+    except GateError as exc:
+        return web.json_response({"error": exc.reason}, status=exc.status)
+    try:
+        if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
+            cancel_event = asyncio.Event()
+            request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
+        if _private_url_access_requested(data):
+            return await _private_url_response(request, data.get("stream") is True)
+        connector = UnixConnector(path=_SOCKET_PATH)
+        timeout = ClientTimeout(total=_TOTAL_TIMEOUT,
+                                sock_connect=_CONNECT_TIMEOUT,
+                                sock_read=_SOCK_READ_TIMEOUT)
         async with ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post("http://pixel-upstream/v1/chat/completions",
                                     json=upstream_data, headers=fwd_headers) as resp:
@@ -814,7 +858,7 @@ async def handle_chat_completions(request: web.Request):
     except Exception:
         return web.json_response({"error": "bad gateway"}, status=502)
     finally:
-        request.app[_ACTIVE_REQUESTS_KEY].discard(request_token)
+        await request.app[_TRANSITION_GATE_KEY].finish(request_token)
         if cancel_event is not None:
             active = request.app[_CANCEL_EVENTS_KEY].get(chat_id)
             if active is not None:
@@ -1123,10 +1167,26 @@ def create_app() -> web.Application:
     app = web.Application()
     app[_CANCEL_EVENTS_KEY] = {}
     app[_ACTIVE_REQUESTS_KEY] = set()
+    gate = TransitionGate(
+        os.environ.get("PIXEL_TRANSITION_STATE_DIR", ""), app[_ACTIVE_REQUESTS_KEY],
+        owner_key_distinct=not _constant_time_compare(config_token, preview_proxy_token),
+    )
+    app[_TRANSITION_GATE_KEY] = gate
+
+    async def stop_admission(_application):
+        await gate.shutdown()
+
+    async def close_gate(_application):
+        gate.close()
+
+    app.on_shutdown.append(stop_admission)
+    app.on_cleanup.append(close_gate)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/preview/{site_id}/{tail:.*}", handle_preview)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/v1/activity", handle_activity)
+    app.router.add_get("/v1/transition", handle_transition)
+    app.router.add_post("/v1/transition/{operation:acquire|release|recover}", handle_transition)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_post("/v1/chat/cancel", handle_chat_cancel)
     # Catch-all registered last: unmatched paths AND unmatched methods → 404.

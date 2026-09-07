@@ -14,6 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY pixel_edge.py ./
+COPY transition_gate.py ./
 
 # Non-root user
 RUN useradd -m -u 1000 pixel
