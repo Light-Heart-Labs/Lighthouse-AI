@@ -3360,6 +3360,85 @@ function inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction) {
     EXTENSION_LIFECYCLE_SUCCESS.get(action)?.has(inspection.result.currentStatus) === true;
 }
 
+const EXTENSION_READ_ACTIONS = new Set([
+  "ods.extensions.search", "ods.extensions.list", "ods.extensions.inspect",
+]);
+
+function extensionDiscoveryEligible(state) {
+  return state && !state.operationsHostCommandRequested &&
+    !state.operationsExpectedExtensionLifecycle && !state.operationsContinuation &&
+    !state.exactDownloadRequested &&
+    [...state.operationsRequiredActions].every((action) => EXTENSION_READ_ACTIONS.has(action));
+}
+
+function extensionDiscoveryActive(state) {
+  return extensionDiscoveryEligible(state) &&
+    (state.extensionDiscoveryUsed || state.operationsRequiredActions.size > 0);
+}
+
+function extensionReadSubmission(toolName, params) {
+  const steps = toolName === "pixel_ops_run" ? [params]
+    : toolName === "pixel_ops_workflow_submit" ? params?.steps : undefined;
+  return Array.isArray(steps) && steps.length > 0 && steps.every((step) =>
+    step && typeof step === "object" && !Array.isArray(step) &&
+    typeof step.target === "string" && EXTENSION_READ_ACTIONS.has(step.action));
+}
+
+function extensionInspectionEvidence(step, action, jobId) {
+  const result = extensionLifecycleResult(step, action);
+  if (!result || result.action !== "inspect") return undefined;
+  return [
+    OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+    `- Target: \`${action.target}\`; extension: \`${result.extensionId}\`.`,
+    `- Inspection: \`${result.outcome}\`; current state: \`${result.currentStatus}\`.`,
+    `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+    "- This inspection made no change and grants no installation or configuration authority.",
+    `- Broker job: \`${jobId}\`.`,
+  ].join("\n");
+}
+
+function extensionDiscoveryVerification(state) {
+  if (state.operationsSubmittedJobs.size === 0) {
+    return { status: "failed", text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
+      ...(!state.toolExecutionAttempted ? { code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE } : {}) };
+  }
+  const evidence = [];
+  let successes = 0;
+  for (const [jobId, submission] of state.operationsSubmittedJobs) {
+    const outcome = state.operationsTerminalJobs.get(jobId);
+    if (!outcome || !submission.actions.every(({ action }) => EXTENSION_READ_ACTIONS.has(action))) {
+      return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+    }
+    if (outcome.status !== "succeeded") {
+      const targets = submission.actions.map(({ target, action }) =>
+        `${JSON.stringify(target)} / ${JSON.stringify(action)}`).join(", ");
+      evidence.push(`- Broker job \`${jobId}\`: \`${outcome.status}\`; requested ${targets}. No successful result was accepted for this attempt.`);
+      continue;
+    }
+    // Match each result to its submitted parameters as well as target/action.
+    // A workflow may search several different queries or inspect several IDs;
+    // consuming matched steps avoids rebinding one receipt to another action.
+    const remaining = [...outcome.steps];
+    for (const action of submission.actions) {
+      let text;
+      const index = remaining.findIndex((step) => {
+        if (step.target !== action.target || step.action !== action.action) return false;
+        text = action.action === "ods.extensions.inspect"
+          ? extensionInspectionEvidence(step, action, jobId)
+          : operationsEvidenceText(new Set([action.action]), new Map([[jobId, {
+            ...outcome, actions: [action], steps: [step],
+          }]]));
+        return typeof text === "string";
+      });
+      if (index < 0) return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+      remaining.splice(index, 1);
+      evidence.push(text);
+      successes += 1;
+    }
+  }
+  return { status: successes > 0 ? "passed" : "failed", text: evidence.join("\n\n") };
+}
+
 function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   const mutationActions = [...requiredActions].filter(
     (action) => action.startsWith("ods.extensions.") && action !== "ods.extensions.inspect"
@@ -5596,6 +5675,7 @@ export function createToolLoopGuard({
         exactDownloadTerminalOutcome: undefined,
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
+        extensionDiscoveryUsed: false,
         operationsRequiredActions: new Set(),
         operationsHostCommandRequested: false,
         operationsExactHostCommand: undefined,
@@ -5613,6 +5693,7 @@ export function createToolLoopGuard({
         operationsContinuation: undefined,
         operationsContinuationOutcome: undefined,
         operationsSubmittedJobs: new Map(),
+        toolExecutionAttempted: false,
         operationsTerminalJobs: new Map(),
         operationsHostResultCompactionsRemaining: 0,
         operationsTerminalBlocks: 0,
@@ -6362,6 +6443,19 @@ export function createToolLoopGuard({
       !Array.isArray(pendingParams.args)
         ? pendingParams.args
         : pendingParams;
+    // No broker submission does not mean no work happened. A clean-context
+    // replay is safe only before any tool execution was attempted; a failed
+    // or disconnected call may still have produced effects. Discovery alone
+    // is metadata and can safely precede that recovery.
+    if (state && !["tool_search", "tool_describe"].includes(selectedToolName)) {
+      state.toolExecutionAttempted = true;
+    }
+    if (extensionDiscoveryEligible(state) && extensionReadSubmission(selectedToolName, selectedParams)) {
+      // Read-only discovery is a tool capability, not a prompt-derived plan.
+      // Keep actual target/query/ID intact; the broker validates their policy.
+      state.extensionDiscoveryUsed = true;
+      state.operationsRequired = true;
+    }
     if (state?.workspaceVisualContinuationRequested) {
       const continuationDirectory = state.workspaceTaskDirectory;
       const selectedPath = FILE_PATH_TOOLS.has(selectedToolName)
@@ -6798,7 +6892,7 @@ export function createToolLoopGuard({
       }
       return { block: true, blockReason: OPERATIONS_HOST_COMMAND_REQUIRES_PROPOSAL_REASON };
     }
-    if (state?.operationsInventoryOnly) {
+    if (state?.operationsInventoryOnly && !extensionDiscoveryActive(state)) {
       if (state.operationsInventory) {
         return { block: true, blockReason: OPERATIONS_INVENTORY_COMPLETE_REASON };
       }
@@ -7039,6 +7133,7 @@ export function createToolLoopGuard({
       state.operationsOdsStatusProjectionAttempted = true;
     } else if (
       state?.operationsRequired &&
+      !extensionDiscoveryActive(state) &&
       !OPERATIONS_TOOLS.has(toolName) &&
       toolName !== "tool_search" &&
       toolName !== "tool_describe" &&
@@ -7080,6 +7175,16 @@ export function createToolLoopGuard({
         `Pixel stopped a tool retry after the Operations boundary for run ${runId}; active run aborted=${aborted}`
       );
       return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
+    }
+
+    if (extensionDiscoveryActive(state) && OPERATIONS_SUBMISSION_TOOLS.has(toolName)) {
+      const params = normalizedParams ?? event?.params;
+      if (!extensionReadSubmission(toolName, params)) {
+        return { block: true, blockReason: OPERATIONS_WRONG_ACTION_REASON };
+      }
+      // An early return here bypasses only the plan-specific rewrites below;
+      // OpenClaw tool policy and the external broker still govern this call.
+      return normalizedParams === undefined ? undefined : { params: normalizedParams };
     }
 
     if (
@@ -8447,6 +8552,7 @@ export function createToolLoopGuard({
 
   function trustedOperationsContinuation(state, runId) {
     if (!state?.operationsRequired) return undefined;
+    if (extensionDiscoveryActive(state)) return undefined;
     if (state.operationsInventoryOnly) {
       if (state.operationsInventory || state.operationsInventoryAttempted) return undefined;
       return {
@@ -8869,6 +8975,7 @@ export function createToolLoopGuard({
       };
     }
     if (state.operationsRequired) {
+      if (extensionDiscoveryActive(state)) return extensionDiscoveryVerification(state);
       if (state.operationsInventoryOnly) {
         const inventoryText = operationsInventoryEvidenceText(state.operationsInventory);
         return inventoryText
@@ -8897,7 +9004,7 @@ export function createToolLoopGuard({
         return {
           status: "failed",
           text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
-          code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
+          ...(!state.toolExecutionAttempted ? { code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE } : {}),
         };
       }
       if (
@@ -9051,7 +9158,7 @@ export function createToolLoopGuard({
     const verification = verificationForRun(runId);
     const state = runs.get(runId);
     const readOnlyOperations = state?.operationsRequired &&
-      (state.operationsInventoryOnly ||
+      (extensionDiscoveryActive(state) || state.operationsInventoryOnly ||
         (state.operationsRequiredActions.size > 0 &&
           [...state.operationsRequiredActions].every((action) =>
             action.startsWith("host.") || action === "ods.extensions.list" || action === "ods.extensions.search")));
