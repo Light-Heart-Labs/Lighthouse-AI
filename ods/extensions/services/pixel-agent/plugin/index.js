@@ -42,12 +42,15 @@ import {
 } from "./host-observe.mjs";
 import { createEvidenceArtifactWriter } from "./evidence-artifact.mjs";
 import { createWorkspacePreviewTool } from "./workspace-preview.mjs";
+import { createAccessRuntime, executionHostForAgent } from "./access-runtime.mjs";
+import { createOpenClawCodingTools, resolveSandboxContext, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
 const ABORT_BODY_LIMIT = 256;
 const OPENAI_RUN_ID = /^chatcmpl_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const toolLoopGuardRegistry = createToolLoopGuardRegistry();
-const execCancellationControl = createExecCancellationControl();
+let execCancellationControl;
+let accessRuntime;
 const evidenceArtifactWriter = createEvidenceArtifactWriter();
 
 // Restrict tool registration to the Pixel agent. Tools are only offered to the
@@ -195,6 +198,13 @@ export default definePluginEntry({
   name: "Pixel ODS Integration",
   description: "Read-only ODS status and strictly guarded public-page evidence for Pixel.",
   register(api) {
+    execCancellationControl ??= createExecCancellationControl({
+      executionHost: executionHostForAgent(api.config, AGENT_ID),
+    });
+    accessRuntime ??= createAccessRuntime({config: () => api.config,
+      createTools: createOpenClawCodingTools, resolveSandbox: resolveSandboxContext,
+      execControl: () => execCancellationControl, runtimeVersion: OPENCLAW_VERSION,
+      hooksAllowed: api.config?.plugins?.entries?.["pixel-ods"]?.hooks?.allowConversationAccess === true});
     const statusFile = statusFileFromEnv();
     const configuredContextWindow = api.pluginConfig?.modelContextWindow;
     const configuredLeanPrompt = api.pluginConfig?.leanPrompt === true;
@@ -232,17 +242,42 @@ export default definePluginEntry({
     api.on("model_call_started", (event, context) =>
       toolLoopGuard.observeModelCall(event, context, AGENT_ID)
     );
-    api.on("before_tool_call", (event, context) =>
-      withPixelCronDeliveryDefault(
-        toolLoopGuard.beforeToolCall(event, context, AGENT_ID),
-        event,
-        context,
-        AGENT_ID,
-      )
-    );
-    api.on("after_tool_call", (event, context) =>
-      toolLoopGuard.afterToolCall(event, context, AGENT_ID)
-    );
+    api.on("before_agent_run", (event, context) => accessRuntime.admit(undefined, context));
+    api.on("agent_end", (event, context) => accessRuntime.finish({runId: event.runId}, context));
+    api.on("before_tool_call", async (event, context) => {
+      if (accessRuntime.isProbe(context)) return;
+      const guard = withPixelCronDeliveryDefault(
+        await toolLoopGuard.beforeToolCall(event, context, AGENT_ID),
+        event, context, AGENT_ID,
+      );
+      if (guard?.block) return guard;
+      return accessRuntime.beforeTool(event, context) ?? guard;
+    });
+    api.on("after_tool_call", (event, context) => {
+      accessRuntime.afterTool(event, context);
+      if (!accessRuntime.isProbe(context)) return toolLoopGuard.afterToolCall(event, context, AGENT_ID);
+    });
+    api.registerHttpRoute({path: "/pixel-ods/access-runtime", auth: "gateway", match: "exact",
+      handler: async (req, res) => {
+        if (req.url !== "/pixel-ods/access-runtime") { sendJson(res, 400, {error: "invalid request"}); return true; }
+        if (req.method === "GET") { sendJson(res, 200, accessRuntime.status()); return true; }
+        if (req.method !== "POST") { sendJson(res, 405, {error: "method not allowed"}); return true; }
+        try {
+          let body = "";
+          for await (const chunk of req) { body += chunk.toString(); if (body.length > 512) throw new Error(); }
+          const value = JSON.parse(body);
+          if (!value || Object.keys(value).sort().join() !== "operation,revision,token" ||
+              !/^[a-f0-9]{64}$/.test(value.token) || !/^[a-f0-9]{64}$/.test(value.revision)) throw new Error();
+          let result;
+          if (value.operation === "acquire") result = accessRuntime.acquire(value.token, value.revision);
+          else if (value.operation === "release") result = accessRuntime.release(value.token);
+          else if (value.operation === "probe") result = await accessRuntime.probe(value.token);
+          else throw new Error();
+          sendJson(res, 200, result);
+        } catch { sendJson(res, 409, {error: "access transition unavailable, busy, or proof failed"}); }
+        return true;
+      },
+    });
     api.on("tool_result_persist", (event, context) =>
       toolLoopGuard.toolResultPersist(event, context, AGENT_ID)
     );

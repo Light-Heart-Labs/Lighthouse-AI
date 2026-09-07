@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import re
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -144,6 +144,60 @@ class ChatCancelRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/pixel", tags=["pixel"])
+
+
+class PixelAccessChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    mode: Literal["sandboxed", "full-access"]
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirmed: bool
+
+
+class PixelAccessStatus(BaseModel):
+    # Project only the public mode contract; host credentials and receipts never
+    # cross into browser state, even if the upstream gains new fields.
+    model_config = ConfigDict(extra="ignore", strict=True)
+    available: bool
+    surface: Literal["linux-systemd", "wsl-systemd", "linux", "darwin", "windows"]
+    configured_mode: Literal["sandboxed", "full-access", "unknown"]
+    effective_mode: Literal["sandboxed", "full-access", "unknown"]
+    runtime_verified: bool
+    revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    busy: bool
+    pending: bool
+    reason: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,95}$")
+    scope: Literal["owner-host"]
+
+
+def _access_projection(value):
+    try:
+        status = PixelAccessStatus.model_validate(value)
+        if (status.runtime_verified != (status.effective_mode != "unknown")
+                or status.runtime_verified and (not status.available or status.pending
+                    or status.effective_mode != status.configured_mode)):
+            raise ValueError("inconsistent runtime proof")
+        return status.model_dump()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=502, detail="Pixel access status could not be verified") from None
+
+
+@router.get("/access-mode", dependencies=[Depends(verify_api_key)])
+async def pixel_access_status():
+    try:
+        return _access_projection(await request_agent_json("GET", "/v1/pixel/access-mode", timeout=30.0))
+    except AgentClientError:
+        raise HTTPException(status_code=503, detail="Pixel access service is unavailable") from None
+
+
+@router.post("/access-mode", dependencies=[Depends(verify_api_key)])
+async def pixel_access_change(change: PixelAccessChange):
+    if change.mode == "full-access" and not change.confirmed:
+        raise HTTPException(status_code=400, detail="Confirm the Full Access risk before enabling it")
+    try:
+        value = await request_agent_json("POST", "/v1/pixel/access-mode", payload=change.model_dump(), timeout=330.0)
+        return _access_projection(value)
+    except AgentClientError:
+        raise HTTPException(status_code=409, detail="The access change was not verified. Refresh status before retrying or restoring safer mode.") from None
 
 
 async def _host_model_status() -> dict[str, object] | None:

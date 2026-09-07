@@ -21,11 +21,13 @@ services:
       - PIXEL_INGRESS_SOCKET=/pixel-runtime/pixel-ingress.sock
       - PIXEL_PREVIEW_PROXY_KEY=${DASHBOARD_API_KEY:?Set DASHBOARD_API_KEY in .env}
       - PIXEL_PREVIEW_SOCKET=/pixel-preview-runtime/http.sock
+      - PIXEL_TRANSITION_STATE_DIR=/pixel-transition-state
     group_add:
       - "${PIXEL_INGRESS_GID:?Set PIXEL_INGRESS_GID in .env}"
     volumes:
       - "${PIXEL_INGRESS_RUNTIME_DIR:?Set PIXEL_INGRESS_RUNTIME_DIR in .env}:/pixel-runtime:ro"
       - "${PIXEL_PREVIEW_RUNTIME_DIR:?Set PIXEL_PREVIEW_RUNTIME_DIR in .env}:/pixel-preview-runtime:ro"
+      - pixel-transition-state:/pixel-transition-state
     tmpfs:
       - /tmp:size=1M,noexec,nosuid,nodev,mode=1777
     deploy:
@@ -76,3 +78,8 @@ services:
     environment:
       PIXEL_EDGE_URL: "http://pixel-edge:9595"
       PIXEL_OPENWEBUI_KEY: "${PIXEL_OPENWEBUI_KEY:?Set PIXEL_OPENWEBUI_KEY in .env}"
+
+volumes:
+  # Docker copies the image's pixel-owned 0700 directory into a new volume.
+  # Existing state is retained across image rebuilds, restarts and mode changes.
+  pixel-transition-state:

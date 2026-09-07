@@ -616,7 +616,7 @@ def _require_idle(check_no_active_run, staged=None):
 def enable_full_access(config_path, state_dir=None, *, confirmed=False,
                        validate_config=None, restart=None,
                        check_no_active_run=None, lock_timeout=DEFAULT_LOCK_TIMEOUT,
-                       now=None):
+                       now=None, expected_config_sha256=None):
     """Switch the pixel agent to unsandboxed full access (see module docstring)."""
     if not confirmed:
         raise AccessModeRejected(
@@ -632,6 +632,8 @@ def enable_full_access(config_path, state_dir=None, *, confirmed=False,
     validate = _normalize_validate(validate_config)
     sd = _prepare_state_dir(state_dir or _default_state_dir())
     with _Lock(sd, exclusive=True, timeout=lock_timeout):
+        if expected_config_sha256 is not None and _sha256_bytes(_load_config(config_path)[2]) != expected_config_sha256:
+            raise AccessModeRace("config-changed", "configuration changed since inspection")
         return _enable_locked(config_path, sd, validate, restart,
                               check_no_active_run, confirmed)
 
@@ -776,7 +778,7 @@ def _utcnow():
 
 def restore_sandbox(config_path, state_dir=None, *, validate_config=None,
                     restart=None, check_no_active_run=None,
-                    lock_timeout=DEFAULT_LOCK_TIMEOUT):
+                    lock_timeout=DEFAULT_LOCK_TIMEOUT, expected_config_sha256=None):
     """Restore the five baseline fields only while idle, with restart and health."""
     if not callable(check_no_active_run):
         raise AccessModeRejected("no-active-run-check", "a live no-active-run check function is required")
@@ -785,6 +787,8 @@ def restore_sandbox(config_path, state_dir=None, *, validate_config=None,
     validate = _normalize_validate(validate_config)
     sd = _prepare_state_dir(state_dir or _default_state_dir())
     with _Lock(sd, exclusive=True, timeout=lock_timeout):
+        if expected_config_sha256 is not None and _sha256_bytes(_load_config(config_path)[2]) != expected_config_sha256:
+            raise AccessModeRace("config-changed", "configuration changed since inspection")
         return _restore_locked(config_path, sd, validate, restart, check_no_active_run)
 
 
