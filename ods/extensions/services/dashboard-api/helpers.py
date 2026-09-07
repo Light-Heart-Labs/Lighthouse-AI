@@ -1146,3 +1146,16 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def validate_tuple_pair_types(pair: object, expected_types: tuple = (str, str)) -> bool:
+    """Validate 2-element tuple or list pair for strict length and item types.
+
+    Returns True if pair is a sequence of exactly 2 elements matching expected_types,
+    otherwise returns False safely without raising TypeError or IndexError.
+    """
+    if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+        return False
+    t1, t2 = expected_types
+    return isinstance(pair[0], t1) and isinstance(pair[1], t2)
+
