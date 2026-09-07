@@ -40,6 +40,24 @@ def run(installation, **kwargs):
     return repair_module.repair(runtime, state, manifest_path=manifest, **kwargs)
 
 
+def test_completion_module_has_separate_exact_byte_custody(installation):
+    runtime, state, manifest, module, original, patched = installation
+    completion = module.with_name(repair_module.COMPLETION_MODULE)
+    module.rename(completion)
+    outcome = run(installation, module_name=repair_module.COMPLETION_MODULE)
+    assert outcome["module"] == repair_module.COMPLETION_MODULE
+    assert completion.read_bytes() == patched
+    run(installation, module_name=repair_module.COMPLETION_MODULE, restore=True)
+    assert completion.read_bytes() == original
+    assert not module.exists()
+
+
+def test_unrecognized_module_cannot_expand_repair_targets(installation):
+    with pytest.raises(ValueError, match="unsupported runtime repair module"):
+        run(installation, module_name="../other-file.js")
+    assert not installation[1].exists()
+
+
 def test_apply_reapply_restore_preserve_bytes_permissions_and_backup(installation):
     _, state, _, module, original, patched = installation
     assert run(installation)["status"] == "changed"

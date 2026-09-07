@@ -16,6 +16,7 @@ import tempfile
 
 MANIFEST = Path(__file__).with_name("openclaw-tool-recovery.json")
 MODULE = "tool-loop-detection-C0oQKkXZ.js"
+COMPLETION_MODULE = "agent-command-DeS125kF.js"
 VERSION = "2026.6.33"
 
 
@@ -53,7 +54,10 @@ def atomic_write(path, data, mode=0o600):
             os.unlink(temporary)
 
 
-def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST):
+def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
+           module_name=MODULE):
+    if module_name not in {MODULE, COMPLETION_MODULE}:
+        raise ValueError("unsupported runtime repair module")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     package = json.loads((runtime_root / "package.json").read_text(encoding="utf-8"))
     if package.get("name") != "openclaw":
@@ -68,7 +72,7 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST):
     lock_fd = os.open(state_dir / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(lock_fd, "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        module = runtime_root / "dist" / MODULE
+        module = runtime_root / "dist" / module_name
         current, mode = read_regular(module)
         before = manifest["sourceSha256"]
         after = manifest["patchedSha256"]
@@ -100,7 +104,7 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST):
         if digest(candidate) != after:
             raise ValueError("runtime repair candidate hash mismatch")
         target = original if restore else candidate
-        receipt = {"schemaVersion": 1, "version": VERSION, "module": MODULE,
+        receipt = {"schemaVersion": 1, "version": VERSION, "module": module_name,
                    "sourceSha256": before, "patchedSha256": after,
                    "backup": backup.name, "desiredSha256": digest(target)}
         receipt_path = state_dir / "receipt.json"
@@ -124,9 +128,14 @@ def main():
     parser.add_argument("--openclaw-bin", required=True, type=Path)
     parser.add_argument("--state-dir", required=True, type=Path)
     parser.add_argument("--restore", action="store_true")
+    parser.add_argument("--completion-recovery", action="store_true")
     args = parser.parse_args()
     runtime_root = args.openclaw_bin.resolve(strict=True).parent
-    print(json.dumps(repair(runtime_root, args.state_dir, restore=args.restore)))
+    options = {}
+    if args.completion_recovery:
+        options = {"module_name": COMPLETION_MODULE,
+                   "manifest_path": MANIFEST.with_name("openclaw-completion-recovery.json")}
+    print(json.dumps(repair(runtime_root, args.state_dir, restore=args.restore, **options)))
 
 
 if __name__ == "__main__":

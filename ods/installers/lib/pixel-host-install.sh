@@ -3818,6 +3818,7 @@ ods_pixel_install_default_agent() {
         && -f "$plugin_root/host/system_observe.py" \
         && -f "$plugin_root/host/openclaw_tool_recovery.py" \
         && -f "$plugin_root/host/openclaw-tool-recovery.json" \
+        && -f "$plugin_root/host/openclaw-completion-recovery.json" \
         && -f "$plugin_root/host/pixel-ops-broker-ods.conf" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
@@ -4061,6 +4062,17 @@ ods_pixel_install_default_agent() {
         --state-dir "$home/.openclaw/ods-runtime-patches/tool-recovery" \
         >>"$pixel_log" 2>&1; then
         ai_bad "Pixel's runtime recovery repair could not verify its package bytes. See $pixel_log."
+        return 1
+    fi
+    # Embedded model runs already own context compaction. Do not run the CLI
+    # post-turn compactor on their persisted final reply: a redundant timeout
+    # there discarded a completed task and its verified preview.
+    if ! ods_pixel_run_as_owner "$owner" "$home" python3 \
+        "$plugin_root/host/openclaw_tool_recovery.py" \
+        --openclaw-bin "$openclaw_bin" --completion-recovery \
+        --state-dir "$home/.openclaw/ods-runtime-patches/completion-recovery" \
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel's completion recovery repair could not verify its package bytes. See $pixel_log."
         return 1
     fi
     # The runtime overlay above replaces the live configuration atomically.

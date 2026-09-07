@@ -35,3 +35,24 @@ Validation includes execution against the real installed runtime's exported
 record/outcome/detect functions, preserving the other detectors, plus separate
 backup, idempotence, restore, interrupted-write, and changed-package tests.
 These tests do not replace live ODS recovery and fresh-install qualification.
+
+## OpenClaw 2026.6.33 embedded completion recovery
+
+The shared transcript persistence path also fills gaps in embedded agent
+transcripts. It incorrectly ran the CLI post-turn compactor on those embedded
+results. In live ODS testing, the model completed its task and published a
+verified preview, then this redundant compactor timed out and caused the
+OpenAI-compatible endpoint to discard the completed response.
+
+The reviewed `openclaw-completion-recovery.json` transformation limits that
+CLI lifecycle call to actual CLI runners. Embedded transcript persistence and
+the embedded runner's own context management remain intact; this does not
+increase context, output or timeout limits. CLI compaction is unchanged.
+
+This repair has the same exact-byte, version, backup and restore requirements
+as the discovery repair. Its separate custody directory is
+`.openclaw/ods-runtime-patches/completion-recovery`; pass
+`--completion-recovery --restore` to the helper to restore its original bytes.
+The transformation includes a small portion of OpenClaw's MIT-licensed agent
+command runtime, Copyright (c) 2026 OpenClaw Foundation; see the same complete
+[upstream MIT notice](upstream/THIRD_PARTY_NOTICES.md).
