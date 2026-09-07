@@ -3908,6 +3908,41 @@ function workspacePreviewMkdirDirectory(params) {
   return directory;
 }
 
+// Keep status UI elements separate from requests for platform facts.
+function statusKeywordIsUiNounPhrase(clause, keywordIndex, keywordLen) {
+  const uiWords =
+    /\b(?:preview|component|page|dashboard|message|indicator|display|design|monitor|light|accessible|contrast)\b/i;
+  const prepBoundary =
+    /\b(?:in|on|at|by|for|with|from|to|of|about|into|through|during|shown|displayed|using|via|where|which|that|and|but|or)\b/i;
+  const punctBoundary = /[,.?;:!]/;
+
+  const words = [];
+  const wordRe = /\S+/g;
+  let m;
+  while ((m = wordRe.exec(clause)) !== null) {
+    words.push({ text: m[0], start: m.index, end: m.index + m[0].length });
+  }
+
+  let kwWordIdx = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].start <= keywordIndex && words[i].end >= keywordIndex + keywordLen) {
+      kwWordIdx = i;
+      break;
+    }
+  }
+  if (kwWordIdx === -1) return false;
+
+  for (let i = kwWordIdx - 1; i >= Math.max(0, kwWordIdx - 4); i--) {
+    if (uiWords.test(words[i].text)) return true;
+    if (prepBoundary.test(words[i].text) || punctBoundary.test(words[i].text)) break;
+  }
+  for (let i = kwWordIdx + 1; i < Math.min(words.length, kwWordIdx + 5); i++) {
+    if (uiWords.test(words[i].text)) return true;
+    if (prepBoundary.test(words[i].text) || punctBoundary.test(words[i].text)) break;
+  }
+  return false;
+}
+
 export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return [];
@@ -3947,11 +3982,43 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
     !rejectsStatus &&
     (/\bpixel_ods_status\b/i.test(text) ||
       asksModelState ||
-      /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b/i.test(
-        text
+      text.split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i).some(
+        (clause) => {
+          const hasStatusKeyword =
+            /\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b/i.test(
+              clause
+            ) ||
+            /\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
+              clause
+            );
+          if (!hasStatusKeyword) return false;
+          // UI/design context words adjacent to the status keyword indicate a
+          // descriptive reference, not a platform health query.
+          const statusKeywordMatch = clause.match(
+            /\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b/i
+          );
+          const hasUiDesignContext = statusKeywordMatch
+            ? statusKeywordIsUiNounPhrase(clause, statusKeywordMatch.index, statusKeywordMatch[0].length)
+            : false;
+          // Interrogative verbs that request facts, not UI actions.
+          const queryVerb =
+            /\b(?:what|which|identify|name|report|tell|show|inspect|check|verify|list)\b/i.test(
+              clause
+            );
+          const copulaQuestion =
+            /^\s*(?:is|are|was|were|has|have)\s+(?:the\s+)?(?:ODS|Pixel)\b/i.test(clause);
+          if (hasUiDesignContext) return false;
+          const bareQuery = /^\s*(?:ODS|Pixel)\s+(?:health|status|online|service count|services online|context (?:window|length|limit))\s*$/i.test(clause);
+          return queryVerb || copulaQuestion || bareQuery;
+        }
       ) ||
-      /\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b/i.test(
-        text
+      // Bare queries ("ODS status?") have their question marks consumed by
+      // the clause splitter. Retain punctuation for the remaining question
+      // forms, and apply the UI check to the same sentence.
+      (text.match(/[^.!?]*[.!?]|[^.!?]*\n/g) ?? []).some((s) =>
+        (/\b(?:ODS|Pixel)\b.{0,80}\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b[^.!?]{0,32}\?/i.test(s) ||
+          /\b(?:health|status|online|service count|services online|context (?:window|length|limit))\b.{0,80}\b(?:ODS|Pixel)\b[^.!?]{0,32}\?/i.test(s)) &&
+        !/\b(?:preview|component|page|dashboard|message|indicator|display|design|light)\b/i.test(s)
       ) ||
       asksAvailability ||
       asksDockerStatus ||

@@ -12309,3 +12309,222 @@ test("normalizes the common write filePath alias across direct and nested core f
     assert.equal(foreign, undefined);
   }
 });
+
+test("ODS status keywords in descriptive UI context do not require projection", () => {
+  // --- Negatives: platform status words embedded in UI/design context ---
+
+  // Captured failure: "accessible status message" is a UI element, not a platform query
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Build an offline maze game in /workspace/maze-lab/index.html. Use a solvable 9x9 " +
+        "grid, arrows/WASD plus touch direction buttons, moves counter, win message and " +
+        "Reset. Keep the ODS narrow preview usable, with high-contrast walls and an accessible " +
+        "status message. No external dependencies or storage requirement. Verify a start-to-goal " +
+        "route with available runtime tools, read final source and publish for actual play " +
+        "testing. Preserve every other project."
+    ),
+    []
+  );
+
+  // Descriptive mentions of ODS + status without interrogative intent
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Keep the ODS narrow preview usable."
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "The ODS status page design needs a status indicator."
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Write an ODS status component for the UI."
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Build a maze game with ODS preview and status message display."
+    ),
+    []
+  );
+
+  // "Show an accessible status message in the ODS preview" has "show" + "status" + "ODS"
+  // but is a UI instruction, not a platform health query
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Show an accessible status message in the ODS preview."
+    ),
+    []
+  );
+
+  // Interrogative verb + UI context: "What" and "which" do not override design context
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "What should the ODS status page design look like?"
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Which ODS status component should I build?"
+    ),
+    []
+  );
+
+  // Repair prompt from the original failure scenario
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Repair ODS tool-requirement classification so UI/app status and narrow ODS preview " +
+        "design do not demand real platform status."
+    ),
+    []
+  );
+
+  // Clause separation: "ODS" and "status" in different semantic contexts
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Work in /workspace/project. Build a status dashboard. The ODS preview should show it."
+    ),
+    []
+  );
+
+  // --- Negatives: genuine negation preserved ---
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Create input.csv in the workspace. Do not check ODS status or ODS applications."
+    ),
+    []
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "For this request, do only a small workspace file conversion; do not inspect ODS status, host health or other machines."
+    ),
+    []
+  );
+
+  // --- Positives: genuine terse platform queries ---
+  assert.deepEqual(userMessageOdsToolRequirements([], "What is the ODS status?"), [
+    "pixel_ods_status",
+  ]);
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Report the ODS health and tell me which services are online."
+    ),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Check if Pixel is online."),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Is the ODS status healthy?"),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Show me the ODS service count."),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Tell me about Pixel health."),
+    ["pixel_ods_status"]
+  );
+
+  // Bare terse queries (question mark consumed by clause splitter; detected via original text)
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "ODS status?"),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Pixel health?"),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "ODS online?"),
+    ["pixel_ods_status"]
+  );
+
+  // Bare query in one sentence, UI word in another: per-sentence veto preserves the query
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "ODS status? Preserve the dashboard."),
+    ["pixel_ods_status"]
+  );
+
+  // Genuine status request mentioning dashboard in a prepositional phrase
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Report the ODS status shown on the dashboard."),
+    ["pixel_ods_status"]
+  );
+
+  // Copula question about UI design does not force projection
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Is the ODS status page design accessible?"),
+    []
+  );
+
+  for (const prompt of ["Show ODS status.", "Show Pixel health.", "Show the ODS status on the dashboard.", "ODS status", "Pixel health"]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), ["pixel_ods_status"]);
+  }
+
+  // Inspect actual health
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Inspect the ODS health."),
+    ["pixel_ods_status"]
+  );
+  assert.deepEqual(
+    userMessageOdsToolRequirements([], "Verify the ODS status."),
+    ["pixel_ods_status"]
+  );
+
+  // Direct tool reference still works
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Run pixel_ods_status to get the current model."
+    ),
+    ["pixel_ods_status"]
+  );
+
+  // Mixed task with real platform query still triggers projection
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Build a maze game at /workspace/maze/index.html. Also check the ODS status before starting."
+    ),
+    ["pixel_ods_status"]
+  );
+
+  // Mixed task: file creation + separate platform query in a later clause
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Create the file and report the Pixel health."
+    ),
+    ["pixel_ods_status"]
+  );
+
+  // "show me the current" fact-request pattern counts as a query
+  assert.deepEqual(
+    userMessageOdsToolRequirements(
+      [],
+      "Show me the current ODS status."
+    ),
+    ["pixel_ods_status"]
+  );
+});
