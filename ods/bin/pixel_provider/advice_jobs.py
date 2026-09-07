@@ -10,7 +10,8 @@ import os
 from pathlib import Path
 import threading
 
-from .advice import AdvisoryCall,JOB_ID,validate_request
+from .advice import JOB_ID,validate_request
+from .advice_call import WorkerAdvisoryCall
 from .client import _json,_write_private,read_private
 from .store import ProviderStore,StoreError,decode_document
 
@@ -24,7 +25,7 @@ def _sync_dir(path):
 
 
 class AdvisoryJobs:
-    def __init__(self,directory,*,call_factory=AdvisoryCall):
+    def __init__(self,directory,*,call_factory=WorkerAdvisoryCall):
         self.providers = Path(directory)
         self.root = self.providers/'advice-jobs'
         self.call_factory = call_factory
@@ -131,7 +132,7 @@ class AdvisoryJobs:
             return True
         result = dict(status='failed',result=None,error='advice-failed')
         try:
-            answer = asyncio.run(call.execute(cancelled=cancelled))
+            answer = call.run(cancelled=cancelled,lock_fds=(lock_fd,slot_fd))
             result = dict(status='completed',result=answer,error=None)
         except asyncio.CancelledError:
             result = dict(status='cancelled',result=None,error=None)

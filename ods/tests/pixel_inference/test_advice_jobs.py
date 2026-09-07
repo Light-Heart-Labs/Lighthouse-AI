@@ -23,6 +23,9 @@ class FakeCall:
         self.body=body
     def metadata(self):
         return dict(jobId=self.body['requestId'],revision=1,providerId='backup')
+    def run(self,*,cancelled,lock_fds):
+        assert len(lock_fds)==2
+        return asyncio.run(self.execute(cancelled=cancelled))
     async def execute(self,*,cancelled):
         type(self).calls+=1
         for _ in range(50):

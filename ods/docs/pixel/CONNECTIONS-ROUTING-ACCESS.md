@@ -357,11 +357,44 @@ the tracked job. Forgetting tracking does not stop a request or erase host
 evidence. Cancelling discards a late answer; it cannot undo upstream work or
 charges. Host evidence requires an explicit future retention/deletion workflow.
 
-This candidate currently requires a POSIX host-agent interpreter with Python
-3.11+, `httpx` and `fastapi`. Normal host-agent installation does not yet provision
-this optional runtime; do not claim fresh-install advisory readiness. The
-default agent's provider activation and an advisor-to-leader execution journey
-are also still pending. Existing installs are not changed by saving profiles.
+The host-agent stays stdlib-only (Python 3.9+). Advice now requires a separately
+prepared, owner-private Python 3.11+ worker. Preparation is explicit; saving
+profiles or starting ODS never installs packages or changes the host interpreter.
+From the installed ODS directory, run as the same OS user as the host agent:
+
+```sh
+python3 bin/ods-pixel-advice-runtime status --provider-directory /absolute/ods/data/pixel-providers
+python3 bin/ods-pixel-advice-runtime prepare --provider-directory /absolute/ods/data/pixel-providers \
+  --python /usr/bin/python3.12 --expected-revision 0 --confirm-install
+```
+
+Replace the paths with the actual provider directory and an already-installed
+Python 3.11+ supporting `venv`. Use the **runtime** revision returned by status,
+not the provider Settings revision. The confirmed command downloads compatible
+FastAPI/httpx dependencies from PyPI into a new private venv, records resolved
+versions/archive hashes, runs an offline import check, and atomically publishes
+its revisioned pointer. It never runs global pip, upgrades Python, or restarts
+existing services. Repeating preparation at the current ready revision is a
+no-op. A missing/unsafe Python or unavailable `venv` needs operator remediation;
+the command does not install OS packages or acquire administrative privileges.
+
+The source bundle, installed tree and interpreter are hashed before use. Drift
+blocks new calls; explicitly reprepare after an ODS source/interpreter update.
+Failed/old runtime directories stay inactive and retained, not automatically
+deleted. This is owner-private custody, not protection from a malicious process
+with the same OS identity. Resolved dependencies are recorded for each prepare;
+different prepares may resolve newer versions within the supported ranges.
+
+One bounded private pipe carries the approved capsule and selected credential;
+neither goes in argv, environment, or runtime files. No new listener is opened.
+The worker inherits job/concurrency locks; cancellation reaps its process group,
+and parent loss closes stdin, cancelling upstream work with a two-second forced
+exit fallback. Core dumps are disabled in the worker. No interrupted job replays.
+
+Guided dependency provisioning/repair in the dashboard, default agent provider
+activation and advisor-to-leader execution remain pending. Linux tests do not
+qualify native Windows/macOS, and this optional command is not full installation
+acceptance. Existing installs are not changed by saving profiles.
 
 An isolated actual dashboard/host fixture completed a real Tower2 GLM advisory
 request, recovered its result after reload without another call, and pasted it

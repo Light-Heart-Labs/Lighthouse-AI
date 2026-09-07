@@ -8,6 +8,20 @@ on:
       - master
 
 jobs:
+  pixel-advice-host-stdlib:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.9', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Host import and runtime status require no optional dependencies
+        working-directory: ods
+        run: python -I -S tests/pixel_inference/check_advice_stdlib.py
+
   pixel-inference-contracts:
     runs-on: ubuntu-latest
     strategy:
