@@ -54,3 +54,4 @@ TasksMax=32
 
 [Install]
 WantedBy=multi-user.target
+WantedBy=openclaw-gateway.service
