@@ -30,6 +30,7 @@ import {
 import {
   createExecCancellationControl,
   createToolLoopGuardRegistry,
+  privateBrowserAccessForAgent,
 } from "./tool-loop-guard.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
@@ -217,11 +218,13 @@ export default definePluginEntry({
     // continuation. Give the Pixel agent an explicit, trusted prompt contract
     // so every ODS lookup is followed by a user-visible answer.
     api.on("before_prompt_build", (event, context) => {
-      toolLoopGuard.observeRun(context, AGENT_ID, event);
+      const privateBrowserAccess = privateBrowserAccessForAgent(api.config, AGENT_ID);
+      toolLoopGuard.observeRun(context, AGENT_ID, event, { privateBrowserAccess });
       return promptContractForAgent(context, AGENT_ID, event, {
         verificationStatus: toolLoopGuard.verificationStatus(context?.runId),
         configuredContextWindow,
         configuredLeanPrompt,
+        privateBrowserAccess,
       });
     });
     api.on("model_call_started", (event, context) =>

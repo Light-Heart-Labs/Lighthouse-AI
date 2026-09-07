@@ -1142,11 +1142,11 @@ class TestResponseRewrite(BaseEdgeTest):
 
 
 # ---------------------------------------------------------------------------
-# Private URL boundary
+# Private URL requests reach the capability-aware gateway
 # ---------------------------------------------------------------------------
 
 class TestPrivateUrlBoundary(BaseEdgeTest):
-    async def test_non_stream_private_url_returns_exact_local_reply(self):
+    async def test_non_stream_private_url_reaches_gateway(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",
             headers=self.auth(),
@@ -1160,11 +1160,12 @@ class TestPrivateUrlBoundary(BaseEdgeTest):
             self.assertEqual(data["model"], "pixel/default")
             self.assertEqual(
                 data["choices"][0]["message"]["content"],
-                self.pe._PRIVATE_URL_REPLY,
+                "openclaw/default is assistant text",
             )
-        self.assertEqual(self.up_runner.app["chat_requests"], [])
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+        self.assertIn("http://127.0.0.1:3000", str(self.up_runner.app["chat_requests"][0]["messages"]))
 
-    async def test_stream_private_url_returns_exact_local_reply(self):
+    async def test_stream_private_url_reaches_gateway(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",
             headers=self.auth(),
@@ -1183,11 +1184,12 @@ class TestPrivateUrlBoundary(BaseEdgeTest):
             self.assertEqual(resp.status, 200)
             self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
             body = await resp.text()
-            self.assertIn(self.pe._PRIVATE_URL_REPLY, body)
+            self.assertIn("openclaw/default is assistant text", body)
             self.assertIn('"model": "pixel/default"', body)
             self.assertIn('"finish_reason": "stop"', body)
             self.assertTrue(body.endswith("data: [DONE]\n\n"))
-        self.assertEqual(self.up_runner.app["chat_requests"], [])
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+        self.assertIn("http://dashboard.local/status", str(self.up_runner.app["chat_requests"][0]["messages"]))
 
     async def test_public_url_forwards_normally(self):
         async with self.client.post(
@@ -1231,7 +1233,7 @@ class TestPrivateUrlBoundary(BaseEdgeTest):
             self.assertEqual(resp.status, 200)
         self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
 
-    async def test_draft_then_access_private_url_is_still_blocked(self):
+    async def test_draft_then_access_private_url_reaches_gateway(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",
             headers=self.auth(),
@@ -1250,9 +1252,9 @@ class TestPrivateUrlBoundary(BaseEdgeTest):
             data = await resp.json()
             self.assertEqual(
                 data["choices"][0]["message"]["content"],
-                self.pe._PRIVATE_URL_REPLY,
+                "openclaw/default is assistant text",
             )
-        self.assertEqual(self.up_runner.app["chat_requests"], [])
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
 
 
 # ---------------------------------------------------------------------------

@@ -5217,6 +5217,30 @@ export function userMessageRequestsPrivateUrl(messages, prompt = undefined) {
   return textRequestsPrivateUrlAccess(text);
 }
 
+// Browser access comes from owner configuration, never model claims.
+export function privateBrowserAccessForAgent(config, agentId = "pixel") {
+  if (config?.browser?.enabled !== true || config?.plugins?.enabled === false ||
+      config?.plugins?.entries?.browser?.enabled === false) return false;
+  if (Array.isArray(config?.plugins?.allow) &&
+      !config.plugins.allow.includes("browser")) return false;
+  const agent = config?.agents?.list?.find((entry) => entry?.id === agentId);
+  if (!agent) return false;
+  const allowsBrowser = (policy) => {
+    if (policy?.deny?.some((name) => name === "browser" || name === "*")) return false;
+    return !Array.isArray(policy?.allow) ||
+      policy.allow.some((name) => name === "browser" || name === "*") ||
+      policy.alsoAllow?.includes("browser") === true;
+  };
+  if (!allowsBrowser(config.tools) || !allowsBrowser(agent.tools)) return false;
+  const defaults = config.agents.defaults?.sandbox ?? {};
+  const sandbox = agent.sandbox ?? {};
+  if ((sandbox.mode ?? defaults.mode ?? "off") === "off") return true;
+  if (!allowsBrowser(config.tools?.sandbox?.tools) ||
+      !allowsBrowser(agent.tools?.sandbox?.tools)) return false;
+  return (sandbox.browser?.enabled ?? defaults.browser?.enabled) === true ||
+    (sandbox.browser?.allowHostControl ?? defaults.browser?.allowHostControl) === true;
+}
+
 export function userMessageRequestsExactByteDownload(messages, prompt = undefined) {
   const text = currentUserText(messages, prompt);
   if (!text) return false;
@@ -7256,14 +7280,22 @@ export function createToolLoopGuard({
     }
 
     if (
-      (toolName === "web_fetch" || toolName === "pixel_ods_web_extract") &&
-      fetchTargetsNonPublicAddress(event)
+      (selectedToolName === "web_fetch" || selectedToolName === "pixel_ods_web_extract") &&
+      fetchTargetsNonPublicAddress(selectedEvent)
     ) {
+      if (state?.privateBrowserAccess && !state.privateBrowserRedirected) {
+        state.privateBrowserRedirected = true;
+        return { block: true, blockReason: "This public web tool did not access the private URL. Use the configured browser for the owner's requested page; do not substitute shell or another public fetch tool." };
+      }
       if (state) state.privateNetworkExhausted = true;
       warn("Pixel blocked a non-public web_fetch destination before execution");
       return { block: true, blockReason: WEB_FETCH_PUBLIC_ONLY_REASON };
     }
     if (selectedToolName === "exec" && execTargetsNonPublicAddress(selectedEvent)) {
+      if (state?.privateBrowserAccess && !state.privateBrowserRedirected) {
+        state.privateBrowserRedirected = true;
+        return { block: true, blockReason: "This shell command did not access the private URL. Use the configured browser for the owner's requested page; do not retry shell or public fetch tools." };
+      }
       if (state) state.privateNetworkExhausted = true;
       warn("Pixel blocked an exec-based private HTTP(S) destination before execution");
       return { block: true, blockReason: EXEC_PRIVATE_NETWORK_REASON };
@@ -7527,7 +7559,7 @@ export function createToolLoopGuard({
     return normalizedParams ? { params: normalizedParams } : undefined;
   }
 
-  function observeRun(context, agentId = "pixel", event = undefined) {
+  function observeRun(context, agentId = "pixel", event = undefined, capabilities = undefined) {
     if (context?.agentId !== agentId) return;
     const runId = context?.runId;
     const sessionId = context?.sessionId;
@@ -7536,12 +7568,17 @@ export function createToolLoopGuard({
       runId &&
       typeof sessionId === "string" &&
       sessionId &&
-      userMessageRequestsPrivateUrl(event?.messages, event?.prompt)
+      userMessageRequestsPrivateUrl(event?.messages, event?.prompt) &&
+      capabilities?.privateBrowserAccess !== true
     ) {
       stateFor(runId).privateNetworkPrompt = true;
     }
     if (typeof runId === "string" && runId) {
       const state = stateFor(runId);
+      if (capabilities !== undefined) {
+        state.privateBrowserAccess = capabilities.privateBrowserAccess === true &&
+          userMessageRequestsPrivateUrl(event?.messages, event?.prompt);
+      }
       if (typeof sessionId === "string" && sessionId) {
         state.currentSessionId = sessionId;
       }

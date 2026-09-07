@@ -447,11 +447,9 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /dedicated staged-download and verified workspace-publication route/);
   assert.match(result.appendSystemContext, /exact-byte download is unavailable/);
   assert.match(result.appendSystemContext, /do not create a substitute artifact/);
-  assert.match(result.appendSystemContext, /web_fetch is public-web only/);
-  assert.match(result.appendSystemContext, /explain simply that this chat cannot open private URLs/);
-  assert.match(result.appendSystemContext, /without naming internal guards/);
-  assert.match(result.appendSystemContext, /hypothetical shell\/browser workarounds/);
-  assert.match(result.appendSystemContext, /never offer or use exec, shell, or another tool to bypass it/);
+  assert.match(result.appendSystemContext, /web_fetch and pixel_ods_web_extract are public-web only/);
+  assert.match(result.appendSystemContext, /private pages require a separately configured browser capability/);
+  assert.match(result.appendSystemContext, /do not substitute exec or shell for a blocked public fetch/);
   assert.match(result.appendSystemContext, /explicit public URL, fetch that URL directly/);
   assert.match(result.appendSystemContext, /public GitHub repository as Owner\/Repo/);
   assert.match(result.appendSystemContext, /https:\/\/github\.com\/Owner\/Repo/);

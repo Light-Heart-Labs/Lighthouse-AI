@@ -63,7 +63,7 @@ export const ODS_CONVERSATION_CONTRACT = [
   "When the owner asks for current, verified, or source-cited information, a failed lookup means you must not answer from memory or guess; state that verification failed and distinguish any explicitly requested background knowledge as unverified.",
   "A source title, URL, table of contents, or truncated excerpt does not verify a requested detail: if the fetched text does not contain that detail, say it remains unverified and do not supply a remembered answer.",
   "web_fetch and pixel_ods_web_extract return safety-marked, transformed evidence rather than the origin server's exact response bytes: never save that transformed text as an exact download, call its byte count or digest the remote object's byte count or digest, or claim byte-for-byte fidelity. Exact-byte public downloads use the dedicated staged-download and verified workspace-publication route only; otherwise state that exact-byte download is unavailable and do not create a substitute artifact.",
-  "web_fetch is public-web only: never call it for localhost, a loopback or raw IP address, a single-label host, or a .local or .internal name; explain simply that this chat cannot open private URLs, without naming internal guards or hypothetical shell/browser workarounds, and never offer or use exec, shell, or another tool to bypass it.",
+  "web_fetch and pixel_ods_web_extract are public-web only: never use them for localhost, a loopback or raw IP address, a single-label host, or a .local or .internal name. Owner-requested private pages require a separately configured browser capability; do not substitute exec or shell for a blocked public fetch. If that capability is unavailable, say the page was not accessed.",
   "When the owner supplies an explicit public URL, fetch that URL directly before searching. When the owner identifies a public GitHub repository as Owner/Repo, treat https://github.com/Owner/Repo as the identified canonical source and fetch it directly; do not spend search calls trying to rediscover it.",
   "When the current request identifies a GitHub repository, never answer repository facts before the required canonical README tool result; a no-tool or failed-fetch answer is unverified and will be rejected.",
   "For public web research without an identified source, use web_search to locate a promising source and web_fetch to read that URL; never pass a URL as a search query, never invent a web_browse tool, and stop after one changed search strategy or one failed fetch.",
@@ -127,6 +127,9 @@ export const ODS_HOST_COMMAND_CONTRACT =
 
 export const ODS_PRIVATE_URL_CONTRACT =
   "The owner's current request contains a private URL. Do not call any tool for this request, do not substitute an ODS status lookup, do not infer whether the target is running, and do not suggest shell or browser workarounds. State briefly that this chat did not access the private page, then ask the owner to provide its content or use a separately approved private-access capability.";
+
+export const ODS_PRIVATE_BROWSER_CONTRACT =
+  "The owner requested a private page and this agent has an explicitly configured browser capability. Discover and use that browser for the requested URL and interactions, with its dedicated agent profile. Do not use personal browser sessions unless the owner expressly requested them. Public web_fetch and pixel_ods_web_extract remain public-only; shell is not a substitute. Report only what actual browser results establish, and state any browser failure honestly.";
 
 export const ODS_EXACT_DOWNLOAD_CONTRACT =
   "The owner's current request requires origin-exact bytes in the Pixel workspace. Call only pixel_ops_download_stage first; the host guard binds the owner's one HTTPS URL, safe destination basename, and supplied SHA-256 when present. Wait for that job with pixel_ops_job_wait. After a succeeded terminal receipt, call pixel_ods_download_promote; the host guard binds the exact job, source, digest, filename, and workspace-relative destination. Never use web_fetch, read, write, edit, exec, pixel_ops_artifact_transfer, or a reconstructed substitute for this route. After promotion, call no more tools and report its exact receipt.";
@@ -246,7 +249,7 @@ export function promptContractForAgent(
   context,
   agentId,
   event = undefined,
-  { verificationStatus, configuredContextWindow, configuredLeanPrompt } = {}
+  { verificationStatus, configuredContextWindow, configuredLeanPrompt, privateBrowserAccess } = {}
 ) {
   if (!context || context.agentId !== agentId) return undefined;
   // OpenClaw can expose a provider-family reference window to hooks even when
@@ -269,7 +272,7 @@ export function promptContractForAgent(
     ? ` ${ODS_LOOP_RECOVERY_CONTRACT}`
     : "";
   const privateUrl = userMessageRequestsPrivateUrl(event?.messages, event?.prompt)
-    ? ` ${ODS_PRIVATE_URL_CONTRACT}`
+    ? ` ${privateBrowserAccess === true ? ODS_PRIVATE_BROWSER_CONTRACT : ODS_PRIVATE_URL_CONTRACT}`
     : "";
   const githubSource = githubSourceContract(event?.messages, event?.prompt);
   const extensionInventory = userMessageRequestsExtensionInventory(

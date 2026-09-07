@@ -15,13 +15,11 @@ All other paths/methods return 404 (catch-all).
 import asyncio
 import hashlib
 import hmac
-import ipaddress
 import json
 import os
 import re
 import sys
-import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 from aiohttp import web, ClientSession, UnixConnector, ClientTimeout
 from transition_gate import TransitionGate, GateError, strict_json, valid_binding
@@ -76,13 +74,6 @@ _PIXEL_REWRITE = "pixel/default"
 _SAFE_CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _PREVIEW_SITE_ID = re.compile(r"^site-[a-f0-9]{24}$")
 _PREVIEW_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_HTTP_URL = re.compile(r"https?://[^\s<>{}\[\]\"']+", re.IGNORECASE)
-_PRIVATE_URL_INTENT = re.compile(
-    r"\b(?:access|browse|call|check|connect|download|fetch|inspect|open|query|read|"
-    r"request|retrieve|summari[sz]e|test|visit)\b|"
-    r"\btell\s+me\b|\bwhat(?:\s+is|'s)\s+(?:at|on)\b",
-    re.IGNORECASE,
-)
 _ARTIFACT_DRAFT_PREFIX = re.compile(
     r"^\s*(?:please\s+)?(?:build|write|draft|document|compose|create|edit|update|"
     r"refactor|implement|generate)\b",
@@ -93,17 +84,6 @@ _ARTIFACT_NOUN = re.compile(
     r"fixture|page|project|readme|script|site|snippet|test|web(?:site|page)?|"
     r"workspace)\b",
     re.IGNORECASE,
-)
-_FOLLOWUP_PRIVATE_ACCESS = re.compile(
-    r"\b(?:and\s+)?then\s+(?:access|browse|call|check|connect|download|fetch|"
-    r"inspect|open|query|read|request|retrieve|summari[sz]e|test|visit)\b",
-    re.IGNORECASE,
-)
-_PRIVATE_HOST_SUFFIXES = (".localhost", ".local", ".internal")
-_PRIVATE_URL_REPLY = (
-    "I couldn't access that private page from this chat, so I can't verify its "
-    "title or contents. If you paste the page text or HTML here, I can inspect "
-    "it; otherwise, use a separately approved private-network or browser capability."
 )
 _RESERVED_ASSISTANT_REPLIES = frozenset({
     "NO_REPLY",
@@ -581,103 +561,6 @@ def _message_text(content) -> str:
     return "\n".join(parts)
 
 
-def _is_private_http_url(value: str) -> bool:
-    """Return true for HTTP(S) URLs outside the public-DNS-only boundary."""
-    try:
-        parsed = urlsplit(value.rstrip(".,;:!?)]}"))
-        hostname = (parsed.hostname or "").rstrip(".").lower()
-    except (ValueError, UnicodeError):
-        return False
-    if parsed.scheme.lower() not in {"http", "https"} or not hostname:
-        return False
-    try:
-        ipaddress.ip_address(hostname)
-        return True
-    except ValueError:
-        pass
-    return (
-        hostname == "localhost"
-        or "." not in hostname
-        or hostname.endswith(_PRIVATE_HOST_SUFFIXES)
-    )
-
-
-def _private_url_access_requested(data: dict) -> bool:
-    """Detect an explicit request to access a private URL in the latest user turn."""
-    messages = data.get("messages")
-    if not isinstance(messages, list):
-        return False
-    for message in reversed(messages):
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        text = _message_text(message.get("content"))
-        if not _PRIVATE_URL_INTENT.search(text):
-            return False
-        if not any(_is_private_http_url(match.group(0)) for match in _HTTP_URL.finditer(text)):
-            return False
-        # A coding request can legitimately contain a private development URL
-        # as inert source text. The downstream plugin still blocks any actual
-        # shell/web contact, so keep drafting available unless the owner adds a
-        # distinct follow-up instruction to access the target now.
-        if (
-            _ARTIFACT_DRAFT_PREFIX.search(text)
-            and _ARTIFACT_NOUN.search(text)
-            and not _FOLLOWUP_PRIVATE_ACCESS.search(text)
-        ):
-            return False
-        return True
-    return False
-
-
-async def _private_url_response(request: web.Request, stream: bool):
-    """Return the exact local boundary response without invoking Pixel upstream."""
-    created = int(time.time())
-    response_id = "chatcmpl-pixel-private-url"
-    if not stream:
-        return web.json_response({
-            "id": response_id,
-            "object": "chat.completion",
-            "created": created,
-            "model": _PIXEL_REWRITE,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": _PRIVATE_URL_REPLY},
-                "finish_reason": "stop",
-            }],
-        })
-
-    response = web.StreamResponse(
-        status=200,
-        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
-    )
-    await response.prepare(request)
-    chunks = [
-        {
-            "id": response_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": _PIXEL_REWRITE,
-            "choices": [{
-                "index": 0,
-                "delta": {"role": "assistant", "content": _PRIVATE_URL_REPLY},
-                "finish_reason": None,
-            }],
-        },
-        {
-            "id": response_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": _PIXEL_REWRITE,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-        },
-    ]
-    for chunk in chunks:
-        await response.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
-    await response.write(b"data: [DONE]\n\n")
-    await response.write_eof()
-    return response
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -819,8 +702,10 @@ async def handle_chat_completions(request: web.Request):
         if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
             cancel_event = asyncio.Event()
             request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
-        if _private_url_access_requested(data):
-            return await _private_url_response(request, data.get("stream") is True)
+        # The gateway knows the owner's enabled tools and their network policy.
+        # A URL in chat is not an outbound fetch by this transport. Let an
+        # authorized browser handle local previews; public-fetch restrictions
+        # and the unavailable-browser response remain enforced by the harness.
         connector = UnixConnector(path=_SOCKET_PATH)
         timeout = ClientTimeout(total=_TOTAL_TIMEOUT,
                                 sock_connect=_CONNECT_TIMEOUT,
