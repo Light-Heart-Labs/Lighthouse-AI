@@ -12310,6 +12310,48 @@ test("normalizes the common write filePath alias across direct and nested core f
   }
 });
 
+test("recovers the captured write text alias with an explicit redundant overwrite flag", () => {
+  const content = "<p>Café, quoted \"text\" & 🌿</p>\n";
+  // The native 9B model repeated this exact envelope shape for several minutes
+  // because the otherwise supported text alias rejected overwrite:true.
+  const args = { path: "csv-explorer-lab/index.html", text: content, overwrite: true };
+  const original = structuredClone(args);
+  assert.deepEqual(call(createToolLoopGuard(), "write", { event: { params: args } }), {
+    params: { path: args.path, content },
+  });
+  for (const id of ["write", "openclaw:core:write"]) {
+    assert.deepEqual(call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id, args } },
+    }), { params: { id, args: { path: args.path, content } } });
+  }
+  assert.deepEqual(args, original, "normalization must not mutate model arguments");
+
+  assert.deepEqual(call(createToolLoopGuard(), "write", {
+    event: { params: { filePath: "/workspace/example.txt", text: "", overwrite: true } },
+  }), { params: { path: "example.txt", content: "" } });
+
+  // Core write cannot implement a no-overwrite request. Do not convert it
+  // into an overwrite, resolve conflicting content, or discard unknown flags.
+  for (const rejected of [
+    { ...args, overwrite: false },
+    { ...args, overwrite: "true" },
+    { ...args, overwrite: null },
+    { ...args, append: true },
+    { ...args, content: "different" },
+    { ...args, text: { body: content } },
+  ]) {
+    assert.equal(call(createToolLoopGuard(), "write", { event: { params: rejected } }), undefined);
+    assert.equal(call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id: "openclaw:core:write", args: rejected } },
+    }), undefined);
+  }
+  for (const id of ["openclaw:other:write", "pixel_ods_operations_submit"]) {
+    assert.equal(call(createToolLoopGuard(), "tool_call", {
+      event: { params: { id, args } },
+    }), undefined);
+  }
+});
+
 test("ODS status keywords in descriptive UI context do not require projection", () => {
   // --- Negatives: platform status words embedded in UI/design context ---
 

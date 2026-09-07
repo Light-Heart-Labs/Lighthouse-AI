@@ -853,11 +853,19 @@ function normalizeWorkspaceParams(toolName, params) {
   }
   if (
     toolName === "write" &&
-    Object.keys(updated).sort().join("\u0000") === ["path", "text"].sort().join("\u0000") &&
+    ["path\u0000text", "overwrite\u0000path\u0000text"].includes(
+      Object.keys(updated).sort().join("\u0000")
+    ) &&
+    (!Object.hasOwn(updated, "overwrite") || updated.overwrite === true) &&
     typeof params.text === "string"
   ) {
+    // Core write already replaces the target. Compact models sometimes add
+    // overwrite:true to the text alias; it grants no additional capability.
+    // Keep overwrite:false and unfamiliar options unmodified, because core
+    // write cannot honor their potentially different semantics.
     updated.content = params.text;
     delete updated.text;
+    delete updated.overwrite;
     changed = true;
   }
   if (
