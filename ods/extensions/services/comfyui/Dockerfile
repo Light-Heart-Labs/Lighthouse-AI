@@ -11,7 +11,7 @@
 #   7. Startup script + non-root user (changes most often)
 # =============================================================================
 
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+FROM nvidia/cuda:13.2.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -26,11 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# Layer 2: PyTorch + CUDA 12.8 (Blackwell sm_120 support)
+# Layer 2: PyTorch + CUDA 13.2 (Blackwell sm_120 optimized support)
 # ---------------------------------------------------------------------------
 RUN pip3 install --no-cache-dir \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu128
+        --index-url https://download.pytorch.org/whl/cu132
 
 # ---------------------------------------------------------------------------
 # Layer 3: ComfyUI from source (pinned to v0.16.4)
