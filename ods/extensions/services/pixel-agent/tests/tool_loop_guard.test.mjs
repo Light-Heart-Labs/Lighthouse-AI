@@ -7461,7 +7461,8 @@ test("makes a second ignored same-page pivot terminal", () => {
   assert.equal(call(guard, "web_fetch", { event }), undefined);
   assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
   assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "read").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  assert.equal(call(guard, "read"), undefined);
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
   assert.equal(call(guard, "web_search").blockReason, WEB_LOOP_ABORT_REASON);
   assert.deepEqual(aborts, ["session-1"]);
 });
@@ -7478,7 +7479,7 @@ test("web exhaustion preserves authorized local workspace repair", () => {
     assert.equal(call(guard, "web_fetch", { event: web }).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
     const exhausted = call(guard, "web_fetch", { event: web });
     assert.equal(exhausted.block, true);
-    assert.match(exhausted.blockReason, /Continue the owner's authorized local workspace task/);
+    assert.match(exhausted.blockReason, /otherwise-authorized tools/);
     const invoke = (name, params) => wrapped
       ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args: params } } })
       : call(guard, name, { event: { params } });
@@ -7497,6 +7498,71 @@ test("web exhaustion preserves authorized local workspace repair", () => {
     // The ordinary workspace sequence may still guide this repeated read.
     assert.doesNotMatch(resumedRead?.blockReason ?? "", /web-research budget|web-tool loop/i);
     assert.deepEqual(aborts, []);
+  }
+});
+
+test("research exhaustion preserves report delivery without inferred workspace intent", () => {
+  for (const exhaustion of ["search", "total", "repeat"]) {
+    for (const wrapped of [false, true]) {
+      const aborts = [];
+      const guard = createToolLoopGuard({
+        limits: { search: 1, fetch: 4, total: exhaustion === "total" ? 1 : 5 },
+        abortRun: (id) => { aborts.push(id); return true; },
+      });
+      // No workspace-task inference: a research workflow may still save its
+      // requested deliverable. Its access policy is independent of this cap.
+      if (exhaustion === "repeat") {
+        const event = { params: { url: "https://docs.python.org/3/library/csv.html" } };
+        assert.equal(call(guard, "web_fetch", { event }), undefined);
+        assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
+        assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+      } else {
+        assert.equal(call(guard, "web_search"), undefined);
+        assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+      }
+      const invoke = (name, args) => wrapped
+        ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args } } })
+        : call(guard, name, { event: { params: args } });
+      for (const [name, args] of [
+        ["write", { path: "research/report.md", content: "Findings from the collected sources." }],
+        ["read", { path: "research/report.md" }],
+        ["tool_search", { query: "write a local report" }],
+        ["tool_describe", { id: "write" }],
+      ]) {
+        assert.notEqual(invoke(name, args)?.block, true, `${exhaustion}/${wrapped}/${name}`);
+      }
+      assert.deepEqual(aborts, []);
+      assert.match(WEB_BUDGET_EXHAUSTED_REASON, /Do not call web tools again/);
+      assert.doesNotMatch(WEB_BUDGET_EXHAUSTED_REASON, /Do not call any tool again/);
+      // Discovery must not open a second route around the same web budget.
+      assert.equal(invoke("pixel_ods_web_extract", {
+        url: "https://docs.python.org/3/library/csv.html", query: "reader",
+      }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+      assert.notEqual(invoke("read", { path: "research/report.md" })?.block, true);
+      assert.equal(invoke("web_fetch", {
+        url: "https://docs.python.org/3/library/json.html",
+      }).blockReason, WEB_LOOP_ABORT_REASON);
+      assert.deepEqual(aborts, ["session-1"]);
+      // A fresh run gets a fresh web budget.
+      assert.equal(call(guard, "web_search", {
+        context: { agentId: "pixel", runId: "run-2", sessionId: "session-2" },
+      }), undefined);
+    }
+  }
+});
+
+test("web exhaustion keeps independent execution and private-address boundaries", () => {
+  for (const wrapped of [false, true]) {
+    const guard = createToolLoopGuard({ limits: { search: 1, fetch: 1, total: 1 } });
+    call(guard, "web_search");
+    call(guard, "web_search");
+    const invoke = (name, args) => wrapped
+      ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args } } })
+      : call(guard, name, { event: { params: args } });
+    assert.equal(invoke("edit", { path: "report.md", oldText: "same", newText: "same" }).blockReason,
+      NOOP_EDIT_REQUIRES_CHANGE_REASON);
+    assert.equal(invoke("exec", { command: "curl http://127.0.0.1:3001/private" }).blockReason,
+      EXEC_PRIVATE_NETWORK_REASON);
   }
 });
 
@@ -7605,7 +7671,8 @@ test("makes a second wrong tool after a truncated fetch terminal", () => {
   });
   assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
   assert.equal(call(guard, "web_fetch", { event: { params } }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "read").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  assert.equal(call(guard, "read"), undefined);
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
   assert.equal(call(guard, "web_search").blockReason, WEB_LOOP_ABORT_REASON);
   assert.deepEqual(aborts, ["session-1"]);
 });
@@ -7637,7 +7704,8 @@ test("aborts only the active run when the model ignores the terminal block", () 
 
   assert.equal(call(guard, "web_search"), undefined);
   assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "read").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  assert.equal(call(guard, "read"), undefined);
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
   assert.deepEqual(call(guard, "web_search"), {
     block: true,
     blockReason: WEB_LOOP_ABORT_REASON,
@@ -11203,7 +11271,8 @@ test("an abort failure is contained and remains a blocked tool result", () => {
   });
   call(guard, "web_search");
   call(guard, "web_search");
-  call(guard, "read");
+  assert.equal(call(guard, "read"), undefined);
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
   const result = call(guard, "web_search");
   assert.equal(result.block, true);
   assert.equal(result.blockReason, WEB_LOOP_ABORT_REASON);
