@@ -6818,6 +6818,40 @@ test("makes a second ignored same-page pivot terminal", () => {
   assert.deepEqual(aborts, ["session-1"]);
 });
 
+test("web exhaustion preserves authorized local workspace repair", () => {
+  for (const wrapped of [false, true]) {
+    const aborts = [];
+    const guard = createToolLoopGuard({ abortRun: (id) => { aborts.push(id); return true; } });
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Repair the error-clearing logic in /workspace/splitter-2b/index.html and publish the existing website.",
+    });
+    const web = { params: { url: "https://docs.python.org/3/" } };
+    assert.equal(call(guard, "web_fetch", { event: web }), undefined);
+    assert.equal(call(guard, "web_fetch", { event: web }).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
+    const exhausted = call(guard, "web_fetch", { event: web });
+    assert.equal(exhausted.block, true);
+    assert.match(exhausted.blockReason, /Continue the owner's authorized local workspace task/);
+    const invoke = (name, params) => wrapped
+      ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args: params } } })
+      : call(guard, name, { event: { params } });
+    const readParams = { path: "splitter-2b/index.html" };
+    assert.notEqual(invoke("read", readParams)?.block, true);
+    afterCall(guard, "read", { event: { params: readParams, result: { content: [{ type: "text", text: "<p>old</p>" }] } } });
+    assert.notEqual(invoke("edit", { path: "splitter-2b/index.html", oldText: "old", newText: "new" })?.block, true);
+    afterCall(guard, "edit", { event: { params: { path: "splitter-2b/index.html", oldText: "old", newText: "new" }, result: { content: [{ type: "text", text: "Successfully replaced text in splitter-2b/index.html." }] } } });
+    // An unrelated web-budget failure must not disable independent protections.
+    assert.equal(invoke("edit", { path: "splitter-2b/index.html", oldText: "same", newText: "same" }).blockReason, NOOP_EDIT_REQUIRES_CHANGE_REASON);
+    const execution = invoke("exec", { command: "node --check app.js", workdir: "splitter-2b" });
+    assert.notEqual(execution?.block, true, JSON.stringify(execution));
+    afterCall(guard, "exec", { event: { params: { command: "node --check app.js", workdir: "splitter-2b" }, result: { details: { status: "completed", exitCode: 0 } } } });
+    assert.equal(call(guard, "web_search").block, true);
+    const resumedRead = invoke("read", readParams);
+    // The ordinary workspace sequence may still guide this repeated read.
+    assert.doesNotMatch(resumedRead?.blockReason ?? "", /web-research budget|web-tool loop/i);
+    assert.deepEqual(aborts, []);
+  }
+});
+
 test("allows different public pages within the normal budget", () => {
   const guard = createToolLoopGuard();
   assert.equal(

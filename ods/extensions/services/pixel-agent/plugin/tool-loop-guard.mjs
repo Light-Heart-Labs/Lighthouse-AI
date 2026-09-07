@@ -30,6 +30,12 @@ const MAX_TRACKED_WORKSPACE_FILE_BYTES = 4 * 1024 * 1024;
 export const WEB_BUDGET_EXHAUSTED_REASON =
   "Pixel's web-research budget is exhausted for this response. Do not call any tool again in this turn. Give the user a visible final answer now using the evidence already collected, clearly stating any uncertainty.";
 
+function webBudgetExhaustedReason(state) {
+  return state?.workspaceTaskRequested
+    ? "The web-research budget is exhausted. Do not call web tools again. Continue the owner's authorized local workspace task with read, edit, write, execution or preview tools; preserve the existing evidence and report any missing external information."
+    : WEB_BUDGET_EXHAUSTED_REASON;
+}
+
 export const WEB_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another web tool after the bounded research budget was exhausted. Start a fresh message to continue with a narrower research question.";
 
@@ -7082,7 +7088,7 @@ export function createToolLoopGuard({
       } else {
         state.targetedExtractPending = undefined;
         state.webExhausted = true;
-        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+        return { block: true, blockReason: webBudgetExhaustedReason(state) };
       }
     }
 
@@ -7111,7 +7117,7 @@ export function createToolLoopGuard({
         };
       } else {
         state.webExhausted = true;
-        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+        return { block: true, blockReason: webBudgetExhaustedReason(state) };
       }
     }
 
@@ -7140,10 +7146,16 @@ export function createToolLoopGuard({
         : undefined;
     }
 
-    if (state.webExhausted) {
+    const workspaceAfterWeb = state.webExhausted && state.workspaceTaskRequested &&
+      (WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName) ||
+        ["tool_search", "tool_describe", "pixel_ods_workspace_preview"].includes(effectiveToolName));
+    // Exhausting a side lookup must not prevent the requested local repair.
+    // All ordinary path, tool-policy and coding-loop checks still apply.
+    if (workspaceAfterWeb) state.webTerminalBlocks = 0;
+    if (state.webExhausted && !workspaceAfterWeb) {
       if (state.webTerminalBlocks === 0) {
         state.webTerminalBlocks = 1;
-        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+        return { block: true, blockReason: webBudgetExhaustedReason(state) };
       }
       let aborted = false;
       try {
@@ -7286,7 +7298,7 @@ export function createToolLoopGuard({
       if (fetchUrl && state.fetchedUrls.has(fetchUrl)) {
         if (state.fetchPivots.has(fetchUrl)) {
           state.webExhausted = true;
-          return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+          return { block: true, blockReason: webBudgetExhaustedReason(state) };
         }
         state.fetchPivots.add(fetchUrl);
         return { block: true, blockReason: WEB_FETCH_REPEAT_PIVOT_REASON };
@@ -7296,7 +7308,7 @@ export function createToolLoopGuard({
     const kind = toolName === "web_search" ? "search" : "fetch";
     if (state[kind] >= effective[kind] || state.total >= effective.total) {
       state.webExhausted = true;
-      return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+      return { block: true, blockReason: webBudgetExhaustedReason(state) };
     }
 
     state[kind] += 1;
