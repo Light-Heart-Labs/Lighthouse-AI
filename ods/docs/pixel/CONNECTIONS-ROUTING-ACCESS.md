@@ -2,8 +2,9 @@
 
 Status: development in PR #3818, stacked on ODS PR #3385. The Settings UI,
 POSIX credential vault, inference-only sharing perimeter and host owner controls
-are implemented. Guided sharing/pairing, Pixel provider runtime activation,
-cloud failover and Full Access remain pending. Sharing is disabled by default.
+are implemented, including guided host sharing and an isolated POSIX client CLI.
+Pixel provider runtime activation, cloud failover, Full Access and complete
+cross-platform guided onboarding remain pending. Sharing is disabled by default.
 
 ## Independent settings
 
@@ -102,7 +103,7 @@ Full Access permits whatever the selected OS account can do. Restoring sandbox
 policy does not undo host changes, transmitted data or persistence. WSL access
 is not proof of Windows Administrator or native desktop control.
 
-## Implemented inference sharing perimeter (not guided setup)
+## Implemented inference sharing perimeter and guided host setup
 
 The optional `pixel-inference` service ships as `compose.yaml.disabled`. It is
 not included in normal fresh installs. Its sole host binding is loopback port
@@ -190,6 +191,80 @@ real client inference journey. All fixture containers were removed by verified
 run-owned IDs; evidence and failed fixtures were retained.
 
 ## Development validation
+
+### Isolated Pixel client (Linux / WSL guest)
+
+`bin/ods-pixel-connect` prepares a **new** private client using the exact Pixel
+commit pinned by ODS (`70f44c90`, v4.3.24) and its canonical onboarding/config
+renderer. It requires an existing OpenClaw 2026.6.33 installation, Node, Python
+3.11+, Git source containing that Pixel commit, and the installed Pixel sandbox
+image. It does not install or upgrade these prerequisites, change a production
+Pixel, activate a service, or change access mode. Native Windows is explicitly
+unsupported by this POSIX adapter; WSL evidence is not native Windows acceptance.
+
+Export the one-time connection bundle from Settings into an owner-private file
+(0600 under a 0700 Linux directory, not an NTFS shared directory). Select its
+endpoint deliberately: the device credential is sent only after explicit
+`--confirm-endpoint` agreement. The probe refuses redirects, proxy environment
+variables, unexpected identities and unbounded metadata responses. HTTPS uses
+normal certificate/hostname verification; HTTP is restricted to literal loopback.
+
+For a remote peer, keep sharing bound to its loopback port. An already-trusted
+SSH alias can forward it without opening the inference listener to the LAN:
+
+```sh
+python3 ods/bin/ods-pixel-connect tunnel --ssh-target tower2-lan \
+  --remote-port 4005 --listen-port 4005
+```
+
+The tunnel is foreground, loopback-only, limited to eight connections, with
+strict existing host-key trust and no agent forwarding or remote shell. A
+listening tunnel is **not** proof of authentication or model readiness. In WSL,
+an explicitly selected `--ssh-bin /mnt/c/Windows/System32/OpenSSH/ssh.exe` can
+reuse the owner's Windows SSH alias and trust without copying private keys.
+The exported bundle's base URL must match the chosen local tunnel address.
+
+From another terminal, using private files and a previously installed runtime:
+
+```sh
+python3 ods/bin/ods-pixel-connect probe \
+  --connection-file /private/connection.json \
+  --confirm-endpoint http://127.0.0.1:4005/v1
+python3 ods/bin/ods-pixel-connect prepare \
+  --connection-file /private/connection.json \
+  --confirm-endpoint http://127.0.0.1:4005/v1 \
+  --directory /private/new-client --pixel-repository /source/Pixel \
+  --openclaw-bin /absolute/path/to/openclaw --reasoning off
+python3 ods/bin/ods-pixel-connect run \
+  --directory /private/new-client --message-file /private/task.txt
+```
+
+Reasoning support is an explicit choice, not guessed from a model name or an
+agent benchmark flag. Each client gets a unique agent ID and private state,
+workspace, canonical `.env`, onboarding answers and rendered config. Digests
+detect configuration changes before a turn. The installed runtime version is
+rechecked; a new probe catches revocation/identity changes before starting an
+agent. Preparation reports `prepared-not-activated`. Run reports process exit
+and private evidence, **not** an unsupported claim that the user's task succeeded.
+SIGINT/SIGTERM and deadlines reap only the owned agent process group. They do
+not undo tools already completed or remove persisted sandbox containers.
+
+The minimal client keeps sandbox mode `all` and optional limbs disabled. Its
+pinned runtime can warn about optional searxng/llamacpp plugins absent from fresh
+state; these warnings do not qualify those plugins as installed. Full installer,
+plugin setup, reconnect/repair UI and native adapters remain delivery work.
+
+An isolated laptop Ubuntu 24.04 WSL guest completed two real Pixel write/read
+turns using physical Tower2 GLM inference. Tool receipts and laptop artifacts
+were independently checked; Docker inspection confirmed a nonprivileged,
+network-none, read-only-root sandbox. Existing Pixel configuration stayed
+unchanged. After key revocation, both probe and run were denied, and no new run
+directory was created. The temporary routing policy was synthetic, not a
+production route migration. The run-owned sandbox and tunnel/server processes
+were removed; private evidence and workspace artifacts were retained. This
+qualifies this isolated client journey only, not full feature or release readiness.
+
+### Automated checks
 
 Run the focused, service-independent contract tests from `ods/`:
 
