@@ -6406,12 +6406,46 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_advice_runtime()
         elif path == "/v1/pixel/inference-sharing":
             self._handle_pixel_sharing()
+        elif path == "/v1/pixel/access-mode" and not parsed.query:
+            self._handle_pixel_access_mode(False)
         elif path == "/v1/host/port":
             self._handle_host_port_status(parse_qs(parsed.query))
         elif path == "/v1/setup/state":
             self._handle_setup_state()
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_pixel_access_mode(self, change: bool):
+        if not check_auth(self):
+            return
+        from pixel_access_client import request_access
+        if not change:
+            if platform.system() != "Linux":
+                json_response(self, 200, {"available": False, "surface": platform.system().lower(),
+                    "configured_mode": "unknown", "effective_mode": "unknown", "runtime_verified": False,
+                    "revision": None, "busy": False, "pending": False, "scope": "owner-host",
+                    "reason": "macos-launchd-adapter-missing" if platform.system() == "Darwin" else "native-windows-adapter-missing"})
+                return
+            try:
+                status, body = request_access("status")
+                json_response(self, status, body)
+            except Exception:
+                json_response(self, 503, {"error": "access-service-unavailable"})
+            return
+        body = read_json_body(self)
+        if body is None:
+            return
+        acquired, _active = _begin_model_lifecycle("pixel_access_mode")
+        if not acquired:
+            json_response(self, 409, {"error": "model-lifecycle-busy"})
+            return
+        try:
+            status, response = request_access("change", body)
+            json_response(self, status, response)
+        except Exception:
+            json_response(self, 503, {"error": "access-transition-unavailable"})
+        finally:
+            _end_model_lifecycle("pixel_access_mode")
 
     def _handle_pixel_ops_status(self, query: dict[str, list[str]]):
         """Return one exact, nonsecret Operations result projection.
@@ -6852,7 +6886,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         # parsed as the next request on an HTTP/1.1 keep-alive connection. GET
         # polling remains reusable, which is where connection churn matters.
         self.close_connection = True
-        if self.path in ("/v1/extension/start", "/v1/extension/stop"):
+        if self.path == "/v1/pixel/access-mode":
+            self._handle_pixel_access_mode(True)
+        elif self.path in ("/v1/extension/start", "/v1/extension/stop"):
             action = "start" if self.path.endswith("/start") else "stop"
             self._handle_extension(action)
         elif self.path == "/v1/core/recreate":

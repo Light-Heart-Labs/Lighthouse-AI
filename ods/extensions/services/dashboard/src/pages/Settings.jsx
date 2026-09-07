@@ -25,6 +25,7 @@ import { Link } from 'react-router-dom'
 import EnvEditor from '../components/settings/EnvEditor'
 import PixelProviderSettings from '../components/settings/PixelProviderSettings.jsx'
 import PixelSharingSettings from '../components/settings/PixelSharingSettings.jsx'
+import PixelAccessCard from '../components/settings/PixelAccessCard'
 import { useTheme } from '../contexts/ThemeContext'
 import { dashboardHost, serviceUrl } from '../lib/serviceUrls'
 import {
@@ -414,7 +415,7 @@ export default function Settings() {
         </div>
         <PixelProviderSettings />
         <PixelSharingSettings />
-
+        <PixelAccessCard />
         <RoutingTableCard
           services={services}
           counts={routeCounts}

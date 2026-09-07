@@ -15,14 +15,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY pixel_edge.py ./
 COPY transition_gate.py ./
+COPY edge_entrypoint.py ./
 
 # Non-root user
 RUN useradd -m -u 1000 pixel
+RUN install -d -m 0700 -o pixel -g pixel /pixel-transition-state
 
 USER pixel
 
 ENV PIXEL_EDGE_PORT_INTERNAL=9595
+ENV PIXEL_TRANSITION_STATE_DIR=/pixel-transition-state
 
 EXPOSE 9595
 
-CMD ["python3", "pixel_edge.py"]
+CMD ["python3", "edge_entrypoint.py"]

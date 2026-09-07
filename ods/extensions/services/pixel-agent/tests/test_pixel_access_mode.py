@@ -62,6 +62,7 @@ class Harness(unittest.TestCase):
 
     def write_config(self, cfg):
         with open(self.cfg_path, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
             json.dump(cfg, fh, indent=2)
 
     def read_config(self):
@@ -103,6 +104,20 @@ class Harness(unittest.TestCase):
 
 
 class TestEnable(Harness):
+    def test_revision_checked_under_lock_before_enable_or_restore(self):
+        before = open(self.cfg_path, "rb").read()
+        with self.assertRaises(pam.AccessModeRace):
+            self.enable(expected_config_sha256="0" * 64)
+        self.assertEqual(open(self.cfg_path, "rb").read(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.state_dir, "pixel-access-mode.json")))
+        self.enable(expected_config_sha256=pam._sha256_bytes(before))
+        enabled = open(self.cfg_path, "rb").read()
+        receipt = self.receipt()
+        with self.assertRaises(pam.AccessModeRace):
+            self.restore(expected_config_sha256=pam._sha256_bytes(before))
+        self.assertEqual(open(self.cfg_path, "rb").read(), enabled)
+        self.assertEqual(self.receipt(), receipt)
+
     def test_config_changed_during_restart_retains_pending_state(self):
         def restart_and_change_config():
             cfg = self.read_config()
@@ -363,6 +378,7 @@ class TestStatus(Harness):
         self.assertEqual(self.status()["status"], "unknown")
         self.assertEqual(self.status()["reasons"], ["config-missing"])
         with open(self.cfg_path, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
             fh.write("{not json")
         st = self.status()
         self.assertEqual(st["status"], "unknown")
@@ -508,6 +524,7 @@ class TestDefaultValidator(unittest.TestCase):
             self.skipTest("openclaw CLI not installed")
         cfg_path = os.path.join(self.tmp, "c.json")
         with open(cfg_path, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
             json.dump(make_config(), fh)
         xdg = os.path.join(self.tmp, "xdg-state")
         old = os.environ.get("XDG_STATE_HOME")

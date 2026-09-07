@@ -2162,6 +2162,72 @@ ods_pixel_reconcile_promoted_model() {
     return 1
 }
 
+_ods_pixel_install_access_service() {
+    local owner="$1" openclaw_bin="$2"
+    # This coordinator is privileged. Never run or import its implementation
+    # from the owner's mutable checkout, even when the host agent is unprivileged.
+    ods_sudo python3 - "${INSTALL_DIR:?}" "$owner" "$openclaw_bin" <<'PY'
+import fcntl, json, os, pathlib, pwd, stat, subprocess, sys, tempfile
+source = pathlib.Path(sys.argv[1])
+owner = pwd.getpwnam(sys.argv[2])
+if owner.pw_uid == 0:
+    raise SystemExit("Pixel access requires a non-root gateway owner")
+state = pathlib.Path('/var/lib/ods-pixel-access')
+state.mkdir(mode=0o700, exist_ok=True)
+info = state.lstat()
+if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+    raise SystemExit("Pixel access state directory is unsafe")
+lock = os.open(state / 'lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+info = os.fstat(lock)
+if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
+    raise SystemExit("Pixel access state lock is unsafe")
+fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+if (state / 'transition.json').exists():
+    raise SystemExit("Recover the existing Pixel access transition before upgrading its coordinator")
+target = pathlib.Path('/usr/local/libexec/ods-pixel-access')
+target.mkdir(mode=0o755, parents=True, exist_ok=True)
+for path in (target, *target.parents):
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise SystemExit("Pixel access program directory is not root protected")
+
+def write(path, content, mode):
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o022:
+            raise SystemExit("Refusing an unsafe Pixel access program/configuration path")
+    fd, temporary = tempfile.mkstemp(prefix='.ods-access-install-', dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+
+host = source / 'extensions/services/pixel-agent/host'
+for name in ('access_mode_server.py', 'access_mode_worker.py', 'pixel_access_mode.py', 'access_mode_config.py'):
+    write(target / name, (host / name).read_bytes(), 0o644)
+write(target / 'pixel_access_bridge.py', (source / 'bin/pixel_access_bridge.py').read_bytes(), 0o644)
+config_dir = pathlib.Path('/etc/ods')
+config_dir.mkdir(mode=0o755, exist_ok=True)
+info = config_dir.lstat()
+if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+    raise SystemExit("Pixel access configuration directory is unsafe")
+binary = pathlib.Path(sys.argv[3])
+if not binary.is_absolute() or not os.access(binary, os.X_OK):
+    raise SystemExit("The installed OpenClaw validator is unavailable")
+write(config_dir / 'pixel-access.json', json.dumps({'install_dir': str(source.resolve()), 'owner': owner.pw_name, 'openclaw_bin': str(binary)}).encode(), 0o600)
+write(pathlib.Path('/etc/systemd/system/ods-pixel-access.service'), (host / 'ods-pixel-access.service').read_bytes(), 0o644)
+# Hold the same transition lock through activation, so a Settings request cannot
+# begin between code replacement and coordinator restart.
+subprocess.run(['systemctl', 'daemon-reload'], check=True)
+subprocess.run(['systemctl', 'enable', 'ods-pixel-access.service'], check=True)
+subprocess.run(['systemctl', 'restart', 'ods-pixel-access.service'], check=True)
+PY
+    [[ $? -eq 0 ]] || return 1
+}
+
 _ods_pixel_mark_installing() {
     local owner="$1" home="$2" marker
     marker="$home/.config/ods/pixel-managed.json"
@@ -4181,6 +4247,10 @@ ods_pixel_install_default_agent() {
     fi
     if ! _ods_pixel_mark_ready "$owner" "$home" "$contract_sha256" "$pixel_root"; then
         ai_bad "Could not record the verified Pixel runtime as ready."
+        return 1
+    fi
+    if ! _ods_pixel_install_access_service "$owner" "$openclaw_bin"; then
+        ai_bad "Pixel access coordinator installation failed; access mode changes remain unavailable."
         return 1
     fi
     ai_ok "Pixel is installed, verified, and ready on the private ODS ingress"
