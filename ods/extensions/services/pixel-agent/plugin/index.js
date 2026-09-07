@@ -36,6 +36,7 @@ import { withPixelCronDeliveryDefault } from "./cron-delivery-default.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
 import {
+  createExtensionReadTool,
   createHostCommandProposeTool,
   createHostObserveTool,
 } from "./host-observe.mjs";
@@ -314,6 +315,10 @@ export default definePluginEntry({
 
     registerTool(api, createHostCommandProposeTool(), {
       names: ["pixel_ods_host_command_propose"],
+    });
+
+    registerTool(api, createExtensionReadTool(), {
+      names: ["pixel_ods_extensions"],
     });
 
     for (const [name, description] of [

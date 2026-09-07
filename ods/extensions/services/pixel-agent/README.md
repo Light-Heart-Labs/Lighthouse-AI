@@ -45,6 +45,15 @@ upstream default. Other agents and existing jobs are unaffected.
 
 ## Security boundaries
 
+- **Extension diagnosis.** `pixel_ods_extensions` exposes read-only catalog
+  search, installation-state listing, and configuration inspection. The model
+  chooses the operation and order. The tool defaults to `ods-host`, preserves
+  an explicit broker target, and returns the actual broker job and result.
+  A wait timeout retains the submitted job ID for later readback. It cannot
+  install, enable, configure, remove, or approve an extension. Evidence binds
+  to the submitted target, query, and extension ID; a terminal failed inspection
+  reports that configuration could not be established rather than calling it
+  pending or claiming the extension is ready.
 - **Unix-domain socket only.** The socket is created at the fixed service path,
   mode `0660`, best-effort `chgrp` to `PIXEL_INGRESS_GID`. If a non-socket path
   already exists at the socket location, the service refuses to start. It only

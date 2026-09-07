@@ -2279,6 +2279,103 @@ function recordDiscovery(guard, params, jobId, status = "succeeded", steps) {
   });
 }
 
+for (const wrapped of [false, true]) {
+  test(`native extension read verifies the selected query and target (${wrapped ? "wrapped" : "direct"})`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Help me understand what I can set up.",
+    });
+    const args = { action: "search", query: "image generation", target: "registered-peer" };
+    const name = "pixel_ods_extensions";
+    const params = wrapped ? { id: `openclaw:pixel-ods:${name}`, args } : args;
+    const toolName = wrapped ? "tool_call" : name;
+    const before = call(guard, toolName, { event: { params } });
+    assert.equal(before?.block, undefined);
+    assert.deepEqual(before?.params ?? params, params);
+    const jobId = "ops-1234567890123-aaaaaaaaaaaa";
+    const receipt = { details: { jobId, status: "succeeded", waitTimedOut: false, steps: [{
+      ...discoveryStep("ods.extensions.search", { query: args.query }), target: args.target,
+    }] } };
+    const result = wrapped ? { details: {
+      tool: { id: `openclaw:pixel-ods:${name}`, source: "openclaw", sourceName: "pixel-ods", name },
+      result: receipt,
+    } } : receipt;
+    afterCall(guard, toolName, { event: { params, result } });
+    const verification = guard.deliveryVerificationForRun("run-1");
+    assert.equal(verification.status, "passed");
+    assert.equal(verification.deliveryMode, "append");
+    assert.match(verification.text, /image generation/);
+    assert.match(verification.text, /registered-peer/);
+  });
+}
+
+test("native extension read reports a terminal failed inspection without inventing configuration readiness", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Inspect ComfyUI and explain what configuration it needs. Do not change anything.",
+  });
+  const params = { action: "inspect", serviceId: "comfyui" };
+  assert.equal(call(guard, "pixel_ods_extensions", { event: { params } })?.block, undefined);
+  afterCall(guard, "pixel_ods_extensions", { event: { params, result: { details: {
+    jobId: "ops-1234567890123-dddddddddddd", status: "succeeded", waitTimedOut: false,
+    steps: [lifecycleStep("inspect", lifecycleResult("inspect", { extensionId: "comfyui", outcome: "failed" }))],
+  } } } });
+  const verification = guard.deliveryVerificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.match(verification.text, /Inspection: `failed`/);
+  assert.match(verification.text, /configuration could not be established/);
+  assert.doesNotMatch(verification.text, /configuration keys: none|Inspection: `ready`/);
+  // A terminal read failure is evidence, never permission for a mutation.
+  assert.equal(call(guard, "pixel_ops_run", { event: { params: {
+    target: "ods-host", action: "ods.extensions.install", parameters: { serviceId: "comfyui" },
+  } } })?.block, true);
+});
+
+test("native extension read binds later readback to the timed-out job without resubmission", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Inspect ComfyUI and explain the configuration it needs. Do not change anything.",
+  });
+  const params = { action: "inspect", serviceId: "comfyui" };
+  const jobId = "ops-1234567890123-bbbbbbbbbbbb";
+  assert.equal(call(guard, "pixel_ods_extensions", { event: { params } })?.block, undefined);
+  afterCall(guard, "pixel_ods_extensions", { event: { params,
+    result: { details: { jobId, status: "pending", waitTimedOut: true } },
+  } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  const waitParams = { jobId };
+  const before = call(guard, "pixel_ops_job_wait", { event: { params: waitParams } });
+  assert.equal(before?.block, undefined);
+  assert.deepEqual(before?.params ?? waitParams, waitParams);
+  afterCall(guard, "pixel_ops_job_wait", { event: { params: waitParams,
+    result: { details: { jobId, status: "succeeded", waitTimedOut: false,
+      steps: [discoveryStep("ods.extensions.inspect", { serviceId: "comfyui" })],
+    } },
+  } });
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  assert.match(guard.verificationForRun("run-1").text, /MODEL_DIRECTORY/);
+});
+
+for (const mismatch of ["query", "serviceId", "target"]) {
+  test(`native extension read rejects a successful receipt with the wrong ${mismatch}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Help me understand what I can set up.",
+    });
+    const params = mismatch === "query" ? { action: "search", query: "images" }
+      : { action: "inspect", serviceId: "comfyui", target: "registered-peer" };
+    assert.equal(call(guard, "pixel_ods_extensions", { event: { params } })?.block, undefined);
+    const step = { ...discoveryStep(`ods.extensions.${params.action}`,
+      mismatch === "query" ? { query: "agents" } : { serviceId: mismatch === "serviceId" ? "crewai" : "comfyui" }),
+      target: mismatch === "target" ? "ods-host" : params.target ?? "ods-host",
+    };
+    afterCall(guard, "pixel_ods_extensions", { event: { params, result: { details: {
+      jobId: "ops-1234567890123-cccccccccccc", status: "succeeded", waitTimedOut: false, steps: [step],
+    } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+  });
+}
+
 test("extension discovery allows model-selected reads without rewriting targets or queries", () => {
   const guard = createToolLoopGuard();
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {

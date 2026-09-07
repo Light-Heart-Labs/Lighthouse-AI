@@ -371,6 +371,77 @@ export function createHostObserveTool({
   };
 }
 
+const EXTENSION_READ_BOUNDARY =
+  "Read-only ODS extension discovery through the external Operations Broker. This receipt grants no authority to install, configure, or change an extension.";
+
+export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, timeoutMs, pollIntervalMs } = {}) {
+  return {
+    name: "pixel_ods_extensions",
+    description:
+      "Search the installable ODS extension catalog, list extension installation states, or inspect an extension's required configuration. Choose search, list, or inspect as needed. The default target is the local ods-host; an explicit target is preserved and validated by the broker. This read-only tool waits for a broker receipt and cannot install, enable, configure, remove, or approve anything.",
+    parameters: {
+      type: "object", additionalProperties: false, required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["search", "list", "inspect"] },
+        target: { type: "string", minLength: 2, maxLength: 64 },
+        query: { type: "string", minLength: 1, maxLength: 4096, description: "Search query; defaults to all when omitted for search." },
+        serviceId: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,63}$", description: "Exact catalog extension ID required for inspect." },
+      },
+    },
+    execute: async (_toolCallId, params) => {
+      const invalid = (message) => errorResult(message, EXTENSION_READ_BOUNDARY);
+      if (!params || typeof params !== "object" || Array.isArray(params) ||
+          Object.keys(params).some((key) => !["action", "target", "query", "serviceId"].includes(key)) ||
+          !["search", "list", "inspect"].includes(params.action)) {
+        return invalid("Choose one read-only extension action: search, list, or inspect.");
+      }
+      const target = params.target === undefined ? "ods-host" : params.target;
+      if (typeof target !== "string" || target.length < 2 || target.length > 64) {
+        return invalid("Use an exact target ID from the Operations inventory.");
+      }
+      const query = params.query === undefined ? "all" : params.query;
+      if (params.action === "search" ?
+          (params.serviceId !== undefined || typeof query !== "string" || !query.trim() || query.length > 4096) :
+          params.action === "inspect" ?
+            (params.query !== undefined || typeof params.serviceId !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(params.serviceId)) :
+            (params.query !== undefined || params.serviceId !== undefined)) {
+        return invalid("Search accepts query; inspect requires the exact lowercase catalog serviceId; list takes neither field.");
+      }
+      const parameters = params.action === "search" ? { query }
+        : params.action === "inspect" ? { serviceId: params.serviceId } : {};
+      const jobId = `ops-${Date.now()}-${randomBytes(6).toString("hex")}`;
+      try {
+        await publishRequest(jobId, {
+          schemaVersion: 1, jobId, kind: "action", createdAt: new Date().toISOString(), requester: AGENT_ID,
+          target, action: `ods.extensions.${params.action}`, parameters,
+          reason: "Read-only ODS extension discovery requested through Pixel.",
+          boundary: "Request only. The external broker validates target, parameters, and policy.",
+        }, requestDir);
+      } catch {
+        // Publication can succeed before temporary-file cleanup fails. Keep
+        // the identity even when submission itself cannot be confirmed.
+        return toolResult({ jobId, status: "unknown", waitTimedOut: true,
+          boundaryNotice: EXTENSION_READ_BOUNDARY,
+          next: "Submission could not be confirmed. Check this job with pixel_ops_job_get or pixel_ops_job_wait before retrying." });
+      }
+      try {
+        const receipt = await waitForTerminal(jobId, {
+          resultDir, timeoutMs, pollIntervalMs, boundaryNotice: EXTENSION_READ_BOUNDARY,
+        });
+        return toolResult({ ...receipt, ...(receipt.waitTimedOut ? {
+          next: "Read this existing job with pixel_ops_job_get or pixel_ops_job_wait; a wait timeout does not cancel the submitted read.",
+        } : {}) });
+      } catch {
+        // A published request remains real work even if its result cannot be
+        // read. Preserve its identity so the model can wait instead of resubmit.
+        return toolResult({ jobId, status: "pending", waitTimedOut: true,
+          boundaryNotice: EXTENSION_READ_BOUNDARY,
+          next: "Read this existing job with pixel_ops_job_get or pixel_ops_job_wait; do not resubmit it merely because result readback failed." });
+      }
+    },
+  };
+}
+
 export function createHostCommandProposeTool({
   requestDir,
   resultDir,
