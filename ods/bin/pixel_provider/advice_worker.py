@@ -63,8 +63,9 @@ def main():
         if sys.argv[1:] == ['--check']:
             import fastapi
             import httpx
+            import uvicorn
             result = dict(schemaVersion=1,ready=True,python=list(sys.version_info[:3]),
-                          fastapi=fastapi.__version__,httpx=httpx.__version__)
+                          fastapi=fastapi.__version__,httpx=httpx.__version__,uvicorn=uvicorn.__version__)
             sys.stdout.buffer.write(encode_frame(result))
             sys.stdout.buffer.flush()
             return 0

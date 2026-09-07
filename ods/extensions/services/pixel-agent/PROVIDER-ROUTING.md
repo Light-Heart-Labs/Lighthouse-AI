@@ -13,6 +13,26 @@ remain owned by the existing agent. No new agent/session is spawned per call.
 Only short-lived loopback credentials enter runtime memory; upstream provider
 credentials must remain with the host lease worker.
 
+`provider-lease-worker.mjs` now supplies that private pipe transport. Its trusted
+command launches `ods-pixel-route-lease`, which verifies the explicitly prepared
+runtime's source/tree/interpreter identity and execs the private Python worker.
+No credential enters argv or the environment. This launcher is internal transport,
+not an owner-approval or activation endpoint. Never populate its command, directory
+or request callback from untrusted chat content or incoming headers.
+
+Each worker holds a random loopback listener and one of two OS-lock slots.
+Exclusive, fsynced run-claim directories prevent replay independently of those
+live slots. Even a capacity refusal consumes its valid run identity; incomplete
+claims after a crash remain denied. Claims are not automatically deleted.
+The worker has a bounded initial frame, lifetime deadline and parent-EOF/extra-byte
+watchdog. It spawns no tools or child commands, so process death closes its sockets
+and releases its locks. Parent transport has redundant bounded termination.
+
+The optional private runtime now includes uvicorn in the same version range as
+the sharing service. Existing prepared runtimes with different source identity
+require the existing explicitly confirmed repair flow; no global install or
+automatic service restart is performed.
+
 ## Findings from the actual pinned gateway
 
 - HTTP chat run IDs have a `chatcmpl_` prefix; local agent runs may use UUIDs.
@@ -35,6 +55,20 @@ turns, denial without inference, overlapping per-run credentials, release counts
 and absence of lease credentials in persisted runtime state. It retains evidence
 under a unique temporary directory and stops only its own process group.
 
+Set `ODS_PROVIDER_WORKER_PYTHON` to an absolute test Python with the provider
+dependencies to additionally exercise actual per-turn Python workers and stored
+provider credentials. On the qualified Linux fixture, setting
+`ODS_PREPARE_LEASE_RUNTIME=1` explicitly allows a fresh private dependency download
+and runs the same journey through the custody-checked launcher. This fixture uses
+`/usr/bin/python3.12`; it is not native-platform qualification elsewhere.
+
+Real process tests cover duplicate workers, incomplete claims, unsafe lock files,
+capacity denial, supervisor/worker SIGKILL, EOF, extra input, deadlines and
+in-flight upstream disconnect followed by replay denial. The bridge's bounded
+cache can prune only successfully released entries when its host adapter provides
+durable replay protection. Without that adapter, the 256-entry fail-closed bound
+remains. Failed/unknown cleanup is never eligible for eviction.
+
 Run the integration test explicitly on POSIX with the exact installed package:
 
 ```sh
@@ -47,15 +81,12 @@ model qualification, production activation, cloud qualification or Full Access.
 
 ## Required before normal-chat activation
 
-1. A private host lease worker must reuse the existing frozen provider policy,
-   own durable run claims, deadlines and cancellation, and reap on gateway loss.
+1. Wire the qualified host worker into installed lifecycle/source custody.
    `agent_end` is best-effort cleanup, not authoritative lifetime control.
-2. This prototype retains at most 256 run tombstones and then denies new work.
-   Do not install it as a long-lived service. Durable replay denial and bounded
-   pruning must be implemented together; never evict a live lease to admit work.
-3. Activation must bind an approved Settings revision, recipients/data scope,
+   Preserve the independent watchdog and durable claims across gateway restarts.
+2. Activation must bind an approved Settings revision, recipients/data scope,
    concrete execution identity and authoritative idle/admission state. Stage,
    verify and restore configuration transactionally without changing ODS_MODE.
-4. Test cancellation, gateway/worker crash, stream interruption, real model
+3. Test cancellation, gateway/worker crash, stream interruption, real model
    failover, fresh installation and upgrades through the ordinary ODS chat UI.
    Handoff and Full Access retain their separate acceptance requirements.

@@ -1,4 +1,4 @@
-"""Explicit per-turn activation for the isolated, pinned Pixel client.
+"""Frozen per-turn provider gateway, shared by client and native lease workers.
 
 No production service/config mutation. An immutable Settings revision and its
 credential snapshot last only for this turn; later saves affect later turns.
@@ -46,7 +46,7 @@ class ProviderSession:
         self.status = 'not-started'
 
     @contextmanager
-    def activate(self,run,env,agent_id):
+    def serve(self):
         # Optional dependency import: default ODS/Pixel operation does not need
         # a provider gateway, and native host-agent import remains lightweight.
         try:
@@ -56,51 +56,65 @@ class ProviderSession:
             raise StoreError('provider-runtime-dependencies-missing') from None
         token = 'ods_route_'+secrets.token_hex(32)
         listener = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        listener.bind(('127.0.0.1',0))
-        address = f'http://127.0.0.1:{listener.getsockname()[1]}/v1'
-        app = create_app(self.config,self.credentials,token,events=self.events)
-        server = uvicorn.Server(uvicorn.Config(app,log_level='critical',access_log=False,
-            timeout_graceful_shutdown=3,lifespan='off'))
-        thread = threading.Thread(target=lambda:server.run(sockets=[listener]),daemon=True)
-        thread.start()
+        server = thread = None
         try:
+            listener.bind(('127.0.0.1',0))
+            address = f'http://127.0.0.1:{listener.getsockname()[1]}/v1'
+            app = create_app(self.config,self.credentials,token,events=self.events)
+            server = uvicorn.Server(uvicorn.Config(app,log_level='critical',access_log=False,
+                timeout_graceful_shutdown=3,lifespan='off'))
+            thread = threading.Thread(target=lambda:server.run(sockets=[listener]),daemon=True)
+            thread.start()
             deadline = time.monotonic()+5
             while not server.started and thread.is_alive() and time.monotonic()<deadline:
                 time.sleep(.01)
             if not server.started:
                 raise StoreError('provider-runtime-start-failed')
-            config = decode_document(read_private(Path(env['OPENCLAW_CONFIG_PATH'])))
-            agents = config.get('agents',{}).get('list',[])
-            if len(agents) != 1 or agents[0].get('id') != agent_id:
-                raise StoreError('provider-client-scope-mismatch')
-            # This run overlay changes inference only. The canonical client
-            # inputs, workspace, tools, sandbox and approval settings are kept.
-            effective = copy.deepcopy(config)
-            leader = self.leader
-            model = dict(id='ods/pixel',name='ODS Provider Policy',reasoning=leader['reasoning'],
-                input=['text','image'] if leader['supportsVision'] else ['text'],
-                contextWindow=leader['contextTokens'],maxTokens=leader['maxOutputTokens'])
-            provider_id = 'ods-runtime-'+uuid.uuid4().hex[:16]
-            effective.setdefault('models',{})['providers'] = {provider_id:{
-                'baseUrl':address,'apiKey':token,'api':'openai-completions','models':[model]}}
-            selected = {'primary':provider_id+'/ods/pixel','fallbacks':[]}
-            effective['agents']['defaults']['model'] = selected
-            effective['agents']['list'][0]['model'] = selected
-            effective['agents']['defaults']['models'] = {provider_id+'/ods/pixel':{}}
-            path = Path(run)/'provider-openclaw.json'
-            _write_private(path,_json(effective))
-            _write_private(Path(run)/'provider-policy.json',_json(public_config(self.config)))
             self.status = 'active-for-turn'
-            yield dict(env,OPENCLAW_CONFIG_PATH=str(path),PIXEL_MODEL_REASONING=str(leader['reasoning']).lower())
+            yield dict(baseUrl=address,token=token,contextTokens=self.leader['contextTokens'],
+                maxOutputTokens=self.leader['maxOutputTokens'],reasoning=self.leader['reasoning'],
+                supportsVision=self.leader['supportsVision'])
         finally:
-            server.should_exit = True
-            thread.join(timeout=6)
-            if thread.is_alive():
-                server.force_exit = True
-                thread.join(timeout=2)
+            if server is not None:
+                server.should_exit = True
+            if thread is not None and thread.ident is not None:
+                thread.join(timeout=6)
+                if thread.is_alive():
+                    server.force_exit = True
+                    thread.join(timeout=2)
             listener.close()
-            self.status = 'stopped' if not thread.is_alive() else 'cleanup-unverified'
+            alive = thread is not None and thread.is_alive()
+            self.status = 'cleanup-unverified' if alive else 'stopped'
+            if alive:
+                raise StoreError('provider-runtime-cleanup-unverified')
+
+    @contextmanager
+    def activate(self,run,env,agent_id):
+        try:
+            with self.serve() as lease:
+                config = decode_document(read_private(Path(env['OPENCLAW_CONFIG_PATH'])))
+                agents = config.get('agents',{}).get('list',[])
+                if len(agents) != 1 or agents[0].get('id') != agent_id:
+                    raise StoreError('provider-client-scope-mismatch')
+                # Client-only overlay. Normal chat uses serve() without changing
+                # the canonical agent, workspace, tools, sandbox or approvals.
+                effective = copy.deepcopy(config)
+                leader = self.leader
+                model = dict(id='ods/pixel',name='ODS Provider Policy',reasoning=leader['reasoning'],
+                    input=['text','image'] if leader['supportsVision'] else ['text'],
+                    contextWindow=leader['contextTokens'],maxTokens=leader['maxOutputTokens'])
+                provider_id = 'ods-runtime-'+uuid.uuid4().hex[:16]
+                effective.setdefault('models',{})['providers'] = {provider_id:{
+                    'baseUrl':lease['baseUrl'],'apiKey':lease['token'],'api':'openai-completions','models':[model]}}
+                selected = {'primary':provider_id+'/ods/pixel','fallbacks':[]}
+                effective['agents']['defaults']['model'] = selected
+                effective['agents']['list'][0]['model'] = selected
+                effective['agents']['defaults']['models'] = {provider_id+'/ods/pixel':{}}
+                path = Path(run)/'provider-openclaw.json'
+                _write_private(path,_json(effective))
+                _write_private(Path(run)/'provider-policy.json',_json(public_config(self.config)))
+                self.status = 'active-for-turn'
+                yield dict(env,OPENCLAW_CONFIG_PATH=str(path),PIXEL_MODEL_REASONING=str(leader['reasoning']).lower())
+        finally:
             _write_private(Path(run)/'provider-events.json',_json({'revision':self.config['revision'],
                 'runtimeStatus':self.status,'events':self.events}))
-            if thread.is_alive():
-                raise StoreError('provider-runtime-cleanup-unverified')

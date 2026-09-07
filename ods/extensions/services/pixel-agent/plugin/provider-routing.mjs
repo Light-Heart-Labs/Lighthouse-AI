@@ -23,11 +23,12 @@ function leaseSnapshot(value) {
     reasoning: value.reasoning, supportsVision: value.supportsVision});
 }
 
-export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, releaseLease, enabled = false} = {}) {
+export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, releaseLease, enabled = false,
+  durableReplayGuard = false} = {}) {
   const runs = new Map();
   const models = new Map();
-  // Prototype bound, no active eviction or replay after release. Installation
-  // needs durable lease admission before a long-lived bridge can prune tombstones.
+  // Only a host adapter with persistent exclusive claims may prune closed
+  // entries. Late SDK retries then receive durable denial, never a fresh route.
   const MAX_RUNS = 256;
   const binding = ctx => ctx?.agentId === agentId && typeof ctx.runId === 'string' &&
     RUN.test(ctx.runId) && typeof ctx.sessionId === 'string' &&
@@ -36,7 +37,8 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   function release(entry) {
     if (!entry.releasePromise) entry.releasePromise = Promise.resolve()
       .then(() => releaseLease({runId: entry.runId, sessionId: entry.sessionId}))
-      .catch(() => { /* Keep a closed tombstone; never retry a release implicitly. */ });
+      .then(() => {entry.released = true; entry.lease = undefined;})
+      .catch(() => { /* Failed cleanup is not eligible for eviction. */ });
     return entry.releasePromise;
   }
   async function beforeModelResolve(_event, ctx) {
@@ -47,6 +49,14 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
       let entry = runs.get(ctx.runId);
       if (entry && entry.sessionId !== ctx.sessionId) return UNAVAILABLE;
       if (!entry) {
+        if (durableReplayGuard === true && runs.size >= MAX_RUNS) {
+          for (const [oldRun, oldEntry] of runs) {
+            if (oldEntry.closed && oldEntry.released) {
+              runs.delete(oldRun); models.delete(oldEntry.modelId);
+              if (runs.size < MAX_RUNS) break;
+            }
+          }
+        }
         if (runs.size >= MAX_RUNS) return UNAVAILABLE;
         entry = {runId: ctx.runId, sessionId: ctx.sessionId, modelId: `turn-${randomUUID()}`,
           state: 'pending', closed: false};

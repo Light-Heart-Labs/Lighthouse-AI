@@ -114,3 +114,28 @@ test('unknown models and capacity pressure cannot evict active leases', async ()
   const wrapped = f.provider.wrapStreamFn({modelId: 'unknown', streamFn: () => assert.fail('unexpected IO')});
   assert.throws(() => wrapped({}, {}, {}), /unavailable/);
 });
+
+test('durable host claims allow closed-entry pruning but still deny replay', async () => {
+  const claims = new Set();
+  const f = fixture({durableReplayGuard: true, acquireLease: ({runId}) => {
+    if (claims.has(runId)) throw new Error('durable replay denial');
+    claims.add(runId); return lease();
+  }});
+  const first = context();
+  for (let i = 0; i < 270; i++) {
+    const ctx = i === 0 ? first : context();
+    assert.notEqual((await f.beforeModelResolve({}, ctx)).modelOverride, 'unavailable');
+    await f.agentEnd({}, ctx);
+  }
+  assert.equal(claims.size, 270);
+  assert.equal((await f.beforeModelResolve({}, first)).modelOverride, 'unavailable');
+  assert.equal(claims.size, 270);
+});
+
+test('failed release is never eligible for eviction even with durable admission', async () => {
+  const f = fixture({durableReplayGuard: true, releaseLease: () => {throw new Error('cleanup unknown');}});
+  for (let i = 0; i < 256; i++) {
+    const ctx = context(); await f.beforeModelResolve({}, ctx); await f.agentEnd({}, ctx);
+  }
+  assert.equal((await f.beforeModelResolve({}, context())).modelOverride, 'unavailable');
+});

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const pkg = process.env.OPENCLAW_PACKAGE;
-test('pinned gateway binds each turn, retains native history, and refuses unavailable policy',
-  {skip: !pkg, timeout: 150000}, async () => {
+const workerPython = process.env.ODS_PROVIDER_WORKER_PYTHON;
+for (const workerMode of [false, ...(workerPython ? [true] : [])]) {
+test('pinned gateway session/routing contract; private worker=' + workerMode,
+  {skip: !pkg, timeout: 300000}, async () => {
     assert.equal(JSON.parse(readFileSync(join(pkg, 'package.json'))).version, '2026.6.33');
     const root = mkdtempSync(join(tmpdir(), 'ods-routing-gateway-'));
     const fixture = join(root, 'lease.json');
@@ -25,7 +27,9 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks));
       requests.push({body, path: req.url, auth: req.headers.authorization});
-      if (req.url !== '/v1/chat/completions' || !req.headers.authorization?.startsWith('Bearer fixture-lease-chatcmpl_') || body.model !== 'ods/pixel') {
+      const validAuth = workerMode ? req.headers.authorization === 'Bearer fixture-upstream-key'
+        : req.headers.authorization?.startsWith('Bearer fixture-lease-chatcmpl_');
+      if (req.url !== '/v1/chat/completions' || !validAuth || body.model !== (workerMode ? 'fixture-model' : 'ods/pixel')) {
         res.writeHead(401); res.end(JSON.stringify({error: {message: 'fixture wire contract mismatch'}})); return;
       }
       if (requests.length >= 4) {
@@ -45,8 +49,20 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
         model: 'ods/pixel', choices: [{index: 0, delta: {}, finish_reason: first ? 'tool_calls' : 'stop'}],
         usage: {prompt_tokens: 100, completion_tokens: 10, total_tokens: 110}}) + '\n\ndata: [DONE]\n\n');
     });
+    try {
     upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
     const baseUrl = `http://127.0.0.1:${upstream.address().port}/v1`;
+    const providerDirectory = join(root, 'providers');
+    let workerCommand;
+    if (workerMode) {
+      const setup = spawnSync(workerPython, ['-I', '-B', fileURLToPath(new URL('./fixtures/provider-lease-config.py', import.meta.url)),
+        providerDirectory, baseUrl], {encoding: 'utf8', timeout: 180000,
+        env: {PATH: process.env.PATH, ODS_PREPARE_LEASE_RUNTIME: process.env.ODS_PREPARE_LEASE_RUNTIME || '0'}});
+      assert.equal(setup.status, 0, setup.stderr);
+      const workerPath = process.env.ODS_PREPARE_LEASE_RUNTIME === '1' ? '../../../../bin/ods-pixel-route-lease'
+        : '../../../../bin/pixel_provider/route_worker.py';
+      workerCommand = [workerPython, '-I', '-B', fileURLToPath(new URL(workerPath, import.meta.url))];
+    }
     const saveLease = (revision, refuse = false) => writeFileSync(fixture,
       JSON.stringify({baseUrl, revision, refuse}), {mode: 0o600});
     saveLease(1);
@@ -55,8 +71,9 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
     mkdirSync(join(root, 'node_modules')); symlinkSync(resolve(pkg), join(root, 'node_modules/openclaw'));
     const plugin = join(root, 'plugin'); mkdirSync(plugin);
     const original = readFileSync(new URL('./fixtures/provider-routing-gateway.mjs', import.meta.url), 'utf8');
-    writeFileSync(join(plugin, 'index.mjs'), original.replace('../../plugin/provider-routing.mjs', './provider-routing.mjs'));
+    writeFileSync(join(plugin, 'index.mjs'), original.replaceAll('../../plugin/', './'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-routing.mjs', import.meta.url)), join(plugin, 'provider-routing.mjs'));
+    copyFileSync(fileURLToPath(new URL('../plugin/provider-lease-worker.mjs', import.meta.url)), join(plugin, 'provider-lease-worker.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-routing-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}));
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-routing-fixture',
@@ -82,6 +99,8 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
       OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: join(root, 'openclaw.json'),
       XDG_CONFIG_HOME: join(root, 'xdg'), XDG_CACHE_HOME: join(root, 'cache'),
       ODS_ROUTING_FIXTURE: fixture, OPENCLAW_SKIP_CHANNELS: '1'};
+    if (workerMode) Object.assign(env, {ODS_LEASE_DIRECTORY: providerDirectory,
+      ODS_LEASE_WORKER_COMMAND: JSON.stringify(workerCommand)});
     const child = spawn(process.execPath, [join(pkg, 'openclaw.mjs'), 'gateway', 'run'],
       {env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true});
     let log = ''; child.stdout.on('data', b => { log += b; }); child.stderr.on('data', b => { log += b; });
@@ -108,9 +127,11 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
       const second = await chat('Continue from the previous witness without calling it again.');
       assert.match(second.text, /second-turn-complete/, log.slice(-8000) + second.text);
       assert.equal(requests.length, 3);
-      assert.ok(requests.every(r => r.auth.startsWith('Bearer fixture-lease-chatcmpl_') && r.body.model === 'ods/pixel'));
-      assert.equal(requests[0].auth, requests[1].auth);
-      assert.notEqual(requests[1].auth, requests[2].auth);
+      if (!workerMode) {
+        assert.ok(requests.every(r => r.auth.startsWith('Bearer fixture-lease-chatcmpl_') && r.body.model === 'ods/pixel'));
+        assert.equal(requests[0].auth, requests[1].auth);
+        assert.notEqual(requests[1].auth, requests[2].auth);
+      }
       assert.ok(requests[2].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes('witness-retained-42')));
       saveLease(3, true);
       const denied = await chat('This must not reach inference.');
@@ -123,28 +144,49 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
       assert.equal(new Set(acquired.map(e => e.runId)).size, 3);
       assert.deepEqual(acquired.map(e => e.revision), [1, 2, 3]);
       assert.equal(events.filter(e => e.kind === 'tool').length, 1);
+      const readEvents = () => readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
+      const waitReleases = async count => {
+        for (let i = 0; i < 100; i++) {
+          if (readEvents().filter(e => e.kind === 'release').length >= count) return;
+          await delay(50);
+        }
+        assert.fail('lease cleanup did not complete');
+      };
+      await waitReleases(3);
       saveLease(4);
       const parallel = await Promise.all([chat('parallel-alpha', 'session-alpha'), chat('parallel-beta', 'session-beta')]);
       for (const result of parallel) assert.match(result.text, /second-turn-complete/);
       assert.equal(requests.length, 5);
       assert.equal(maxParallelActive, 2, 'must prove overlapping requests, not serialized Promise.all');
-      assert.notEqual(requests[3].auth, requests[4].auth);
+      if (!workerMode) assert.notEqual(requests[3].auth, requests[4].auth);
       for (const request of requests.slice(3)) {
         assert.ok(!request.body.messages.some(m => m.role === 'tool'));
       }
-      const finalEvents = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
+      await waitReleases(5);
+      const finalEvents = readEvents();
       const runs = finalEvents.filter(e => e.kind === 'acquire');
       assert.equal(runs.length, 5);
       for (const run of runs) assert.equal(finalEvents.filter(e => e.kind === 'release' && e.runId === run.runId).length, 1);
-      for (const request of requests) assert.ok(runs.some(run => request.auth === 'Bearer fixture-lease-' + run.runId));
+      if (workerMode) {
+        const leases = finalEvents.filter(e => e.kind === 'worker-lease');
+        assert.equal(leases.length, 4);
+        assert.equal(new Set(leases.map(e => e.tokenHash)).size, 4);
+        for (const lease of leases) await assert.rejects(fetch(lease.baseUrl + '/models', {signal: AbortSignal.timeout(500)}));
+      } else {
+        for (const request of requests) assert.ok(runs.some(run => request.auth === 'Bearer fixture-lease-' + run.runId));
+      }
       const privateState = join(root, 'state');
       for (const item of readdirSync(privateState, {recursive: true, withFileTypes: true})) {
-        if (item.isFile()) assert.ok(!readFileSync(join(item.parentPath, item.name)).includes(Buffer.from('fixture-lease-')),
-          'per-run credential must not persist in runtime state');
+        if (item.isFile()) {
+          const contents = readFileSync(join(item.parentPath, item.name));
+          for (const secretPrefix of ['fixture-lease-', 'ods_route_', 'fixture-upstream-key']) {
+            assert.ok(!contents.includes(Buffer.from(secretPrefix)), 'credential must not persist in runtime state');
+          }
+        }
       }
       writeFileSync(join(root, 'result.json'), JSON.stringify({runtime: '2026.6.33', requests: 5,
         nativeSessionCount: 3, turns: 5, toolEffects: 1, deniedWithoutInference: true,
-        perRunCredentials: true, maxParallelActive, credentialsNotPersisted: true,
+        perRunCredentials: true, maxParallelActive, credentialsNotPersisted: true, privateWorker: workerMode,
         exactReleaseCount: 5, gatewayPid: child.pid}));
       console.log('Evidence:', root);
     } finally {
@@ -156,7 +198,10 @@ test('pinned gateway binds each turn, retains native history, and refuses unavai
         if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL');
       }
       await exit;
+    }
+    } finally {
       upstream.closeAllConnections(); await new Promise(r => upstream.close(r));
       console.log('Retained fixture:', root);
     }
   });
+}

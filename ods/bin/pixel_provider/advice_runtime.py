@@ -18,7 +18,7 @@ import uuid
 from .advice_process import reap_group,run_worker,worker_environment
 from .store import ProviderStore,StoreError,_private
 
-REQUIREMENTS = 'fastapi>=0.109.0,<0.120.0\nhttpx>=0.27.0,<0.29.0\n'
+REQUIREMENTS = 'fastapi>=0.109.0,<0.120.0\nhttpx>=0.27.0,<0.29.0\nuvicorn>=0.27.0,<0.30.0\n'
 HEX = re.compile(r'[a-f0-9]{64}')
 RUNTIME = re.compile(r'runtime-[a-f0-9]{32}')
 SOURCE = Path(__file__).absolute().parent
