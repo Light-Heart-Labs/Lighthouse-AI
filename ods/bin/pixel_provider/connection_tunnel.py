@@ -23,10 +23,11 @@ async def serve_tunnel(*, ssh_bin, target, remote_port, listen_port, stop=None, 
         raise StoreError('invalid-tunnel-port')
     stop = stop or asyncio.Event()
     clients = set()
+    closing = False
 
     async def handle(reader,writer):
         task = asyncio.current_task()
-        if len(clients) >= 8:
+        if closing or len(clients) >= 8:
             writer.close()
             return
         clients.add(task)
@@ -43,8 +44,15 @@ async def serve_tunnel(*, ssh_bin, target, remote_port, listen_port, stop=None, 
                 destination.write(data)
                 await destination.drain()
         try:
-            child = await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
+            spawn = asyncio.create_task(asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL))
+            try:
+                child = await asyncio.shield(spawn)
+            except asyncio.CancelledError:
+                # Process creation may finish after cancellation. Acquire its
+                # handle before unwinding so the owned child is still reaped.
+                child = await spawn
+                raise
             pumps = [asyncio.create_task(pump(reader,child.stdin)),asyncio.create_task(pump(child.stdout,writer))]
             async with asyncio.timeout(3600):
                 done,_ = await asyncio.wait(pumps,return_when=asyncio.FIRST_COMPLETED)
@@ -82,12 +90,14 @@ async def serve_tunnel(*, ssh_bin, target, remote_port, listen_port, stop=None, 
             ready()
         await stop.wait()
     finally:
+        closing = True
         server.close()
-        await server.wait_closed()
         active = list(clients)
         for task in active:
             task.cancel()
         await asyncio.gather(*active,return_exceptions=True)
+        # Python 3.12 waits for active connections too: drain handlers FIRST.
+        await server.wait_closed()
 
 
 def run_tunnel(**options):
