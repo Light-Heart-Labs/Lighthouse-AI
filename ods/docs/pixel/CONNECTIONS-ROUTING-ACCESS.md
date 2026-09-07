@@ -391,10 +391,25 @@ The worker inherits job/concurrency locks; cancellation reaps its process group,
 and parent loss closes stdin, cancelling upstream work with a two-second forced
 exit fallback. Core dumps are disabled in the worker. No interrupted job replays.
 
-Guided dependency provisioning/repair in the dashboard, default agent provider
-activation and advisor-to-leader execution remain pending. Linux tests do not
-qualify native Windows/macOS, and this optional command is not full installation
-acceptance. Existing installs are not changed by saving profiles.
+The **Ask for advice** panel now shows runtime readiness on the ODS service
+host. If missing or drifted, select a server-discovered Python and explicitly
+confirm the private PyPI dependency installation, then choose **Prepare private
+runtime** or **Repair private runtime**. Clients send a verified candidate ID,
+source hash and runtime revision, never executable paths or shell commands.
+Missing Python/venv requires operator remediation; no OS packages are installed.
+
+Preparation is a durable UUID job with a single cross-process installer slot.
+Reload resumes observation, not installation. Stop terminates the owned process
+group; if the runtime pointer already committed, it truthfully reports completion
+instead of claiming rollback. A separate watchdog survives installer-worker exit,
+retains admission locks, and kills remaining descendants when its supervisor's
+private pipe closes. Old candidates and interrupted job evidence remain retained.
+Only an intact, matching published runtime is accepted as setup success.
+
+Default agent provider activation and advisor-to-leader execution remain pending.
+Linux checks do not qualify native Windows/macOS, and optional runtime preparation
+does not complete whole-product installation acceptance. Existing installs are
+not changed by saving profiles.
 
 An isolated actual dashboard/host fixture completed a real Tower2 GLM advisory
 request, recovered its result after reload without another call, and pasted it

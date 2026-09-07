@@ -17,8 +17,19 @@ def worker_environment():
     return {'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'}
 
 
-def reap_group(process):
+def reap_group(process,*,inherited_group=False):
     """Own group only, including descendants retaining pipes after leader exit."""
+    if inherited_group:
+        # The outer setup supervisor owns this group and its EOF watchdog kills
+        # all descendants if it loses its parent. Never signal our own group here.
+        with suppress(ProcessLookupError):
+            process.terminate()
+        try:
+            process.wait(timeout=.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        process.wait(timeout=2)
+        return
     with suppress(ProcessLookupError):
         os.killpg(process.pid,signal.SIGTERM)
     try:
@@ -30,7 +41,7 @@ def reap_group(process):
     process.wait(timeout=2)
 
 
-def run_worker(command,snapshot,*,cancelled,deadline_seconds,lock_fds=()):
+def run_worker(command,snapshot,*,cancelled,deadline_seconds,lock_fds=(),inherited_group=False):
     if os.name != 'posix':
         raise StoreError('unsupported-platform')
     if (not isinstance(command,list) or not command or not os.path.isabs(command[0])
@@ -48,7 +59,7 @@ def run_worker(command,snapshot,*,cancelled,deadline_seconds,lock_fds=()):
     try:
         process = subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE,bufsize=0,close_fds=True,
-                                   pass_fds=tuple(lock_fds),start_new_session=True,
+                                   pass_fds=tuple(lock_fds),start_new_session=not inherited_group,
                                    env=worker_environment(),cwd='/')
         with selectors.DefaultSelector() as selector:
             for stream in (process.stdin,process.stdout,process.stderr):
@@ -106,7 +117,7 @@ def run_worker(command,snapshot,*,cancelled,deadline_seconds,lock_fds=()):
             with suppress(OSError):
                 process.stdin.close()
             try:
-                reap_group(process)
+                reap_group(process,inherited_group=inherited_group)
             finally:
                 for stream in (process.stdout,process.stderr):
                     stream.close()

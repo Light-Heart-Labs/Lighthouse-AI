@@ -19,6 +19,8 @@ async function setup({ kind, post, onInsert = vi.fn() } = {}) {
   vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(id)
   const fetchMock = vi.fn(async (url, options) => {
     if (url === '/api/pixel/providers') return response({ configuration: config(kind) })
+    if (url === '/api/pixel/advice-runtime') return response({ status: 'ready', revision: 1,
+      runtimeId: 'runtime-' + 'c'.repeat(32), sourceSha256: 'a'.repeat(64), host: 'Tower2', candidates: [], job: null })
     if (post) return post(url, options)
     return response(job())
   })

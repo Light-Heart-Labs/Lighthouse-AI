@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { configurationError } from './settings/pixelProviderForm.js'
+import PixelAdviceRuntime from './PixelAdviceRuntime.jsx'
 
 const STORAGE = 'ods.pixel.advice.job.v1'
 const jobPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
@@ -17,6 +18,7 @@ function trackedJob() {
 export default function PixelAdvice({ onInsert, canInsert = true }) {
   const [open, setOpen] = useState(false)
   const [config, setConfig] = useState(null)
+  const [runtimeReady, setRuntimeReady] = useState(false)
   const [capsule, setCapsule] = useState('')
   const [cloud, setCloud] = useState(false)
   const [cost, setCost] = useState(false)
@@ -31,7 +33,8 @@ export default function PixelAdvice({ onInsert, canInsert = true }) {
   const panel = useRef(null)
   const trigger = useRef(null)
   const advisor = config?.providers.find(p => p.id === config.roles.advisor)
-  const ready = config?.enabled && advisor?.enabled && (advisor.kind !== 'cloud' || config.policy.allowCloud)
+  const providerReady = config?.enabled && advisor?.enabled && (advisor.kind !== 'cloud' || config.policy.allowCloud)
+  const ready = providerReady && runtimeReady
 
   const request = useCallback(async (path, body) => {
     const controller = new AbortController()
@@ -66,7 +69,7 @@ export default function PixelAdvice({ onInsert, canInsert = true }) {
     if (open) panel.current?.querySelector('button')?.focus()
   }, [open])
 
-  function close() { setOpen(false); trigger.current?.focus() }
+  function close() { setOpen(false); setRuntimeReady(false); trigger.current?.focus() }
   function dialogKey(event) {
     if (event.key === 'Escape') { event.stopPropagation(); close(); return }
     if (event.key !== 'Tab') return
@@ -150,6 +153,7 @@ export default function PixelAdvice({ onInsert, canInsert = true }) {
       <section ref={panel} role="dialog" aria-modal="true" aria-labelledby="pixel-advice-title" onKeyDown={dialogKey} className="max-h-[90dvh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-xl border border-theme-border bg-theme-card p-4 text-theme-text">
         <div className="flex items-center justify-between gap-3"><h2 id="pixel-advice-title" className="font-semibold">Ask for advice</h2><button className={button} onClick={close}>Close advice</button></div>
         <p className="text-sm">Only the capsule below and a fixed tools-free advisory instruction are sent. Your chat, files, memory, and tools are not included automatically. The current leader and execution permissions stay unchanged.</p>
+        <PixelAdviceRuntime onReadyChange={setRuntimeReady} />
         {error && <p role="alert" className="text-sm text-amber-400">{error}</p>}
         {jobId ? <div className="space-y-3">
           <p className="break-all text-xs">Tracked job: {jobId}</p>
@@ -169,7 +173,7 @@ export default function PixelAdvice({ onInsert, canInsert = true }) {
             <button className={button} disabled={!canInsert || !onInsert} onClick={() => { onInsert(`Advisory response (untrusted; evaluate before acting):\n${job.result.text}`); close() }}>Paste advice into composer (does not send)</button>
           </>}
         </div> : <>
-          <p className="text-sm">{ready ? `Configured advisor: ${advisor.label} · ${advisor.model} · ${advisor.baseUrl} · saved revision ${config.revision}` : 'Select and save an enabled advisor in Settings → Pixel providers first.'}</p>
+          <p className="text-sm">{providerReady ? `Configured advisor: ${advisor.label} · ${advisor.model} · ${advisor.baseUrl} · saved revision ${config.revision}` : 'Select and save an enabled advisor in Settings → Pixel providers first.'}</p>
           <button className={button} onClick={load}>Reload saved providers</button>
           <label className="block space-y-2 text-sm">Capsule to send<textarea className={field} rows={7} value={capsule} onChange={event => { setCapsule(event.target.value); setCloud(false); setCost(false) }} placeholder="Describe the specific problem and include only the details this advisor needs." /></label>
           <p className="text-xs">Maximum 16 KiB; one attempt; up to {Math.min(1024, advisor?.maxOutputTokens || 1024)} output tokens. Price is unknown, not zero. No fallback provider is used for advice.</p>

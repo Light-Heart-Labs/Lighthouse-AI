@@ -6,11 +6,13 @@ import tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'bin'))
 from pixel_provider.advice_jobs import AdvisoryJobs
 from pixel_provider.advice_runtime import runtime_status
+from pixel_provider.advice_setup import readiness
 
 with tempfile.TemporaryDirectory() as directory:
     root=Path(directory)
     assert runtime_status(root)==dict(status='missing',revision=0,runtimeId=None)
     assert AdvisoryJobs(root).providers==root
     assert not (root/'provider-config.json').exists()
+    assert readiness(root/'absent')['status']=='not-configured'
     assert 'httpx' not in sys.modules and 'fastapi' not in sys.modules
 print('Host advisory imports/status pass with stdlib only:',sys.version.split()[0])

@@ -6402,6 +6402,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_ops_status(parse_qs(parsed.query, keep_blank_values=True))
         elif path == "/v1/pixel/providers":
             self._handle_pixel_providers(save=False)
+        elif path == "/v1/pixel/advice-runtime":
+            self._handle_pixel_advice_runtime()
         elif path == "/v1/pixel/inference-sharing":
             self._handle_pixel_sharing()
         elif path == "/v1/host/port":
@@ -6889,6 +6891,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_providers(save=True)
         elif self.path in {"/v1/pixel/advice/start", "/v1/pixel/advice/status", "/v1/pixel/advice/cancel"}:
             self._handle_pixel_advice(self.path.rsplit('/', 1)[1])
+        elif self.path in {"/v1/pixel/advice-runtime/prepare", "/v1/pixel/advice-runtime/status", "/v1/pixel/advice-runtime/cancel"}:
+            self._handle_pixel_advice_runtime(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke", "/v1/pixel/inference-sharing/start", "/v1/pixel/inference-sharing/stop"}:
             self._handle_pixel_sharing(self.path.rsplit('/', 1)[1])
         elif self.path == "/v1/runtime/lemonade/ensure":
@@ -6965,6 +6969,43 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 503, {'error': 'Sharing is unavailable'}, no_store=True)
             return
         json_response(self, 202 if action in {'start', 'stop'} else 200, result, no_store=True)
+
+    def _handle_pixel_advice_runtime(self, action=None):
+        """Owner-confirmed optional private setup, never an arbitrary command."""
+        if not check_auth(self):
+            return
+        from pixel_provider.store import StoreError, decode_document
+        from pixel_provider.advice_setup import get_setup_manager, readiness
+        try:
+            if action is None:
+                result = readiness(Path(DATA_DIR) / 'pixel-providers')
+            else:
+                lengths = self.headers.get_all('Content-Length', [])
+                if (len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,5}', lengths[0])
+                        or self.headers.get('Transfer-Encoding') is not None or not 0 < int(lengths[0]) <= 8192):
+                    raise StoreError('invalid-setup-request')
+                previous = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(10)
+                    raw = self.rfile.read(int(lengths[0]))
+                finally:
+                    self.connection.settimeout(previous)
+                if len(raw) != int(lengths[0]):
+                    raise StoreError('invalid-setup-request')
+                body = decode_document(raw)
+                manager = get_setup_manager(DATA_DIR)
+                if action == 'prepare':
+                    result = manager.start(body)
+                else:
+                    if not isinstance(body, dict) or set(body) != {'jobId'}:
+                        raise StoreError('invalid-setup-request')
+                    result = getattr(manager, action)(body['jobId'])
+            json_response(self, 202 if action == 'prepare' else 200, result, no_store=True)
+        except StoreError as exc:
+            status = 409 if exc.code in {'stale-revision', 'setup-request-conflict', 'setup-busy'} else 400
+            json_response(self, status, {'error': 'Advisory setup unavailable', 'code': exc.code}, no_store=True)
+        except (OSError, ValueError, TypeError, KeyError):
+            json_response(self, 503, {'error': 'Advisory setup unavailable'}, no_store=True)
 
     def _handle_pixel_advice(self, action):
         """Explicit owner-reviewed inference job, not an agent/tool endpoint."""

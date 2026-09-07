@@ -3,6 +3,7 @@
 The owner can alter owner-owned files; hashes detect drift, not a malicious
 same-UID adversary. Old/failed directories are retained, never auto-activated.
 """
+import asyncio
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 import uuid
 
 from .advice_process import reap_group,run_worker,worker_environment
@@ -147,26 +149,50 @@ def runtime_status(directory):
     return dict(status=status,revision=receipt['revision'],runtimeId=receipt['runtime']['id'])
 
 
-def install_command(command,*,timeout=180):
+def install_command(command,*,timeout=180,cancelled=lambda:False,lock_fds=(),inherited_group=False):
+    if cancelled():
+        raise asyncio.CancelledError()
     process = subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL,start_new_session=True,close_fds=True,
+                               stderr=subprocess.DEVNULL,start_new_session=not inherited_group,close_fds=True,
+                               pass_fds=tuple(lock_fds),
                                cwd='/',umask=0o077,env={**worker_environment(),'PIP_CONFIG_FILE':os.devnull})
     try:
-        if process.wait(timeout=timeout) != 0:
+        deadline=time.monotonic()+timeout
+        while process.poll() is None:
+            if cancelled():
+                raise asyncio.CancelledError()
+            if time.monotonic()>=deadline:
+                raise StoreError('advice-runtime-install-timeout')
+            time.sleep(.05)
+        if cancelled():
+            raise asyncio.CancelledError()
+        if process.returncode != 0:
             raise StoreError('advice-runtime-install-failed')
-    except subprocess.TimeoutExpired:
-        raise StoreError('advice-runtime-install-timeout') from None
     finally:
-        reap_group(process)
+        reap_group(process,inherited_group=inherited_group)
 
 
-def prepare_runtime(directory,*,python,expected_revision,confirmed):
+def prepare_runtime(directory,*,python,expected_revision,confirmed,cancelled=lambda:False,
+                    lock_fds=(),inherited_group=False,runtime_id=None):
+    deadline=time.monotonic()+180
+    def checkpoint():
+        if cancelled():
+            raise asyncio.CancelledError()
+        if time.monotonic()>=deadline:
+            raise StoreError('advice-runtime-install-timeout')
+    def install(command,*,timeout=180):
+        checkpoint()
+        return install_command(command,timeout=min(timeout,max(1,int(deadline-time.monotonic()))),
+            cancelled=cancelled,lock_fds=lock_fds,inherited_group=inherited_group)
+    checkpoint()
     if os.name != 'posix':
         raise StoreError('unsupported-platform')
     if confirmed is not True:
         raise StoreError('runtime-install-confirmation-required')
     if not isinstance(python,str) or not os.path.isabs(python):
         raise StoreError('explicit-python-required')
+    if runtime_id is not None and (not isinstance(runtime_id,str) or not RUNTIME.fullmatch(runtime_id)):
+        raise StoreError('invalid-runtime-id')
     directory = Path(directory).absolute()
     store = RuntimeStore(directory)
     initial = store.load()
@@ -177,7 +203,7 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
     interpreter = Path(python).resolve(strict=True)
     interpreter_hash = digest_file(interpreter)
     # Validate Python before attempting a venv or creating an inactive runtime.
-    install_command([str(interpreter),'-I','-B','-c',
+    install([str(interpreter),'-I','-B','-c',
                      'import sys; assert sys.version_info >= (3,11)'],timeout=10)
     root = Path(directory)/'advice-runtimes'
     with store._locked(True):
@@ -186,7 +212,8 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
     with ProviderStore(root)._locked(True):
         if store.load()['revision'] != expected_revision:
             raise StoreError('stale-revision')
-        leaf = root/('runtime-'+uuid.uuid4().hex)
+        checkpoint()
+        leaf = root/(runtime_id or ('runtime-'+uuid.uuid4().hex))
         leaf.mkdir(mode=0o700)
         source_hash = source_digest()
         package = leaf/'source'/'pixel_provider'
@@ -198,13 +225,13 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
             (package/source.name).chmod(0o600)
         if source_digest(package) != source_hash:
             raise StoreError('advice-runtime-drift')
-        install_command([str(interpreter),'-I','-B','-m','venv',str(leaf/'venv')])
+        install([str(interpreter),'-I','-B','-m','venv',str(leaf/'venv')])
         binary = str(leaf/'venv'/'bin'/'python')
         requirements = leaf/'requirements.txt'
         requirements.write_text(REQUIREMENTS,encoding='utf-8')
         requirements.chmod(0o600)
         report = leaf/'install-report.json'
-        install_command([binary,'-I','-B','-m','pip','--isolated','--disable-pip-version-check',
+        install([binary,'-I','-B','-m','pip','--isolated','--disable-pip-version-check',
                          'install','--no-input','--no-cache-dir','--only-binary=:all:',
                          '--index-url','https://pypi.org/simple','--report',str(report),'-r',str(requirements)])
         if report.stat().st_size > 2*1024*1024:
@@ -223,7 +250,10 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
         lock.chmod(0o600)
         report.chmod(0o600)
         command = [binary,'-I','-B',str(package/'advice_worker.py')]
-        check = run_worker(command+['--check'],{},cancelled=lambda:False,deadline_seconds=30)
+        checkpoint()
+        check = run_worker(command+['--check'],{},cancelled=cancelled,
+            deadline_seconds=min(30,max(1,int(deadline-time.monotonic()))),lock_fds=lock_fds,
+            inherited_group=inherited_group)
         if check.get('ready') is not True or check.get('schemaVersion') != 1:
             raise StoreError('advice-runtime-selftest-failed')
         if source_digest() != source_hash or digest_file(interpreter) != interpreter_hash:
@@ -233,6 +263,7 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
             interpreter=str(interpreter),interpreterSha256=interpreter_hash))
         # Flush all installed bytes before atomically publishing the pointer.
         for directory_path,_,files in os.walk(leaf,followlinks=False):
+            checkpoint()
             for name in files:
                 path = Path(directory_path)/name
                 if not path.is_symlink():
@@ -248,6 +279,9 @@ def prepare_runtime(directory,*,python,expected_revision,confirmed):
             os.fsync(fd)
         finally:
             os.close(fd)
+        # Cancellation after this commit must be reconciled as published, not
+        # falsely reported as a rollback. The caller knows the candidate ID.
+        checkpoint()
         committed = store.save(candidate,expected_revision=expected_revision)
         resolve_runtime(directory,receipt=committed)
         return dict(status='ready',revision=committed['revision'],runtimeId=leaf.name)
