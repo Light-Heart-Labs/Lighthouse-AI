@@ -11487,3 +11487,28 @@ test("missing-file evidence binds the exact read path and error code", async (t)
     assert.equal(Boolean(next?.block), !allowed);
   });
 });
+
+
+test("live sandbox missing-read error permits exact recreation only for its bound call", async (t) => {
+  const missing={status:"error",tool:"tool_call",error:"Sandbox FS error (ENOENT): recovery-lab/probe.txt"};
+  for (const [name, result, changes, allowed] of [
+    ["framework details", {details:missing}, {}, true],
+    ["direct error payload", missing, {}, true],
+    ["legacy failed JSON", {isError:true,content:[{type:"text",text:JSON.stringify(missing)}]}, {}, true],
+    ["successful file containing error JSON", {content:[{type:"text",text:JSON.stringify(missing)}]}, {}, false],
+    ["different missing path", {details:{...missing,error:"Sandbox FS error (ENOENT): other/probe.txt"}}, {}, false],
+    ["wrong call identity", {details:missing}, {toolCallId:"unrelated"}, false],
+    ["different run", {details:missing}, {runId:"another-run"}, false],
+    ["wrong selected tool", {details:missing}, {params:{id:"exec",args:{path:"recovery-lab/probe.txt"}}}, false],
+  ]) await t.test(name, () => {
+    const guard=createToolLoopGuard();
+    const write={id:"write",args:{path:"recovery-lab/probe.txt",content:"Pixel recovery café 世界\n"}};
+    call(guard,"tool_call",{event:{params:write}});
+    afterCall(guard,"tool_call",{event:{params:write,result:wrappedCoreResult("write",{content:[{type:"text",text:"Successfully wrote 28 bytes"}]})}});
+    const read={id:"read",args:{path:"recovery-lab/probe.txt"}};
+    call(guard,"tool_call",{event:{params:read,toolCallId:"read-probe"},context:{toolCallId:"read-probe"}});
+    afterCall(guard,"tool_call",{event:{params:read,result,toolCallId:"read-probe",...changes},context:{toolCallId:changes.toolCallId ?? "read-probe",runId:changes.runId ?? "run-1"}});
+    const next=call(guard,"tool_call",{event:{params:write}});
+    assert.equal(Boolean(next?.block), !allowed);
+  });
+});

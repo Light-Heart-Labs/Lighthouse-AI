@@ -2665,6 +2665,35 @@ function toolSearchEventEnvelope(event, expectedToolName, expectedSourceName) {
   };
 }
 
+// Tool Search catches sandbox read failures outside its usual selected-tool
+// envelope. Bind that error to the pre-call read identity before using it.
+function toolSearchSandboxMissingRead(event, pending, runId) {
+  if (pending?.runId !== runId || pending.selectedToolName !== "read" ||
+      !["read", "openclaw:core:read"].includes(event?.params?.id)) return undefined;
+  const requestedPath = normalizeWorkspaceFilePath(pending.selectedParams?.path);
+  if (typeof requestedPath !== "string" || !requestedPath ||
+      normalizeWorkspaceFilePath(event.params?.args?.path) !== requestedPath) return undefined;
+  const result = event.result;
+  const payload = result?.details?.status === "error" ? result.details : result;
+  let error = typeof event.error === "string" ? event.error : undefined;
+  if (payload?.status === "error" && payload.tool === "tool_call" &&
+      typeof payload.error === "string") error = payload.error;
+  if (!error && result?.isError === true && Array.isArray(result.content)) {
+    for (const block of result.content) {
+      if (block?.type !== "text" || typeof block.text !== "string") continue;
+      try {
+        const parsed = JSON.parse(block.text);
+        if (parsed?.status === "error" && parsed.tool === "tool_call" &&
+            typeof parsed.error === "string") error = parsed.error;
+      } catch { /* Successful file contents are never missing-file evidence. */ }
+    }
+  }
+  const match = error?.match(/^Sandbox FS error \(ENOENT\): ([^\r\n]+)$/);
+  if (!match || normalizeWorkspaceFilePath(match[1]) !== requestedPath) return undefined;
+  return {params: pending.selectedParams,
+    result: {isError: true, details: {code: "ENOENT", path: requestedPath}}};
+}
+
 function toolSearchSelectedToolEvent(event, expectedToolName, expectedSourceName) {
   if (toolCallFailed(event)) return undefined;
   const envelope = toolSearchEventEnvelope(event, expectedToolName, expectedSourceName);
@@ -7702,7 +7731,8 @@ export function createToolLoopGuard({
       toolName === "read" && event?.result && typeof event.result === "object"
         ? event
         : toolName === "tool_call"
-          ? toolSearchSelectedToolEvent(event, "read", "core")
+          ? toolSearchSelectedToolEvent(event, "read", "core") ??
+            toolSearchSandboxMissingRead(event, pendingToolRun, runId)
           : undefined;
     const completedReadPath = completedRead && !toolCallFailed(completedRead)
       ? normalizeWorkspaceFilePath(completedRead.params?.path)
