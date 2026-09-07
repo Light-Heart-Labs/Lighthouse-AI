@@ -63,6 +63,14 @@ def test_later_runtime_changes_are_not_overwritten_by_restore(installation):
     assert module.read_bytes() == b"independent package update"
 
 
+def test_normal_npm_group_mode_is_preserved(installation):
+    module = installation[3]
+    module.chmod(0o664)
+    assert run(installation)["status"] == "changed"
+    assert module.stat().st_mode & 0o777 == 0o664
+    assert module.read_bytes() == installation[5]
+
+
 def test_changed_backup_is_not_used(installation):
     run(installation)
     next(installation[1].glob("*.js")).write_bytes(b"tampered")

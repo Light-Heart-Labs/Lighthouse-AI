@@ -23,10 +23,13 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def read_regular(path):
+def read_regular(path, *, private=False):
     info = path.lstat()
+    # npm commonly installs owner-group-writable package files (0664). Their
+    # exact reviewed hash is still required; backups must remain owner-only.
+    forbidden_permissions = 0o077 if private else 0o002
     if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-            or info.st_uid != os.getuid() or info.st_mode & 0o022):
+            or info.st_uid != os.getuid() or info.st_mode & forbidden_permissions):
         raise ValueError("runtime repair requires owner-controlled regular files")
     return path.read_bytes(), stat.S_IMODE(info.st_mode)
 
@@ -83,7 +86,7 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST):
             raise ValueError("runtime repair baseline hash mismatch")
         backup = state_dir / (before + ".js")
         if backup.exists() or backup.is_symlink():
-            saved, _ = read_regular(backup)
+            saved, _ = read_regular(backup, private=True)
             if digest(saved) != before:
                 raise ValueError("runtime repair backup hash mismatch")
         else:

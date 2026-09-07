@@ -49,4 +49,3 @@ test('global no-progress breaker still applies',()=>{
  assert.equal(detect(s,'exec',params,config,scope).stuck,true);
  assert.notEqual(detect(s,'exec',params,config,scope).detector,'unknown_tool_repeat');
 });
-
