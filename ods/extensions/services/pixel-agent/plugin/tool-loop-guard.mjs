@@ -4190,7 +4190,17 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
     /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
     /\b(?:reachability|connectivity)\s+(?:of|to|for)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
   ];
-  const peer = patterns.map((pattern) => text.match(pattern)?.[1]).find(Boolean);
+  const match = patterns.map((pattern) => text.match(pattern)).find((value) => value?.[1]);
+  let peer = match?.[1];
+  if (peer?.endsWith(".") && !peer.includes("..")) {
+    // A quoted terminal dot belongs to the DNS target; an unquoted single dot
+    // ends the sentence. Leave malformed repeated dots for validation below.
+    const start = match.index + match[0].lastIndexOf(peer);
+    const quote = text[start - 1];
+    const explicitlyQuoted = ["`", '"', "'"].includes(quote) &&
+      text[start + peer.length] === quote;
+    if (!explicitlyQuoted) peer = peer.slice(0, -1);
+  }
   if (
     !peer ||
     // Resolving "its log path" names no network peer. Pronouns and articles

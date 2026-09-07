@@ -3262,6 +3262,404 @@ test("binds one owner-named private peer to bounded read-only reachability evide
   assert.doesNotMatch(evidence, /Tower1|Tower2|Tower3/);
 });
 
+test("strips sentence-ending punctuation from bare peer names", () => {
+  // Bare peer name followed by sentence-ending period must not capture the dot.
+  const defaultPorts = [22, 80, 443, 3389, 5985, 5986];
+
+  // Exact failing prompt: "Resolve tower2." — the word "SSH" in "No SSH login"
+  // triggers the existing SSH port detection; peer must still be "tower2" not "tower2."
+  const exactResult = userMessageNetworkPeerRequest(
+    [],
+    "Resolve tower2. Use the read-only host.network-peer observation with peer set exactly to tower2, and report its actual result. No SSH login, credentials, subnet scan, service change or external message."
+  );
+  assert.equal(exactResult.peer, "tower2", "exact failing prompt: peer is tower2 not tower2.");
+  assert.ok(exactResult.ports.includes(22), "SSH keyword detected in prompt");
+
+  // Clean version without SSH keyword uses default ports.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2. Use the read-only host.network-peer observation and report its actual result."
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "clean prompt: bare tower2 followed by sentence period"
+  );
+
+  // Other sentence-ending punctuation on bare names.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], "Resolve tower2! on the local network."),
+    { peer: "tower2", ports: defaultPorts },
+    "exclamation after bare name"
+  );
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], "Resolve tower2? on the local network."),
+    { peer: "tower2", ports: defaultPorts },
+    "question mark after bare name"
+  );
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], "Resolve tower2; on the local network."),
+    { peer: "tower2", ports: defaultPorts },
+    "semicolon after bare name"
+  );
+
+  // Quoted and backticked names must not regress.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], 'Resolve "tower2" on the local network.'),
+    { peer: "tower2", ports: defaultPorts },
+    "double-quoted name"
+  );
+  assert.deepEqual(
+    userMessageNetworkPeerRequest([], "Resolve `tower2` on the local network."),
+    { peer: "tower2", ports: defaultPorts },
+    "backticked name"
+  );
+
+  // Internal DNS dots must be preserved (not treated as sentence punctuation).
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2.internal.corp on the local network."
+    ),
+    { peer: "tower2.internal.corp", ports: defaultPorts },
+    "FQDN with internal dots preserved"
+  );
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Check connectivity to host1.example.local on the LAN."
+    ),
+    { peer: "host1.example.local", ports: defaultPorts },
+    "FQDN via reachability pattern"
+  );
+
+  // FQDN with trailing sentence period must still strip only the final dot.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2.example.local. on the network."
+    ),
+    { peer: "tower2.example.local", ports: defaultPorts },
+    "FQDN with trailing sentence period"
+  );
+
+  // Negative: unrelated prose with dots must not produce a peer.
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "The file has dots in its name. Check it on the network."
+    ),
+    undefined,
+    "prose dots do not produce a peer"
+  );
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "Read the documentation at version 2.0. Check connectivity."
+    ),
+    undefined,
+    "version number dots do not produce a peer"
+  );
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "The path is /usr/local/bin. Verify reachability."
+    ),
+    undefined,
+    "path dots do not produce a peer"
+  );
+
+  // Negative: double dots (invalid hostname) rejected.
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2..example on the network."
+    ),
+    undefined,
+    "double dots rejected even after strip"
+  );
+});
+
+test("guards network-peer routing to exact owner target after punctuation strip", () => {
+  const guard = createToolLoopGuard();
+  const prompt =
+    "Resolve tower2. Use the read-only host.network-peer observation with peer set exactly to tower2. No SSH login.";
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+
+  // The guard routes every host.network-peer call to the exact parsed peer "tower2"
+  // (not "tower2." — the trailing period was stripped by the parser).
+  // It corrects any peer mismatch in the model's args to the owner-requested target.
+  const routed = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: { actions: ["host.network-peer"], peer: "tower2.", ports: [22] },
+      },
+    },
+  });
+  assert.equal(routed?.params?.args?.peer, "tower2", "routing corrects trailing period");
+
+  // A call naming a different peer is also corrected to the owner-requested target.
+  const other = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: { actions: ["host.network-peer"], peer: "tower1", ports: [22] },
+      },
+    },
+  });
+  assert.equal(other?.params?.args?.peer, "tower2", "different peer corrected to owner target");
+
+  // The correct peer is accepted as-is.
+  const correct = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: {
+          actions: ["host.network-peer"],
+          peer: "tower2",
+          ports: [22],
+        },
+      },
+    },
+  });
+  assert.equal(correct?.params?.args?.peer, "tower2", "exact peer accepted");
+});
+
+test("preserves terminal FQDN dot for explicitly quoted peers (regression)", () => {
+  const defaultPorts = [22, 80, 443, 3389, 5985, 5986];
+
+  // Quoted FQDN with terminal dot: the dot is part of the DNS target, not sentence punctuation.
+  // The first candidate's unconditional peer.replace(/[.!?;,]+$/, '') erased this.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      'Resolve "tower2.example.local." on the network.'
+    ),
+    { peer: "tower2.example.local.", ports: defaultPorts },
+    "quoted FQDN terminal dot preserved"
+  );
+
+  // Backticked FQDN with terminal dot: same requirement.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve `tower2.example.local.` on the network."
+    ),
+    { peer: "tower2.example.local.", ports: defaultPorts },
+    "backticked FQDN terminal dot preserved"
+  );
+
+  // Single-quoted FQDN with terminal dot.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve 'tower2.example.local.' on the network."
+    ),
+    { peer: "tower2.example.local.", ports: defaultPorts },
+    "single-quoted FQDN terminal dot preserved"
+  );
+
+  // Quoted non-FQDN bare name: no terminal dot to preserve.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      'Resolve "tower2" on the network.'
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "quoted bare name unchanged"
+  );
+
+  // Quoted name with internal dots but no terminal dot.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      'Resolve "tower2.internal.corp" on the network.'
+    ),
+    { peer: "tower2.internal.corp", ports: defaultPorts },
+    "quoted internal DNS dots preserved without terminal dot"
+  );
+
+  // Quoted peer with sentence-ending exclamation after the closing quote.
+  // Exclamation is outside the capture; the capture ends at the closing quote.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      'Resolve "tower2"! on the network.'
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "quoted peer with exclamation after quote"
+  );
+});
+
+test("rejects malformed double dots without sanitizing them (regression)", () => {
+  // The first candidate's unconditional peer.replace(/[.!?;,]+$/, '') would
+  // convert "tower2.." to "tower2", passing the .. check that follows.
+  // This silently sanitizes a malformed hostname into a valid one.
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2.. on the network."
+    ),
+    undefined,
+    "double trailing dots rejected — not sanitized to valid target"
+  );
+
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2..example on the network."
+    ),
+    undefined,
+    "internal double dots rejected"
+  );
+
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2... on the network."
+    ),
+    undefined,
+    "triple dots rejected — not sanitized"
+  );
+
+  // Quoted double dots also rejected (quote preserves exact text but .. still invalid).
+  assert.equal(
+    userMessageNetworkPeerRequest(
+      [],
+      'Resolve "tower2..example" on the network.'
+    ),
+    undefined,
+    "quoted double dots still rejected"
+  );
+});
+
+test("bare names still strip trailing sentence punctuation", () => {
+  const defaultPorts = [22, 80, 443, 3389, 5985, 5986];
+
+  // Bare name with trailing period (sentence end, not DNS).
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2. on the network."
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "bare trailing period stripped"
+  );
+
+  // Bare FQDN with trailing period (ambiguous: could be sentence end or FQDN).
+  // For bare names, we treat it as sentence punctuation and strip.
+  // The owner can use quotes to disambiguate.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2.example.local. on the network."
+    ),
+    { peer: "tower2.example.local", ports: defaultPorts },
+    "bare FQDN trailing period stripped (use quotes to preserve)"
+  );
+
+  // Bare name with trailing exclamation.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2! on the network."
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "bare trailing exclamation stripped"
+  );
+
+  // Bare name with trailing question mark.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2? on the network."
+    ),
+    { peer: "tower2", ports: defaultPorts },
+    "bare trailing question mark stripped"
+  );
+
+  // Internal DNS dots preserved for bare names.
+  assert.deepEqual(
+    userMessageNetworkPeerRequest(
+      [],
+      "Resolve tower2.internal.corp on the network."
+    ),
+    { peer: "tower2.internal.corp", ports: defaultPorts },
+    "bare internal DNS dots preserved"
+  );
+});
+
+test("routing hooks preserve quoted terminal-dot peer after revision", () => {
+  const guard = createToolLoopGuard();
+  const prompt =
+    'Resolve "tower2.example.local." on the network. No SSH login.';
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel",
+    { prompt }
+  );
+
+  // Parser now returns peer: "tower2.example.local." (with terminal dot).
+  // Guard routes to that exact target.
+  const routed = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: { actions: ["host.network-peer"], peer: "tower2.example.local.", ports: [80] },
+      },
+    },
+  });
+  assert.equal(routed?.params?.args?.peer, "tower2.example.local.", "quoted FQDN with terminal dot routed exactly");
+
+  // Model sends the stripped version; guard corrects to owner-requested target.
+  const stripped = call(guard, "tool_call", {
+    event: {
+      params: {
+        id: "pixel_ods_host_observe",
+        args: { actions: ["host.network-peer"], peer: "tower2.example.local", ports: [80] },
+      },
+    },
+  });
+  assert.equal(stripped?.params?.args?.peer, "tower2.example.local.", "stripped peer corrected to quoted owner target");
+});
+
+test("IPv4 and IPv6 peer targets unaffected by punctuation revision", () => {
+
+  // IPv4 private address.
+  const ipv4Result = userMessageNetworkPeerRequest(
+    [],
+    "Resolve 192.168.1.10 on the network."
+  );
+  assert.equal(ipv4Result?.peer, "192.168.1.10", "IPv4 private peer captured");
+
+  // IPv4 public address — should be rejected by private scope check.
+  const publicIpv4 = userMessageNetworkPeerRequest(
+    [],
+    "Resolve 8.8.8.8 on the network."
+  );
+  assert.equal(publicIpv4, undefined, "IPv4 public address rejected by private scope check");
+});
+
+test("requested ports unaffected by punctuation revision", () => {
+  const result = userMessageNetworkPeerRequest(
+    [],
+    "Resolve tower2 on the network, ports 8080, 8443."
+  );
+  assert.ok(result, "peer parsed with explicit ports");
+  assert.ok(result.ports.includes(8080), "explicit port 8080 included");
+  assert.ok(result.ports.includes(8443), "explicit port 8443 included");
+
+  const sshResult = userMessageNetworkPeerRequest(
+    [],
+    "Resolve tower2 on the network via SSH."
+  );
+  assert.ok(sshResult?.ports.includes(22), "SSH port 22 auto-added");
+});
+
 test("rejects network-peer receipts that escape the exact private target boundary", () => {
   const prompt = "Probe Strixy on the local network and report whether it is reachable.";
   const ports = [22, 80, 443, 3389, 5985, 5986];
