@@ -82,3 +82,32 @@ Live browser and model qualification is also required.
 The transformation includes a small portion of OpenClaw's MIT-licensed Tool
 Search runtime, Copyright (c) 2026 OpenClaw Foundation; the complete license is
 retained in the [upstream MIT notice](upstream/THIRD_PARTY_NOTICES.md).
+
+## OpenClaw 2026.6.33 compaction default export
+
+The installed compaction wrapper uses `export *`, which omits the implementation
+chunk's default export. Its consumer imports that default and calls it after a
+successful compaction, producing `TypeError: reconcile is not a function`.
+The ODS transformation adds an explicit default re-export. It preserves the
+existing implementation's monotonic session count and timestamp handling.
+
+The installer checks both the wrapper and its dependency against reviewed
+SHA-256 hashes. A changed dependency, unknown package version or independently
+modified wrapper is never patched as though it were the reviewed runtime.
+Owner-private backup and custody use
+`.openclaw/ods-runtime-patches/compaction-export`; the helper's
+`--compaction-export --restore` restores reviewed bytes only.
+
+The installed-package test in `compaction_export.test.mjs` loads the real pinned
+chunk in isolated Node VM modules with a synthetic session store. It checks the
+missing export before repair, callable default after repair, increasing counts,
+replayed counts, timestamp monotonicity and preservation of other session fields.
+Set `PIXEL_OPENCLAW_RUNTIME` to the OpenClaw package directory and run Node with
+`--experimental-vm-modules --test`. This contract test is separate from native
+conversation qualification. It does not resolve or qualify the aggregate
+compaction timeout, interrupted-run recovery or assistant-tail continuation.
+
+The wrapper line comes from OpenClaw's MIT-licensed runtime, Copyright (c) 2026
+OpenClaw Foundation; the full license remains in the
+[upstream MIT notice](upstream/THIRD_PARTY_NOTICES.md). The test does not vendor
+the upstream implementation.
