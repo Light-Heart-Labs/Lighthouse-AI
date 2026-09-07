@@ -11586,3 +11586,223 @@ test("live sandbox missing-read error permits exact recreation only for its boun
     assert.equal(Boolean(next?.block), !allowed);
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// Outer-envelope workdir normalization for tool_call exec
+// ──────────────────────────────────────────────────────────────
+
+test("normalizes outer workdir into args for a bare { id, args, workdir } exec envelope", () => {
+  const prepared = [];
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: (runId, command) => {
+        prepared.push([runId, command]);
+        return command;
+      },
+    },
+  });
+  const params = {
+    id: "exec",
+    args: { command: "python3 summarize_expenses.py fixtures/empty.csv --check" },
+    workdir: "report-lab",
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  assert.equal(result.params.id, "exec");
+  assert.equal(result.params.args.command, "python3 summarize_expenses.py fixtures/empty.csv --check");
+  assert.equal(result.params.args.workdir, "/workspace/report-lab");
+});
+
+test("normalizes outer workdir into args for openclaw:core:exec envelope", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    id: "openclaw:core:exec",
+    args: { command: "echo hello" },
+    workdir: "sub/dir",
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  assert.equal(result.params.id, "openclaw:core:exec");
+  assert.equal(result.params.args.workdir, "/workspace/sub/dir");
+});
+
+test("does NOT normalize outer workdir when args already has workdir (conflict)", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    id: "exec",
+    args: { command: "echo hello", workdir: "/workspace/other" },
+    workdir: "report-lab",
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  // Outer workdir must not override args.workdir; no silent normalization.
+  const effectiveParams = result?.params ?? params;
+  assert.equal(effectiveParams.args.workdir, "/workspace/other");
+});
+
+test("does NOT normalize outer workdir for non-exec tool ids", () => {
+  const guard = createToolLoopGuard();
+  for (const id of ["write", "read", "edit", "process", "openclaw:core:write"]) {
+    const params = {
+      id,
+      args: { path: "test.txt", content: "data" },
+      workdir: "some-dir",
+    };
+    const result = call(guard, "tool_call", { event: { params } });
+    // workdir must stay on the outer envelope (not normalized into args).
+    const effectiveParams = result?.params ?? params;
+    assert.equal(effectiveParams.args.workdir, undefined,
+      `workdir not normalized for id=${id}`);
+  }
+});
+
+test("does NOT normalize outer workdir when extra outer fields are present", () => {
+  const guard = createToolLoopGuard();
+  const params = {
+    id: "exec",
+    args: { command: "echo hello" },
+    workdir: "report-lab",
+    timeoutSeconds: 30,
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  const effectiveParams = result?.params ?? params;
+  assert.equal(effectiveParams.args.workdir, undefined,
+    "extra outer keys block normalization");
+});
+
+test("does NOT normalize outer workdir for escaping paths", () => {
+  const guard = createToolLoopGuard();
+  for (const p of [
+    "../etc",
+    "sub/../secret",
+    "../../escape",
+    "a/b/..",
+  ]) {
+    const params = {
+      id: "exec",
+      args: { command: "echo hello" },
+      workdir: p,
+    };
+    const result = call(guard, "tool_call", { event: { params } });
+    // When normalization is rejected, guard passes through (undefined result)
+    // or returns original params; either way args.workdir must be undefined.
+    const effectiveParams = result?.params ?? params;
+    assert.equal(effectiveParams.args.workdir, undefined,
+      `workdir not normalized for escaping path: ${p}`);
+  }
+});
+
+test("does NOT normalize outer workdir for invalid path characters", () => {
+  const guard = createToolLoopGuard();
+  for (const p of [
+    "has space",
+    "has\ttab",
+    "has#hash",
+    "has$dollar",
+    "",
+  ]) {
+    const params = {
+      id: "exec",
+      args: { command: "echo hello" },
+      workdir: p,
+    };
+    const result = call(guard, "tool_call", { event: { params } });
+    const effectiveParams = result?.params ?? params;
+    assert.equal(effectiveParams.args.workdir, undefined,
+      `workdir not normalized for invalid path: ${JSON.stringify(p)}`);
+  }
+});
+
+test("normalizes outer workdir into args for absolute /workspace/... paths", () => {
+  const guard = createToolLoopGuard();
+  // The native failure used workdir="/workspace/report-lab" at the outer level.
+  const params = {
+    id: "exec",
+    args: { command: "python3 summarize_expenses.py fixtures/empty.csv --check" },
+    workdir: "/workspace/report-lab",
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  assert.equal(result.params.id, "exec");
+  assert.equal(result.params.args.command, "python3 summarize_expenses.py fixtures/empty.csv --check");
+  assert.equal(result.params.args.workdir, "/workspace/report-lab");
+});
+
+test("does NOT normalize outer workdir for absolute /workspace paths that escape via ..", () => {
+  const guard = createToolLoopGuard();
+  for (const p of [
+    "/workspace/../etc",
+    "/workspace/sub/../../etc",
+    "/workspace/../../../secret",
+  ]) {
+    const params = {
+      id: "exec",
+      args: { command: "echo hello" },
+      workdir: p,
+    };
+    const result = call(guard, "tool_call", { event: { params } });
+    const effectiveParams = result?.params ?? params;
+    assert.equal(effectiveParams.args.workdir, undefined,
+      `workdir not normalized for escaping absolute path: ${p}`);
+  }
+});
+
+test("does NOT normalize outer workdir for non-workspace absolute paths", () => {
+  const guard = createToolLoopGuard();
+  for (const p of [
+    "/tmp/test",
+    "/home/user/project",
+    "/etc/passwd",
+    "/workspace ",
+  ]) {
+    const params = {
+      id: "exec",
+      args: { command: "echo hello" },
+      workdir: p,
+    };
+    const result = call(guard, "tool_call", { event: { params } });
+    const effectiveParams = result?.params ?? params;
+    assert.equal(effectiveParams.args.workdir, undefined,
+      `workdir not normalized for non-workspace absolute path: ${JSON.stringify(p)}`);
+  }
+});
+
+test("normalized outer workdir preserves normal exec cancellation", () => {
+  const prepared = [];
+  const guard = createToolLoopGuard({
+    execControl: {
+      prepare: (runId, command) => {
+        prepared.push([runId, command]);
+        return `/wrapped ${command}`;
+      },
+    },
+  });
+  const params = {
+    id: "exec",
+    args: { command: "ls -la" },
+    workdir: "test-dir",
+  };
+  const result = call(guard, "tool_call", { event: { params } });
+  // Command still traverses cancellation wrapper.
+  assert.match(result.params.args.command, /^\/wrapped ls -la$/);
+  assert.equal(result.params.args.workdir, "/workspace/test-dir");
+});
+
+test("outer workdir does not crash when a malformed envelope has null args", () => {
+  const guard = createToolLoopGuard();
+  const params = { id: "exec", args: null, workdir: "report-lab" };
+  assert.doesNotThrow(() => call(guard, "tool_call", { event: { params } }));
+});
+
+test("outer workdir recovery preserves existing execution boundaries", () => {
+  for (const [command, reason] of [
+    ["rm -rf /workspace/project", RECURSIVE_DELETE_REQUIRES_OWNER_REASON],
+    ["curl http://192.168.1.1/", EXEC_PRIVATE_NETWORK_REASON],
+  ]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({ execControl: {
+      prepare: (...args) => { prepared.push(args); return "must-not-run"; },
+      signal: () => true,
+    } });
+    assert.deepEqual(call(guard, "tool_call", { event: { params: {
+      id: "openclaw:core:exec", args: { command }, workdir: "/workspace/report-lab",
+    } } }), { block: true, blockReason: reason });
+    assert.deepEqual(prepared, []);
+  }
+});

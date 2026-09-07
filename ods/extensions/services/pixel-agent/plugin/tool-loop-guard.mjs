@@ -698,6 +698,35 @@ function normalizeWorkspaceParams(toolName, params) {
       changed = true;
     }
   }
+  // A model can emit a tool_call with the workdir field at the outer
+  // envelope level instead of inside args for exec. When the outer shape
+  // is exactly { id, args, workdir } and args has no workdir, normalize
+  // the outer workdir into args. Accept relative workspace paths and
+  // absolute /workspace/... paths; reject everything else.
+  const outerWorkdir = params.workdir;
+  if (
+    toolName === "tool_call" &&
+    nestedCoreToolName === "exec" &&
+    Object.keys(params).length === 3 &&
+    Object.hasOwn(params, "id") &&
+    Object.hasOwn(params, "args") &&
+    Object.hasOwn(params, "workdir") &&
+    params.args !== null &&
+    typeof params.args === "object" &&
+    !Array.isArray(params.args) &&
+    !Object.hasOwn(params.args, "workdir") &&
+    typeof outerWorkdir === "string" &&
+    outerWorkdir.length > 0 &&
+    outerWorkdir.length <= 256 &&
+    ((/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(outerWorkdir) &&
+     !outerWorkdir.split("/").includes("..")) ||
+     (/^\/workspace\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(outerWorkdir) &&
+      !outerWorkdir.split("/").includes("..")))
+  ) {
+    updated.args = { ...updated.args, workdir: normalizeExecWorkdir(outerWorkdir) };
+    delete updated.workdir;
+    changed = true;
+  }
   // The 9B workspace agent repeatedly emitted {code: "ls -la tidy-demo/"}
   // after choosing exec. Adapt that exact shell-tool envelope before retry
   // accounting and cancellation. Interpreter, host, or conflicting alias
