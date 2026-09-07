@@ -7534,6 +7534,46 @@ test("allows only same-page targeted extraction after a successful truncated fet
   );
 });
 
+test("dispatches deferred extraction after truncation and still counts the inner fetches", () => {
+  for (const id of ["pixel_ods_web_extract", "openclaw:pixel-ods:pixel_ods_web_extract"]) {
+    const guard = createToolLoopGuard({ limits: { search: 1, fetch: 3, total: 3 } });
+    const url = "https://docs.python.org/3/library/pathlib.html";
+    call(guard, "web_fetch", { event: { params: { url } } });
+    afterCall(guard, "web_fetch", {
+      event: { params: { url }, result: { details: { status: 200, truncated: true } } },
+    });
+    for (const query of ["Path.glob", "Path.rglob"]) {
+      const args = { url, query };
+      assert.notEqual(call(guard, "tool_call", {
+        event: { params: { id, args } },
+      })?.block, true);
+      assert.equal(call(guard, "pixel_ods_web_extract", { event: { params: args } }), undefined);
+    }
+    assert.equal(call(guard, "pixel_ods_web_extract", {
+      event: { params: { url, query: "Path.exists" } },
+    }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  }
+});
+
+test("deferred extraction retains URL scope and private destination checks after truncation", () => {
+  for (const url of ["https://example.com/other", "http://127.0.0.1/private"]) {
+    const guard = createToolLoopGuard();
+    const params = { url: "https://docs.python.org/3/library/pathlib.html" };
+    call(guard, "web_fetch", { event: { params } });
+    afterCall(guard, "web_fetch", {
+      event: { params, result: { details: { status: 200, truncated: true } } },
+    });
+    const result = call(guard, "tool_call", {
+      event: { params: {
+        id: "openclaw:pixel-ods:pixel_ods_web_extract",
+        args: { url, query: "Path.glob" },
+      } },
+    });
+    assert.equal(result.blockReason, url.startsWith("http://127.")
+      ? WEB_FETCH_PUBLIC_ONLY_REASON : WEB_FETCH_TRUNCATED_PIVOT_REASON);
+  }
+});
+
 test("recognizes serialized built-in fetch details before enforcing the targeted pivot", () => {
   const guard = createToolLoopGuard();
   const params = { url: "https://docs.python.org/3/library/pathlib.html" };
