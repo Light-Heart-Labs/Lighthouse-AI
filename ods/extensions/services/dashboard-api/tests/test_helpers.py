@@ -1607,3 +1607,19 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestSafeListReplaceAt:
+
+    def test_in_bounds_replacement(self):
+        from helpers import safe_list_replace_at
+        items = ["a", "b", "c"]
+        assert safe_list_replace_at(items, 1, "x") == ["a", "x", "c"]
+        assert safe_list_replace_at(items, -1, "z") == ["a", "b", "z"]
+
+    def test_out_of_bounds_or_non_list_input(self):
+        from helpers import safe_list_replace_at
+        assert safe_list_replace_at(["a"], 10, "end") == ["a", "end"]
+        assert safe_list_replace_at(None, 0, "first") == ["first"]
+        assert safe_list_replace_at("not_list", 0, "item") == ["item"]
+
