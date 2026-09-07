@@ -41,6 +41,12 @@ def main():
     duration = [10]
     reason = ['failed']
     phase = 'request'
+    def requested_stop(*_args):
+        # An orderly owner/supervisor cancellation is not a worker failure.
+        # Preserve a deadline/protocol cause already observed by the watchdog.
+        if not stopped.is_set():
+            reason[0] = 'closed'
+            stopped.set()
     def watchdog():
         # Bound even a truncated first frame. No third-party imports, listeners
         # or child processes exist yet. Once armed, this thread owns stdin reads.
@@ -64,8 +70,8 @@ def main():
             os._exit(125)
     try:
         resource.setrlimit(resource.RLIMIT_CORE,(0,0))
-        signal.signal(signal.SIGTERM,lambda *_:stopped.set())
-        signal.signal(signal.SIGINT,lambda *_:stopped.set())
+        signal.signal(signal.SIGTERM,requested_stop)
+        signal.signal(signal.SIGINT,requested_stop)
         threading.Thread(target=watchdog,daemon=True,name='provider-parent-watch').start()
         with os.fdopen(os.dup(0),'rb',buffering=0) as stream:
             value = validate_request(read_frame(stream))

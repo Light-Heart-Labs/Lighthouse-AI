@@ -133,7 +133,7 @@ def test_lease_refuses_wrong_token_then_closes_and_cannot_replay(saved):
     finally: close(replay)
 
 
-@pytest.mark.parametrize('loss',['eof','extra','sigkill','deadline'])
+@pytest.mark.parametrize('loss',['eof','extra','sigkill','sigterm','sigint','deadline'])
 def test_process_loss_closes_listener_releases_slots_and_keeps_claim(saved,loss):
     root,_=saved; body=request(); body['timeoutSeconds']=1 if loss=='deadline' else 30
     child=launch(root,body)
@@ -142,8 +142,12 @@ def test_process_loss_closes_listener_releases_slots_and_keeps_claim(saved,loss)
         if loss=='eof': child.stdin.close()
         elif loss=='extra': child.stdin.write(b'x'); child.stdin.flush()
         elif loss=='sigkill': child.kill()
+        elif loss in ('sigterm','sigint'): child.send_signal(signal.SIGTERM if loss=='sigterm' else signal.SIGINT)
         child.wait(timeout=5)
         assert port_closed(lease)
+        if loss in ('sigterm','sigint'):
+            assert child.returncode==0
+            assert json.loads((root/'route-leases'/body['runId']/'result.json').read_text())['status']=='closed'
         with pytest.raises(StoreError,match='provider-run-replayed'):
             with LeaseClaim(root,body['runId'],body['sessionId'],1): pass
         with LeaseClaim(root,str(uuid.uuid4()),'fresh-one',1):
