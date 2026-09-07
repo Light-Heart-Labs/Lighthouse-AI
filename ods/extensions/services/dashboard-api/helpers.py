@@ -1146,3 +1146,23 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def safe_list_replace_at(items: object, index: int, new_value: object) -> list:
+    """Replace item at index safely without IndexError.
+
+    If items is None or non-list, returns a new list containing new_value.
+    If index is within bounds, replaces element in-place; if index is out of bounds,
+    appends new_value safely.
+    """
+    if not isinstance(items, list):
+        return [new_value]
+    res = list(items)
+    if 0 <= index < len(res):
+        res[index] = new_value
+    elif index < 0 and abs(index) <= len(res):
+        res[index] = new_value
+    else:
+        res.append(new_value)
+    return res
+
