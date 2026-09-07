@@ -168,8 +168,6 @@ export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON =
 export const WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON =
   "Keep this visual follow-up in the bound artifact directory. Read existing files before editing or replacing them, use sandbox exec/process for inspection and verification, then republish the same directory with pixel_ods_workspace_preview. Do not blindly overwrite files, create a replacement project, or modify another directory.";
 
-export const WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON =
-  "Pixel could not find a readback-verified visual artifact bound to this chat, so it did not guess or modify unrelated workspace files. Ask the owner to build or republish the artifact first, or provide its exact workspace path explicitly.";
 
 export const WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX =
   "Pixel preserved the website files in its workspace, but ODS did not verify a browser-accessible preview. No localhost URL is live or claimed; ask Pixel to continue and publish the static site through the workspace preview capability.";
@@ -5651,7 +5649,6 @@ export function createToolLoopGuard({
         workspacePreviewAuthorshipRequired: false,
         workspacePreviewModelAuthored: false,
         workspaceVisualContinuationRequested: false,
-        workspaceVisualContinuationUnavailable: false,
         workspaceVisualContinuationEdited: false,
         workspaceVisualContinuationOriginalSha256: undefined,
         workspacePreviewInspectionRequested: false,
@@ -6336,12 +6333,6 @@ export function createToolLoopGuard({
       !Array.isArray(pendingParams.args)
         ? pendingParams.args
         : pendingParams;
-    if (state?.workspaceVisualContinuationUnavailable) {
-      return {
-        block: true,
-        blockReason: WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON,
-      };
-    }
     if (state?.workspaceVisualContinuationRequested) {
       const continuationDirectory = state.workspaceTaskDirectory;
       const selectedPath = FILE_PATH_TOOLS.has(selectedToolName)
@@ -7631,8 +7622,9 @@ export function createToolLoopGuard({
         if (trustedSessionPreview) {
           state.workspaceVisualContinuationOriginalSha256 ??= trustedSessionPreview.sha256;
         }
-        state.workspaceVisualContinuationUnavailable =
-          visualContinuationRequested && !trustedSessionPreview && !explicitDelivery;
+        // A prose-only continuation guess is not a workspace access boundary.
+        // With no verified previous preview, ordinary tools must remain usable
+        // to locate the requested files. Only a real preview binds its scope.
         state.workspacePreviewRequested = Boolean(trustedSessionPreview) ||
           ((!visualContinuationRequested || explicitDelivery) && previewRequested);
         state.workspacePreviewAuthorshipRequired = Boolean(
