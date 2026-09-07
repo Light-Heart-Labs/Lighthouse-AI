@@ -1607,3 +1607,18 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestWrapStringLineBounds:
+
+    def test_truncates_long_strings(self):
+        from helpers import wrap_string_line_bounds
+        raw = "Hello World, this is a long text string"
+        assert wrap_string_line_bounds(raw, max_len=11) == "Hello World"
+
+    def test_handles_none_and_bounds(self):
+        from helpers import wrap_string_line_bounds
+        assert wrap_string_line_bounds(None) == ""
+        assert wrap_string_line_bounds("ABC", max_len=0) == "A"
+        assert wrap_string_line_bounds(12345, max_len=3) == "123"
+

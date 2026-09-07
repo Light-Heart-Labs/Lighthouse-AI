@@ -1146,3 +1146,20 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def wrap_string_line_bounds(text: object, max_len: int = 80) -> str:
+    """Wrap or truncate string content safely to max_len bounds.
+
+    Returns empty string for None. Enforces minimum max_len boundary of 1.
+    Handles non-string inputs safely.
+    """
+    if text is None:
+        return ""
+    val = str(text)
+    if max_len <= 0:
+        max_len = 1
+    if len(val) <= max_len:
+        return val
+    return val[:max_len]
+
