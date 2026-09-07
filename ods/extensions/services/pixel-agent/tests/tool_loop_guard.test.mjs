@@ -98,7 +98,6 @@ import {
   WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON,
   WORKSPACE_VISUAL_CONTINUATION_REQUIRES_EDIT_REASON,
   WORKSPACE_VISUAL_CONTINUATION_SCOPE_REASON,
-  WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON,
   createExecCancellationControl,
   createToolLoopGuard,
   createToolLoopGuardRegistry,
@@ -10293,21 +10292,37 @@ test("negated workspace repairs do not grant continuation intent", () => {
   }
 });
 
-test("never carries natural visual authority into another session", () => {
+test("unbound visual references allow discovery without carrying preview authority", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
     { prompt: "Keep that game and make it faster." }
   );
-  const blocked = call(guard, "tool_call", {
+  const discovery = call(guard, "tool_call", {
     event: { params: { id: "read", args: { path: "index.html" } } },
   });
-  assert.equal(blocked.block, true);
-  assert.equal(
-    blocked.blockReason,
-    WORKSPACE_VISUAL_CONTINUATION_UNAVAILABLE_REASON
-  );
+  assert.notEqual(discovery?.block, true);
+  assert.equal(call(guard, "pixel_ods_workspace_preview", {
+    event: { params: { relativeDirectory: "unverified-game" } },
+  })?.block, true);
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+});
+
+test("ordinary archive and organizer follow-ups do not require a visual artifact", () => {
+  for (const [prompt, file] of [
+    ["Find my existing backup-check-1813 archive and make it retrievable through the supported Pixel artifact or download interface. Preserve the original and archive bytes.", "backup-check-1813/manifest.json"],
+    ["Now exercise organizer-1834 again against its existing destination. Verify that a second run preserves all pre-existing destination bytes and does not lose files when two sources have the same basename. Add that collision fixture only inside this project if it is missing.", "organizer-1834/file_organizer.py"],
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    assert.notEqual(call(guard, "tool_search", {
+      event: { params: { query: "read exec" } },
+    })?.block, true);
+    assert.notEqual(call(guard, "tool_call", {
+      event: { params: { id: "read", args: { path: file } } },
+    })?.block, true);
+  }
 });
 
 test("rejects ODS-authored creative bytes for every visual request", () => {
