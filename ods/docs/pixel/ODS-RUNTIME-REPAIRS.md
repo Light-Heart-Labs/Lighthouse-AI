@@ -56,3 +56,29 @@ as the discovery repair. Its separate custody directory is
 The transformation includes a small portion of OpenClaw's MIT-licensed agent
 command runtime, Copyright (c) 2026 OpenClaw Foundation; see the same complete
 [upstream MIT notice](upstream/THIRD_PARTY_NOTICES.md).
+
+## OpenClaw 2026.6.33 Tool Search image results
+
+Tool Search wrapped native screenshot content inside a JSON text block. Large
+base64 strings then consumed the model's text context before the normal image
+adapter could handle them. The `openclaw-image-envelope.json` transformation
+keeps supported text and image blocks in their original order, retains text
+and annotations without truncation, and preserves errors and the complete
+framework-owned `{tool,result}` payload in `details` for ODS receipts.
+
+Only compact tool identity is added to model-visible text. Unsupported or
+malformed content retains the existing serializer; it is not silently dropped.
+Model image capabilities and context/output budgets are unchanged. Text-only
+models still use the runtime's existing image filtering, while image-capable
+models can receive the native image blocks.
+
+The installer applies the exact-byte repair after upstream verification. Its
+private backup and receipt use `.openclaw/ods-runtime-patches/image-envelope`;
+`--image-envelope --restore` restores the reviewed original without replacing
+independent changes. Validation executes code extracted from the reviewed
+runtime module and checks byte custody, content preservation and error behavior.
+Live browser and model qualification is also required.
+
+The transformation includes a small portion of OpenClaw's MIT-licensed Tool
+Search runtime, Copyright (c) 2026 OpenClaw Foundation; the complete license is
+retained in the [upstream MIT notice](upstream/THIRD_PARTY_NOTICES.md).

@@ -3819,6 +3819,7 @@ ods_pixel_install_default_agent() {
         && -f "$plugin_root/host/openclaw_tool_recovery.py" \
         && -f "$plugin_root/host/openclaw-tool-recovery.json" \
         && -f "$plugin_root/host/openclaw-completion-recovery.json" \
+        && -f "$plugin_root/host/openclaw-image-envelope.json" \
         && -f "$plugin_root/host/pixel-ops-broker-ods.conf" \
         && -f "$plugin_root/host/cancellable-exec.sh" \
         && -f "$plugin_root/host/noninteractive-sudo.sh" ]] || return 1
@@ -4073,6 +4074,16 @@ ods_pixel_install_default_agent() {
         --state-dir "$home/.openclaw/ods-runtime-patches/completion-recovery" \
         >>"$pixel_log" 2>&1; then
         ai_bad "Pixel's completion recovery repair could not verify its package bytes. See $pixel_log."
+        return 1
+    fi
+    # Keep screenshot bytes in native image blocks. JSON-encoding them as text
+    # exhausts small model contexts before the provider can handle the image.
+    if ! ods_pixel_run_as_owner "$owner" "$home" python3 \
+        "$plugin_root/host/openclaw_tool_recovery.py" \
+        --openclaw-bin "$openclaw_bin" --image-envelope \
+        --state-dir "$home/.openclaw/ods-runtime-patches/image-envelope" \
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel's image result repair could not verify its package bytes. See $pixel_log."
         return 1
     fi
     # The runtime overlay above replaces the live configuration atomically.

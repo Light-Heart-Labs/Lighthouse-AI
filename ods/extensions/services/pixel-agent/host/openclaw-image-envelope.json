@@ -1,0 +1,14 @@
+{
+  "sourceSha256": "9597e4765bdcafc5f51ba0640c94790dfd5fc5445879408827524ff4b02a78f0",
+  "patchedSha256": "4958ed801841f3659ee722dd1d3e5006d91440c9e214afac2770e8258448efdb",
+  "replacements": [
+    [
+      "async function runCodeMode(params) {",
+      "/** Preserve native images instead of JSON-encoding their bytes as prompt text. */\nfunction toolCallResultEnvelope(payload) {\n\tconst result = isRecord(payload?.result) ? payload.result : void 0;\n\tconst content = result?.content;\n\tconst validImage = (block) => isRecord(block) && block.type === \"image\"\n\t\t&& typeof block.data === \"string\" && block.data.length > 0\n\t\t&& typeof block.mimeType === \"string\" && /^image\\/[a-z0-9.+-]+$/i.test(block.mimeType);\n\tconst validText = (block) => isRecord(block) && block.type === \"text\" && typeof block.text === \"string\";\n\t// Leave unfamiliar result shapes to the existing serializer. Do not silently\n\t// drop unsupported blocks or claim a malformed image is a native attachment.\n\tif (!Array.isArray(content) || !content.some(validImage)\n\t\t|| !content.every((block) => validText(block) || validImage(block))) return jsonResult(payload);\n\tconst tool = isRecord(payload.tool) ? payload.tool : {};\n\tconst identity = Object.fromEntries([\"id\", \"source\", \"sourceName\", \"name\"]\n\t\t.filter((key) => typeof tool[key] === \"string\").map((key) => [key, tool[key]]));\n\tconst envelope = {\n\t\t...result,\n\t\tcontent: [\n\t\t\t...(Object.keys(identity).length ? [{ type: \"text\", text: JSON.stringify({ tool: identity }) }] : []),\n\t\t\t...content\n\t\t],\n\t\t// Framework-owned provenance is retained for ODS receipts and adapters.\n\t\tdetails: payload\n\t};\n\tif (payload.isError === true || result.isError === true) envelope.isError = true;\n\treturn envelope;\n}\nasync function runCodeMode(params) {"
+    ],
+    [
+      "return jsonResult(await runtime.call(call.id, call.input, {",
+      "return toolCallResultEnvelope(await runtime.call(call.id, call.input, {"
+    ]
+  ]
+}

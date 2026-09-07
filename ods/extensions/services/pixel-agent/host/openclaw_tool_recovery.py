@@ -17,6 +17,7 @@ import tempfile
 MANIFEST = Path(__file__).with_name("openclaw-tool-recovery.json")
 MODULE = "tool-loop-detection-C0oQKkXZ.js"
 COMPLETION_MODULE = "agent-command-DeS125kF.js"
+IMAGE_MODULE = "tool-search-BInRpkE3.js"
 VERSION = "2026.6.33"
 
 
@@ -56,7 +57,7 @@ def atomic_write(path, data, mode=0o600):
 
 def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
            module_name=MODULE):
-    if module_name not in {MODULE, COMPLETION_MODULE}:
+    if module_name not in {MODULE, COMPLETION_MODULE, IMAGE_MODULE}:
         raise ValueError("unsupported runtime repair module")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     package = json.loads((runtime_root / "package.json").read_text(encoding="utf-8"))
@@ -128,13 +129,18 @@ def main():
     parser.add_argument("--openclaw-bin", required=True, type=Path)
     parser.add_argument("--state-dir", required=True, type=Path)
     parser.add_argument("--restore", action="store_true")
-    parser.add_argument("--completion-recovery", action="store_true")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--completion-recovery", action="store_true")
+    selection.add_argument("--image-envelope", action="store_true")
     args = parser.parse_args()
     runtime_root = args.openclaw_bin.resolve(strict=True).parent
     options = {}
     if args.completion_recovery:
         options = {"module_name": COMPLETION_MODULE,
                    "manifest_path": MANIFEST.with_name("openclaw-completion-recovery.json")}
+    elif args.image_envelope:
+        options = {"module_name": IMAGE_MODULE,
+                   "manifest_path": MANIFEST.with_name("openclaw-image-envelope.json")}
     print(json.dumps(repair(runtime_root, args.state_dir, restore=args.restore, **options)))
 
 

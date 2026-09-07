@@ -40,14 +40,15 @@ def run(installation, **kwargs):
     return repair_module.repair(runtime, state, manifest_path=manifest, **kwargs)
 
 
-def test_completion_module_has_separate_exact_byte_custody(installation):
+@pytest.mark.parametrize("module_name", [repair_module.COMPLETION_MODULE, repair_module.IMAGE_MODULE])
+def test_additional_module_has_separate_exact_byte_custody(installation, module_name):
     runtime, state, manifest, module, original, patched = installation
-    completion = module.with_name(repair_module.COMPLETION_MODULE)
+    completion = module.with_name(module_name)
     module.rename(completion)
-    outcome = run(installation, module_name=repair_module.COMPLETION_MODULE)
-    assert outcome["module"] == repair_module.COMPLETION_MODULE
+    outcome = run(installation, module_name=module_name)
+    assert outcome["module"] == module_name
     assert completion.read_bytes() == patched
-    run(installation, module_name=repair_module.COMPLETION_MODULE, restore=True)
+    run(installation, module_name=module_name, restore=True)
     assert completion.read_bytes() == original
     assert not module.exists()
 

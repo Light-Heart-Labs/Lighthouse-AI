@@ -1,0 +1,73 @@
+// Execute the helper extracted from the exact reviewed runtime, not a copy.
+// OPENCLAW_TOOL_SEARCH_MODULE must point to candidate Tool Search package bytes.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+const manifest = JSON.parse(readFileSync(new URL("../host/openclaw-image-envelope.json", import.meta.url)));
+const source = readFileSync(process.env.OPENCLAW_TOOL_SEARCH_MODULE, "utf8");
+assert.equal(createHash("sha256").update(source).digest("hex"), manifest.patchedSha256);
+const start = "function toolCallResultEnvelope(payload) {";
+const end = "async function runCodeMode(params) {";
+assert.equal(source.split(start).length, 2);
+assert.equal(source.split(end).length, 2);
+assert.equal(source.split("return toolCallResultEnvelope(await runtime.call(call.id, call.input, {").length, 2);
+const block = source.slice(source.indexOf(start), source.indexOf(end));
+const jsonResult = payload => ({content: [{type: "text", text: JSON.stringify(payload, null, 2)}], details: payload});
+const execute = new Function("isRecord", "jsonResult", block + "\nreturn toolCallResultEnvelope;")(
+  value => value !== null && typeof value === "object" && !Array.isArray(value), jsonResult
+);
+const image = {type: "image", data: "iVBORw0KGgo".repeat(30000), mimeType: "image/png"};
+const tool = {id: "openclaw:core:browser", source: "openclaw", sourceName: "core", name: "browser", description: "long schema ".repeat(500)};
+
+test("large screenshots remain typed images and are not duplicated in prompt text", () => {
+  const payload = {tool, result: {content: [image], details: {targetId: "owned-target"}}};
+  const result = execute(payload);
+  assert.equal(result.content[1], image);
+  assert.equal(result.details, payload);
+  assert.deepEqual(JSON.parse(result.content[0].text), {tool: {id: tool.id, source: tool.source, sourceName: tool.sourceName, name: tool.name}});
+  assert.ok(result.content.filter(b => b.type === "text").every(b => !b.text.includes(image.data)));
+  assert.ok(!result.content[0].text.includes(tool.description));
+});
+
+test("text, image order, annotations, errors and result metadata survive without truncation", () => {
+  const text = {type: "text", text: "Café <bot> 🌿\n".repeat(2000), annotations: {audience: ["assistant"]}};
+  const empty = {type: "text", text: ""};
+  const second = {...image, mimeType: "image/jpeg"};
+  const payload = {tool, result: {content: [text, image, empty, second], isError: true, structuredContent: {status: "partial"}, details: {error: "capture failed"}}};
+  const original = JSON.stringify(payload);
+  const result = execute(payload);
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent, payload.result.structuredContent);
+  payload.result.content.forEach((part, i) => assert.equal(result.content[i + 1], part));
+  assert.equal(result.details, payload);
+  assert.equal(JSON.stringify(payload), original);
+});
+
+test("outer errors propagate without inventing an error on successful images", () => {
+  assert.equal(execute({tool, isError: true, result: {content: [image]}}).isError, true);
+  assert.equal(Object.hasOwn(execute({tool, result: {content: [image]}}), "isError"), false);
+});
+
+test("non-image and unfamiliar payloads retain the existing serializer", () => {
+  for (const payload of [undefined, null, {}, {tool, result: {content: [{type: "text", text: "ordinary result"}]}}, {tools: [tool]}, {result: {content: "not an array"}}]) {
+    assert.deepEqual(execute(payload), jsonResult(payload));
+  }
+});
+
+test("mixed unsupported or malformed blocks are never silently discarded", () => {
+  for (const part of [null, {type: "resource", resource: {uri: "owned:file"}}, {type: "text", text: 7}, {type: "image", data: ""}, {type: "image", data: "abc", mimeType: ""}, {type: "image", data: "abc", mimeType: "text/html"}]) {
+    const payload = {tool, result: {content: [image, part]}};
+    assert.deepEqual(execute(payload), jsonResult(payload));
+  }
+});
+
+test("exact reviewed transformation reverses without touching unrelated runtime code", () => {
+  let original = source;
+  for (const [before, after] of [...manifest.replacements].reverse()) {
+    assert.equal(original.split(after).length, 2);
+    original = original.replace(after, before);
+  }
+  assert.equal(createHash("sha256").update(original).digest("hex"), manifest.sourceSha256);
+});
