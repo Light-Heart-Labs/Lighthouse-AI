@@ -7319,9 +7319,11 @@ export function createToolLoopGuard({
     }
 
     if (state?.targetedExtractPending) {
-      const requestedUrl = canonicalFetchUrl(event);
+      // Tool Search dispatch reaches this gate before the selected tool's own
+      // hook. Compare its actual tool and arguments, not the dispatch wrapper.
+      const requestedUrl = canonicalFetchUrl(selectedEvent);
       const exactGitHubFileContinuation =
-        toolName === "web_fetch" &&
+        selectedToolName === "web_fetch" &&
         state.githubFileUrl &&
         requestedUrl === state.githubFileUrl &&
         state.targetedExtractPending === state.githubReadmeUrl;
@@ -7333,7 +7335,7 @@ export function createToolLoopGuard({
         state.targetedExtractPending = undefined;
         state.targetedExtractBlocks = 0;
       } else if (
-        toolName === "pixel_ods_web_extract" &&
+        selectedToolName === "pixel_ods_web_extract" &&
         requestedUrl === state.targetedExtractPending
       ) {
         state.targetedExtractPending = undefined;
