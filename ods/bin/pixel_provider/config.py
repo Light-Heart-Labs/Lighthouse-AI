@@ -85,6 +85,11 @@ def _validate_base_url(value, label):
         address = ipaddress.ip_address(hostname)
     except ValueError:
         address = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if not re.fullmatch(r"\[[0-9a-fA-F:.]+\](?::[0-9]+)?", parts.netloc):
+            raise ConfigError(f"{label}: invalid IPv6 authority", "invalid_url")
+    elif "[" in parts.netloc or "]" in parts.netloc:
+        raise ConfigError(f"{label}: invalid authority", "invalid_url")
     if address is None:
         if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", hostname):
             raise ConfigError(f"{label}: invalid hostname", "invalid_url")

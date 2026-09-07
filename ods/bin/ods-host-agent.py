@@ -6297,6 +6297,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_ssh_supervisor_status()
         elif path == "/v1/pixel/ops-status":
             self._handle_pixel_ops_status(parse_qs(parsed.query, keep_blank_values=True))
+        elif path == "/v1/pixel/providers":
+            self._handle_pixel_providers(save=False)
         elif path == "/v1/host/port":
             self._handle_host_port_status(parse_qs(parsed.query))
         elif path == "/v1/setup/state":
@@ -6778,6 +6780,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_apply()
         elif self.path == "/v1/remote-provider/proof":
             self._handle_remote_provider_proof()
+        elif self.path == "/v1/pixel/providers/save":
+            self._handle_pixel_providers(save=True)
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
         elif self.path == "/v1/model/delete":
@@ -6798,6 +6802,52 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_network_wifi_forget()
         else:
             json_response(self, 404, {"error": "Not found"})
+
+    def _handle_pixel_providers(self, *, save):
+        """Provider Settings only; does not activate routes or change privileges."""
+        if not check_auth(self):
+            return
+        try:
+            from pixel_provider.host_api import get_configuration, save_configuration
+            from pixel_provider.store import MAX_BYTES, StoreError, decode_document
+        except ImportError:
+            json_response(self, 503, {"error": "Provider Settings are unavailable"})
+            return
+        try:
+            if save:
+                lengths = self.headers.get_all("Content-Length", [])
+                if (len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,9}", lengths[0])
+                        or self.headers.get("Transfer-Encoding") is not None):
+                    json_response(self, 400, {"error": "Invalid provider request framing"})
+                    return
+                length = int(lengths[0])
+                if length > MAX_BYTES:
+                    json_response(self, 413, {"error": "Provider configuration exceeds size limit"})
+                    return
+                if length == 0:
+                    json_response(self, 400, {"error": "Provider configuration is required"})
+                    return
+                old_timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(10)
+                    raw = self.rfile.read(length)
+                finally:
+                    self.connection.settimeout(old_timeout)
+                if len(raw) != length:
+                    raise StoreError("malformed-json")
+                result = save_configuration(DATA_DIR, decode_document(raw))
+            else:
+                result = get_configuration(DATA_DIR)
+        except StoreError as exc:
+            code = 409 if exc.code == "stale-revision" else 503
+            if save and exc.code in {"invalid-request", "invalid-config", "malformed-json"}:
+                code = 400
+            json_response(self, code, {"error": "Provider Settings request failed", "code": exc.code})
+            return
+        except (OSError, ValueError, TypeError, RecursionError):
+            json_response(self, 503, {"error": "Provider Settings are unavailable"})
+            return
+        json_response(self, 200, result)
 
     def _handle_setup_persona(self):
         if not check_auth(self):
