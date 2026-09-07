@@ -35,7 +35,8 @@ listens **only** on `PIXEL_INGRESS_SOCKET` (default
 
 ## Scheduled tasks
 
-Pixel's isolated `agentTurn` cron jobs default to `delivery.mode: none` when
+Pixel's background `agentTurn` cron jobs (isolated, current, or explicit session)
+default to `delivery.mode: none` when
 delivery is omitted, so local workspace jobs do not fail trying to announce to
 an unconfigured external channel. Explicit delivery settings remain unchanged.
 The adapter covers direct and Tool Search calls, with either nested `job` or

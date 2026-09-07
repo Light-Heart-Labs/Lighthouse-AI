@@ -1,7 +1,7 @@
 // Pixel-only cron delivery default.
 //
 // OpenClaw 2026.6.33 normalizeCronJobCreate defaults an omitted `delivery` on
-// isolated agentTurn cron jobs to `announce`, which fails with channel-required
+// background agentTurn cron jobs to `announce`, which fails with channel-required
 // errors in ODS native chat. This helper gives the Pixel agent an ODS-safe
 // default of `{ mode: "none" }` for exactly that shape, composing AFTER the
 // tool loop guard so guard block results are preserved exactly.
@@ -17,7 +17,8 @@
 // - An omitted `sessionTarget` with an explicit `payload.kind: "agentTurn"`
 //   is treated as isolated because that is the canonical SDK default
 //   (normalizeCronJobCreate), i.e. the exact bug shape; an explicit
-//   non-isolated sessionTarget is always respected.
+//   main sessionTarget is always respected. Current and explicit session targets
+//   also use detached delivery in the pinned SDK.
 
 const CRON_DELIVERY_NONE = Object.freeze({ mode: "none" });
 const CRON_TOOL_NAMES = Object.freeze(new Set(["cron", "openclaw:core:cron"]));
@@ -104,7 +105,11 @@ function cronDeliveryDefaultFor(base, toolName, configuredPixelId) {
   if (host.action !== "add") return undefined;
   const sessionTarget = resolveField(target, host, "sessionTarget");
   if (sessionTarget === null) return undefined;
-  if (sessionTarget !== undefined && sessionTarget !== "isolated") {
+  const backgroundTarget = sessionTarget === undefined ||
+    sessionTarget === "isolated" || sessionTarget === "current" ||
+    (typeof sessionTarget === "string" && sessionTarget.startsWith("session:") &&
+      sessionTarget.slice("session:".length).trim().length > 0);
+  if (!backgroundTarget) {
     return undefined;
   }
   const payload = resolveField(target, host, "payload");

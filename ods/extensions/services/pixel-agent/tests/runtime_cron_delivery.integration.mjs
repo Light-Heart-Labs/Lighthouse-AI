@@ -51,3 +51,14 @@ test("explicit external delivery survives both adapter and SDK normalization", (
   assert.equal(actual.channel, "slack");
   assert.equal(actual.to, "qualification-only");
 });
+
+test("real SDK defaults current and explicit-session background jobs too", () => {
+  for (const sessionTarget of ["current", "session:agent:pixel:qualification-only"]) {
+    const params = { action: "add", job: { ...structuredClone(job), sessionTarget } };
+    assert.equal(normalize(structuredClone(params.job)).delivery.mode, "announce");
+    const result = withPixelCronDeliveryDefault(undefined, { params },
+      { agentId: "pixel", toolName: "cron" }, "pixel");
+    assert.equal(normalize(result.params.job).delivery.mode, "none");
+    assert.equal(result.params.job.sessionTarget, sessionTarget);
+  }
+});
