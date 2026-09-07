@@ -6315,7 +6315,11 @@ export function createToolLoopGuard({
       const args = suppliedArgs;
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
       const observedDirectory = workspacePreviewDirectoryFromState(state);
-      const directory = observedDirectory ?? providedDirectory;
+      // An explicit target must not be silently replaced by a previous one.
+      // A static subdirectory may be selected after the parent failed validation.
+      const directory = Object.hasOwn(args ?? {}, "relativeDirectory")
+        ? providedDirectory
+        : observedDirectory;
       const hasObservedIndex =
         typeof directory === "string" &&
         (state.workspacePreviewAuthorshipRequired
@@ -6325,6 +6329,12 @@ export function createToolLoopGuard({
             state.successfulReadPaths.has(`${directory}/index.html`)
           ));
       if (!directory || !hasObservedIndex) {
+        if (directory && !state.workspacePreviewAuthorshipRequired) {
+          return {
+            block: true,
+            blockReason: `Read ${directory}/index.html before publishing that exact directory. Preserve existing files; a different directory's readback cannot verify this target.`,
+          };
+        }
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
       }
       state.workspacePreviewDirectory = directory;

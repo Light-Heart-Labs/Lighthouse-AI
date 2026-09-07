@@ -10173,7 +10173,7 @@ test(`binds a natural visual follow-up via ${mutationName} to the same session's
       toolCallId: "continuation-preview",
       params: {
         id: "pixel_ods_workspace_preview",
-        args: { relativeDirectory: "wrong-site" },
+        args: { relativeDirectory: "signal-garden" },
       },
     },
     context: { ...run2.context, toolCallId: "continuation-preview" },
@@ -10508,6 +10508,47 @@ test("turns a setup-only preview mkdir into an immediate bounded write correctio
   );
 });
 
+for (const wrapped of [false, true]) {
+  test(`preview recovery respects an explicit observed target (${wrapped ? "ToolSearch" : "direct"})`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun(
+      { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+      "pixel", { prompt: "Open the existing report/index.html preview." }
+    );
+    const observe = (directory) => {
+      const params = { path: `${directory}/index.html` };
+      call(guard, "read", { event: { params } });
+      afterCall(guard, "read", {
+        event: { params, result: { details: { status: "completed" } } },
+      });
+    };
+    const publish = (directory) => call(guard, wrapped ? "tool_call" : "pixel_ods_workspace_preview", {
+      event: { params: wrapped
+        ? { id: "pixel_ods_workspace_preview", args: { relativeDirectory: directory } }
+        : { relativeDirectory: directory } },
+    });
+    observe("report");
+    assert.notEqual(publish("report")?.block, true);
+    afterCall(guard, "pixel_ods_workspace_preview", {
+      event: { params: { relativeDirectory: "report" }, result: {
+        isError: true, details: { status: "failed", errorCode: "unsupported_file_type" },
+      } },
+    });
+    const unread = publish("report/static");
+    assert.equal(unread.block, true);
+    assert.match(unread.blockReason, /Read report\/static\/index\.html/);
+    assert.equal(unread.params, undefined, "do not retry the failed parent behind the model's back");
+    observe("report/static");
+    const selected = publish("report/static");
+    assert.equal(selected?.block, undefined);
+    assert.deepEqual(wrapped ? selected.params.args : selected.params, { relativeDirectory: "report/static" });
+    for (const invalid of ["../outside", "missing", "", null]) {
+      assert.equal(publish(invalid).block, true, `reject explicit unverified target ${invalid}`);
+    }
+    assert.equal(guard.verificationForRun("run-1").status, "failed", "no successful host receipt has been received");
+  });
+}
+
 test("accepts only a readback-verified dedicated preview receipt", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
@@ -10523,7 +10564,10 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   afterCall(guard, "write", {
     event: { params: writeParams, result: { details: { status: "completed" } } },
   });
-  const previewParams = { relativeDirectory: "wrong-site" };
+  assert.equal(call(guard, "pixel_ods_workspace_preview", {
+    event: { params: { relativeDirectory: "wrong-site" } },
+  }).block, true, "an unobserved explicit target is not replaced with a different site");
+  const previewParams = { relativeDirectory: "demo-site" };
   const normalized = call(guard, "pixel_ods_workspace_preview", {
     event: { params: previewParams },
   });
