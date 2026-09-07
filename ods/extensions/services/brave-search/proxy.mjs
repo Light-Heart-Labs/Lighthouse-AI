@@ -94,7 +94,7 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function callBrave(query, count, offset) {
+async function callBrave(query, count, offset, signal) {
   const url = new URL(parsedBraveUrl);
   url.searchParams.set("q", query);
   url.searchParams.set("count", String(count));
@@ -103,10 +103,7 @@ async function callBrave(query, count, offset) {
   } else {
     url.searchParams.delete("offset");
   }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, {
+  return await fetch(url, {
       headers: {
         Accept: "application/json",
         "Accept-Encoding": "gzip",
@@ -116,20 +113,23 @@ async function callBrave(query, count, offset) {
       // redirecting upstream could receive the subscription token. The Brave
       // API never redirects; refuse rather than follow.
       redirect: "error",
-      signal: ctrl.signal,
+      signal,
     });
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // Shared upstream call. Maps transport failures to a tagged shape so each
 // route can render them in its own error contract (/v1 as 5xx, searxng
 // compat as unresponsive_engines).
 async function fetchBraveWeb(query, count, offset) {
-  let upstream;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
-    upstream = await callBrave(query, count, offset);
+    const upstream = await callBrave(query, count, offset, ctrl.signal);
+    if (!upstream.ok) {
+      await upstream.body?.cancel();
+      return { error: "http_error", status: upstream.status };
+    }
+    return { data: await upstream.json() };
   } catch (err) {
     if (err && err.name === "AbortError") {
       return { error: "timeout" };
@@ -137,18 +137,12 @@ async function fetchBraveWeb(query, count, offset) {
     if (err instanceof TypeError) {
       return { error: "unavailable" };
     }
-    throw err;
-  }
-  if (!upstream.ok) {
-    return { error: "http_error", status: upstream.status };
-  }
-  try {
-    return { data: await upstream.json() };
-  } catch (err) {
     if (err instanceof SyntaxError) {
       return { error: "invalid_json" };
     }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
