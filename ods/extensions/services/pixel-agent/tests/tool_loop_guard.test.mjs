@@ -10554,12 +10554,13 @@ test("accepts only a readback-verified dedicated preview receipt", () => {
   assert.match(verification.text, new RegExp(WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX));
   assert.match(
     verification.text,
-    /active model wrote every published file in this request/
+    /Created by Pixel\./
   );
-  assert.match(
-    verification.text,
-    /this static receipt does not claim that controls were clicked or exercised/
-  );
+  assert.equal(verification.preview.sha256, snapshot.sha256);
+  assert.equal(verification.preview.bytes, snapshot.bytes);
+  assert.equal(verification.preview.files, snapshot.files);
+  assert.equal(verification.preview.relativeDirectory, "demo-site");
+  assert.doesNotMatch(verification.text, /SHA-256|HTTP 200|Interaction evidence:/);
   assert.match(
     verification.text,
     new RegExp(`http://${snapshot.siteId}\\.localhost:9437/${snapshot.siteId}/`)
@@ -10659,7 +10660,8 @@ test("publishes repaired multi-file websites without demanding whole-project rew
     });
     const verification = guard.verificationForRun("run-1");
     assert.equal(verification.status, "passed", prompt);
-    assert.doesNotMatch(verification.text, /active model wrote every published file/);
+    assert.doesNotMatch(verification.text, /Created by Pixel\./);
+    assert.match(verification.text, /Published from your workspace\./);
   }
 });
 
@@ -10801,7 +10803,7 @@ test("accepts a novel multi-file visual only when every published file was writt
   });
   const verification = guard.verificationForRun("run-1");
   assert.equal(verification.status, "passed");
-  assert.match(verification.text, /active model wrote every published file/);
+  assert.match(verification.text, /Created by Pixel\./);
 });
 
 test("binds a successful focused model edit to the final preview bytes", () => {
