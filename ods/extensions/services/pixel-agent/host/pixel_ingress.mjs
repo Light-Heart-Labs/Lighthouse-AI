@@ -946,9 +946,15 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
       return;
     }
     if (wantsStream) {
+      let deliveryStage = "completion";
+      let completionRunId;
       try {
         const body = await readBounded(upstream.body, MAX_STREAM_RESPONSE);
         const completion = JSON.parse(body.toString("utf8"));
+        if (typeof completion?.id === "string" && OPENAI_RUN_ID.test(completion.id)) {
+          completionRunId = completion.id;
+        }
+        deliveryStage = "verification";
         const verification = await verificationForRun(
           completion?.id,
           token,
@@ -956,11 +962,15 @@ async function forwardChat(res, outgoing, token, gatewayPort, deps = defaultDeps
           controller.signal,
           deps
         );
+        deliveryStage = "delivery";
         res.end(completionSse(
           applyVerificationToCompletion(completion, verification),
           verification
         ));
       } catch {
+        // Log only the fixed stage and validated opaque run ID. Never include
+        // completion content, tool results, request bodies, or credentials.
+        console.warn(`pixel-ingress response failed at ${deliveryStage}; run=${completionRunId ?? "unavailable"}`);
         if (!res.destroyed && !res.writableEnded) {
           res.write('data: {"error":{"message":"upstream stream failed","type":"pixel_ingress_error"}}\n\n');
           res.end("data: [DONE]\n\n");
