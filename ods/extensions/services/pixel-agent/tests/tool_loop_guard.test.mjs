@@ -1257,6 +1257,18 @@ test("adapts an exact readback alias and injects workdir after a direct successf
   );
 });
 
+test("preserving existing apps does not turn a runtime question into website work", () => {
+  const prompt = "The repaired JSON explorer now shows the Mint match and its ancestors, clearing search restores the whole tree, and malformed input still preserves it. Keep the saved apps unchanged. Read-only platform question: what permissions does Pixel actually have in this ODS installation right now? Use available runtime evidence to distinguish sandboxed execution from gateway/host execution, filesystem scope and network access. Report what you can verify and what you cannot; do not change configuration, install anything, or expose tokens and credentials.";
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);
+  assert.equal(userMessageRequestsWorkspaceMutation([], prompt), false);
+  for (const text of [
+    "Keep this website unchanged. Explain its structure.",
+    "Keep the existing apps intact and report current CPU usage.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], text), false, text);
+  assert.equal(userMessageRequestsWorkspacePreview([], "Keep the existing apps unchanged. Build a new interactive website at /workspace/new-site/index.html and publish it."), true);
+  assert.equal(userMessageRequestsWorkspacePreview([], "Keep the saved apps unchanged. Add a reset button to this website and publish it."), true);
+});
+
 test("read-only HTML diagnosis does not acquire preview or mutation coaching from a negated verb list", () => {
   const prompt = "The focused notes repair also reached the output limit. Do only this bounded read-only diagnosis now: find the Markdown list rendering replacement in /workspace/notes-garden/index.html, print at most 15 relevant lines, and identify which regex capture is used. Use at most two tools and a short final answer. Do not edit, publish, run the app, or read the whole file.";
   assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);

@@ -4585,8 +4585,10 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
       /\b(?:browser|checkout|flow|form|interface|onboarding|screen|sign[- ]?up|ui|ux|web)\b/i.test(actionText));
   const buildAction =
     /\b(?:build|can\s+you\s+(?:build|create|make)|create|develop|design|generate|give\s+me|implement|make|show\s+me|want|would\s+like|write)\b/i;
+  // Preserving existing apps is not a visual revision. A separate positive
+  // edit/build/delivery directive still supplies its own action below.
   const reviseAction =
-    /\b(?:add|change|continue|edit|improve|keep|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i;
+    /\b(?:add|change|continue|edit|improve|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i;
   const build = buildAction.test(actionText);
   const revise = reviseAction.test(actionText);
   // An app inventory in one clause does not become a browser-build request
