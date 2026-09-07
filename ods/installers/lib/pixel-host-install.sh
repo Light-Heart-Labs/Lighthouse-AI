@@ -2381,6 +2381,7 @@ _ods_pixel_write_extension_catalog() {
 import hashlib, json, os, pathlib, re, stat, sys, tempfile
 
 source_path, services_path, output_path = map(pathlib.Path, sys.argv[1:4])
+builtin_services_path = services_path.parent.parent / "services"
 owner_uid = os.getuid()
 
 
@@ -2438,18 +2439,43 @@ for item in raw_extensions:
             or extension_id in seen):
         raise SystemExit("invalid or duplicate ODS extension id")
     seen.add(extension_id)
+    catalog_source = item.get("catalog_source", "library")
+    if catalog_source not in {"library", "builtin"}:
+        raise SystemExit("invalid ODS extension catalog source")
+    source_root = builtin_services_path if catalog_source == "builtin" else services_path
+    source_info = source_root.lstat()
+    if (not stat.S_ISDIR(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode)
+            or source_info.st_uid != owner_uid or source_info.st_mode & 0o022):
+        raise SystemExit("unsafe ODS extension source directory")
+    service_dir = source_root / extension_id
+    try:
+        directory_info = service_dir.lstat()
+    except FileNotFoundError:
+        continue
+    if (not stat.S_ISDIR(directory_info.st_mode) or stat.S_ISLNK(directory_info.st_mode)
+            or directory_info.st_uid != owner_uid or directory_info.st_mode & 0o022):
+        raise SystemExit("unsafe ODS extension directory")
     compose_name = item.get("compose_file")
     if compose_name in {None, ""}:
-        continue
-    if not isinstance(compose_name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", compose_name) is None:
-        raise SystemExit(f"invalid compose file for ODS extension {extension_id}")
-    compose_path = services_path / extension_id / compose_name
-    try:
-        owned_regular(compose_path, f"extension compose file {extension_id}", 2 * 1024 * 1024)
-    except FileNotFoundError:
-        # Catalog-only entries are useful references but are not installable by
-        # the current ODS lifecycle and must not be advertised to Pixel as such.
-        continue
+        if catalog_source != "builtin":
+            continue
+        owned_regular(service_dir / "manifest.yaml", f"service manifest {extension_id}", 2 * 1024 * 1024)
+    else:
+        if not isinstance(compose_name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", compose_name) is None:
+            raise SystemExit(f"invalid compose file for ODS extension {extension_id}")
+        compose_path = service_dir / compose_name
+        try:
+            owned_regular(compose_path, f"extension compose file {extension_id}", 2 * 1024 * 1024)
+        except FileNotFoundError:
+            if catalog_source == "builtin":
+                # Disabled services remain discoverable without authorizing a start.
+                try:
+                    owned_regular(compose_path.with_name(compose_name + ".disabled"),
+                                  f"disabled extension compose file {extension_id}", 2 * 1024 * 1024)
+                except FileNotFoundError:
+                    continue
+            else:
+                continue
 
     env_vars = item.get("env_vars", [])
     if not isinstance(env_vars, list) or len(env_vars) > 128:
@@ -2482,6 +2508,8 @@ for item in raw_extensions:
         "name": clean_text(item.get("name"), "name", 128),
         "description": clean_text(item.get("description"), "description", 1000),
         "category": clean_text(item.get("category"), "category", 64),
+        "catalogSource": catalog_source,
+        "configurationScope": "declared-environment-keys",
         "gpuBackends": token_list(item.get("gpu_backends", []), "GPU backends", r"[a-z0-9][a-z0-9._-]{0,31}", 16, 32),
         "dependsOn": token_list(item.get("depends_on", []), "dependencies", r"[a-z0-9][a-z0-9._-]{0,63}"),
         "requiredConfiguration": sorted(required_configuration),
@@ -2491,7 +2519,7 @@ for item in raw_extensions:
     })
 
 if not extensions:
-    raise SystemExit("ODS extension catalog has no installable entries")
+    raise SystemExit("ODS extension catalog has no available entries")
 extensions.sort(key=lambda entry: entry["id"])
 payload = {
     "schemaVersion": 1,

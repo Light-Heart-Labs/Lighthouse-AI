@@ -378,13 +378,13 @@ export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, t
   return {
     name: "pixel_ods_extensions",
     description:
-      "Search the installable ODS extension catalog, list extension installation states, or inspect an extension's required configuration. Choose search, list, or inspect as needed. The default target is the local ods-host; an explicit target is preserved and validated by the broker. This read-only tool waits for a broker receipt and cannot install, enable, configure, remove, or approve anything.",
+      "Search the ODS catalog of library extensions and built-in services, list their states, or inspect declared environment configuration. Catalog absence does not prove ODS lacks a capability. Empty configuration arrays mean no declared keys, not verified runtime prerequisites. Choose search, list, or inspect as needed. The default target is ods-host; explicit targets are preserved and validated by the broker. This read-only tool waits for a receipt and cannot install, enable, configure, remove, or approve anything.",
     parameters: {
       type: "object", additionalProperties: false, required: ["action"],
       properties: {
         action: { type: "string", enum: ["search", "list", "inspect"] },
         target: { type: "string", minLength: 2, maxLength: 64 },
-        query: { type: "string", minLength: 1, maxLength: 4096, description: "Search query; defaults to all when omitted for search." },
+        query: { type: "string", minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9 _/+:#.\\-]{1,80}$", description: "Short catalog keywords; defaults to all when omitted for search." },
         serviceId: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,63}$", description: "Exact catalog extension ID required for inspect." },
       },
     },
@@ -401,7 +401,7 @@ export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, t
       }
       const query = params.query === undefined ? "all" : params.query;
       if (params.action === "search" ?
-          (params.serviceId !== undefined || typeof query !== "string" || !query.trim() || query.length > 4096) :
+          (params.serviceId !== undefined || typeof query !== "string" || !query.trim() || !/^[A-Za-z0-9 _/+:#.\-]{1,80}$/.test(query)) :
           params.action === "inspect" ?
             (params.query !== undefined || typeof params.serviceId !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(params.serviceId)) :
             (params.query !== undefined || params.serviceId !== undefined)) {

@@ -2309,6 +2309,26 @@ for (const wrapped of [false, true]) {
   });
 }
 
+test("native extension inspection preserves declared scope and refuses invented runtime qualification", () => {
+  for (const runtimeRequirementsVerified of [false, true]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Inspect the extension configuration without changing anything.",
+    });
+    const params = { action: "inspect", serviceId: "comfyui" };
+    assert.equal(call(guard, "pixel_ods_extensions", { event: { params } })?.block, undefined);
+    afterCall(guard, "pixel_ods_extensions", { event: { params, result: { details: {
+      jobId: "ops-1234567890123-dddddddddddd", status: "succeeded", waitTimedOut: false,
+      steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+        extensionId: "comfyui", outcome: "inspected", configurationScope: "declared-environment-keys", runtimeRequirementsVerified,
+      }))],
+    } } } });
+    const verification = guard.deliveryVerificationForRun("run-1");
+    assert.equal(verification.status, runtimeRequirementsVerified ? "failed" : "passed");
+    if (!runtimeRequirementsVerified) assert.match(verification.text, /Runtime prerequisites and features have not been verified/);
+  }
+});
+
 test("native extension read reports a terminal failed inspection without inventing configuration readiness", () => {
   const guard = createToolLoopGuard();
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
@@ -4671,6 +4691,8 @@ test("renders a strictly validated extension catalog receipt instead of host evi
               matches: [
                 {
                   id: "n8n",
+                  catalogSource: "builtin",
+                  configurationScope: "declared-environment-keys",
                   name: "n8n",
                   description: "Workflow automation platform.",
                   category: "recommended",

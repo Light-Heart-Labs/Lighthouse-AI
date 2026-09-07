@@ -479,6 +479,10 @@ def _public_result(
         "requiredConfiguration": required_configuration,
         "optionalConfiguration": optional_configuration,
         "missingConfiguration": missing_configuration,
+        # These keys describe the manifest's environment contract. Even a
+        # successful lifecycle action does not qualify every runtime feature.
+        "configurationScope": "declared-environment-keys",
+        "runtimeRequirementsVerified": False,
         "rollback": {
             "attempted": rollback_attempted,
             "succeeded": rollback_succeeded,
@@ -541,10 +545,12 @@ def _execute(
     missing = [key for key in required if not values.get(key)]
 
     if action == "inspect":
+        # A completed read cannot establish runtime readiness. In particular,
+        # an absent environment specification does not mean no setup is needed.
         return _public_result(
             action=action,
             extension_id=extension_id,
-            outcome="ready" if not missing else "blocked",
+            outcome="inspected" if not missing else "blocked",
             previous_status=previous_status,
             current_status=previous_status,
             changed=False,

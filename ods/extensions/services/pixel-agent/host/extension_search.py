@@ -28,6 +28,7 @@ ENTRY_KEYS = {
     "tags",
     "featureNames",
 }
+SCOPE_KEYS = {"catalogSource", "configurationScope"}
 
 
 class CatalogError(Exception):
@@ -84,8 +85,12 @@ def _load_catalog(path: pathlib.Path) -> list[dict[str, Any]]:
     seen: set[str] = set()
     validated: list[dict[str, Any]] = []
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != ENTRY_KEYS:
+        if not isinstance(entry, dict) or set(entry) not in (ENTRY_KEYS, ENTRY_KEYS | SCOPE_KEYS):
             raise CatalogError("catalog entry schema is invalid")
+        source = entry.get("catalogSource", "library")
+        scope = entry.get("configurationScope", "declared-environment-keys")
+        if source not in {"library", "builtin"} or scope != "declared-environment-keys":
+            raise CatalogError("catalog entry scope is invalid")
         extension_id = _string(entry.get("id"), "extension id", 64)
         if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", extension_id) is None or extension_id in seen:
             raise CatalogError("catalog extension id is invalid")
@@ -93,6 +98,8 @@ def _load_catalog(path: pathlib.Path) -> list[dict[str, Any]]:
         validated.append(
             {
                 "id": extension_id,
+                "catalogSource": source,
+                "configurationScope": scope,
                 "name": _string(entry.get("name"), "extension name", 128),
                 "description": _string(entry.get("description"), "extension description", 1000),
                 "category": _string(entry.get("category"), "extension category", 64),

@@ -54,6 +54,27 @@ class ExtensionManagerTests(unittest.TestCase):
         self.assertTrue(manager._same_effective_status("enabled", "enabled"))
         self.assertFalse(manager._same_effective_status("enabled", "disabled"))
 
+    def test_inspection_does_not_promote_declared_keys_to_runtime_readiness(self) -> None:
+        for state, keys, configured in [
+            ("not_installed", (), False),
+            ("disabled", ("APP_TOKEN",), False),
+            ("enabled", ("APP_TOKEN",), True),
+        ]:
+            with self.subTest(state=state):
+                if configured:
+                    with self.env_path.open("a", encoding="utf-8") as handle:
+                        handle.write("APP_TOKEN=private-test-value\n")
+                with mock.patch.object(manager, "_detail", return_value=detail(state, required=keys)):
+                    result = self.execute("inspect")
+                self.assertEqual(result["configurationScope"], "declared-environment-keys")
+                self.assertIs(result["runtimeRequirementsVerified"], False)
+                self.assertEqual(result["currentStatus"], state)
+                self.assertEqual(result["outcome"], "blocked" if keys and not configured else "inspected")
+                self.assertEqual(result["missingConfiguration"], list(keys) if not configured else [])
+                self.assertFalse(result["changed"])
+                self.assertNotIn("private-test-value", json.dumps(result))
+                self.assertNotIn("must-not-leak", json.dumps(result))
+
     def test_request_grammar_is_exact(self) -> None:
         request = json.dumps(
             {"schemaVersion": 1, "action": "inspect", "extensionId": "crewai"}

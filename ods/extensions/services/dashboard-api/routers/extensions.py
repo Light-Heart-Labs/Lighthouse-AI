@@ -399,6 +399,11 @@ def _compute_extension_status(ext: dict, services_by_id: dict) -> str:
     if gpu_backends and "all" not in gpu_backends and GPU_BACKEND not in gpu_backends:
         return "incompatible"
 
+    if ext.get("catalog_source") == "builtin":
+        builtin_dir = EXTENSIONS_DIR / ext_id
+        if any((builtin_dir / name).is_file() for name in ("compose.yaml.disabled", "compose.yml.disabled")):
+            return "disabled"
+
     return "not_installed"
 
 
@@ -1160,7 +1165,7 @@ async def extensions_catalog(
         installable = _is_installable(ext["id"])
         ext_id = ext["id"]
         user_dir = USER_EXTENSIONS_DIR / ext_id
-        source = "user" if user_dir.is_dir() else ("core" if ext_id in SERVICES else "library")
+        source = "user" if user_dir.is_dir() else ("core" if ext_id in SERVICES or ext.get("catalog_source") == "builtin" else "library")
         has_data = (Path(DATA_DIR) / ext_id).is_dir()
         update_state = update_states.get(ext_id, {
             "update_status": "unavailable",
@@ -1339,7 +1344,7 @@ async def extension_detail(
     manifest = {**ext, **({"llm": llm_contract} if llm_contract is not None else {})}
 
     user_dir = USER_EXTENSIONS_DIR / service_id
-    source = "user" if user_dir.is_dir() else ("core" if service_id in SERVICES else "library")
+    source = "user" if user_dir.is_dir() else ("core" if service_id in SERVICES or ext.get("catalog_source") == "builtin" else "library")
     update_state = await asyncio.to_thread(_library_update_state, service_id) if source == "user" else {
         "update_status": "unavailable",
         "update_available": False,
