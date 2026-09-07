@@ -1257,6 +1257,20 @@ test("adapts an exact readback alias and injects workdir after a direct successf
   );
 });
 
+test("explicit HTML creation supports named utilities without reviving refused publication", () => {
+  const prompt = "Actual Notes Garden retest passes headings, bold, literal HTML, unordered Water/Prune and ordered Sow/Harvest. Rename works and Cancel deletion preserves the note. Build a separate small offline Pomodoro timer at /workspace/timer-garden/index.html with accessible work/break duration inputs, Start/Pause/Resume/Reset, clear remaining-time and phase labels, and a short 5-second test option. Use no external resources and publish it for real timing and control tests. Preserve all existing apps.";
+  assert.equal(userMessageRequestsWorkspacePreview([], prompt), true);
+  assert.equal(userMessageRequestsWorkspacePreview([], "Build a metronome at /workspace/metronome/index.html. Use no external resources."), true);
+  for (const text of [
+    "Build a timer at /workspace/timer/index.html. Do not publish it.",
+    "Inspect /workspace/timer/index.html. Do not edit and publish it.",
+    "Keep timer/index.html unchanged. Create a JSON workflow for backups.",
+    "Explain how the timer in timer/index.html works; do not edit or publish.",
+    "Create an HTML parser fixture at fixtures/input.html for unit tests; no browser preview is needed.",
+    "Do not build and publish the timer at timer/index.html.",
+  ]) assert.equal(userMessageRequestsWorkspacePreview([], text), false, text);
+});
+
 test("preserving existing apps does not turn a runtime question into website work", () => {
   const prompt = "The repaired JSON explorer now shows the Mint match and its ancestors, clearing search restores the whole tree, and malformed input still preserves it. Keep the saved apps unchanged. Read-only platform question: what permissions does Pixel actually have in this ODS installation right now? Use available runtime evidence to distinguish sandboxed execution from gateway/host execution, filesystem scope and network access. Report what you can verify and what you cannot; do not change configuration, install anything, or expose tokens and credentials.";
   assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);

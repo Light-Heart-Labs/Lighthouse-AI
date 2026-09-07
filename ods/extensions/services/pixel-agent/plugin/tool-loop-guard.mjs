@@ -4591,6 +4591,12 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:add|change|continue|edit|improve|modify|patch|refresh|remove|republish|speed\s+up|tweak|update|work)\b/i;
   const build = buildAction.test(actionText);
   const revise = reviseAction.test(actionText);
+  // A timer or another named utility can be explicitly requested as HTML
+  // without using a fixed vocabulary of website/app names. Bind its creation
+  // to the same sentence so an earlier saved HTML file grants no authority.
+  const htmlCreation = actionText
+    .split(/[!?;\n]+|\.(?=\s|$)/)
+    .some((clause) => buildAction.test(clause) && hasWorkspaceHtmlTarget(clause));
   // An app inventory in one clause does not become a browser-build request
   // because a later clause asks for an unrelated JSON file or workflow.
   const application = actionText
@@ -4618,8 +4624,8 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:explain|history|review|tutorial|what\s+is|why)\b/i.test(text) &&
     !/\b(?:build|create|develop|design|generate|implement|make)\b/i.test(text);
   const nonVisualImplementation =
-    /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(text) &&
-    !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(text);
+    /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(actionText) &&
+    !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(actionText);
   const explicitDelivery = hasExplicitWorkspacePreviewDirective(actionText);
   // An edit constraint does not veto an independently requested display.
   // Keep negative compound requests closed ("never create and publish").
@@ -4655,7 +4661,7 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\b(?:show|display|preview)\b[^.!?;\n]{0,64}\bhere\b/i.test(text) &&
     /\b(?:controls?|interacti(?:ve|on)|keyboard|mobile|phone|touch)\b/i.test(text);
   return directPreview || unreachableLocalPreview || interactiveDelivery ||
-    ((website || application || browserInterface) && (build || revise)) ||
+    ((website || application || browserInterface || htmlCreation) && (build || revise)) ||
     (browserVisual && build);
 }
 
