@@ -262,6 +262,8 @@ def create_app(store=None, router_url=None, client=None):
                 return JSONResponse({'object': 'list', 'data': [{'id': PUBLIC_MODEL, 'object': 'model', 'owned_by': 'ods'}],
                     'ods': {'catalogId': grant['catalogId'], 'routedModel': grant['runtimeModelId'],
                             'identitySource': 'ods-verified-route', 'routeSeq': metadata['routeSeq'],
+                            'contextLength': metadata.get('contextLength'), 'capabilities': metadata.get('capabilities'),
+                            'maxOutputTokens': grant['maxOutputTokens'], 'expiresAt': grant['expiresAt'],
                             'execution': 'client-owned'}}, headers={'Cache-Control': 'no-store'})
 
             headers = {'Content-Type': 'application/json', 'X-ODS-Expected-Catalog': grant['catalogId'],

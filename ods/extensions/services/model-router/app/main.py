@@ -560,6 +560,8 @@ def _active_route() -> dict[str, Any]:
         "routeSeq": int(active.get("routeSeq") or 0),
         "catalogId": str(active.get("catalogId") or ""),
         "runtimeModelId": str(active.get("runtimeModelId") or ""),
+        "contextLength": active["contextLength"],
+        "capabilities": dict(active["capabilities"]),
         "backendKind": str((active.get("backend") or {}).get("kind") or "unknown"),
         "endpointId": endpoint_id,
         "baseUrl": endpoint["baseUrl"],
@@ -958,7 +960,8 @@ async def list_models() -> dict[str, Any]:
         metadata = {"routedModel": route["runtimeModelId"],
                     "catalogId": route["catalogId"],
                     "backend": route["backendKind"],
-                    "routeSeq": route["routeSeq"]}
+                    "routeSeq": route["routeSeq"], "contextLength": route["contextLength"],
+                    "capabilities": route["capabilities"]}
     except RouterError:
         metadata = {"routedModel": None, "catalogId": None, "backend": None, "routeSeq": None}
     return {"object": "list", "data": data, "ods": metadata}

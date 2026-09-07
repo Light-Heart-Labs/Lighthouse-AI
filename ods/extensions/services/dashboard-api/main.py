@@ -76,6 +76,7 @@ from routers import (
     node,
     pixel,
     pixel_providers,
+    pixel_sharing,
 )
 from settings import (
     _ENV_ASSIGNMENT_RE, _ENV_COMMENTED_ASSIGNMENT_RE, _SETTINGS_APPLY_ALLOWED_SERVICES, _parse_env_text, _read_env_map_from_path,
@@ -1188,6 +1189,7 @@ app.include_router(usage.router)
 app.include_router(node.router)
 app.include_router(pixel.router)
 app.include_router(pixel_providers.router)
+app.include_router(pixel_sharing.router)
 
 
 # ================================================================

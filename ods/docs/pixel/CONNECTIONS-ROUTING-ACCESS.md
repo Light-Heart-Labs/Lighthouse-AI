@@ -123,11 +123,29 @@ Host-owner endpoints:
   switch, not Compose/service activation; enabling requires verified identity.
 - `POST .../revoke`: `{expectedRevision, deviceId}`. Revocation and disabling
   remain available when no model is active. Stale revisions return 409.
+- `POST .../start` and `POST .../stop`: `{expectedRevision}`. Explicit asynchronous
+  service lifecycle (202); start requires a live grant for the verified local
+  model. Only the optional sharing service is built/started/stopped. No model
+  router restart, provider-mode change, or external port exposure is performed.
 
 All use the existing host-owner authentication, bounded strict JSON and
-`Cache-Control: no-store`. Their `runtime.status: not-probed` is not a claim
-that the sharing service is installed or listening. Dashboard controls and
-guided service activation/import are still pending.
+`Cache-Control: no-store`. Dashboard-owner equivalents are under
+`/api/pixel/inference-sharing`. Settings includes device creation/revocation,
+confirmed start/stop, actual service state, and one-time connection-bundle
+copying. The copied `/v1` URL must be HTTPS or local loopback through an
+operator-created SSH tunnel; ODS does not automatically create network access.
+Keys are not persisted in browser storage, and ambiguous writes require a fresh
+read before another attempt. Client-side import/probing/activation is pending.
+
+Activation validates the resolved Compose security settings and requires an
+already healthy, installation-owned model-router. The port defaults to 4005
+and remains loopback-only even when customized. An activation-specific nonce
+and verified immutable Docker ID bound failed-start cleanup to that operation;
+existing or replaced containers are not name-based cleanup targets. Admission
+closes on failure while preserving concurrent key revocations. Lifecycle and
+enable operations serialize; revocation stays available during a slow build.
+The optional Compose template is restored after failure only if unchanged.
+POSIX private state is required; native Windows is reported unsupported.
 
 Device keys authorize only `GET /v1/models` and `POST /v1/chat/completions` with
 model `ods/shared`. They do not authorize agent execution, model management,
@@ -164,6 +182,13 @@ Tower2's GLM model, model-identity checks and post-call revocation. The routing
 state in that test was synthetic. This is not installed Pixel, laptop pairing,
 production deployment or native-privilege acceptance.
 
+An isolated real-Docker fixture additionally qualified service build/start,
+health, reading private grants through the non-root read-only mount, atomic
+revocation, and explicit stop without restarting its router dependency. Its
+router was synthetic: this proves lifecycle wiring, not installed Pixel or a
+real client inference journey. All fixture containers were removed by verified
+run-owned IDs; evidence and failed fixtures were retained.
+
 ## Development validation
 
 Run the focused, service-independent contract tests from `ods/`:
@@ -188,7 +213,7 @@ Dashboard tests use the API's existing runtime and test requirements:
 
 ```sh
 cd extensions/services/dashboard-api
-python3 -m pytest tests/test_pixel_providers.py tests/test_pixel.py tests/test_host_agent_client.py tests/test_settings_env.py tests/test_model_routes.py -q
+python3 -m pytest tests/test_pixel_providers.py tests/test_pixel_sharing.py tests/test_pixel.py tests/test_host_agent_client.py tests/test_settings_env.py tests/test_model_routes.py -q
 ```
 
 The host tests start only a disposable loopback HTTP fixture, use temporary

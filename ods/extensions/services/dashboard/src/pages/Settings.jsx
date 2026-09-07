@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import EnvEditor from '../components/settings/EnvEditor'
 import PixelProviderSettings from '../components/settings/PixelProviderSettings.jsx'
+import PixelSharingSettings from '../components/settings/PixelSharingSettings.jsx'
 import { useTheme } from '../contexts/ThemeContext'
 import { dashboardHost, serviceUrl } from '../lib/serviceUrls'
 import {
@@ -412,6 +413,7 @@ export default function Settings() {
           <RemoteSetupCard setupStatus={setupStatus} className="xl:col-span-5" />
         </div>
         <PixelProviderSettings />
+        <PixelSharingSettings />
 
         <RoutingTableCard
           services={services}

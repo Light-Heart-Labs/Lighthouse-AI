@@ -108,6 +108,21 @@ class SharingStore(ProviderStore):
             raise StoreError('invalid-request')
         return public_sharing(self._change(expected_revision, lambda doc: doc.update(enabled=enabled)))
 
+    def disable_after_failed_start(self):
+        """Close failed activation while preserving concurrent grant revocations.
+
+        The host lifecycle lock excludes another start/enable until this ends.
+        Grant changes may advance revision during a slow Docker build; those
+        changes must survive without keeping a failed activation's admission on.
+        """
+        with self._locked(True) as directory_fd:
+            current = self._load(directory_fd)
+            if not current['enabled']:
+                return public_sharing(current)
+            revision = current['revision']
+            current['enabled'] = False
+            return public_sharing(self._commit(directory_fd, current, revision))
+
     def revoke(self, device_id, *, expected_revision):
         def update(doc):
             device = next((item for item in doc['devices'] if item['id'] == device_id), None)

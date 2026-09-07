@@ -16,7 +16,7 @@ def _directory(data_dir):
 
 def _envelope(configuration, route):
     return {'configuration': configuration, 'activeRoute': route,
-            'transport': {'mode': 'loopback-only', 'defaultPort': 4005},
+            'transport': {'mode': 'loopback-only', 'defaultPort': 4005, 'port': 4005},
             'runtime': {'status': 'not-probed'}}
 
 

@@ -4,6 +4,8 @@ import http.client
 import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,7 +21,8 @@ def owner(tmp_path):
     host_fixture.HostHTTP.setUpClass()
     agent = host_fixture.HostHTTP.agent
     agent.DATA_DIR = tmp_path
-    route = {'catalogId':'glm','runtimeModelId':'GLM','routeSeq':4}
+    route = {'catalogId':'glm','runtimeModelId':'GLM','routeSeq':4,'contextLength':32768,
+             'capabilities':{'chat':True,'tools':True,'vision':False,'agentViable':True}}
     with patch.object(agent, '_pixel_share_active_route', return_value=route):
         yield agent, host_fixture.HostHTTP.server, route
     host_fixture.HostHTTP.tearDownClass()
@@ -90,3 +93,105 @@ def test_corrupt_state_is_unavailable_not_empty(owner):
     path.write_text('{"secret":"do-not-echo"}')
     status, result, _ = request(owner)
     assert status == 503 and 'do-not-echo' not in json.dumps(result)
+
+
+@pytest.fixture
+def lifecycle(owner):
+    started, release = threading.Event(), threading.Event()
+    progress = []
+    class Service:
+        port = 4015
+        fail = False
+        state = 'stopped'
+        def start(self):
+            started.set()
+            assert release.wait(3), 'test did not release lifecycle'
+            if self.fail:
+                raise RuntimeError('private-lifecycle-sentinel')
+            self.state = 'ready'
+        def stop(self):
+            started.set()
+            assert release.wait(3), 'test did not release lifecycle'
+            self.state = 'stopped'
+        def status(self):
+            return {'status': self.state}
+    service = Service()
+    agent = owner[0]
+    with patch.object(agent, '_pixel_sharing_service', return_value=service), \
+         patch.object(agent, '_write_progress', side_effect=lambda *args, **kwargs: progress.append((args,kwargs))), \
+         patch.object(agent, '_read_progress_status', side_effect=lambda _: progress[-1][0][1] if progress else None):
+        yield service, started, release, progress
+        release.set()
+        deadline = time.monotonic() + 4
+        while agent._service_locks['pixel-inference'].locked() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert not agent._service_locks['pixel-inference'].locked()
+
+
+def test_start_requires_live_grant_then_returns_202_and_serializes_lifecycle(owner, lifecycle):
+    service, started, release, progress = lifecycle
+    assert request(owner, 'start', {'expectedRevision':0})[0] == 400
+    assert not started.is_set()
+    request(owner, 'issue', {'expectedRevision':0,'settings':settings()})
+    status, value, cache = request(owner, 'start', {'expectedRevision':1})
+    assert status == 202 and cache == 'no-store'
+    assert value['configuration']['revision'] == 2 and value['configuration']['enabled']
+    assert value['runtime']['status'] == 'starting' and value['transport']['port'] == 4015
+    assert started.wait(1)
+    assert request(owner, 'stop', {'expectedRevision':2})[0] == 409
+    release.set()
+    deadline = time.monotonic() + 2
+    while owner[0]._service_locks['pixel-inference'].locked() and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert request(owner)[1]['runtime']['status'] == 'ready'
+    assert progress[-1][0][1] == 'complete'
+    assert request(owner, 'stop', {'expectedRevision':2})[0] == 202
+
+
+def test_failed_start_disables_admission_and_does_not_expose_error(owner, lifecycle):
+    service, started, release, progress = lifecycle
+    service.fail = True
+    request(owner, 'issue', {'expectedRevision':0,'settings':settings()})
+    assert request(owner, 'start', {'expectedRevision':1})[0] == 202
+    assert started.wait(1)
+    release.set()
+    deadline = time.monotonic() + 2
+    while owner[0]._service_locks['pixel-inference'].locked() and time.monotonic() < deadline:
+        time.sleep(.01)
+    status, value, _ = request(owner)
+    assert status == 200 and value['runtime']['status'] == 'error'
+    assert not value['configuration']['enabled'] and value['configuration']['revision'] == 3
+    assert 'private-lifecycle-sentinel' not in json.dumps(progress)
+
+
+@pytest.mark.parametrize('action', ['start','stop'])
+def test_lifecycle_rejects_unknown_fields_or_bool_revision_before_start(owner, lifecycle, action):
+    for body in ({'expectedRevision':True}, {'expectedRevision':0,'command':'anything'}):
+        assert request(owner, action, body)[0] == 400
+    assert not lifecycle[1].is_set()
+
+
+def test_failed_start_preserves_concurrent_revocation_but_closes_admission(owner, lifecycle):
+    service, started, release, _ = lifecycle
+    service.fail = True
+    issued = request(owner, 'issue', {'expectedRevision':0,'settings':settings()})[1]
+    assert request(owner, 'start', {'expectedRevision':1})[0] == 202
+    assert started.wait(1)
+    assert request(owner, 'enable', {'expectedRevision':2,'enabled':True})[0] == 409
+    assert request(owner, 'revoke', {'expectedRevision':2,'deviceId':issued['credential']['id']})[0] == 200
+    release.set()
+    deadline = time.monotonic() + 2
+    while owner[0]._service_locks['pixel-inference'].locked() and time.monotonic() < deadline:
+        time.sleep(.01)
+    value = request(owner)[1]['configuration']
+    assert value['revision'] == 4 and not value['enabled'] and value['devices'][0]['revoked']
+
+
+def test_progress_write_failure_closes_admission_before_thread_launch(owner, lifecycle):
+    from pixel_provider.sharing import SharingStore
+    request(owner, 'issue', {'expectedRevision':0,'settings':settings()})
+    with patch.object(owner[0], '_write_progress', side_effect=OSError('private-progress-error')):
+        assert request(owner, 'start', {'expectedRevision':1})[0] == 503
+    assert not lifecycle[1].is_set()
+    assert not owner[0]._service_locks['pixel-inference'].locked()
+    assert not SharingStore(owner[0].DATA_DIR/'pixel-inference').load()['enabled']

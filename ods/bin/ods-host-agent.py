@@ -2014,9 +2014,87 @@ def _pixel_share_active_route():
     if (env.get('ODS_MODE', 'local') != 'local' or not _switchboard_state.migrate_env_identity(env)
             or active.get('reconstructed') is True or not active.get('verifiedAt')
             or proof.get('completion') is not True or proof.get('identity') != active.get('runtimeModelId')
-            or active.get('routeSeq') != doc.get('routeSeq') or doc['routeSeq'] > doc['seq']):
+            or active.get('routeSeq') != doc.get('routeSeq') or doc['routeSeq'] > doc['seq']
+            or type(active.get('contextLength')) is not int or not 1 <= active['contextLength'] <= 10_000_000):
         return None
-    return {key: active[key] for key in ('catalogId', 'runtimeModelId', 'routeSeq')}
+    return {key: active[key] for key in ('catalogId', 'runtimeModelId', 'routeSeq', 'contextLength', 'capabilities')}
+
+
+def _pixel_sharing_service():
+    from pixel_provider.sharing_service import SharingService
+    env = load_env(INSTALL_DIR / '.env')
+    raw_port = env.get('PIXEL_INFERENCE_PORT', '4005')
+    if not isinstance(raw_port, str) or not re.fullmatch(r'[0-9]{4,5}', raw_port):
+        from pixel_provider.store import StoreError
+        raise StoreError('invalid-sharing-port')
+    return SharingService(INSTALL_DIR, DATA_DIR, EXTENSIONS_DIR / 'pixel-inference',
+        port=int(raw_port), resolve_flags=resolve_compose_flags, invalidate=invalidate_compose_cache)
+
+
+def _pixel_sharing_runtime():
+    from pixel_provider.store import StoreError
+    try:
+        service = _pixel_sharing_service()
+        if _service_locks['pixel-inference'].locked():
+            return {'status':'starting'}, service.port
+        status = service.status()
+        if status['status'] != 'ready' and _read_progress_status('pixel-inference') == 'error':
+            status = {'status':'error'}
+        return status, service.port
+    except (StoreError, OSError, ValueError):
+        return {'status':'unavailable'}, 4005
+
+
+def _start_pixel_sharing_change(action, body, route):
+    from pixel_provider.sharing import SharingStore
+    from pixel_provider.sharing_host_api import change_sharing, get_sharing
+    from pixel_provider.store import StoreError
+    if (not isinstance(body, dict) or set(body) != {'expectedRevision'}
+            or type(body['expectedRevision']) is not int or not 0 <= body['expectedRevision'] < 2**53 - 1):
+        raise StoreError('invalid-request')
+    lock = _service_locks['pixel-inference']
+    if not lock.acquire(blocking=False):
+        raise StoreError('operation-in-progress')
+    revision = None
+    try:
+        service = _pixel_sharing_service()
+        if action == 'start':
+            doc = get_sharing(DATA_DIR, route)['configuration']
+            if route is None or not any(not item['revoked'] and item['createdAt'] <= time.time() < item['expiresAt']
+                    and all(item[key] == route[key] for key in ('catalogId','runtimeModelId')) for item in doc['devices']):
+                raise StoreError('no-active-device')
+        result = change_sharing(DATA_DIR, 'enable',
+            {'expectedRevision':body['expectedRevision'],'enabled':action == 'start'}, route)
+        revision = result['configuration']['revision']
+        _write_progress('pixel-inference', 'installing', 'Starting inference sharing' if action == 'start' else 'Stopping inference sharing')
+        def work():
+            try:
+                service.start() if action == 'start' else service.stop()
+                _write_progress('pixel-inference', 'complete', 'Inference sharing ready' if action == 'start' else 'Inference sharing stopped')
+            except Exception:
+                # Grant revocations may advance revision during the build;
+                # preserve them while closing this failed activation.
+                if action == 'start':
+                    try:
+                        SharingStore(DATA_DIR / 'pixel-inference').disable_after_failed_start()
+                    except (StoreError, OSError):
+                        pass
+                _write_progress('pixel-inference', 'error', 'Inference sharing operation failed',
+                                error='Sharing operation failed; reload state before retrying.')
+            finally:
+                lock.release()
+        threading.Thread(target=work, daemon=True, name='ods-pixel-sharing-lifecycle').start()
+        result['runtime'] = {'status':'starting'}
+        result['transport']['port'] = service.port
+        return result
+    except Exception:
+        if action == 'start' and revision is not None:
+            try:
+                SharingStore(DATA_DIR / 'pixel-inference').disable_after_failed_start()
+            except (StoreError, OSError):
+                pass
+        lock.release()
+        raise
 
 
 def _project_switchboard_agent_viability(payload: dict) -> None:
@@ -6809,7 +6887,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_remote_provider_proof()
         elif self.path == "/v1/pixel/providers/save":
             self._handle_pixel_providers(save=True)
-        elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke"}:
+        elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke", "/v1/pixel/inference-sharing/start", "/v1/pixel/inference-sharing/stop"}:
             self._handle_pixel_sharing(self.path.rsplit('/', 1)[1])
         elif self.path == "/v1/runtime/lemonade/ensure":
             self._handle_windows_lemonade_runtime_ensure()
@@ -6860,18 +6938,31 @@ class AgentHandler(BaseHTTPRequestHandler):
                     raise StoreError('malformed-json')
                 body = decode_document(raw)
             route = _pixel_share_active_route()
-            result = (get_sharing(DATA_DIR, route) if action is None else
-                      change_sharing(DATA_DIR, action, body, route))
+            if action in {'start', 'stop'}:
+                result = _start_pixel_sharing_change(action, body, route)
+            elif action == 'enable':
+                lock = _service_locks['pixel-inference']
+                if not lock.acquire(blocking=False):
+                    raise StoreError('operation-in-progress')
+                try:
+                    result = change_sharing(DATA_DIR, action, body, route)
+                finally:
+                    lock.release()
+                result['runtime'], result['transport']['port'] = _pixel_sharing_runtime()
+            else:
+                result = (get_sharing(DATA_DIR, route) if action is None else
+                          change_sharing(DATA_DIR, action, body, route))
+                result['runtime'], result['transport']['port'] = _pixel_sharing_runtime()
         except StoreError as exc:
-            status = 409 if exc.code in {'stale-revision', 'active-route-changed'} else 503
-            if action is not None and exc.code in {'invalid-request', 'invalid-config', 'malformed-json'}:
+            status = 409 if exc.code in {'stale-revision', 'active-route-changed', 'operation-in-progress'} else 503
+            if action is not None and exc.code in {'invalid-request', 'invalid-config', 'malformed-json', 'no-active-device'}:
                 status = 400
             json_response(self, status, {'error': 'Sharing request failed', 'code': exc.code}, no_store=True)
             return
         except (OSError, ValueError, TypeError, RecursionError):
             json_response(self, 503, {'error': 'Sharing is unavailable'}, no_store=True)
             return
-        json_response(self, 200, result, no_store=True)
+        json_response(self, 202 if action in {'start', 'stop'} else 200, result, no_store=True)
 
     def _handle_pixel_providers(self, *, save):
         """Provider Settings only; does not activate routes or change privileges."""
