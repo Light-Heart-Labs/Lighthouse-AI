@@ -4635,6 +4635,29 @@ function hasExplicitWorkspacePreviewDirective(text) {
   });
 }
 
+function requestsNamedSessionPreview(text, preview) {
+  if (!text || !preview?.relativeDirectory) return false;
+  // A verified project name is a usable target: owners need not repeat
+  // "website" or its full HTML path on every publication request.
+  const ownerText = text
+    .replace(/(?:\x60{3}|~{3})[\s\S]*?(?:\x60{3}|~{3})/g, " ")
+    .replace(/^\s*>[^\n]*/gm, " ");
+  const directory = preview.relativeDirectory.replace(/[^A-Za-z0-9_/-]/g, "\\$&");
+  const target = new RegExp(
+    "^(?:(?:the|this|that|existing|current|updated|repaired)\\s+)*" +
+      "[\\x60\"']?(?:/workspace/)?" + directory +
+      "(?:/index\\.html)?[\\x60\"']?(?=\\s|[!?;]|\\.(?:\\s|$)|$)",
+    "i"
+  );
+  // Keep this an owner command, rather than a quoted command, explanation,
+  // subordinate clause, or instruction found inside a code block.
+  const commands = ownerText.matchAll(
+    /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:publish|republish|preview|display|show|open)\s+([^!?;\n]{1,512})/gi
+  );
+  if (![...commands].some((match) => target.test(match[1]))) return false;
+  return !/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\s+(?:publish(?:ing)?|republish(?:ing)?|preview(?:ing)?|display(?:ing)?|show(?:ing)?|open(?:ing)?)\b/i.test(ownerText);
+}
+
 export function userMessageRequestsWorkspacePreview(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
@@ -7398,6 +7421,12 @@ export function createToolLoopGuard({
       }
       if (currentUserText(event?.messages, event?.prompt)) {
         state.ownerIntentObserved = true;
+        const previousPreview = typeof sessionId === "string" && sessionId
+          ? sessionPreviews.get(sessionId)
+          : undefined;
+        const namedPreviewRequested = requestsNamedSessionPreview(
+          currentOwnerIntentText(event?.messages, event?.prompt), previousPreview
+        );
         const visualContinuationRequested =
           userMessageRequestsWorkspaceVisualContinuation(
             event?.messages,
@@ -7407,12 +7436,12 @@ export function createToolLoopGuard({
           visualContinuationRequested && typeof sessionId === "string" && sessionId
             ? sessionPreviews.get(sessionId)
             : undefined;
-        const previewRequested = userMessageRequestsWorkspacePreview(
+        const previewRequested = namedPreviewRequested || userMessageRequestsWorkspacePreview(
           event?.messages, event?.prompt
         );
-        const explicitDelivery = previewRequested && hasExplicitWorkspacePreviewDirective(
+        const explicitDelivery = namedPreviewRequested || (previewRequested && hasExplicitWorkspacePreviewDirective(
           currentOwnerIntentText(event?.messages, event?.prompt)
-        );
+        ));
         state.workspaceVisualContinuationRequested = Boolean(trustedSessionPreview);
         if (trustedSessionPreview) {
           state.workspaceVisualContinuationOriginalSha256 ??= trustedSessionPreview.sha256;
@@ -7452,6 +7481,9 @@ export function createToolLoopGuard({
           event?.messages,
           event?.prompt
         );
+        if (namedPreviewRequested) {
+          state.workspacePreviewDirectory = previousPreview.relativeDirectory;
+        }
         if (trustedSessionPreview) {
           state.workspaceTaskPath =
             `${trustedSessionPreview.relativeDirectory}/index.html`;

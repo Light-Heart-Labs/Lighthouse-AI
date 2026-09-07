@@ -169,6 +169,80 @@ function workspacePreviewSnapshot(relativeDirectory, writes) {
   };
 }
 
+function seedNamedPreview(guard) {
+  guard.observeRun(
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
+    "pixel", { prompt: "Build and publish a website at /workspace/log-viewer-lab/index.html." }
+  );
+  const write = { path: "log-viewer-lab/index.html", content: "<!doctype html><p>logs</p>" };
+  call(guard, "write", { event: { params: write } });
+  afterCall(guard, "write", { event: { params: write, result: { details: { status: "completed" } } } });
+  const params = { relativeDirectory: "log-viewer-lab" };
+  assert.notEqual(call(guard, "pixel_ods_workspace_preview", { event: { params } })?.block, true);
+  const snapshot = workspacePreviewSnapshot("log-viewer-lab", [write]);
+  const details = {
+    schemaVersion: 1, kind: "ods-pixel-workspace-preview", status: "succeeded",
+    relativeDirectory: "log-viewer-lab", ...snapshot, port: 9437,
+    url: "http://" + snapshot.siteId + ".localhost:9437/" + snapshot.siteId + "/",
+    httpStatus: 200, readbackVerified: true, executable: false, overwritten: false,
+  };
+  afterCall(guard, "pixel_ods_workspace_preview", { event: { params, result: { details } } });
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  return { write, params, details };
+}
+
+for (const prompt of [
+  "Inspect the actual event handlers/state update ordering, repair synchronous export filtering and visible validation, and publish the existing log-viewer-lab. Do not repeat a claimed fix without verifying the relevant code path.",
+  "Publish the existing log-viewer-lab unchanged.",
+  "Please preview log-viewer-lab.",
+  "Could you show the updated log-viewer-lab for testing?",
+  "Do not edit any files. Publish the current log-viewer-lab.",
+]) {
+  test("publishes a verified project by name in its own session: " + prompt, () => {
+    const guard = createToolLoopGuard();
+    const { write, params, details } = seedNamedPreview(guard);
+    const context = { agentId: "pixel", runId: "run-named", sessionId: "session-1" };
+    guard.observeRun(context, "pixel", { prompt });
+    const read = { path: write.path };
+    call(guard, "read", { context, event: { runId: context.runId, params: read } });
+    afterCall(guard, "read", { context, event: {
+      runId: context.runId, params: read,
+      result: { content: [{ type: "text", text: write.content }] },
+    } });
+    assert.notEqual(call(guard, "pixel_ods_workspace_preview", {
+      context, event: { runId: context.runId, params },
+    })?.block, true);
+    afterCall(guard, "pixel_ods_workspace_preview", {
+      context, event: { runId: context.runId, params, result: { details } },
+    });
+    assert.equal(guard.verificationForRun(context.runId).status, "passed");
+  });
+}
+
+for (const [prompt, sessionId] of [
+  ["Publish another-lab.", "session-1"],
+  ["Publish log-viewer-lab.other.", "session-1"],
+  ["Publish log-viewer-lab.", "different-session"],
+  ["Do not publish log-viewer-lab.", "session-1"],
+  ["Don't publish log-viewer-lab.", "session-1"],
+  ["Explain why we should publish log-viewer-lab.", "session-1"],
+  ['Explain "Publish log-viewer-lab."', "session-1"],
+  ["Explain this command:\n" + "\x60\x60\x60\nPublish log-viewer-lab.\n\x60\x60\x60", "session-1"],
+  ["Explain this quote:\n> Publish log-viewer-lab.", "session-1"],
+]) {
+  test("does not derive named publication authority from unrelated context: " + prompt, () => {
+    const guard = createToolLoopGuard();
+    seedNamedPreview(guard);
+    const context = { agentId: "pixel", runId: "run-unbound", sessionId };
+    guard.observeRun(context, "pixel", { prompt });
+    const blocked = call(guard, "pixel_ods_workspace_preview", {
+      context, event: { runId: context.runId, params: { relativeDirectory: "log-viewer-lab" } },
+    });
+    assert.equal(blocked?.block, true);
+    assert.match(blocked.blockReason, /unsolicited/);
+  });
+}
+
 test("exec cancellation control creates exact owner-private markers and fails closed", () => {
   const temporary = mkdtempSync(path.join(tmpdir(), "pixel-exec-control-"));
   const root = path.join(temporary, "control");
