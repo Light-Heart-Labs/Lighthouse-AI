@@ -4,7 +4,6 @@ Auto-discover GGUF models in ods/data/models and update configuration files.
 Runs on ODS startup to make newly downloaded models available in UI.
 """
 import os
-import json
 import sys
 import yaml
 from pathlib import Path
@@ -128,7 +127,7 @@ def main():
             update_litellm_config(config_file, discovered)
 
         return 0
-    except Exception as e:
+    except Exception:
         # Silently fail - this is a nice-to-have feature
         return 0
 
