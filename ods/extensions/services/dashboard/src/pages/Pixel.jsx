@@ -1017,8 +1017,8 @@ export default function Pixel({ systemStatus = null }) {
           </div>
         )}
         {messages.map((message, index) => (
-          <div key={index} className={`mx-auto flex w-full max-w-5xl ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 xl:max-w-3xl ${
+          <div key={index} className={`mx-auto flex min-w-0 w-full max-w-5xl ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`min-w-0 max-w-[min(85%,48rem)] rounded-2xl px-4 py-3 text-sm leading-6 [overflow-wrap:anywhere] ${
               message.role === 'user'
                 ? 'bg-theme-accent text-white shadow-lg shadow-black/10'
                 : message.status === 'error'
