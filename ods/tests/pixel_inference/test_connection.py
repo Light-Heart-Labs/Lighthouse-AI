@@ -170,4 +170,3 @@ def test_tools_false_not_blocked():
     probe["ods"]["capabilities"]["agentViable"] = False
     result = normalize_probe(probe, BASE_CONN, now=NOW)
     assert result["capabilities"]["chat"] is True
-
