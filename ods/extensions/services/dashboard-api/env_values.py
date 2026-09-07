@@ -8,6 +8,10 @@ def strip_matching_quotes(value: str) -> str:
     double quotes. Unmatched or mixed quotes are data, not delimiters, and
     must survive reads unchanged.
     """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
