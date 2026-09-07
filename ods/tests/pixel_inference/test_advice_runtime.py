@@ -17,12 +17,18 @@ pytestmark=pytest.mark.skipif(os.name != 'posix',reason='POSIX private runtime')
 @pytest.fixture
 def provision(tmp_path,monkeypatch):
     root=tmp_path/'providers'; root.mkdir(mode=0o700)
+    # This is a simulated provisioner, not interpreter qualification. Hosted
+    # tool-cache ownership/modes are outside our control; never relax production
+    # custody or chmod a shared Python installation to make this fixture pass.
+    binary=root/'fixture-python'
+    binary.write_bytes(b'fictional interpreter, never executed')
+    binary.chmod(0o700)
     calls=[]
     def install(command,**kwargs):
         calls.append(command)
         if 'venv' in command:
             target=Path(command[-1]); target.mkdir(mode=0o700); (target/'bin').mkdir(mode=0o700)
-            (target/'bin'/'python').symlink_to(Path(sys.executable).resolve())
+            (target/'bin'/'python').symlink_to(binary)
         if '--report' in command:
             report=Path(command[command.index('--report')+1])
             report.write_text(json.dumps({'install':[dict(metadata={'name':'httpx','version':'0.28.1'},
@@ -33,7 +39,7 @@ def provision(tmp_path,monkeypatch):
 
 
 def prepare(root,revision=0,**changes):
-    return runtime.prepare_runtime(root,**dict(dict(python=sys.executable,expected_revision=revision,confirmed=True),**changes))
+    return runtime.prepare_runtime(root,**dict(dict(python=str(root/'fixture-python'),expected_revision=revision,confirmed=True),**changes))
 
 
 def test_explicit_optional_prepare_idempotence_and_separate_revision(provision):
@@ -108,8 +114,20 @@ def test_missing_runtime_does_not_claim_or_read_capsule(saved):
 def test_interpreter_custody_drift_before_credential_pass(provision,monkeypatch):
     root,_=provision; prepare(root)
     original=runtime.digest_file
-    binary=Path(sys.executable).resolve()
+    binary=root/'fixture-python'
     monkeypatch.setattr(runtime,'digest_file',lambda path:'f'*64 if path==binary else original(path))
     assert runtime.runtime_status(root)['status']=='drift'
     with pytest.raises(StoreError):
         runtime.resolve_runtime(root)
+
+
+@pytest.mark.parametrize('unsafe',['group-write','other-write','hardlink'])
+def test_unsafe_interpreter_rejected_before_provision(provision,unsafe):
+    root,calls=provision; binary=root/'fixture-python'
+    if unsafe=='hardlink':
+        os.link(binary,root/'second-name')
+    else:
+        binary.chmod(0o720 if unsafe=='group-write' else 0o702)
+    with pytest.raises(StoreError,match='advice-runtime-unsafe'):
+        prepare(root)
+    assert not calls and not (root/'advice-runtimes').exists()
