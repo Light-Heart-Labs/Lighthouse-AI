@@ -6,6 +6,10 @@ default `pixel/default` model in Open WebUI and has a dedicated **Pixel** app
 in the ODS Dashboard. The full goal is to create projects, use host tools,
 manage ODS, and carry out sustained work through conversation.
 
+See the [enhancement priorities](pixel/ENHANCEMENT-PRIORITIES.md) for the
+source-linked review of upstream Pixel proposals and their native ODS
+acceptance tests.
+
 The rollout is experimental: Hermes, OpenCode, Open WebUI and the other ODS
 applications remain available in parallel while Pixel matures. This integration
 does not require their removal or a Pixel-only core download. Hermes remains

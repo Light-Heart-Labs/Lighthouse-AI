@@ -176,7 +176,7 @@ export const WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX =
   "Pixel did not create or verify the requested website files, so ODS did not publish a browser preview. No localhost URL is live or claimed; ask Pixel to retry the build.";
 
 export const WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX =
-  "Pixel published and independently read back the static website bytes:";
+  "Your preview is ready.";
 
 export const CLIENT_CANCELLED_REASON =
   "The owner cancelled this Pixel response. Do not call another tool or continue the task in this turn.";
@@ -6315,7 +6315,11 @@ export function createToolLoopGuard({
       const args = suppliedArgs;
       const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
       const observedDirectory = workspacePreviewDirectoryFromState(state);
-      const directory = observedDirectory ?? providedDirectory;
+      // An explicit target must not be silently replaced by a previous one.
+      // A static subdirectory may be selected after the parent failed validation.
+      const directory = Object.hasOwn(args ?? {}, "relativeDirectory")
+        ? providedDirectory
+        : observedDirectory;
       const hasObservedIndex =
         typeof directory === "string" &&
         (state.workspacePreviewAuthorshipRequired
@@ -6325,6 +6329,12 @@ export function createToolLoopGuard({
             state.successfulReadPaths.has(`${directory}/index.html`)
           ));
       if (!directory || !hasObservedIndex) {
+        if (directory && !state.workspacePreviewAuthorshipRequired) {
+          return {
+            block: true,
+            blockReason: `Read ${directory}/index.html before publishing that exact directory. Preserve existing files; a different directory's readback cannot verify this target.`,
+          };
+        }
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
       }
       state.workspacePreviewDirectory = directory;
@@ -8830,17 +8840,11 @@ export function createToolLoopGuard({
       return {
         status: "passed",
         text:
-          `${WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX}\n` +
-          `- [Open the verified preview](${state.workspacePreview.url})\n` +
-          `- Snapshot: ${state.workspacePreview.files} files, ` +
-          `${state.workspacePreview.bytes} bytes, SHA-256 ` +
-          `\`${state.workspacePreview.sha256}\`.\n` +
-          `- Workspace artifact: \`${state.workspacePreview.relativeDirectory}/index.html\`.\n` +
+          `${WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX}\n\n` +
+          `[Open preview](${state.workspacePreview.url})\n\n` +
           (state.workspacePreviewModelAuthored
-            ? "- Origin: Pixel's active model wrote every published file in this request; ODS supplied no creative artifact bytes.\n"
-            : "- Origin: ODS supplied no creative artifact bytes; Pixel published the workspace files selected in this request.\n") +
-          "- Browser readback: HTTP 200 from the dedicated loopback preview origin.\n" +
-          "- Interaction evidence: this static receipt does not claim that controls were clicked or exercised.",
+            ? "Created by Pixel."
+            : "Published from your workspace."),
         preview: {
           schemaVersion: 1,
           kind: "ods-pixel-workspace-preview",
