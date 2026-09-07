@@ -18,6 +18,8 @@ MANIFEST = Path(__file__).with_name("openclaw-tool-recovery.json")
 MODULE = "tool-loop-detection-C0oQKkXZ.js"
 COMPLETION_MODULE = "agent-command-DeS125kF.js"
 IMAGE_MODULE = "tool-search-BInRpkE3.js"
+COMPACTION_MODULE = "embedded-agent-subscribe.handlers.compaction.runtime.js"
+COMPACTION_CHUNK = "embedded-agent-subscribe.handlers.compaction.runtime-BcFOW95l.js"
 VERSION = "2026.6.33"
 
 
@@ -55,9 +57,24 @@ def atomic_write(path, data, mode=0o600):
             os.unlink(temporary)
 
 
+def verify_dependencies(runtime_root, manifest, module_name):
+    """A facade repair is valid only with its reviewed implementation chunk."""
+    expected = manifest.get("reviewedDependencies", {})
+    allowed = {COMPACTION_CHUNK} if module_name == COMPACTION_MODULE else set()
+    if not isinstance(expected, dict) or set(expected) != allowed:
+        raise ValueError("runtime repair dependency contract mismatch")
+    for name, sha256 in expected.items():
+        if not isinstance(sha256, str) or len(sha256) != 64:
+            raise ValueError("runtime repair dependency hash is invalid")
+        data, _ = read_regular(runtime_root / "dist" / name)
+        if digest(data) != sha256:
+            raise ValueError("runtime repair dependency differs from reviewed bytes")
+    return dict(expected)
+
+
 def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
            module_name=MODULE):
-    if module_name not in {MODULE, COMPLETION_MODULE, IMAGE_MODULE}:
+    if module_name not in {MODULE, COMPLETION_MODULE, IMAGE_MODULE, COMPACTION_MODULE}:
         raise ValueError("unsupported runtime repair module")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     package = json.loads((runtime_root / "package.json").read_text(encoding="utf-8"))
@@ -75,6 +92,7 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
         fcntl.flock(lock, fcntl.LOCK_EX)
         module = runtime_root / "dist" / module_name
         current, mode = read_regular(module)
+        dependencies = verify_dependencies(runtime_root, manifest, module_name)
         before = manifest["sourceSha256"]
         after = manifest["patchedSha256"]
         current_hash = digest(current)
@@ -108,6 +126,8 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
         receipt = {"schemaVersion": 1, "version": VERSION, "module": module_name,
                    "sourceSha256": before, "patchedSha256": after,
                    "backup": backup.name, "desiredSha256": digest(target)}
+        if dependencies:
+            receipt["reviewedDependencies"] = dependencies
         receipt_path = state_dir / "receipt.json"
         # Record custody before changing executable bytes, including interrupted
         # attempts. A rerun recovers only the two reviewed byte states.
@@ -117,9 +137,11 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
             latest, _ = read_regular(module)
             if latest != current:
                 raise ValueError("runtime changed while preparing recovery repair")
+            verify_dependencies(runtime_root, manifest, module_name)
             atomic_write(module, target, mode)
         if digest(read_regular(module)[0]) != digest(target):
             raise ValueError("runtime repair readback failed")
+        verify_dependencies(runtime_root, manifest, module_name)
         return {**receipt, "status": "changed" if changed else "unchanged",
                 "restored": restore}
 
@@ -132,6 +154,7 @@ def main():
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--completion-recovery", action="store_true")
     selection.add_argument("--image-envelope", action="store_true")
+    selection.add_argument("--compaction-export", action="store_true")
     args = parser.parse_args()
     runtime_root = args.openclaw_bin.resolve(strict=True).parent
     options = {}
@@ -141,6 +164,9 @@ def main():
     elif args.image_envelope:
         options = {"module_name": IMAGE_MODULE,
                    "manifest_path": MANIFEST.with_name("openclaw-image-envelope.json")}
+    elif args.compaction_export:
+        options = {"module_name": COMPACTION_MODULE,
+                   "manifest_path": MANIFEST.with_name("openclaw-compaction-export.json")}
     print(json.dumps(repair(runtime_root, args.state_dir, restore=args.restore, **options)))
 
 

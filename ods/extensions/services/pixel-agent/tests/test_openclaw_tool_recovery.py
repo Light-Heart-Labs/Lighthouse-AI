@@ -146,3 +146,94 @@ def test_other_runtime_versions_are_untouched(installation):
     assert run(installation) == {"status": "not-applicable", "version": "future"}
     assert installation[3].read_bytes() == installation[4]
     assert not installation[1].exists()
+
+
+@pytest.fixture
+def compaction_installation(installation):
+    runtime, state, manifest, module, original, patched = installation
+    facade = module.with_name(repair_module.COMPACTION_MODULE)
+    module.rename(facade)
+    chunk = facade.with_name(repair_module.COMPACTION_CHUNK)
+    chunk.write_bytes(b"export default async function reconcile() {}\n")
+    chunk.chmod(0o644)
+    data = json.loads(manifest.read_text())
+    data["reviewedDependencies"] = {chunk.name: hashlib.sha256(chunk.read_bytes()).hexdigest()}
+    manifest.write_text(json.dumps(data))
+    return runtime, state, manifest, facade, original, patched
+
+
+def compact(installation, **kwargs):
+    return run(installation, module_name=repair_module.COMPACTION_MODULE, **kwargs)
+
+
+def test_compaction_repair_retains_dependency_custody(compaction_installation):
+    runtime, state, manifest, facade, original, patched = compaction_installation
+    expected = json.loads(manifest.read_text())["reviewedDependencies"]
+    outcome = compact(compaction_installation)
+    assert outcome["reviewedDependencies"] == expected
+    assert json.loads((state / "receipt.json").read_text())["reviewedDependencies"] == expected
+    assert facade.read_bytes() == patched
+    assert compact(compaction_installation)["status"] == "unchanged"
+    assert compact(compaction_installation, restore=True)["status"] == "changed"
+    assert facade.read_bytes() == original
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_compaction_dependency_drift_cannot_apply_or_restore(compaction_installation, restore):
+    runtime, _, _, facade, original, patched = compaction_installation
+    if restore:
+        compact(compaction_installation)
+    chunk = runtime / "dist" / repair_module.COMPACTION_CHUNK
+    chunk.write_bytes(b"an independent package update")
+    with pytest.raises(ValueError, match="dependency differs"):
+        compact(compaction_installation, restore=restore)
+    assert facade.read_bytes() == (patched if restore else original)
+    assert chunk.read_bytes() == b"an independent package update"
+
+
+@pytest.mark.parametrize("dependencies", [{}, {"../outside.js": "a" * 64}])
+def test_compaction_dependency_contract_cannot_expand_targets(compaction_installation, dependencies):
+    _, state, manifest, facade, original, _ = compaction_installation
+    data = json.loads(manifest.read_text())
+    data["reviewedDependencies"] = dependencies
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="dependency contract"):
+        compact(compaction_installation)
+    assert facade.read_bytes() == original
+    assert not (state / "receipt.json").exists()
+
+
+def test_compaction_dependency_symlink_is_rejected(compaction_installation, tmp_path):
+    runtime, _, _, facade, original, _ = compaction_installation
+    chunk = runtime / "dist" / repair_module.COMPACTION_CHUNK
+    other = tmp_path / "other.js"
+    chunk.rename(other)
+    chunk.symlink_to(other)
+    with pytest.raises(ValueError, match="owner-controlled"):
+        compact(compaction_installation)
+    assert facade.read_bytes() == original
+
+
+def test_compaction_dependency_drift_during_preparation_stops_write(compaction_installation, monkeypatch):
+    runtime, _, _, facade, original, _ = compaction_installation
+    chunk = runtime / "dist" / repair_module.COMPACTION_CHUNK
+    write = repair_module.atomic_write
+
+    def change_chunk_after_receipt(path, *args, **kwargs):
+        write(path, *args, **kwargs)
+        if path.name == "receipt.json":
+            chunk.write_bytes(b"updated during preparation")
+
+    monkeypatch.setattr(repair_module, "atomic_write", change_chunk_after_receipt)
+    with pytest.raises(ValueError, match="dependency differs"):
+        compact(compaction_installation)
+    assert facade.read_bytes() == original
+
+
+def test_unchanged_compaction_repair_checks_its_dependency(compaction_installation):
+    runtime, _, _, facade, _, patched = compaction_installation
+    compact(compaction_installation)
+    (runtime / "dist" / repair_module.COMPACTION_CHUNK).unlink()
+    with pytest.raises(FileNotFoundError):
+        compact(compaction_installation)
+    assert facade.read_bytes() == patched
