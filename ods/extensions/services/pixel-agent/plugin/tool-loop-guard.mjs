@@ -28,13 +28,7 @@ const MAX_COMPARE_SWAP_REPAIRS_PER_PATH = 3;
 const MAX_TRACKED_WORKSPACE_FILE_BYTES = 4 * 1024 * 1024;
 
 export const WEB_BUDGET_EXHAUSTED_REASON =
-  "Pixel's web-research budget is exhausted for this response. Do not call any tool again in this turn. Give the user a visible final answer now using the evidence already collected, clearly stating any uncertainty.";
-
-function webBudgetExhaustedReason(state) {
-  return state?.workspaceTaskRequested
-    ? "The web-research budget is exhausted. Do not call web tools again. Continue the owner's authorized local workspace task with read, edit, write, execution or preview tools; preserve the existing evidence and report any missing external information."
-    : WEB_BUDGET_EXHAUSTED_REASON;
-}
+  "Pixel's web-research budget is exhausted for this response. Do not call web tools again. Finish using the evidence already collected and any otherwise-authorized tools, including saving the requested report. Preserve existing evidence and clearly state any missing external information.";
 
 export const WEB_LOOP_ABORT_REASON =
   "Pixel stopped this response because it requested another web tool after the bounded research budget was exhausted. Start a fresh message to continue with a narrower research question.";
@@ -43,7 +37,7 @@ export const WEB_FETCH_REPEAT_PIVOT_REASON =
   "Pixel already fetched this public page in this response. Do not repeat web_fetch or narrate a retry. If the needed detail was beyond the returned prefix, call pixel_ods_web_extract now with the same URL and a distinctive literal method or section name; otherwise answer from the evidence already returned.";
 
 export const WEB_FETCH_TRUNCATED_PIVOT_REASON =
-  "The fetched public page was truncated. Either answer from evidence already present or make exactly one pixel_ods_web_extract call now using that same page URL and a distinctive literal method or section name. Do not call or narrate any other tool; a different next tool will stop this response.";
+  "The fetched public page was truncated. Use evidence already present, or call pixel_ods_web_extract with that same page URL and a distinctive literal method or section name before further web research. Other authorized work may continue, including saving verified findings; do not claim unread content was verified.";
 
 export const WEB_FETCH_PUBLIC_ONLY_REASON =
   "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames and must not contact local, private, or raw-IP destinations. Do not call another tool in this turn; explain the boundary to the user.";
@@ -7345,7 +7339,7 @@ export function createToolLoopGuard({
       return { block: true, blockReason: EXEC_PRIVATE_NETWORK_REASON };
     }
 
-    if (state?.targetedExtractPending) {
+    if (state?.targetedExtractPending && WEB_TOOLS.has(selectedToolName)) {
       // Tool Search dispatch reaches this gate before the selected tool's own
       // hook. Compare its actual tool and arguments, not the dispatch wrapper.
       const requestedUrl = canonicalFetchUrl(selectedEvent);
@@ -7373,7 +7367,7 @@ export function createToolLoopGuard({
       } else {
         state.targetedExtractPending = undefined;
         state.webExhausted = true;
-        return { block: true, blockReason: webBudgetExhaustedReason(state) };
+        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
       }
     }
 
@@ -7402,7 +7396,7 @@ export function createToolLoopGuard({
         };
       } else {
         state.webExhausted = true;
-        return { block: true, blockReason: webBudgetExhaustedReason(state) };
+        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
       }
     }
 
@@ -7431,16 +7425,14 @@ export function createToolLoopGuard({
         : undefined;
     }
 
-    const workspaceAfterWeb = state.webExhausted && state.workspaceTaskRequested &&
-      (WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName) ||
-        ["tool_search", "tool_describe", "pixel_ods_workspace_preview"].includes(effectiveToolName));
-    // Exhausting a side lookup must not prevent the requested local repair.
-    // All ordinary path, tool-policy and coding-loop checks still apply.
-    if (workspaceAfterWeb) state.webTerminalBlocks = 0;
-    if (state.webExhausted && !workspaceAfterWeb) {
+    // A research limit governs web calls, not the rest of the owner's task.
+    // Match resolved Tool Search names too, and fall through to each non-web
+    // tool's ordinary policy, path, cancellation and coding-loop checks.
+    // Non-web progress does not replenish ignored-web-call attempts.
+    if (state.webExhausted && WEB_TOOLS.has(effectiveToolName)) {
       if (state.webTerminalBlocks === 0) {
         state.webTerminalBlocks = 1;
-        return { block: true, blockReason: webBudgetExhaustedReason(state) };
+        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
       }
       let aborted = false;
       try {
@@ -7583,7 +7575,7 @@ export function createToolLoopGuard({
       if (fetchUrl && state.fetchedUrls.has(fetchUrl)) {
         if (state.fetchPivots.has(fetchUrl)) {
           state.webExhausted = true;
-          return { block: true, blockReason: webBudgetExhaustedReason(state) };
+          return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
         }
         state.fetchPivots.add(fetchUrl);
         return { block: true, blockReason: WEB_FETCH_REPEAT_PIVOT_REASON };
@@ -7593,7 +7585,7 @@ export function createToolLoopGuard({
     const kind = toolName === "web_search" ? "search" : "fetch";
     if (state[kind] >= effective[kind] || state.total >= effective.total) {
       state.webExhausted = true;
-      return { block: true, blockReason: webBudgetExhaustedReason(state) };
+      return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
     }
 
     state[kind] += 1;
