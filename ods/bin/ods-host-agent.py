@@ -6840,7 +6840,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 result = get_configuration(DATA_DIR)
         except StoreError as exc:
             code = 409 if exc.code == "stale-revision" else 503
-            if save and exc.code in {"invalid-request", "invalid-config", "malformed-json"}:
+            if save and exc.code in {"invalid-request", "invalid-config", "malformed-json", "credential-target-changed"}:
                 code = 400
             json_response(self, code, {"error": "Provider Settings request failed", "code": exc.code})
             return

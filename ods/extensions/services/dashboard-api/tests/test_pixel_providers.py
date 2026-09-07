@@ -99,6 +99,24 @@ def test_post_success(client, mock_request):
     assert resp.status_code == 200
     mock_request.assert_called_once_with("POST", "/v1/pixel/providers/save", payload=payload, timeout=10)
 
+def test_explicit_credential_changes_forward_once_without_response_leak(client, mock_request):
+    mock_request.return_value = DEFAULT_CONFIG
+    payload = {"expectedRevision": 0, "document": DEFAULT_CONFIG,
+               "credentialChanges": {"tower": {"action": "set", "value": "synthetic-private-key"}}}
+    response = client.post("/api/pixel/providers/save", json=payload,
+                           headers={"Authorization": "Bearer test-key-12345"})
+    assert response.status_code == 200
+    assert "synthetic-private-key" not in response.text
+    mock_request.assert_called_once_with("POST", "/v1/pixel/providers/save", payload=payload, timeout=10)
+
+@pytest.mark.parametrize("changes", [None, [], "bad", {str(i): {} for i in range(33)}])
+def test_bad_credential_envelope_never_calls_host(client, mock_request, changes):
+    response = client.post("/api/pixel/providers/save",
+        json={"expectedRevision": 0, "document": DEFAULT_CONFIG, "credentialChanges": changes},
+        headers={"Authorization": "Bearer test-key-12345"})
+    assert response.status_code == 400
+    mock_request.assert_not_called()
+
 def test_post_bad_json(client):
     resp = client.post("/api/pixel/providers/save", content=b"not json", headers={"Authorization": "Bearer test-key-12345"})
     assert resp.status_code == 400

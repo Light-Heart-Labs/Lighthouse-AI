@@ -76,10 +76,13 @@ async def _body(request):
                            parse_float=_float, parse_constant=_constant)
     except (ValueError, RecursionError):
         raise HTTPException(400, "Invalid provider configuration request") from None
-    if (not isinstance(value, dict) or set(value) != {"expectedRevision", "document"}
+    if (not isinstance(value, dict)
+            or not {"expectedRevision", "document"} <= set(value) <= {"expectedRevision", "document", "credentialChanges"}
             or type(value["expectedRevision"]) is not int
             or not 0 <= value["expectedRevision"] < 2**53 - 1
-            or not isinstance(value["document"], dict)):
+            or not isinstance(value["document"], dict)
+            or not isinstance(value.get("credentialChanges", {}), dict)
+            or len(value.get("credentialChanges", {})) > 32):
         raise HTTPException(400, "Invalid provider configuration request")
     return value
 

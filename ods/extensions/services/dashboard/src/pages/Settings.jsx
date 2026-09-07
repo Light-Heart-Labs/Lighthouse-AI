@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import EnvEditor from '../components/settings/EnvEditor'
+import PixelProviderSettings from '../components/settings/PixelProviderSettings.jsx'
 import { useTheme } from '../contexts/ThemeContext'
 import { dashboardHost, serviceUrl } from '../lib/serviceUrls'
 import {
@@ -180,6 +181,7 @@ export default function Settings() {
   const [statusCache, setStatusCache] = useState(null)
   const [setupStatus, setSetupStatus] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [initialized, setInitialized] = useState(false)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [routeFilter, setRouteFilter] = useState('all')
@@ -278,6 +280,7 @@ export default function Settings() {
       setError(getErrorText(err))
       console.error('Settings fetch error:', err)
     } finally {
+      setInitialized(true)
       setLoading(false)
     }
     void fetchVersionInfo()
@@ -384,7 +387,8 @@ export default function Settings() {
     return { online, degraded, inactive }
   }, [services])
 
-  if (loading) return <SettingsSkeleton />
+  // A system refresh must not unmount the independently edited provider form.
+  if (loading && !initialized) return <SettingsSkeleton />
 
   return (
     <div className="min-h-full px-3 py-6 sm:px-4 lg:px-5 xl:px-6">
@@ -407,6 +411,8 @@ export default function Settings() {
           <AccountUsageCard usageReport={usageReport} className="xl:col-span-7" />
           <RemoteSetupCard setupStatus={setupStatus} className="xl:col-span-5" />
         </div>
+        <PixelProviderSettings />
+
         <RoutingTableCard
           services={services}
           counts={routeCounts}

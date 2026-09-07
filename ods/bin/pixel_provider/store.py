@@ -199,50 +199,57 @@ class ProviderStore:
         with self._locked(True) as directory_fd:
             if self._load(directory_fd)["revision"] != expected_revision:
                 raise StoreError("stale-revision")
-            candidate["revision"] += 1
-            candidate = self._validate(candidate)
-            if candidate["revision"] != expected_revision + 1:
-                raise StoreError("invalid-config")
-            try:
-                raw = json.dumps(candidate, ensure_ascii=True, allow_nan=False,
-                                 separators=(",", ":")).encode("utf-8") + b"\n"
-            except (ValueError, TypeError, RecursionError):
-                raise StoreError("invalid-config") from None
-            if len(raw) > MAX_BYTES:
-                raise StoreError("invalid-config")
-            temp_name = ".provider-" + secrets.token_hex(16) + ".tmp"
+            return self._commit(directory_fd, candidate, expected_revision)
+
+    def _commit(self, directory_fd, candidate, expected_revision):
+        """Caller holds exclusive lock and has checked the committed revision."""
+        candidate = self._validate(candidate)
+        if candidate["revision"] != expected_revision:
+            raise StoreError("stale-revision")
+        candidate["revision"] += 1
+        candidate = self._validate(candidate)
+        if candidate["revision"] != expected_revision + 1:
+            raise StoreError("invalid-config")
+        try:
+            raw = json.dumps(candidate, ensure_ascii=True, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8") + b"\n"
+        except (ValueError, TypeError, RecursionError):
+            raise StoreError("invalid-config") from None
+        if len(raw) > MAX_BYTES:
+            raise StoreError("invalid-config")
+        temp_name = ".provider-" + secrets.token_hex(16) + ".tmp"
+        temp_fd = None
+        created = replaced = False
+        try:
+            temp_fd = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                              0o600, dir_fd=directory_fd)
+            created = True
+            if not _private(os.fstat(temp_fd)):
+                raise StoreError("unsafe-file")
+            remaining = memoryview(raw)
+            while remaining:
+                written = os.write(temp_fd, remaining)
+                if written <= 0:
+                    raise OSError(errno.EIO, "short-write")
+                remaining = remaining[written:]
+            os.fsync(temp_fd)
+            os.close(temp_fd)
             temp_fd = None
-            created = replaced = False
-            try:
-                temp_fd = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                  0o600, dir_fd=directory_fd)
-                created = True
-                if not _private(os.fstat(temp_fd)):
-                    raise StoreError("unsafe-file")
-                remaining = memoryview(raw)
-                while remaining:
-                    written = os.write(temp_fd, remaining)
-                    if written <= 0:
-                        raise OSError(errno.EIO, "short-write")
-                    remaining = remaining[written:]
-                os.fsync(temp_fd)
+            bound = self.directory.lstat()
+            original = os.fstat(directory_fd)
+            if not _private(bound, directory=True) or (bound.st_dev, bound.st_ino) != (original.st_dev, original.st_ino):
+                raise StoreError("directory-replaced")
+            os.replace(temp_name, CONFIG_NAME, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            replaced = True
+            os.fsync(directory_fd)
+        except OSError:
+            raise StoreError("write-durability-unknown" if replaced else "write-failed") from None
+        finally:
+            if temp_fd is not None:
                 os.close(temp_fd)
-                temp_fd = None
-                bound = self.directory.lstat()
-                original = os.fstat(directory_fd)
-                if not _private(bound, directory=True) or (bound.st_dev, bound.st_ino) != (original.st_dev, original.st_ino):
-                    raise StoreError("directory-replaced")
-                os.replace(temp_name, CONFIG_NAME, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-                replaced = True
-                os.fsync(directory_fd)
-            except OSError:
-                raise StoreError("write-durability-unknown" if replaced else "write-failed") from None
-            finally:
-                if temp_fd is not None:
-                    os.close(temp_fd)
-                if created and not replaced:
-                    try:
-                        os.unlink(temp_name, dir_fd=directory_fd)
-                    except FileNotFoundError:
-                        pass
-            return copy.deepcopy(candidate)
+            if created and not replaced:
+                try:
+                    os.unlink(temp_name, dir_fd=directory_fd)
+                except FileNotFoundError:
+                    pass
+        return copy.deepcopy(candidate)

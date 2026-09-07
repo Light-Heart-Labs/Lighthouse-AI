@@ -77,6 +77,30 @@ class HostHTTP(unittest.TestCase):
                 self.assertEqual(self.request(method, {}, token="wrong")[0], 403)
         self.assertEqual(list(self.agent.DATA_DIR.iterdir()), [])
 
+    def test_public_http_key_set_edit_and_retarget_guard(self):
+        document = default_config()
+        document['providers'] = [{'id': 'cloud', 'label': 'Synthetic cloud', 'kind': 'cloud',
+            'baseUrl': 'https://provider.invalid/v1', 'model': 'synthetic-model',
+            'contextTokens': 32768, 'maxOutputTokens': 4096, 'supportsTools': True,
+            'supportsVision': False, 'reasoning': False, 'hasCredential': False, 'enabled': True}]
+        status, saved = self.request('POST', {'expectedRevision': 0, 'document': document,
+            'credentialChanges': {'cloud': {'action': 'set', 'value': 'synthetic-only-key'}}})
+        self.assertEqual(status, 200)
+        self.assertTrue(saved['providers'][0]['hasCredential'])
+        self.assertNotIn('synthetic-only-key', json.dumps(saved))
+        self.assertNotIn('credentialRef', json.dumps(saved))
+        saved['providers'][0]['label'] = 'Edited'
+        saved['providers'][0]['hasCredential'] = False  # Hint cannot clear a stored key.
+        status, saved = self.request('POST', {'expectedRevision': 1, 'document': saved})
+        self.assertEqual(status, 200)
+        self.assertTrue(saved['providers'][0]['hasCredential'])
+        from pixel_provider.vault import CredentialStore
+        store = CredentialStore(self.agent.DATA_DIR / 'pixel-providers')
+        self.assertEqual(store.resolve_credential('cloud', expected_revision=2), 'synthetic-only-key')
+        saved['providers'][0]['baseUrl'] = 'https://different.invalid/v1'
+        self.assertEqual(self.request('POST', {'expectedRevision': 2, 'document': saved})[0], 400)
+        self.assertEqual(store.load()['revision'], 2)
+
     def test_invalid_body_does_not_create_configuration(self):
         for raw in (b'{"expectedRevision":0,"expectedRevision":1,"document":{}}',
                     b'NaN', b'{"expectedRevision":true,"document":{}}',

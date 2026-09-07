@@ -2,7 +2,8 @@
 
 Status: development in PR #3818, stacked on ODS PR #3385. The current contracts
 and Settings backend do not activate remote inference, cloud failover or Full
-Access. The Settings UI, credential vault and runtime activation remain pending.
+Access. The Settings UI and POSIX credential vault are implemented; runtime
+activation, sharing/pairing and native-platform storage remain pending.
 
 ## Independent settings
 
@@ -28,14 +29,30 @@ authority system. Inference route policy grants no tool or operating-system
 privilege. Credentials are represented only by opaque server-side references;
 public projections expose credential presence, not references or values.
 
-## Implemented Settings backend (not activation)
+## Implemented Settings form and backend (not activation)
 
 The owner-authenticated dashboard routes are `GET /api/pixel/providers` and
 `POST /api/pixel/providers/save`. Saves accept the exact envelope
-`{ "expectedRevision": 0, "document": <complete configuration> }` and use a
+`{ "expectedRevision": 0, "document": <complete public configuration>,
+"credentialChanges": { <provider id>: { "action": "set", "value": <key> } } }`
+and use a
 compare-and-swap revision; stale edits return 409. Malformed requests return
 400, oversized requests 413, unavailable storage 503. The host-agent paths are
 fixed and require its separate owner control credential.
+
+The public document is the same shape returned by GET: providers contain
+`hasCredential`, never `credentialRef`. `credentialChanges` is optional; omitted
+entries retain keys by the same provider ID under the same revision lock.
+`{"action":"remove"}` explicitly detaches a key. Unknown provider IDs and
+client-supplied references are rejected. Presence hints never grant or remove
+keys. Changing a keyed provider's endpoint or kind requires explicit replacement
+or removal; an ID change is a new identity, not an inferred credential transfer.
+
+The Settings form supports profiles, ordered backups, leader/advisor/handoff,
+capability/token limits and cloud opt-in. Keys are write-only and cleared at
+submission, including on failure. Conflicts and ambiguous write outcomes require
+an explicit reload; writes are never automatically retried. System Refresh keeps
+unsaved provider edits mounted. No key is put in a URL or browser storage.
 
 Responses distinguish the desired configuration from effective runtime:
 `runtime.status` is currently `not-applied`, with reason
@@ -51,10 +68,17 @@ This protects cooperating writers, not against a malicious same-UID process.
 Windows returns unsupported until a native ACL/locking adapter is implemented;
 the optional module must not prevent the rest of the host agent from starting.
 
-`hasCredential` currently means an opaque credential reference is configured,
-not that a real key exists, is valid, or passed a provider handshake. Never
-paste actual credentials into these configuration fields. Secret provisioning
-and connection verification are separate, still-pending integration steps.
+Keys are stored separately as immutable, owner-only files. New key files and
+their directory entries are fsynced before the configuration commit. Failures
+before commit remove only files created by that transaction; an uncertain
+post-commit failure retains them. Old key files remain for recovery after
+replacement/deletion until explicit reference-aware collection is implemented.
+Detaching a local key does not revoke it at its provider.
+
+`hasCredential` means a reference is configured, not that its key is valid or
+passed a provider handshake. Host-only credential resolution checks the exact
+revision, custody, size and key contents. Connection verification remains
+pending. Do not provision real cloud keys into this draft for runtime use yet.
 
 Activity proof distinguishes busy, idle and unknown and binds observations to
 a runtime epoch and freshness interval. Every chat, API, cron and background
@@ -95,5 +119,11 @@ python3 -m pytest tests/test_pixel_providers.py tests/test_pixel.py tests/test_h
 
 The host tests start only a disposable loopback HTTP fixture, use temporary
 private state, and do not install Pixel or change a running fleet service.
+
+Frontend validation uses `npm ci`, `npm test` and `npm run build` in
+`extensions/services/dashboard`. The local preview was also exercised against
+the actual dashboard router and host-agent in an isolated Linux fixture:
+add a provider, select a leader, save, reload and retain the selection. This
+proves configuration persistence, not inference or Full Access operation.
 
 These tests are necessary but are not installed-runtime or release acceptance.
