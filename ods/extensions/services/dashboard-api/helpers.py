@@ -1146,3 +1146,21 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def sanitize_model_router_port(port_val: object, default_port: int = 8000) -> int:
+    """Sanitize model router port configuration inputs safely.
+
+    Ensures non-integer, out-of-range (1-65535), or None values fallback
+    gracefully to standard default port without crashing network sockets.
+    """
+    if port_val is None:
+        return default_port
+    try:
+        port_num = int(port_val)
+        if 1 <= port_num <= 65535:
+            return port_num
+    except (ValueError, TypeError):
+        pass
+    return default_port
+

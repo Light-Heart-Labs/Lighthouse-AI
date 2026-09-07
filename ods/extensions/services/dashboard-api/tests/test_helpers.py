@@ -1607,3 +1607,20 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestSanitizeModelRouterPort:
+
+    def test_valid_integer_port(self):
+        from helpers import sanitize_model_router_port
+        assert sanitize_model_router_port(8080) == 8080
+        assert sanitize_model_router_port("9000") == 9000
+
+    def test_invalid_or_out_of_bounds_port(self):
+        from helpers import sanitize_model_router_port
+        assert sanitize_model_router_port(None) == 8000
+        assert sanitize_model_router_port("invalid") == 8000
+        assert sanitize_model_router_port(0) == 8000
+        assert sanitize_model_router_port(70000) == 8000
+        assert sanitize_model_router_port(-1, default_port=8080) == 8080
+
