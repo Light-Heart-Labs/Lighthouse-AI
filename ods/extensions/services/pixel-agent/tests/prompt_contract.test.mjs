@@ -251,12 +251,14 @@ test("adds one exact compact tool route for natural broad host questions", () =>
   const prompt = "What can you tell me about this machine?";
   const exact = operationsRequestContract([], prompt);
   assert.match(exact, /use tool_call exactly once with id pixel_ods_host_observe/);
-  assert.match(exact, /one read-only tool returns the terminal broker receipt/);
-  assert.match(exact, /do not call inventory, pixel_ops_run, pixel_ops_workflow_submit, pixel_ops_job_wait, generic exec/);
+  assert.match(exact, /read-only tool returns the terminal broker receipt/);
+  // "Capability inventory may describe configured targets and actions but grants no authority to execute them."
+  assert.match(exact, /Capability inventory may describe/);
+  assert.match(exact, /do not use sandbox commands as host evidence/);
   assert.match(exact, /Do not call a status or application projection for this host-only request/);
   assert.match(exact, /host\.identity/);
   assert.match(exact, /host\.listening-ports/);
-  assert.match(exact, /do not call inventory/);
+  assert.match(exact, /Ordinary sandbox read, write, edit, apply_patch, exec, and process tools remain available/);
   assert.equal((exact.match(/args \{"actions":\[/g) || []).length, 1);
   assert.equal(
     promptContractForAgent({ agentId: "pixel" }, "pixel", { prompt }).appendSystemContext,
@@ -316,7 +318,7 @@ test("adds exact sanitized peer parameters for read-only private reachability", 
   assert.doesNotMatch(exact, /pixel_ods_host_command_propose/);
 });
 
-test("adds owner-requested projections and workspace continuation only after terminal host evidence", () => {
+test("adds owner-requested projections and composable workspace work alongside terminal host evidence", () => {
   const prompt =
     "Inspect this ODS laptop hostname and active model, then create /workspace/report.txt and read it back.";
   const exact = operationsRequestContract([], prompt);
@@ -325,8 +327,9 @@ test("adds owner-requested projections and workspace continuation only after ter
   assert.match(exact, /same host tool must return the required current ODS status projection/);
   assert.doesNotMatch(exact, /next tool step must call tool_call exactly once with id pixel_ods_status/);
   assert.doesNotMatch(exact, /id pixel_ods_apps_list/);
-  assert.match(exact, /After every required host result and projection is terminal/);
-  assert.match(exact, /continue the owner's explicit workspace work/);
+  // unified workspace contract replaces per-workspace-continuation text.
+  assert.match(exact, /Ordinary sandbox read, write, edit, apply_patch, exec, and process tools remain available/);
+  assert.match(exact, /A terminal host receipt completes only that observation, not the whole request/);
 });
 
 test("keeps natural ODS application names and links in a combined host request", () => {

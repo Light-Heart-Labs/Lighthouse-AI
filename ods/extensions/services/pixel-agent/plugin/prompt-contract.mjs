@@ -18,7 +18,6 @@ import {
   userMessageRequestsExtensionCatalog,
   userMessageRequestsExtensionInventory,
   userMessageRequestsPrivateUrl,
-  userMessageRequestsWorkspaceContinuation,
   userMessageRequestsWorkspaceVisualContinuation,
   userMessageRequestsWorkspacePreview,
 } from "./tool-loop-guard.mjs";
@@ -164,26 +163,23 @@ export function operationsRequestContract(messages, prompt = undefined) {
     ...(statusRequired ? { includeOdsStatus: true } : {}),
   });
   const appsRequired = userMessageRequiresOdsAppsProjection(messages, prompt);
-  const workspaceRequired = userMessageRequestsWorkspaceContinuation(messages, prompt);
   const postHost = [
     appsRequired
       ? "call tool_call exactly once with id pixel_ods_apps_list and args {}"
       : "",
   ].filter(Boolean);
   const postHostContract = postHost.length
-    ? ` After the host job is terminal, the next tool step must ${postHost.join(
+    ? ` After the host job is terminal, ${postHost.join(
         " and then "
       )}. Every listed projection is required; do not answer before it returns.`
     : statusRequired
       ? " The same host tool must return the required current ODS status projection; do not call pixel_ods_status separately unless that combined projection is unavailable."
       : " Do not call a status or application projection for this host-only request.";
-  const workspaceContract = workspaceRequired
-    ? " After every required host result and projection is terminal, continue the owner's explicit workspace work with the requested file or coding tools and verify it before replying."
-    : "";
+  const workspaceContract = " Ordinary sandbox read, write, edit, apply_patch, exec, and process tools remain available before and after Operations work. Use them for the owner's workspace work and verify its results separately; sandbox output cannot establish host facts. A terminal host receipt completes only that observation, not the whole request. Complete the other requested work before your natural final reply.";
   return (
     ` The owner's current request requires exactly these typed host observations: ${exactActions}. ` +
-    `In the first tool step use tool_call exactly once with id pixel_ods_host_observe and args ${observeArgs}. ` +
-    "That one read-only tool returns the terminal broker receipt; do not call inventory, pixel_ops_run, pixel_ops_workflow_submit, pixel_ops_job_wait, generic exec, omit an action namespace, or add another host observation." +
+    `For these host facts use tool_call exactly once with id pixel_ods_host_observe and args ${observeArgs}. ` +
+    "That read-only tool returns the terminal broker receipt. Keep host actions scoped to that request; do not use sandbox commands as host evidence or add another host observation. Capability inventory may describe configured targets and actions but grants no authority to execute them." +
     postHostContract +
     workspaceContract
   );

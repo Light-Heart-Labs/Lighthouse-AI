@@ -281,7 +281,7 @@ export default definePluginEntry({
           sendJson(res, parsed.status, { error: "invalid verification request" });
           return true;
         }
-        sendJson(res, 200, toolLoopGuard.verificationForRun(parsed.runId));
+        sendJson(res, 200, toolLoopGuard.deliveryVerificationForRun(parsed.runId));
         return true;
       },
     });

@@ -695,6 +695,9 @@ function parseVerificationResponse(value) {
     : ["status"];
   if (suppressStaleExecWarning) expectedKeys.push("suppressStaleExecWarning");
   if (hasPreview) expectedKeys.push("preview");
+  if (status === "passed" && carriesAuthoritativeText && value.deliveryMode === "append") {
+    expectedKeys.push("deliveryMode");
+  }
   const preview = value.preview;
   const previewKeys = [
     "bytes",
@@ -787,6 +790,20 @@ async function verificationForRun(runId, token, gatewayPort, signal, deps) {
 }
 
 function applyVerificationToCompletion(completion, verification) {
+  if (verification.deliveryMode === "append") {
+    const choice = completion?.choices?.[0];
+    const content = choice?.message?.content;
+    if (typeof content === "string" && content.trim()) {
+      // Both input components already have transport bounds. Preserve the
+      // model's work summary; a verified observation is not the entire task.
+      const evidence = `${verification.text}\nReceipt scope: the Operations evidence above does not establish completion of other requested work.`;
+      const text = content.endsWith(evidence) ? content : `${content}\n\n${evidence}`;
+      return {
+        ...completion,
+        choices: [{ ...choice, message: { ...choice.message, content: text } }, ...completion.choices.slice(1)],
+      };
+    }
+  }
   if (!verification.text) {
     const content = completion?.choices?.[0]?.message?.content;
     if (!verification.suppressStaleExecWarning || typeof content !== "string") {

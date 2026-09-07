@@ -4332,12 +4332,19 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
   };
 }
 
+function withoutFilesystemPaths(text) {
+  // A pathname is data, never a device or host-facet authorization. Keep the
+  // original request intact for command/path binding; mask only this intent view.
+  return text.replace(/([`"'])(?:[A-Za-z]:[\\/]|\\\\|\.{0,2}\/|~\/)[^\r\n]*?\1/g, " ")
+    .replace(/(?:^|\s)(?:[A-Za-z]:[\\/]|\\\\|\.{0,2}\/|~\/)[^\s`"']+/g, " ");
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   // Pixel Edge appends trusted delivery/routing guidance beside the owner
   // message for small local models. That guidance is not owner intent: words
   // such as "route" must not silently expand a bounded host request into
   // network-route/listener work.
-  const text = currentOwnerIntentText(messages, prompt);
+  const text = withoutFilesystemPaths(currentOwnerIntentText(messages, prompt));
   if (!text) return { required: false, actions: [] };
   const explicitOperations =
     /\b(?:use|using|via|through|with)\b.{0,48}\b(?:Pixel\s+)?Operations(?:\s+(?:Broker|capabilit(?:y|ies)|tools?))?\b/i.test(
@@ -6831,7 +6838,9 @@ export function createToolLoopGuard({
       state?.ownerIntentObserved &&
       !state.operationsRequired &&
       !state.exactDownloadRequested &&
-      OPERATIONS_TOOLS.has(effectiveToolName)
+      OPERATIONS_TOOLS.has(effectiveToolName) &&
+      // Capability metadata is read-only and grants no action authority.
+      effectiveToolName !== "pixel_ops_inventory"
     ) {
       // Count offending model rounds cumulatively, not parallel siblings or
       // unrelated authorized workspace calls. Without model-round telemetry,
@@ -7003,9 +7012,7 @@ export function createToolLoopGuard({
       );
     const operationsMayContinueInWorkspace =
       state?.operationsRequired === true &&
-      state.operationsWorkspaceContinuationRequested === true &&
-      WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName) &&
-      verificationForRun(runId).status === "passed";
+      WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName);
     if (operationsMayReadOdsApps) {
       state.operationsOdsAppsProjectionAttempted = true;
     } else if (operationsMayReadOdsStatus) {
@@ -8205,39 +8212,8 @@ export function createToolLoopGuard({
         }
       }
       completeVerifiedEvidenceArtifact(state);
-      const hostOnly =
-        state.operationsRequiredActions.size > 0 &&
-        [...state.operationsRequiredActions].every((action) => action.startsWith("host."));
-      const everySubmittedJobIsTerminal =
-        state.operationsSubmittedJobs.size > 0 &&
-        [...state.operationsSubmittedJobs.keys()].every((jobId) =>
-          state.operationsTerminalJobs.has(jobId)
-        );
-      const everyRequiredProjectionIsPresent =
-        (!state.operationsRequiresOdsAppsProjection || state.operationsOdsAppsProjection) &&
-        (!state.operationsRequiresOdsStatusProjection || state.operationsOdsStatusProjection);
-      const workspaceContinuationIsComplete =
-        !state.operationsWorkspaceContinuationRequested ||
-        (state.operationsWorkspaceWriteVerified && state.operationsWorkspaceReadVerified);
-      if (
-        hostOnly &&
-        everyRequiredProjectionIsPresent &&
-        workspaceContinuationIsComplete &&
-        everySubmittedJobIsTerminal &&
-        !state.operationsTerminalAborted &&
-        typeof context?.sessionId === "string" &&
-        context.sessionId
-      ) {
-        const verification = verificationForRun(runId);
-        if (verification.text && ["passed", "failed"].includes(verification.status)) {
-          state.operationsTerminalAborted = true;
-          try {
-            abortRun(context.sessionId);
-          } catch (error) {
-            warn(`Pixel terminal Operations fast-path abort failed: ${String(error)}`);
-          }
-        }
-      }
+      // A terminal broker receipt completes that operation, not the owner's
+      // whole turn. Let the model continue sandbox work and produce its reply.
     }
     const wrappedExactDownloadToolName =
       toolName === "tool_call" && typeof event?.params?.id === "string"
@@ -8800,6 +8776,14 @@ export function createToolLoopGuard({
     if (state.unrequestedOperationsAborted) {
       return { status: "failed", text: UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON };
     }
+    // Successful host facts cannot hide a failed or still-running workspace
+    // verification in the same request. The broker receipts stay recorded.
+    if (state.operationsRequired && state.latestVerificationStatus === "failed") {
+      return { status: "failed", text: VERIFICATION_FAILED_DELIVERY_PREFIX };
+    }
+    if (state.operationsRequired && state.latestVerificationStatus === "pending") {
+      return { status: "pending", text: VERIFICATION_PENDING_DELIVERY_PREFIX };
+    }
     if (
       state.workspacePreviewRequested &&
       !state.operationsRequired &&
@@ -8981,6 +8965,7 @@ export function createToolLoopGuard({
             evidenceText.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX) ||
+            evidenceText.startsWith(OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX) ||
             evidenceText.startsWith(OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX))
             ? "passed"
             : "failed",
@@ -9042,6 +9027,19 @@ export function createToolLoopGuard({
     return { status: "none", ...staleExecWarningSuppression };
   }
 
+  function deliveryVerificationForRun(runId) {
+    const verification = verificationForRun(runId);
+    const state = runs.get(runId);
+    const readOnlyOperations = state?.operationsRequired &&
+      (state.operationsInventoryOnly ||
+        (state.operationsRequiredActions.size > 0 &&
+          [...state.operationsRequiredActions].every((action) =>
+            action.startsWith("host.") || action === "ods.extensions.list" || action === "ods.extensions.search")));
+    return verification.status === "passed" && verification.text && readOnlyOperations
+      ? { ...verification, deliveryMode: "append" }
+      : verification;
+  }
+
   function replyPayloadSending(event) {
     const state = runs.get(event?.runId);
     if (!state) return undefined;
@@ -9056,9 +9054,16 @@ export function createToolLoopGuard({
         reason: "Pixel delivers one terminal owner-visible reply per turn.",
       };
     }
-    const verification = verificationForRun(event?.runId);
+    const verification = deliveryVerificationForRun(event?.runId);
     const authoritativeText = verification.text;
     if (!authoritativeText) return undefined;
+    if (verification.deliveryMode === "append" &&
+        typeof event.payload?.text === "string" && event.payload.text.trim()) {
+      return {
+        payload: { ...(event.payload ?? {}), text: `${event.payload.text}\n\n${authoritativeText}\nReceipt scope: the Operations evidence above does not establish completion of other requested work.` },
+        reason: "Preserve the model's task reply alongside separately scoped Operations evidence.",
+      };
+    }
     return {
       payload: {
         ...(event.payload ?? {}),
@@ -9079,6 +9084,7 @@ export function createToolLoopGuard({
     observeModelCall,
     abortUserRun,
     verificationForRun,
+    deliveryVerificationForRun,
     verificationStatus: (runId) => runs.get(runId)?.latestVerificationStatus,
     trackedRunCount: () => runs.size,
     trackedUserCount: () => activeUsers.size,

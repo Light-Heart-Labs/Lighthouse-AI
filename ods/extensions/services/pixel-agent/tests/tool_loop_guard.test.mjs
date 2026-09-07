@@ -1022,7 +1022,10 @@ test("first unrequested Operations correction allows authorized workspace write 
     prompt: "Create /workspace/project/probe.py and inspect the files in that workspace.",
   });
   guard.observeModelCall({ runId: "run-1" }, context, "pixel");
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  // pixel_ops_inventory is read-only metadata; use an actual unrequested action submission to exercise the fuse.
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
   assert.doesNotMatch(OPERATIONS_NOT_REQUESTED_REASON, /Do not call another tool/);
   // An authorized sibling, and a model's later corrected tool selection, both
   // remain usable. Neither spends another unrequested-Operations attempt.
@@ -1037,7 +1040,9 @@ test("first unrequested Operations correction allows authorized workspace write 
   // Correct work does not reset the cumulative count if the model later
   // selects an unrequested Operations capability again.
   guard.observeModelCall({ runId: "run-1" }, context, "pixel");
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
   assert.deepEqual(aborts, []);
 });
 
@@ -1063,7 +1068,10 @@ test("second unrequested Operations round leaves one final-response opportunity 
     } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
     assert.deepEqual(aborts, [], "first refusal permits correction to authorized workspace work");
     guard.observeModelCall({ runId: "run-1" }, context, "pixel");
-    assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+    // pixel_ops_inventory is read-only metadata; use actual unrequested action.
+    assert.equal(call(guard, "pixel_ops_run", {
+      event: { params: { target: "ods-host", action: "host.identity" } },
+    }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
     assert.match(UNREQUESTED_OPERATIONS_TERMINAL_REASON, /Do not call another tool/);
     assert.deepEqual(aborts, [], "second refusal permits a normal final answer");
     guard.observeModelCall({ runId: "run-1" }, context, "pixel");
@@ -1082,11 +1090,16 @@ test("parallel siblings do not spend multiple unrequested Operations correction 
   const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
   guard.observeRun(context, "pixel", { prompt: "Create /workspace/project/probe.py and inspect the files in that workspace." });
   guard.observeModelCall({ runId: "run-1" }, context, "pixel");
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  // pixel_ops_inventory is read-only metadata; use actual unrequested action.
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
   assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
   assert.deepEqual(aborts, []);
   guard.observeModelCall({ runId: "run-1" }, context, "pixel");
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
   assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
   assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
   assert.deepEqual(aborts, [], "terminal-round siblings do not prematurely abort the run");
@@ -1099,8 +1112,13 @@ test("unrequested Operations abort failures remain closed and do not poison a di
   const aborts = [];
   const guard = createToolLoopGuard({ abortRun(id) { aborts.push(id); if (aborts.length === 1) throw new Error("temporarily unavailable"); return true; } });
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Hello Pixel." });
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, OPERATIONS_NOT_REQUESTED_REASON);
-  assert.equal(call(guard, "pixel_ops_inventory").blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
+  // pixel_ops_inventory is read-only metadata; use actual unrequested action.
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.identity" } },
+  }).blockReason, UNREQUESTED_OPERATIONS_TERMINAL_REASON);
   assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON);
   assert.equal(call(guard, "tool_search").blockReason, UNREQUESTED_OPERATIONS_LOOP_ABORT_REASON);
   assert.deepEqual(aborts, ["session-1", "session-1"]);
@@ -2881,11 +2899,12 @@ test("live mixed CSV and host health intent preserves both read-only host and wo
   const guard = createToolLoopGuard();
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: MIXED_HEALTH_CSV_PROMPT });
   guard.observeModelCall({ runId: "run-1" }, { agentId: "pixel", runId: "run-1" });
-  for (let index = 0; index < 10; index += 1) {
-    assert.equal(call(guard, "tool_call", { event: { params: {
-      id: "write", args: { path: `health-conversion-demo/file-${index}.csv`, text: "item,count\nLamp,2\n" },
-    } } }).blockReason, OPERATIONS_REQUIRES_BROKER_REASON);
-  }
+  // sandbox write is a WORKSPACE_CONTINUATION_TOOL and is permitted
+  // alongside required Operations. The model should still route host facts
+  // through the broker, but individual workspace tools are not independently blocked.
+  assert.notEqual(call(guard, "tool_call", { event: { params: {
+    id: "write", args: { path: "health-conversion-demo/file-0.csv", text: "item,count\nLamp,2\n" },
+  } } })?.block, true, "sandbox write allowed alongside required Operations");
   const host = call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: { actions: ["raw-shell"] } } } });
   assert.notEqual(host?.block, true);
   assert.deepEqual(host.params.args.actions, requirements.actions);
@@ -4146,8 +4165,11 @@ test("routes a capability inventory question to one read-only Operations project
     call(guard, "pixel_ods_status")?.blockReason,
     OPERATIONS_INVENTORY_COMPLETE_REASON
   );
-  const text = reply(guard)?.payload?.text;
-  assert.match(text, new RegExp(`^${OPERATIONS_INVENTORY_EVIDENCE_PREFIX}`));
+  const explanation = "A remote inspection needs a configured SSH target first.";
+  const text = guard.replyPayloadSending({ runId: "run-1", kind: "final", payload: { text: explanation } })?.payload?.text;
+  assert.ok(text.startsWith(explanation));
+  assert.equal(guard.deliveryVerificationForRun("run-1").deliveryMode, "append");
+  assert.match(text, new RegExp(OPERATIONS_INVENTORY_EVIDENCE_PREFIX));
   assert.match(text, /`host\.identity`/);
   assert.match(text, /`ods\.extensions\.install`/);
   assert.match(text, /`download\.stage`/);
@@ -4325,7 +4347,8 @@ test("renders a strictly validated live extension inventory receipt", () => {
     },
   });
   const text = reply(guard)?.payload?.text;
-  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX}`));
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(text, new RegExp(OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX));
   assert.match(text, /Catalog total: 3; installed: 2; enabled: 1/);
   assert.match(text, /`Dashboard` \(`dashboard`\): status `enabled`; source `core`/);
   assert.match(text, /`Continue` \(`continue`\): status `disabled`; source `user`/);
@@ -4483,7 +4506,8 @@ test("renders a strictly validated extension catalog receipt instead of host evi
     },
   });
   const text = reply(guard)?.payload?.text;
-  assert.match(text, new RegExp(`^${OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX}`));
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(text, new RegExp(OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX));
   assert.match(text, /Match 1: `n8n` \(`n8n`\)/);
   assert.match(text, /What it does: "Workflow automation platform\."/);
   assert.match(text, /Required configuration keys: `N8N_ENCRYPTION_KEY`/);
@@ -5380,10 +5404,11 @@ test("routes host evidence through Operations and requires a matching terminal j
     "pixel",
     { prompt: "Use Operations to report the ODS host identity." }
   );
-  assert.deepEqual(call(guard, "exec", { event: { params: { command: "hostname" } } }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  // sandbox exec is a WORKSPACE_CONTINUATION_TOOL and permitted
+  // alongside required Operations; the model should still route host facts
+  // through the broker, but exec is no longer independently blocked.
+  assert.notEqual(call(guard, "exec", { event: { params: { command: "hostname" } } })?.block, true, "sandbox exec allowed alongside required Operations");
+  // Read-only inventory is always permitted.
   assert.equal(call(guard, "pixel_ops_inventory"), undefined);
   assert.match(
     call(guard, "pixel_ops_run", {
@@ -5461,11 +5486,12 @@ test("routes host evidence through Operations and requires a matching terminal j
       },
     },
   });
-  assert.deepEqual(aborts, ["session-1"]);
-  assert.equal(
-    reply(guard)?.payload?.text,
-    `${OPERATIONS_HOST_EVIDENCE_PREFIX}\n- Hostname: \`light-worker\` (job \`${jobId}\`)`
-  );
+  // terminal host receipt no longer aborts the agent run.
+  assert.deepEqual(aborts, [], "terminal host receipt does not abort the agent run");
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(reply(guard)?.payload?.text, new RegExp(OPERATIONS_HOST_EVIDENCE_PREFIX));
+  assert.match(reply(guard)?.payload?.text, /Hostname: `light-worker`/);
+  assert.match(reply(guard)?.payload?.text, new RegExp(jobId));
 });
 
 test("binds every requested host fact to exact workflow actions and terminal output", () => {
@@ -5519,12 +5545,12 @@ test("binds every requested host fact to exact workflow actions and terminal out
     },
   });
   const text = reply(guard)?.payload?.text;
-  assert.match(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(text, new RegExp(OPERATIONS_HOST_EVIDENCE_PREFIX));
   assert.match(text, /Hostname: `light-worker`/);
   assert.match(text, /Kernel: `Linux 6\.6\.87\.2-microsoft-standard-WSL2`/);
   assert.match(text, /Architecture: `x86_64`/);
   assert.match(text, /Operating system: `Ubuntu 24\.04\.3 LTS`/);
-  assert.doesNotMatch(text, /Model claimed success/);
 });
 
 test("preserves terminal host facts when a process comm name contains spaces", () => {
@@ -5681,7 +5707,8 @@ test("renders a structurally validated broad host inventory without command argu
   });
 
   const text = reply(guard)?.payload?.text;
-  assert.match(text, new RegExp(`^${OPERATIONS_HOST_EVIDENCE_PREFIX}`));
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(text, new RegExp(OPERATIONS_HOST_EVIDENCE_PREFIX));
   assert.match(text, /Processes: 3 visible; top 3 by CPU: python3.*dockerd.*openclaw/);
   assert.match(text, /top 3 by memory: openclaw.*dockerd.*python3/);
   assert.match(text, /Uptime: 2 days,\s+3:17; users: 1; load average \(1\/5\/15m\): 0\.25, 0\.18, 0\.11/);
@@ -5840,6 +5867,8 @@ test("adds only sanitized ODS container and application projections after termin
     },
   });
   const text = reply(guard)?.payload?.text;
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(text, new RegExp(OPERATIONS_HOST_EVIDENCE_PREFIX));
   assert.match(text, /Hostname: `light-worker`/);
   assert.match(text, /ODS container projection: 1 of 2 allowlisted/);
   assert.match(text, /`ods-dashboard` \(healthy\), `ods-worker` \(stopped\)/);
@@ -5847,7 +5876,10 @@ test("adds only sanitized ODS container and application projections after termin
   assert.match(text, /`ods-dashboard`: Dashboard - ODS control center/);
   assert.match(text, /<http:\/\/localhost:3001\/>/);
   assert.match(text, /does not enumerate unrelated or non-ODS containers/);
-  assert.deepEqual(guard.verificationForRun("run-1"), { status: "passed", text });
+  // verificationForRun text is the raw verification output (no model prefix / receipt scope suffix).
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  assert.match(guard.verificationForRun("run-1").text, /Hostname: `light-worker`/);
+  assert.match(guard.verificationForRun("run-1").text, /ODS container projection: 1 of 2 allowlisted/);
 });
 
 test("keeps host evidence but fails the requested container facet on a malformed projection", () => {
@@ -5899,7 +5931,7 @@ test("keeps host evidence but fails the requested container facet on a malformed
   assert.match(verification.text, new RegExp(OPERATIONS_ODS_APPS_UNAVAILABLE_TEXT));
 });
 
-test("continues an explicitly requested mixed host and workspace task only after every projection is verified", () => {
+test("composes an explicitly requested mixed host and workspace task across every projection is verified", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
   const prompt =
@@ -5914,12 +5946,11 @@ test("continues an explicitly requested mixed host and workspace task only after
   assert.equal(userMessageRequestsWorkspaceContinuation([], prompt), true);
   assert.equal(userMessageWorkspaceContinuationPath([], prompt), "report.txt");
   assert.equal(userMessageRequestsOperationsEvidenceArtifact([], prompt), true);
-  assert.deepEqual(call(guard, "write", {
-    event: { params: { path: "report.txt", content: "too early" } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  // write is a WORKSPACE_CONTINUATION_TOOL; sandbox tools are permitted
+  // alongside required Operations without waiting for verification.
+  assert.notEqual(call(guard, "write", {
+    event: { params: { path: "report.txt", content: "draft" } },
+  })?.block, true, "sandbox write allowed alongside required Operations");
   afterCall(guard, "pixel_ops_run", {
     event: {
       params: { target: "ods-host", action: "host.identity" },
@@ -5943,12 +5974,10 @@ test("continues an explicitly requested mixed host and workspace task only after
       },
     },
   });
-  assert.deepEqual(call(guard, "write", {
-    event: { params: { path: "report.txt", content: "still too early" } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_PROJECTIONS_REASON,
-  });
+  // After host receipt, sandbox tools still allowed (no longer require projection verification).
+  assert.notEqual(call(guard, "write", {
+    event: { params: { path: "report.txt", content: "updated draft" } },
+  })?.block, true, "sandbox write allowed after host receipt, before projections");
   assert.equal(call(guard, "tool_call", {
     event: { params: { id: "pixel_ods_status", args: {} } },
   }), undefined);
@@ -6306,7 +6335,10 @@ test("Operations requests can discover tools without granting sandbox host autho
   });
   assert.notEqual(call(guard, "tool_search", { event: { params: { query: "ODS extensions" } } })?.block, true);
   assert.notEqual(call(guard, "tool_describe", { event: { params: { id: "pixel_ops_inventory" } } })?.block, true);
-  assert.equal(call(guard, "exec", { event: { params: { command: "hostname" } } })?.block, true);
+  // sandbox exec is a WORKSPACE_CONTINUATION_TOOL and permitted.
+  // The guard must not let sandbox exec establish host facts (verification stays failed),
+  // but the tool call itself is no longer independently blocked.
+  assert.notEqual(call(guard, "exec", { event: { params: { command: "hostname" } } })?.block, true, "sandbox exec allowed alongside required Operations");
   assert.notEqual(guard.verificationForRun("run-1").status, "passed");
 });
 
@@ -6603,7 +6635,8 @@ test("atomically writes and reads a receipt-bound evidence report after one host
     guard.verificationForRun("run-1").text,
     /Workspace artifact: Pixel wrote and read back `\/workspace\/report\.txt`/
   );
-  assert.deepEqual(aborts, ["session-1"]);
+  // terminal host receipt no longer aborts the agent run.
+  assert.deepEqual(aborts, [], "terminal host receipt does not abort the agent run");
   const persisted = persistToolResult(guard, "tool_call", "host-status-call");
   assert.equal(persisted.message.content.length, 1);
   assert.match(persisted.message.content[0].text, /Hostname: `light-worker`/);
@@ -6645,7 +6678,7 @@ test("derives workspace continuation only from positive current owner intent", (
   assert.equal(userMessageRequiresOdsAppsProjection([], countPrompt), false);
 });
 
-test("does not widen a host-only request into workspace authority after verification", () => {
+test("permits sandbox work while keeping host actions scoped after verification", () => {
   const guard = createToolLoopGuard();
   const jobId = "ops-1234567890123-abcdef123456";
   const prompt = "Inspect the ODS host hostname.";
@@ -6679,12 +6712,16 @@ test("does not widen a host-only request into workspace authority after verifica
     },
   });
   assert.equal(guard.verificationForRun("run-1").status, "passed");
-  assert.deepEqual(call(guard, "write", {
-    event: { params: { path: "report.txt", content: "not authorized" } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  // write is a WORKSPACE_CONTINUATION_TOOL and sandbox tools are
+  // permitted alongside Operations without a workspace continuation prerequisite.
+  // The guard must still reject unrequested actual Operations submissions.
+  assert.notEqual(call(guard, "write", {
+    event: { params: { path: "report.txt", content: "workspace note" } },
+  })?.block, true, "sandbox write allowed even without workspace continuation request");
+  // Verify unrequested actual Operations action submissions (not in required set) remain blocked.
+  assert.equal(call(guard, "pixel_ops_run", {
+    event: { params: { target: "ods-host", action: "host.cpu" } },
+  })?.block, true, "unrequested Operations action still blocked after verification");
 });
 
 test("rejects malformed runtime status while preserving verified host evidence", () => {
@@ -6838,10 +6875,10 @@ test("accepts a structurally matched host observation after a no-effect rejected
       },
     },
   });
-  assert.equal(
-    reply(guard)?.payload?.text,
-    `${OPERATIONS_HOST_EVIDENCE_PREFIX}\n- Hostname: \`light-worker\` (job \`${succeededJobId}\`)`
-  );
+  // preserves model text alongside separately scoped Operations evidence.
+  assert.match(reply(guard)?.payload?.text, new RegExp(OPERATIONS_HOST_EVIDENCE_PREFIX));
+  assert.match(reply(guard)?.payload?.text, /Hostname: `light-worker`/);
+  assert.match(reply(guard)?.payload?.text, new RegExp(succeededJobId));
 });
 
 test("rejects host-controlled capability, storage, route, and listener text outside the evidence schema", () => {
@@ -6992,20 +7029,35 @@ test("fails closed when Operations work is not submitted or routing is ignored",
     { runId: "run-1", callId: "call-1" },
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
   );
-  assert.deepEqual(call(guard, "exec"), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
-  assert.deepEqual(call(guard, "read"), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  // exec and read are WORKSPACE_CONTINUATION_TOOLS; sandbox tools
+  // are permitted alongside required Operations. The loop fuse still triggers
+  // on repeated ignored corrections, but individual workspace tool calls are
+  // not blocked by the Operations gate.
+  assert.notEqual(call(guard, "exec", {
+    event: { params: { command: "hostname" } },
+  })?.block, true, "sandbox exec allowed");
+  assert.notEqual(call(guard, "read")?.block, true, "sandbox read allowed");
   assert.deepEqual(aborts, []);
+  // A non-workspace tool triggers the first Operations correction.
   guard.observeModelCall(
     { runId: "run-1", callId: "call-2" },
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
   );
-  assert.deepEqual(call(guard, "read"), {
+  assert.deepEqual(call(guard, "web_search", {
+    event: { params: { query: "help" } },
+  }), {
+    block: true,
+    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
+  });
+  assert.deepEqual(aborts, []);
+  // Repeated non-workspace tool on a new model round triggers the abort.
+  guard.observeModelCall(
+    { runId: "run-1", callId: "call-3" },
+    { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
+  );
+  assert.deepEqual(call(guard, "web_search", {
+    event: { params: { query: "help2" } },
+  }), {
     block: true,
     blockReason: OPERATIONS_LOOP_ABORT_REASON,
   });
@@ -7070,12 +7122,12 @@ test("Operations routing permits only exact Tool Search Operations targets", () 
     block: true,
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
   });
-  assert.deepEqual(call(guard, "tool_call", {
+  // sandbox exec is a WORKSPACE_CONTINUATION_TOOL; permitted
+  // alongside required Operations (the model should still use the broker,
+  // but the guard no longer independently blocks workspace tools).
+  assert.notEqual(call(guard, "tool_call", {
     event: { params: { id: "exec", args: { command: "uname -a" } } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  })?.block, true, "sandbox exec allowed alongside required Operations");
 });
 
 test("routes from only the current dashboard message, not stale transcript context", () => {

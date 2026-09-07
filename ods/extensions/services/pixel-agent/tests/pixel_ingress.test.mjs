@@ -641,6 +641,84 @@ test("non-stream response releases authoritative text from passed Operations ver
   }
 });
 
+test("native JSON and SSE preserve task prose with explicitly scoped successful evidence", async () => {
+  const prose = "The UTF-8 note was written and read back. The host observation is separate.";
+  const evidence = "Verified hostname: test-host.";
+  for (const stream of [false, true]) {
+    let verificationRequest;
+    const gw = await fakeGateway({ completionText: prose,
+      verification: { status: "passed", text: evidence, deliveryMode: "append" },
+      onVerificationRequest: value => { verificationRequest = value; } });
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ stream, messages: [{ role: "user", content: "complete the file and host work" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      const text = stream
+        ? response.body.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]")
+          .map(line => JSON.parse(line.slice(6)).choices?.[0]?.delta?.content ?? "").join("")
+        : JSON.parse(response.body).choices[0].message.content;
+      assert.ok(text.startsWith(prose));
+      assert.ok(text.includes(evidence));
+      assert.match(text, /does not establish completion of other requested work/);
+      assert.equal(text.split(evidence).length, 2);
+      assert.deepEqual(verificationRequest.body, { runId: TEST_RUN_ID });
+      if (stream) assert.ok(response.body.endsWith("data: [DONE]\n\n"));
+    } finally {
+      await new Promise(resolve => srv.close(resolve));
+      await new Promise(resolve => gw.server.close(resolve));
+    }
+  }
+});
+
+test("append delivery metadata cannot weaken failed, pending, malformed or oversized verification", async () => {
+  for (const verification of [
+    { status: "failed", text: "Failed.", deliveryMode: "append" },
+    { status: "pending", text: "Pending.", deliveryMode: "append" },
+    { status: "none", deliveryMode: "append" },
+    { status: "passed", deliveryMode: "append" },
+    { status: "passed", text: "Evidence.", deliveryMode: "unverified" },
+    { status: "passed", text: "x".repeat(32 * 1024 + 1), deliveryMode: "append" },
+  ]) {
+    const gw = await fakeGateway({ verification, completionText: "Everything succeeded." });
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "inspect host" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 502);
+      assert.doesNotMatch(response.body, /Everything succeeded/);
+    } finally {
+      await new Promise(resolve => srv.close(resolve));
+      await new Promise(resolve => gw.server.close(resolve));
+    }
+  }
+});
+
+test("native evidence composition avoids duplicate receipts and handles an empty model reply", async () => {
+  const evidence = "Verified hostname: test-host.";
+  const scoped = `${evidence}\nReceipt scope: the Operations evidence above does not establish completion of other requested work.`;
+  for (const prose of ["", `Workspace work completed.\n\n${scoped}`]) {
+    const gw = await fakeGateway({ completionText: prose,
+      verification: { status: "passed", text: evidence, deliveryMode: "append" } });
+    const srv = await startIngress({ gatewayPort: gw.port });
+    try {
+      const response = await request(srv, "POST", "/v1/chat/completions", {
+        body: JSON.stringify({ messages: [{ role: "user", content: "inspect host" }] }),
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(JSON.parse(response.body).choices[0].message.content, prose || evidence);
+    } finally {
+      await new Promise(resolve => srv.close(resolve));
+      await new Promise(resolve => gw.server.close(resolve));
+    }
+  }
+});
+
 test("non-stream response removes only a guard-confirmed superseded wrapped exec warning", async () => {
   const staleWarning =
     "recovery_probe=passed\n\n⚠️ 🛠️ `/run/pixel-ods-control/cancellable-exec.sh " +
