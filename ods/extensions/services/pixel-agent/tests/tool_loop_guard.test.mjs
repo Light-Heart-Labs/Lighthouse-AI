@@ -2243,6 +2243,119 @@ function lifecycleStep(action, result = lifecycleResult(action)) {
   };
 }
 
+function discoveryStep(action, parameters = {}) {
+  if (action === "ods.extensions.inspect") {
+    return lifecycleStep("inspect", lifecycleResult("inspect", {
+      extensionId: parameters.serviceId,
+      outcome: "blocked", requiredConfiguration: ["MODEL_DIRECTORY"],
+      missingConfiguration: ["MODEL_DIRECTORY"],
+    }));
+  }
+  const result = action === "ods.extensions.search" ? {
+    schemaVersion: 1, kind: "ods-pixel-extension-search", query: parameters.query,
+    totalCatalog: 3, totalMatches: 0, truncated: false, matches: [],
+    boundary: "Read-only catalog projection; it grants no installation or configuration authority.",
+  } : {
+    schemaVersion: 1, kind: "ods-pixel-extension-inventory", outcome: "succeeded",
+    summary: { total: 0, installed: 0, enabled: 0, cliInstalled: 0, disabled: 0,
+      stopped: 0, unhealthy: 0, installing: 0, settingUp: 0, error: 0,
+      notInstalled: 0, incompatible: 0 },
+    extensions: [],
+    boundary: "Read-only live ODS extension inventory; it exposes only bounded status metadata and grants no installation, configuration, credential, Docker, or shell authority.",
+  };
+  return { ...lifecycleStep("inspect"), action, stdout: JSON.stringify(result) + "\n" };
+}
+
+function recordDiscovery(guard, params, jobId, status = "succeeded", steps) {
+  const workflow = Array.isArray(params.steps);
+  const actions = workflow ? params.steps : [params];
+  afterCall(guard, workflow ? "pixel_ops_workflow_submit" : "pixel_ops_run", {
+    event: { params, result: { details: { jobId, status: "submitted", kind: workflow ? "workflow" : "action" } } },
+  });
+  afterCall(guard, "pixel_ops_job_wait", {
+    event: { params: { jobId }, result: { details: { jobId, status, waitTimedOut: false,
+      ...(status === "succeeded" ? { steps: steps ?? actions.map((a) => discoveryStep(a.action, a.parameters)) } : {}),
+    } } },
+  });
+}
+
+test("extension discovery allows model-selected reads without rewriting targets or queries", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Check which ODS extensions are available, then inspect ComfyUI and explain what I would need to configure to use it. Do not install, enable, or change anything.",
+  });
+  for (const params of [
+    { target: "ods-host", action: "ods.extensions.search", parameters: { query: "all" } },
+    { target: "ods-host", action: "ods.extensions.list" },
+    { target: "ods-host", action: "ods.extensions.inspect", parameters: { serviceId: "comfyui" } },
+    { target: "registered-peer", action: "ods.extensions.inspect", parameters: { serviceId: "other" } },
+    { target: "host", action: "ods.extensions.search", parameters: { query: "different query" } },
+  ]) {
+    const wrapped = { id: "openclaw:pixel-operations-broker:pixel_ops_run", args: params };
+    const outer = call(guard, "tool_call", { event: { params: wrapped } });
+    assert.equal(outer?.block, undefined);
+    assert.deepEqual(outer?.params ?? wrapped, wrapped);
+    const direct = call(guard, "pixel_ops_run", { event: { params } });
+    assert.equal(direct?.block, undefined);
+    assert.deepEqual(direct?.params ?? params, params);
+  }
+  assert.equal(call(guard, "write", { event: { params: { path: "diagnosis.md", content: "Collected evidence" } } })?.block, undefined);
+});
+
+test("extension discovery verifies corrected reads and inspection without losing earlier rejected evidence", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Search the installable ODS extension catalog for agents.",
+  });
+  recordDiscovery(guard, { target: "ods-host", action: "ods.extensions.search", parameters: {} }, "ops-1234567890123-aaaaaaaaaaaa", "rejected");
+  recordDiscovery(guard, { target: "ods-host", action: "ods.extensions.search", parameters: { query: "agents" } }, "ops-1234567890123-bbbbbbbbbbbb");
+  recordDiscovery(guard, { target: "ods-host", action: "ods.extensions.list" }, "ops-1234567890123-cccccccccccc");
+  recordDiscovery(guard, { target: "ods-host", action: "ods.extensions.inspect", parameters: { serviceId: "crewai" } }, "ops-1234567890123-dddddddddddd");
+  const verification = guard.deliveryVerificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.equal(verification.deliveryMode, "append");
+  assert.match(verification.text, /aaaaaaaaaaaa.*rejected/);
+  assert.match(verification.text, /Query: `agents`/);
+  assert.match(verification.text, /Catalog total: 0/);
+  assert.match(verification.text, /extension: `crewai`/);
+  assert.match(verification.text, /Missing required configuration keys: `MODEL_DIRECTORY`/);
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /^Model claimed success\./);
+  assert.match(text, /Receipt scope:/);
+  assert.doesNotMatch(text, /runtime status.*not obtained/i);
+});
+
+test("extension discovery binds repeated workflow actions to their actual parameters", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Help me understand what I can set up." });
+  const steps = ["agents", "images"].map((query) => ({ target: "ods-host", action: "ods.extensions.search", parameters: { query } }));
+  assert.equal(call(guard, "pixel_ops_workflow_submit", { event: { params: { steps } } })?.block, undefined);
+  recordDiscovery(guard, { steps }, "ops-1234567890123-eeeeeeeeeeee", "succeeded", [...steps].reverse().map((a) => discoveryStep(a.action, a.parameters)));
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  assert.match(guard.verificationForRun("run-1").text, /Query: `agents`[\s\S]*Query: `images`/);
+});
+
+test("extension discovery never accepts a local receipt for a supplied remote target", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Search the installable ODS extension catalog." });
+  const params = { target: "registered-peer", action: "ods.extensions.inspect", parameters: { serviceId: "comfyui" } };
+  assert.equal(call(guard, "pixel_ops_run", { event: { params } })?.block, undefined);
+  recordDiscovery(guard, params, "ops-1234567890123-ffffffffffff");
+  assert.equal(guard.verificationForRun("run-1").status, "failed");
+});
+
+test("extension discovery does not classify unknown actions or mutations as reads", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Help me understand what I can set up." });
+  const read = { target: "ods-host", action: "ods.extensions.list" };
+  assert.equal(call(guard, "pixel_ops_run", { event: { params: read } })?.block, undefined);
+  for (const action of ["ods.extensions.install", "ods.extensions.enable", "ods.extensions.unknown", "raw-shell"]) {
+    const params = { target: "ods-host", action, parameters: { serviceId: "comfyui" } };
+    assert.equal(call(guard, "pixel_ops_run", { event: { params } })?.block, true);
+    assert.equal(call(guard, "pixel_ops_workflow_submit", { event: { params: { steps: [read, params] } } })?.block, true);
+  }
+});
+
 test("allows bounded web research then returns a terminal final-answer instruction", () => {
   const aborts = [];
   const guard = createToolLoopGuard({
@@ -4251,14 +4364,14 @@ test("distinguishes live extension state from an installable catalog search", ()
   );
 });
 
-test("routes a live extension inventory to one exact read-only broker action", () => {
+test("live extension inventory permits related catalog reads without parameter rewriting", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
     { prompt: "List the installed and enabled ODS extensions and identify their source." }
   );
-  assert.match(
+  assert.equal(
     call(guard, "pixel_ops_run", {
       event: {
         params: {
@@ -4267,8 +4380,8 @@ test("routes a live extension inventory to one exact read-only broker action", (
           parameters: { query: "all" },
         },
       },
-    })?.blockReason,
-    new RegExp(OPERATIONS_WRONG_ACTION_REASON)
+    }),
+    undefined
   );
   assert.deepEqual(
     call(guard, "pixel_ops_run", {
@@ -4280,7 +4393,7 @@ test("routes a live extension inventory to one exact read-only broker action", (
         },
       },
     }),
-    { params: { target: "ods-host", action: "ods.extensions.list" } }
+    undefined
   );
 });
 
@@ -4355,17 +4468,14 @@ test("renders a strictly validated live extension inventory receipt", () => {
   assert.match(text, /grants no installation, configuration, credential, Docker, or shell authority/);
 });
 
-test("routes extension catalog requests only to the exact broker action", () => {
+test("extension catalog permits independent projections but does not grant unrelated broker actions", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
     "pixel",
     { prompt: "Search the installable ODS extension catalog for notebooks." }
   );
-  assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  assert.equal(call(guard, "pixel_ods_apps_list"), undefined);
   assert.equal(call(guard, "pixel_ops_inventory"), undefined);
   assert.match(
     call(guard, "pixel_ops_run", {
@@ -4393,7 +4503,7 @@ test("routes extension catalog requests only to the exact broker action", () => 
   );
 });
 
-test("repairs a distorted owner-labeled extension query before the broker boundary", () => {
+test("preserves the actual query for broker validation rather than silently replacing it", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -4410,13 +4520,7 @@ test("repairs a distorted owner-labeled extension query before the broker bounda
         },
       },
     }),
-    {
-      params: {
-        target: "ods-host",
-        action: "ods.extensions.search",
-        parameters: { query: "x; id" },
-      },
-    }
+    undefined
   );
   assert.equal(
     call(guard, "pixel_ops_run", {
@@ -7065,7 +7169,6 @@ test("fails closed when Operations work is not submitted or routing is ignored",
   assert.deepEqual(guard.verificationForRun("run-1"), {
     status: "failed",
     text: OPERATIONS_UNAVAILABLE_DELIVERY_PREFIX,
-    code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE,
   });
 });
 
@@ -12956,4 +13059,23 @@ test("ODS status keywords in descriptive UI context do not require projection", 
     ),
     ["pixel_ods_status"]
   );
+});
+
+
+test("zero broker submissions never authorize clean-context replay after tool execution", () => {
+  for (const prompt of ["Use the Operations Broker to inspect the ODS host platform.", "Check which ODS extensions are available."]) {
+    for (const tool of ["exec", "write", "read", "tool_call"]) {
+      const guard = createToolLoopGuard();
+      guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+      assert.equal(guard.verificationForRun("run-1").code, OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE);
+      call(guard, "tool_search", { event: { params: { query: "pixel_ops_run" } } });
+      assert.equal(guard.verificationForRun("run-1").code, OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE);
+      const params = tool === "tool_call" ? { id: "write", args: { path: "report.md", content: "Evidence retained" } }
+        : tool === "exec" ? { command: "printf done >> progress.txt" }
+        : { path: "report.md", content: "Evidence retained" };
+      call(guard, tool, { event: { params } });
+      // Even a missing result cannot establish that an attempted tool had no effect.
+      assert.equal(guard.verificationForRun("run-1").code, undefined, `${prompt}: ${tool}`);
+    }
+  }
 });

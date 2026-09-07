@@ -1093,6 +1093,55 @@ describe('Pixel', () => {
     })
   })
 
+  it('preserves an in-flight request and partial answer across repeated reloads without replay', async () => {
+    let releasePendingRead
+    let reads = 0
+    globalThis.fetch.mockImplementation(async (url, options) => {
+      if (url === '/api/pixel/status') return response({ available: true })
+      if (url !== '/api/pixel/chat/stream') throw new Error(`unexpected request: ${url}`)
+      const pendingRead = new Promise(resolve => { releasePendingRead = resolve })
+      options.signal.addEventListener('abort', () => releasePendingRead({ done: true }), { once: true })
+      return {
+        ok: true,
+        headers: new Map([['content-type', 'text/event-stream']]),
+        body: { getReader: () => ({
+          read: async () => reads++ === 0
+            ? { done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Created report.md; checking its contents."}}]}\n\n') }
+            : pendingRead,
+          releaseLock: () => {},
+        }) },
+      }
+    })
+    const first = render(<Pixel />)
+    await screen.findByText('Available')
+    fireEvent.change(screen.getByPlaceholderText('Message Pixel...'), { target: { value: 'Create a report, then verify it.' } })
+    fireEvent.click(screen.getByTitle('Send'))
+    await screen.findByText('Created report.md; checking its contents.')
+    const request = JSON.parse(globalThis.fetch.mock.calls.find(([url]) => url === '/api/pixel/chat/stream')[1].body)
+    await waitFor(() => {
+      const saved = JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1'))
+      expect(saved.chatId).toBe(request.chat_id)
+      expect(saved.inFlight).toBe(true)
+      expect(saved.messages).toEqual([
+        { role: 'user', content: 'Create a report, then verify it.' },
+        { role: 'assistant', content: 'Created report.md; checking its contents.' },
+      ])
+    })
+    first.unmount()
+    await act(async () => {})
+    for (let reload = 0; reload < 2; reload += 1) {
+      const restored = render(<Pixel />)
+      await screen.findByText('Available')
+      expect(screen.getByText('Create a report, then verify it.')).toBeInTheDocument()
+      expect(screen.getByText('Created report.md; checking its contents.')).toBeInTheDocument()
+      expect(screen.getByText(/Completion was not confirmed/)).toBeInTheDocument()
+      expect(screen.queryByText(/Stopped by you/)).not.toBeInTheDocument()
+      expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
+      expect(globalThis.fetch.mock.calls.filter(([url]) => url === '/api/pixel/chat/stream')).toHaveLength(1)
+      restored.unmount()
+    }
+  })
+
   it('disables send while streaming', async () => {
     globalThis.fetch.mockResolvedValueOnce(
       response({ available: true, model: 'pixel/default', detail: 'local' })
@@ -1176,6 +1225,7 @@ describe('Pixel', () => {
     )
     const encoder = new TextEncoder()
     let reads = 0
+    let closeReader
     globalThis.fetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -1189,7 +1239,7 @@ describe('Pixel', () => {
                 value: encoder.encode('data: {"choices":[{"delta":{"content":"Partial verified work"}}]}\n\n'),
               }
             }
-            return new Promise(() => {})
+            return new Promise(resolve => { closeReader = resolve })
           },
           releaseLock: () => {},
         }),
@@ -1208,11 +1258,16 @@ describe('Pixel', () => {
     fireEvent.click(screen.getByTitle('Stop'))
 
     expect(await screen.findByText('Response stopped')).toBeInTheDocument()
+    await act(async () => { closeReader({ done: true }) })
+    expect(screen.queryByText(/Completion was not confirmed/)).not.toBeInTheDocument()
+    expect(screen.getByText('Response stopped')).toBeInTheDocument()
     expect(screen.getByText('Partial verified work')).toBeInTheDocument()
     expect(screen.getByText('Stopped by you. Workspace changes completed before cancellation were preserved.')).toBeInTheDocument()
     await waitFor(() => {
       const stored = JSON.parse(globalThis.localStorage.getItem('ods.pixel.chat.v1'))
       expect(stored.messages.at(-1).content).toContain('Stopped by you.')
+      expect(stored.interrupted).toBe(false)
+      expect(stored.inFlight).toBe(false)
     })
   })
 

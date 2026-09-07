@@ -64,7 +64,7 @@ const STOPPED_NOTICE = 'Stopped by you. Workspace changes completed before cance
 const MODEL_SWITCH_DETAIL = 'Model switch in progress; Pixel will be ready when activation completes'
 const CLEAN_CONTEXT_RECOVERY_REASON = 'operations-unavailable-zero-submissions'
 const CLEAN_CONTEXT_RECOVERY_NOTICE = 'The first attempt did not reach the Operations Broker, and the host verified that no work was submitted. Retrying once with a clean context…'
-const CLEAN_CONTEXT_RECOVERY_FAILED = 'Automatic recovery was attempted once, but Pixel again did not reach the Operations Broker. The host verified that no Operations work was submitted. Nothing was executed. Start a new chat or rephrase the request.'
+const CLEAN_CONTEXT_RECOVERY_FAILED = 'Automatic recovery was attempted once, but Pixel again did not reach the Operations Broker. The host verified that no Operations work was submitted. Check any other work before continuing; this does not confirm that other tools had no effects.'
 const STATUS_POLL_MS = 3000
 const OPS_STATUS_POLL_MS = 3000
 const OPS_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'rejected'])
@@ -412,7 +412,10 @@ function loadStoredChat() {
     } catch {
       // A damaged preview must not discard an otherwise valid conversation.
     }
-    return { chatId: stored.chatId, messages, preview }
+    return {
+      chatId: stored.chatId, messages, preview,
+      interrupted: stored.inFlight === true || stored.interrupted === true,
+    }
   } catch {
     return null
   }
@@ -441,6 +444,7 @@ export default function Pixel({ systemStatus = null }) {
   const [messages, setMessages] = useState(() => initialChat?.messages || [])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [interrupted, setInterrupted] = useState(() => initialChat?.interrupted || false)
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
@@ -567,12 +571,13 @@ export default function Pixel({ systemStatus = null }) {
   }, [input])
 
   useEffect(() => {
-    if (sending) return
     try {
       const storedMessages = boundedHistory(messages.slice(contextStartRef.current), '')
       globalThis.localStorage?.setItem(CHAT_STORAGE_KEY, JSON.stringify({
         schema: 1,
         chatId: chatIdRef.current,
+        inFlight: sending,
+        interrupted,
         messages: storedMessages.map(({ role, content }) => ({
           role,
           content,
@@ -583,7 +588,7 @@ export default function Pixel({ systemStatus = null }) {
       // Conversation persistence is a convenience; chat remains usable when
       // storage is unavailable, full, or blocked by the browser.
     }
-  }, [messages, preview, sending])
+  }, [messages, preview, sending, interrupted])
 
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim()
@@ -602,6 +607,7 @@ export default function Pixel({ systemStatus = null }) {
     setMessages([...conversation, { role: 'assistant', content: '', status: 'streaming' }])
     setInput('')
     setSending(true)
+    setInterrupted(false)
     setStopping(false)
     setStopError('')
 
@@ -717,6 +723,9 @@ export default function Pixel({ systemStatus = null }) {
     }
 
     function finishAttempt(attempt, recovered = false) {
+      // An acknowledged Stop or page disposal can close a reader normally.
+      // Its late close must not overwrite the explicit cancellation outcome.
+      if (controller.signal.aborted) return
       if (attempt.receivedError) return
       if (attempt.receivedDone) {
         if (attempt.verifiedPreview) {
@@ -732,6 +741,7 @@ export default function Pixel({ systemStatus = null }) {
       const content = attempt.assistantText
         ? `${attempt.assistantText}\n\n_Response interrupted._`
         : 'Connection interrupted'
+      setInterrupted(true)
       setMessages(previous => replaceLastAssistant(previous, { content, status: 'error' }))
     }
 
@@ -799,6 +809,7 @@ export default function Pixel({ systemStatus = null }) {
       finishAttempt(attempt)
     } catch (error) {
       if (error?.name !== 'AbortError') {
+        setInterrupted(true)
         setMessages(previous => replaceLastAssistant(previous, {
           content: latestAssistantText || 'Request failed',
           status: 'error',
@@ -865,6 +876,7 @@ export default function Pixel({ systemStatus = null }) {
     setPreview(null)
     setPreviewRefresh(0)
     setInput('')
+    setInterrupted(false)
     inputRef.current?.focus?.()
   }, [sending])
 
@@ -956,6 +968,11 @@ export default function Pixel({ systemStatus = null }) {
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
+        {interrupted && !sending && (
+          <div role="status" className="mx-auto w-full max-w-5xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+            Completion was not confirmed. Your request and partial response are saved. Work may have completed; check its results before continuing.
+          </div>
+        )}
         {status === 'loading' && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-theme-text-muted">
             <Loader2 className="mb-3 h-8 w-8 animate-spin" />

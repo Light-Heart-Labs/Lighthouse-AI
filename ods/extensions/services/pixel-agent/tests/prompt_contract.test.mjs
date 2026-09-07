@@ -531,7 +531,7 @@ test("adds an immediate final-answer recovery after a runtime loop block", () =>
   assert.match(result.appendSystemContext, /Do not call any tool again in this turn/);
 });
 
-test("adds a salient exact-route contract for extension catalog requests", () => {
+test("guides extension catalog discovery without forcing one tool sequence", () => {
   const event = {
     prompt:
       "Search the installable ODS extension catalog with query x; id exactly as written.",
@@ -541,14 +541,13 @@ test("adds a salient exact-route contract for extension catalog requests", () =>
     result.appendSystemContext,
     `${ODS_CONVERSATION_CONTRACT} ${ODS_EXTENSION_CATALOG_CONTRACT}`
   );
-  assert.match(result.appendSystemContext, /first tool step call only pixel_ops_inventory/);
-  assert.match(result.appendSystemContext, /do not call pixel_ods_apps_list/);
-  assert.match(result.appendSystemContext, /action ods\.extensions\.search/);
-  assert.match(result.appendSystemContext, /character-for-character/);
-  assert.match(result.appendSystemContext, /let the external broker reject it/);
+  assert.match(result.appendSystemContext, /choose read-only ods\.extensions\.search, ods\.extensions\.list, and ods\.extensions\.inspect/);
+  assert.match(result.appendSystemContext, /Preserve the owner's explicit targets and quoted query values/);
+  assert.match(result.appendSystemContext, /Continue other authorized work/);
+  assert.doesNotMatch(result.appendSystemContext, /first tool step call only/);
 });
 
-test("adds a live-state route instead of catalog search for extension inventory", () => {
+test("distinguishes live extension state while permitting relevant follow-up diagnosis", () => {
   const event = {
     prompt:
       "Inspect this live ODS installation. Tell me which services and extensions are installed, enabled, and healthy; distinguish core from optional extensions without changing anything.",
@@ -558,10 +557,9 @@ test("adds a live-state route instead of catalog search for extension inventory"
     result.appendSystemContext,
     `${ODS_CONVERSATION_CONTRACT} ${ODS_EXTENSION_INVENTORY_CONTRACT}`
   );
-  assert.match(result.appendSystemContext, /action ods\.extensions\.list/);
-  assert.match(result.appendSystemContext, /not a search of the installable catalog/);
-  assert.match(result.appendSystemContext, /call each separately requested pixel_ods_status or pixel_ods_apps_list/);
-  assert.doesNotMatch(result.appendSystemContext, /action ods\.extensions\.search/);
+  assert.match(result.appendSystemContext, /ods\.extensions\.list for current installed extension state/);
+  assert.match(result.appendSystemContext, /Follow with read-only search or inspect/);
+  assert.match(result.appendSystemContext, /Installation and configuration changes still require their own authority/);
 });
 
 test("adds a sequential approval-aware contract for extension lifecycle requests", () => {
