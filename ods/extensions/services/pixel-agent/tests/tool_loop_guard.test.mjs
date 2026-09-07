@@ -7653,7 +7653,31 @@ test("recognizes serialized built-in fetch details before enforcing the targeted
       },
     },
   });
-  assert.equal(call(guard, "exec").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
+  assert.equal(call(guard, "web_search").blockReason, WEB_FETCH_TRUNCATED_PIVOT_REASON);
+});
+
+test("truncated research permits report delivery before another web call", () => {
+  for (const wrapped of [false, true]) {
+    const guard = createToolLoopGuard();
+    const url = "https://docs.python.org/3/library/csv.html";
+    const params = { url };
+    call(guard, "web_fetch", { event: { params } });
+    afterCall(guard, "web_fetch", {
+      event: { params, result: { details: { status: 200, truncated: true } } },
+    });
+    const invoke = (name, args) => wrapped
+      ? call(guard, "tool_call", { event: { params: { id: `openclaw:core:${name}`, args } } })
+      : call(guard, name, { event: { params: args } });
+    assert.notEqual(invoke("write", { path: "research/README.md", content: "Verified prefix; later sections not read." })?.block, true);
+    assert.notEqual(invoke("read", { path: "research/README.md" })?.block, true);
+    // A local deliverable does not discard the bounded web continuation.
+    assert.equal(invoke("web_fetch", { url: "https://docs.python.org/3/library/json.html" }).blockReason,
+      WEB_FETCH_TRUNCATED_PIVOT_REASON);
+    assert.notEqual(invoke("pixel_ods_web_extract", { url, query: "reader" })?.block, true);
+    if (wrapped) {
+      assert.equal(call(guard, "pixel_ods_web_extract", { event: { params: { url, query: "reader" } } }), undefined);
+    }
+  }
 });
 
 test("makes a second wrong tool after a truncated fetch terminal", () => {

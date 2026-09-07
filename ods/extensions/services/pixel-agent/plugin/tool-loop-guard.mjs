@@ -37,7 +37,7 @@ export const WEB_FETCH_REPEAT_PIVOT_REASON =
   "Pixel already fetched this public page in this response. Do not repeat web_fetch or narrate a retry. If the needed detail was beyond the returned prefix, call pixel_ods_web_extract now with the same URL and a distinctive literal method or section name; otherwise answer from the evidence already returned.";
 
 export const WEB_FETCH_TRUNCATED_PIVOT_REASON =
-  "The fetched public page was truncated. Either answer from evidence already present or make exactly one pixel_ods_web_extract call now using that same page URL and a distinctive literal method or section name. Do not call or narrate any other tool; a different next tool will stop this response.";
+  "The fetched public page was truncated. Use evidence already present, or call pixel_ods_web_extract with that same page URL and a distinctive literal method or section name before further web research. Other authorized work may continue, including saving verified findings; do not claim unread content was verified.";
 
 export const WEB_FETCH_PUBLIC_ONLY_REASON =
   "Pixel blocked this fetch because web_fetch is restricted to public HTTP(S) hostnames and must not contact local, private, or raw-IP destinations. Do not call another tool in this turn; explain the boundary to the user.";
@@ -7339,7 +7339,7 @@ export function createToolLoopGuard({
       return { block: true, blockReason: EXEC_PRIVATE_NETWORK_REASON };
     }
 
-    if (state?.targetedExtractPending) {
+    if (state?.targetedExtractPending && WEB_TOOLS.has(selectedToolName)) {
       // Tool Search dispatch reaches this gate before the selected tool's own
       // hook. Compare its actual tool and arguments, not the dispatch wrapper.
       const requestedUrl = canonicalFetchUrl(selectedEvent);
