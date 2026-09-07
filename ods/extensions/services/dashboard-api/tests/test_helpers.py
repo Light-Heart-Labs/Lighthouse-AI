@@ -1607,3 +1607,19 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestValidateTuplePairTypes:
+
+    def test_valid_pair_types(self):
+        from helpers import validate_tuple_pair_types
+        assert validate_tuple_pair_types(("key", "val")) is True
+        assert validate_tuple_pair_types(["host", 8080], expected_types=(str, int)) is True
+
+    def test_invalid_pair_types_or_lengths(self):
+        from helpers import validate_tuple_pair_types
+        assert validate_tuple_pair_types(None) is False
+        assert validate_tuple_pair_types(("single",)) is False
+        assert validate_tuple_pair_types(("a", "b", "c")) is False
+        assert validate_tuple_pair_types(("host", "not_int"), expected_types=(str, int)) is False
+
