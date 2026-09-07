@@ -33,6 +33,15 @@ Only these two routes exist; everything else returns `404`/`405`. The server
 listens **only** on `PIXEL_INGRESS_SOCKET` (default
 `/run/ods-pixel/pixel-ingress.sock`) and never listens on TCP.
 
+## Scheduled tasks
+
+Pixel's isolated `agentTurn` cron jobs default to `delivery.mode: none` when
+delivery is omitted, so local workspace jobs do not fail trying to announce to
+an unconfigured external channel. Explicit delivery settings remain unchanged.
+The adapter covers direct and Tool Search calls, with either nested `job` or
+flat job fields and an explicit `payload`. Message-only shorthand retains the
+upstream default. Other agents and existing jobs are unaffected.
+
 ## Security boundaries
 
 - **Unix-domain socket only.** The socket is created at the fixed service path,

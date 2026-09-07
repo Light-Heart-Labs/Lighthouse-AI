@@ -32,6 +32,7 @@ import {
   createToolLoopGuardRegistry,
   privateBrowserAccessForAgent,
 } from "./tool-loop-guard.mjs";
+import { withPixelCronDeliveryDefault } from "./cron-delivery-default.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
 import {
@@ -231,7 +232,12 @@ export default definePluginEntry({
       toolLoopGuard.observeModelCall(event, context, AGENT_ID)
     );
     api.on("before_tool_call", (event, context) =>
-      toolLoopGuard.beforeToolCall(event, context, AGENT_ID)
+      withPixelCronDeliveryDefault(
+        toolLoopGuard.beforeToolCall(event, context, AGENT_ID),
+        event,
+        context,
+        AGENT_ID,
+      )
     );
     api.on("after_tool_call", (event, context) =>
       toolLoopGuard.afterToolCall(event, context, AGENT_ID)
