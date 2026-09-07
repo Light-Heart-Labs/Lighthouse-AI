@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  createExtensionReadTool,
   createHostCommandProposeTool,
   createHostObserveTool,
   testing,
@@ -20,6 +21,117 @@ async function publishResult(filename, value) {
   });
   await rename(temporary, filename);
 }
+
+test("extension read keeps concurrent requests and broker results distinct", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-extension-read-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createExtensionReadTool({ requestDir, resultDir, timeoutMs: 2000, pollIntervalMs: 5 });
+    const pending = [
+      tool.execute("search", { action: "search", target: "registered-peer", query: " image generation " }),
+      tool.execute("inspect", { action: "inspect", target: "registered-peer", serviceId: "comfyui" }),
+    ];
+    let names = [];
+    for (let i = 0; i < 200 && names.length < 2; i += 1) {
+      names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+      if (names.length < 2) await delay(5);
+    }
+    assert.equal(names.length, 2);
+    const requests = await Promise.all(names.map(async (name) => JSON.parse(await readFile(join(requestDir, name), "utf8"))));
+    assert.equal(new Set(requests.map((request) => request.jobId)).size, 2);
+    const search = requests.find((request) => request.action === "ods.extensions.search");
+    const inspect = requests.find((request) => request.action === "ods.extensions.inspect");
+    assert.deepEqual(search.parameters, { query: " image generation " });
+    assert.deepEqual(inspect.parameters, { serviceId: "comfyui" });
+    for (const request of requests) {
+      assert.equal(request.kind, "action");
+      assert.equal(request.target, "registered-peer");
+      assert.match(request.jobId, /^ops-[0-9]{13}-[a-f0-9]{12}$/);
+    }
+    // Complete in reverse order, with different outcomes, to detect a shared
+    // result slot or a receipt from a different submitted operation.
+    await publishResult(join(resultDir, `${inspect.jobId}.json`), { schemaVersion: 2, jobId: inspect.jobId, status: "rejected" });
+    const searchReceipt = { schemaVersion: 2, jobId: search.jobId, status: "succeeded", steps: [{
+      stepId: "action", target: search.target, action: search.action, exitCode: 0,
+      stdout: '{"query":" image generation ","matches":[]}\n', stderr: "",
+      outputTruncated: { stdout: false, stderr: false }, riskSignals: [],
+    }] };
+    await publishResult(join(resultDir, `${search.jobId}.json`), searchReceipt);
+    const [searchResult, inspectResult] = await Promise.all(pending);
+    assert.equal(searchResult.details.jobId, search.jobId);
+    assert.deepEqual(searchResult.details.steps, searchReceipt.steps);
+    assert.equal(searchResult.details.waitTimedOut, false);
+    assert.equal(inspectResult.details.jobId, inspect.jobId);
+    assert.equal(inspectResult.details.status, "rejected");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extension read preserves a queued job after timeout and rejects mutable or ambiguous inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-extension-pending-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createExtensionReadTool({ requestDir, resultDir, timeoutMs: 30, pollIntervalMs: 5 });
+    const result = await tool.execute("list", { action: "list" });
+    const names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+    assert.deepEqual(names, [`${result.details.jobId}.json`]);
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
+    assert.equal(request.target, "ods-host");
+    assert.equal(request.action, "ods.extensions.list");
+    assert.deepEqual(request.parameters, {});
+    assert.equal(result.details.status, "pending");
+    assert.equal(result.details.waitTimedOut, true);
+    assert.match(result.details.next, /pixel_ops_job_get/);
+    for (const params of [
+      { action: "install", serviceId: "comfyui" },
+      { action: "inspect", serviceId: "comfyui", query: "extra" },
+      { action: "search", query: "all", serviceId: "comfyui" },
+      { action: "list", approval: true },
+      { action: "inspect", serviceId: "../comfyui" },
+    ]) {
+      assert.equal((await tool.execute("invalid", params)).isError, true);
+    }
+    assert.deepEqual((await readdir(requestDir)).filter((name) => name.endsWith(".json")), names);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extension read does not replace its job identity with a mismatched result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pixel-extension-mismatch-"));
+  const requestDir = join(root, "requests");
+  const resultDir = join(root, "results");
+  await mkdir(requestDir);
+  await mkdir(resultDir);
+  try {
+    const tool = createExtensionReadTool({ requestDir, resultDir, timeoutMs: 2000, pollIntervalMs: 5 });
+    const pending = tool.execute("search", { action: "search" });
+    let names = [];
+    for (let i = 0; i < 200 && names.length === 0; i += 1) {
+      names = (await readdir(requestDir)).filter((name) => name.endsWith(".json"));
+      if (names.length === 0) await delay(5);
+    }
+    assert.equal(names.length, 1);
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), "utf8"));
+    assert.deepEqual(request.parameters, { query: "all" });
+    await publishResult(join(resultDir, names[0]), { jobId: "ops-1234567890123-aaaaaaaaaaaa", status: "succeeded" });
+    const result = await pending;
+    assert.equal(result.details.jobId, request.jobId);
+    assert.equal(result.details.status, "pending");
+    assert.equal(result.details.waitTimedOut, true);
+    assert.match(result.details.next, /do not resubmit/);
+    assert.equal((await readdir(requestDir)).filter((name) => name.endsWith(".json")).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("host observation accepts only unique fixed read-only actions", () => {
   assert.deepEqual(

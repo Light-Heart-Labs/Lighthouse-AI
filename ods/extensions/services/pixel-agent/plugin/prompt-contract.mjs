@@ -110,6 +110,7 @@ export const ODS_VERIFICATION_FAILED_CONTRACT =
   "The latest verification command in this response failed and no later verification passed. Do not say the work is complete, correct, fixed, successful, or passing. Either make one relevant repair and rerun the stable verification command, or stop and truthfully report the current verified failure.";
 
 const EXTENSION_BROKER_TOOLS_CONTRACT =
+  "The native read-only tool pixel_ods_extensions exposes action search, list, or inspect, with query for search and serviceId for inspect. It submits the read and returns its broker receipt; discover or describe that exact tool when needed. Its default target is ods-host; supply a different target only by its actual broker ID. You can also use the generic Operations tools below. " +
   "These are broker action IDs, not tool names. Submit a read with pixel_ops_run using {target, action, parameters}, or group reads in pixel_ops_workflow_submit with a unique id plus those same fields per step. Parameter values are strings: search uses parameters: {query: \"comfyui\"} and inspect uses parameters: {serviceId: \"comfyui\"}. Use the key parameters, not params; describe the tool if its schema is unfamiliar. Get results with pixel_ops_job_get or pixel_ops_job_wait for the returned job ID. If these tools are deferred, discover or describe their exact names; do not invent pixel_ods_extensions_* tools or look for ODS host configuration through sandbox filesystem tools. ";
 
 export const ODS_EXTENSION_CATALOG_CONTRACT =

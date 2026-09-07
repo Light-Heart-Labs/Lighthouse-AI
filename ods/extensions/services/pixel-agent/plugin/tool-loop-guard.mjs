@@ -338,6 +338,7 @@ const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
   "pixel_ods_download_promote",
 ]);
 const OPERATIONS_TOOLS = new Set([
+  "pixel_ods_extensions",
   "pixel_ods_host_observe",
   "pixel_ods_host_command_propose",
   "pixel_ops_inventory",
@@ -359,6 +360,7 @@ const OPERATIONS_SUBMISSION_TOOLS = new Set([
   "pixel_ops_shell_propose",
 ]);
 const SYNCHRONOUS_HOST_OBSERVE_TOOL = "pixel_ods_host_observe";
+const EXTENSION_READ_TOOL = "pixel_ods_extensions";
 const SYNCHRONOUS_HOST_COMMAND_TOOL = "pixel_ods_host_command_propose";
 const EVIDENCE_REPORT_TOOL = "pixel_ods_evidence_report";
 const EVIDENCE_READBACK_TOOL = "pixel_ods_evidence_readback";
@@ -1752,6 +1754,26 @@ function synchronousHostObservationOutcome(event, state) {
   return outcome ? { submission, outcome } : undefined;
 }
 
+function synchronousExtensionObservation(event) {
+  if (toolCallFailed(event)) return undefined;
+  const params = event?.params;
+  const jobId = event?.result?.details?.jobId;
+  if (!params || !["search", "list", "inspect"].includes(params.action) ||
+      typeof jobId !== "string" || !OPS_JOB_ID.test(jobId)) return undefined;
+  const submission = { jobId, actions: [{
+    target: params.target === undefined ? "ods-host" : params.target,
+    action: `ods.extensions.${params.action}`,
+    parameters: params.action === "search" ? { query: params.query === undefined ? "all" : params.query }
+      : params.action === "inspect" ? { serviceId: params.serviceId } : {},
+  }] };
+  const outcome = operationsTerminalOutcome(
+    { params: { jobId }, result: event.result }, new Map([[jobId, submission]])
+  );
+  // Track a submitted read even when the synchronous wait timed out. Later
+  // get/wait calls must bind to this job, rather than resubmitting the action.
+  return { submission, outcome };
+}
+
 function replayTrackedEdit(content, pairs) {
   if (typeof content !== "string" || pairs.length === 0) return undefined;
   let updated = content;
@@ -2690,7 +2712,7 @@ function toolSearchEventEnvelope(event, expectedToolName, expectedSourceName) {
     !params ||
     typeof params !== "object" ||
     Array.isArray(params) ||
-    params.id !== expectedToolName
+    ![expectedToolName, `openclaw:${expectedSourceName}:${expectedToolName}`].includes(params.id)
   ) {
     return undefined;
   }
@@ -2991,11 +3013,14 @@ function boundedCatalogList(value, pattern, maximumItems = 64, maximumLength = 2
   return result;
 }
 
-function extensionCatalogResult(step, submittedParameters) {
+function extensionCatalogResult(step, submittedAction) {
+  const submittedParameters = submittedAction?.parameters;
   if (
     !step ||
-    step.target !== "ods-host" ||
+    typeof submittedAction?.target !== "string" ||
+    step.target !== submittedAction.target ||
     step.action !== "ods.extensions.search" ||
+    submittedAction.action !== step.action ||
     step.stderr.trim() ||
     step.riskSignals.length > 0 ||
     typeof step.stdout !== "string" ||
@@ -3110,7 +3135,8 @@ function extensionLifecycleResult(step, submittedAction) {
   const submittedParameters = submittedAction?.parameters;
   if (
     !step ||
-    step.target !== "ods-host" ||
+    typeof submittedAction?.target !== "string" ||
+    step.target !== submittedAction.target ||
     step.action !== submittedAction?.action ||
     step.stderr.trim() ||
     step.riskSignals.length > 0 ||
@@ -3166,12 +3192,12 @@ function extensionLifecycleResult(step, submittedAction) {
   }
   if (expectedAction === "inspect") {
     if (
-      !["ready", "blocked"].includes(value.outcome) ||
+      !["ready", "blocked", "failed"].includes(value.outcome) ||
       value.currentStatus !== value.previousStatus ||
       value.changed ||
       value.externalEffectOccurred ||
       value.rollback.attempted ||
-      (value.outcome === "ready") !== (missing.length === 0)
+      (value.outcome !== "failed" && (value.outcome === "ready") !== (missing.length === 0))
     ) {
       return undefined;
     }
@@ -3391,7 +3417,9 @@ function extensionInspectionEvidence(step, action, jobId) {
     OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
     `- Target: \`${action.target}\`; extension: \`${result.extensionId}\`.`,
     `- Inspection: \`${result.outcome}\`; current state: \`${result.currentStatus}\`.`,
-    `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
+    result.outcome === "failed"
+      ? "- Required configuration could not be established by this failed inspection."
+      : `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
     "- This inspection made no change and grants no installation or configuration authority.",
     `- Broker job: \`${jobId}\`.`,
   ].join("\n");
@@ -3608,6 +3636,7 @@ function operationsEvidenceText(
     if (!result) return undefined;
     const lines = [
       OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX,
+      `- Target: \`${outcome.actions[0].target}\`.`,
       `- Catalog total: ${result.summary.total}; installed: ${result.summary.installed}; enabled: ${result.summary.enabled}; CLI-installed: ${result.summary.cliInstalled}.`,
       `- Degraded or inactive installed state: disabled ${result.summary.disabled}; stopped ${result.summary.stopped}; unhealthy ${result.summary.unhealthy}; installing ${result.summary.installing}; setting up ${result.summary.settingUp}; error ${result.summary.error}.`,
       `- Not installed: ${result.summary.notInstalled}; incompatible: ${result.summary.incompatible}.`,
@@ -3664,11 +3693,12 @@ function operationsEvidenceText(
   if (outcome.steps.length !== 1 || outcome.actions.length !== 1) return undefined;
   const result = extensionCatalogResult(
     outcome.steps[0],
-    outcome.actions[0]?.parameters
+    outcome.actions[0]
   );
   if (!result) return undefined;
   const lines = [
     OPERATIONS_EXTENSION_CATALOG_EVIDENCE_PREFIX,
+    `- Target: \`${outcome.actions[0].target}\`.`,
     `- Query: \`${result.query}\``,
     `- Catalog: ${result.totalMatches} match(es) among ${result.totalCatalog}; results truncated: ${result.truncated ? "yes" : "no"}.`,
   ];
@@ -4159,7 +4189,8 @@ const EXTENSION_INVENTORY_BOUNDARY =
 function extensionInventoryResult(step, submittedAction) {
   if (
     !step ||
-    step.target !== "ods-host" ||
+    typeof submittedAction?.target !== "string" ||
+    step.target !== submittedAction.target ||
     step.action !== "ods.extensions.list" ||
     submittedAction?.action !== "ods.extensions.list" ||
     !exactKeys(submittedAction?.parameters ?? {}, []) ||
@@ -6450,7 +6481,8 @@ export function createToolLoopGuard({
     if (state && !["tool_search", "tool_describe"].includes(selectedToolName)) {
       state.toolExecutionAttempted = true;
     }
-    if (extensionDiscoveryEligible(state) && extensionReadSubmission(selectedToolName, selectedParams)) {
+    if (extensionDiscoveryEligible(state) &&
+        (selectedToolName === EXTENSION_READ_TOOL || extensionReadSubmission(selectedToolName, selectedParams))) {
       // Read-only discovery is a tool capability, not a prompt-derived plan.
       // Keep actual target/query/ID intact; the broker validates their policy.
       state.extensionDiscoveryUsed = true;
@@ -8244,6 +8276,15 @@ export function createToolLoopGuard({
           state.operationsOdsStatusProjectionAttempted = true;
           state.operationsOdsStatusProjectionToolSearchPending = false;
           state.operationsOdsStatusProjection = combinedStatus;
+        }
+      }
+      const extensionEvent = toolName === EXTENSION_READ_TOOL ? event
+        : toolName === "tool_call" ? toolSearchSelectedToolEvent(event, EXTENSION_READ_TOOL, "pixel-ods") : undefined;
+      const extensionObservation = extensionEvent ? synchronousExtensionObservation(extensionEvent) : undefined;
+      if (extensionObservation) {
+        state.operationsSubmittedJobs.set(extensionObservation.submission.jobId, extensionObservation.submission);
+        if (extensionObservation.outcome) {
+          state.operationsTerminalJobs.set(extensionObservation.outcome.jobId, extensionObservation.outcome);
         }
       }
       const submission = operationsSubmission(event, toolName);
