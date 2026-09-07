@@ -41,6 +41,7 @@ ALLOWED_SUFFIXES = frozenset(
         ".html", ".htm", ".css", ".js", ".mjs", ".json", ".svg",
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
         ".woff", ".woff2", ".ttf", ".txt", ".map", ".csv", ".tsv",
+        ".md", ".markdown",
     }
 )
 MAX_REQUEST_BYTES = 2048
@@ -48,6 +49,18 @@ MAX_RESPONSE_BYTES = 8192
 MAX_FILES = 128
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
+# Version-control metadata and config names that are skipped entirely during
+# source enumeration.  Their directories (e.g. .git/) are pruned from the
+# walk; their config files (.gitignore, .gitattributes, .gitmodules) and
+# worktree metadata files (the .git file in a git-worktree) are skipped by
+# name.  These files are never entered, read, or copied into snapshots.
+VC_METADATA_NAMES = frozenset(
+    {
+        ".git", ".hg", ".svn",
+        ".gitignore", ".gitattributes", ".gitmodules",
+    }
+)
+
 BOUNDARY = (
     "Create-only static-site snapshot from the configured Pixel workspace to a "
     "dedicated loopback preview origin; no arbitrary host path, network "
@@ -153,7 +166,9 @@ def _source_files(
             or root_info.st_mode & 0o022
         ):
             raise PreviewError("unsafe preview directory")
-        for directory in directories:
+        # Exclude metadata by its own name; ordinary symlinks stay rejected.
+        pruned = [d for d in directories if d not in VC_METADATA_NAMES]
+        for directory in pruned:
             info = (root_path / directory).lstat()
             if (
                 not stat.S_ISDIR(info.st_mode)
@@ -163,7 +178,12 @@ def _source_files(
                 or PATH_COMPONENT.fullmatch(directory) is None
             ):
                 raise PreviewError("unsafe preview directory")
+        directories[:] = pruned
         for name in names:
+            # Skip version-control metadata files (e.g. the .git worktree
+            # pointer file, which is a regular file named .git).
+            if name in VC_METADATA_NAMES:
+                continue
             source = root_path / name
             info = source.lstat()
             relative = source.relative_to(current).as_posix()
@@ -252,7 +272,10 @@ def publish_snapshot(
             os.chmod(temporary, 0o700)
             for relative, data in captured:
                 target = temporary / relative
-                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                parent = temporary
+                for component in pathlib.PurePosixPath(relative).parts[:-1]:
+                    parent = parent / component
+                    parent.mkdir(mode=0o700, exist_ok=True)
                 descriptor = os.open(
                     target,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -388,6 +411,11 @@ class PreviewHandler(http.server.BaseHTTPRequestHandler):
             return
         target, body = result
         content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        # Markdown is documentation, not executable content.  Force
+        # text/plain so browsers never attempt HTML rendering of .md files.
+        suffix = pathlib.PurePosixPath(target.name).suffix.lower()
+        if suffix in {".md", ".markdown"}:
+            content_type = "text/plain; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
