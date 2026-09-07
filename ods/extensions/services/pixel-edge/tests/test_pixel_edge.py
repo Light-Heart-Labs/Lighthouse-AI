@@ -366,11 +366,12 @@ class TestPreviewRelay(BaseEdgeTest):
         site_id = "site-" + "a" * 24
         async with self.client.get(f"http://localhost/preview/{site_id}/") as resp:
             self.assertEqual(resp.status, 401)
+            self.assertNotIn("Access-Control-Allow-Origin", resp.headers)
 
     async def test_preview_relays_exact_bytes_with_an_opaque_browser_sandbox(self):
         site_id = "site-" + "a" * 24
         async with self.client.get(
-            f"http://localhost/preview/{site_id}/", headers=self.auth()
+            f"http://localhost/preview/{site_id}/", headers={**self.auth(), "Origin": "null"}
         ) as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(
@@ -389,7 +390,16 @@ class TestPreviewRelay(BaseEdgeTest):
             self.assertIn("connect-src 'self'", csp)
             self.assertIn("frame-ancestors 'self'", csp)
             self.assertEqual(resp.headers["Cross-Origin-Resource-Policy"], "cross-origin")
+            self.assertEqual(resp.headers["Access-Control-Allow-Origin"], "*")
+            self.assertNotIn("Access-Control-Allow-Credentials", resp.headers)
         self.assertEqual(self.up_runner.app["preview_hosts"], ["pixel-preview.internal"])
+
+    async def test_preview_cors_does_not_extend_to_control_endpoints(self):
+        async with self.client.get(
+            "http://localhost/v1/activity", headers={**self.auth(), "Origin": "null"}
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertNotIn("Access-Control-Allow-Origin", resp.headers)
 
     async def test_preview_rejects_invalid_or_unknown_snapshot_paths(self):
         async with self.client.get(

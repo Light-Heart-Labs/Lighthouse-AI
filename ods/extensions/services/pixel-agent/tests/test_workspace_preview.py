@@ -207,12 +207,14 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
                 connection.request(
                     "GET",
                     f"/{receipt['siteId']}/",
-                    headers={"Host": f"{receipt['siteId']}.localhost:{port}"},
+                    headers={"Host": f"{receipt['siteId']}.localhost:{port}", "Origin": "null"},
                 )
                 response = connection.getresponse()
                 response.read()
                 assert response.status == 200
                 assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+                assert response.headers["Access-Control-Allow-Origin"] == "*"
+                assert "Access-Control-Allow-Credentials" not in response.headers
                 assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
                 assert "connect-src 'none'" not in response.headers["Content-Security-Policy"]
                 assert "form-action 'none'" in response.headers["Content-Security-Policy"]
@@ -230,6 +232,7 @@ def test_http_preview_allows_only_csp_guarded_cross_origin_embedding():
                 rejected = cross_site.getresponse()
                 rejected.read()
                 assert rejected.status == 404
+                assert "Access-Control-Allow-Origin" not in rejected.headers
                 cross_site.close()
             finally:
                 server.shutdown()

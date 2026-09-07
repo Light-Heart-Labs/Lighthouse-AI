@@ -426,6 +426,10 @@ class PreviewHandler(http.server.BaseHTTPRequestHandler):
         # loopback ports. CSP restricts which local parents may frame a site;
         # CORP must therefore permit that cross-origin iframe navigation.
         self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
+        # Module scripts, fonts and fetch() use CORS from the opaque preview
+        # frame. Only published snapshot bytes are served here; never grant
+        # credentials or carry this policy onto ODS control endpoints.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")

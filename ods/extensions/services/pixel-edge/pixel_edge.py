@@ -1032,6 +1032,10 @@ async def handle_preview(request: web.Request):
         # These digest-verified snapshot bytes carry no portal authority;
         # retain the opaque CSP sandbox and the proxy authentication above.
         "Cross-Origin-Resource-Policy": "cross-origin",
+        # CORP alone does not authorize module imports or fetch() from an
+        # opaque frame. This applies only to authenticated, digest-verified
+        # static snapshots, without allowing browser credentials.
+        "Access-Control-Allow-Origin": "*",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
