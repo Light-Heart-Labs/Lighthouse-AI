@@ -55,7 +55,9 @@ def atomic_json(path, value):
     fd, temporary = tempfile.mkstemp(prefix=".transition-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as handle:
-            json.dump(value, handle); handle.flush(); os.fsync(handle.fileno())
+            json.dump(value, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
         parent = os.open(path.parent, os.O_RDONLY)
         try: os.fsync(parent)
@@ -208,7 +210,8 @@ class SystemdAccessBridge:
                                    cwd="/", env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, bufsize=1)
         try:
-            process.stdin.write(json.dumps(request) + "\n"); process.stdin.flush()
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 deadline = time.monotonic() + 300
@@ -227,10 +230,13 @@ class SystemdAccessBridge:
                     if callback is None: raise AccessError("owner-protocol-failed")
                     answer = callback()
                     if type(answer) is not bool: raise AccessError("host-hook-failed")
-                    process.stdin.write(json.dumps(answer) + "\n"); process.stdin.flush()
+                    process.stdin.write(json.dumps(answer) + "\n")
+                    process.stdin.flush()
             raise AccessError("owner-worker-timeout")
         finally:
-            if process.poll() is None: process.terminate(); process.wait(timeout=10)
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
 
     def pending(self):
         file = self.state / "transition.json"
@@ -296,7 +302,10 @@ class SystemdAccessBridge:
                 raise AccessError("unrecognized-service-dropin")
         if enabled and not self.dropin.exists():
             fd = os.open(self.dropin, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)
-            with os.fdopen(fd, "w") as handle: handle.write(content); handle.flush(); os.fsync(handle.fileno())
+            with os.fdopen(fd, "w") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
         elif not enabled and self.dropin.exists(): self.dropin.unlink()
         self.command(["systemctl", "daemon-reload"])
 
@@ -372,7 +381,8 @@ class SystemdAccessBridge:
                 if not baseline_file.exists():
                     if self.dropin.exists(): raise AccessError("service-baseline-missing")
                     atomic_json(baseline_file, {"boundary": self.unit_boundary()})
-                pending["phase"] = "applying"; atomic_json(self.state / "transition.json", pending)
+                pending["phase"] = "applying"
+                atomic_json(self.state / "transition.json", pending)
                 config = snapshot["_config"]
                 # A pristine safe configuration can be verified without inventing
                 # a baseline or performing an unnecessary restore.
@@ -395,12 +405,14 @@ class SystemdAccessBridge:
                 verified_config = self.worker()
                 atomic_json(self.state / "verified.json", {"pid": proof["pid"], "proof": proof["proof"],
                             "config_sha256": verified_config["config_sha256"], "boundary": boundary})
-                pending["phase"] = "releasing"; atomic_json(self.state / "transition.json", pending)
+                pending["phase"] = "releasing"
+                atomic_json(self.state / "transition.json", pending)
                 self.edge("release", token, pending["edge_revision"])
                 self.native("release", token)
                 (self.state / "transition.json").unlink()
                 return self.status()
             except Exception as error:
-                pending["phase"] = "error"; atomic_json(self.state / "transition.json", pending)
+                pending["phase"] = "error"
+                atomic_json(self.state / "transition.json", pending)
                 if isinstance(error, AccessError): raise
                 raise AccessError("transition-failed") from None
