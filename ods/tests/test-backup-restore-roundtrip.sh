@@ -27,6 +27,9 @@ trap 'rm -rf "$TMP"' EXIT
 SRC="$TMP/src"
 mkdir -p "$SRC/data/open-webui" "$SRC/data/hermes/sessions" "$SRC/data/persona"
 mkdir -p "$SRC/data/n8n"
+mkdir -p "$SRC/data/auth"
+printf '%s\n' '{"tokens":[{"token_hash":"owner-fixture","revoked_at":null},{"token_hash":"revoked-fixture","revoked_at":"2026-09-01T00:00:00Z"}]}' > "$SRC/data/auth/magic-links.json"
+chmod 600 "$SRC/data/auth/magic-links.json"
 mkdir -p "$SRC/config"
 mkdir -p "$SRC/models"
 echo "1.0.0" > "$SRC/.version"
@@ -64,6 +67,10 @@ pass "Backup created: $BACKUP_ID"
     || fail "Full backup lost its environment config"
 
 BACKUP_DIR="$SRC/.backups/$BACKUP_ID"
+cmp "$SRC/data/auth/magic-links.json" "$BACKUP_DIR/data/auth/magic-links.json" \
+    || fail "Backup omitted the magic-link registry"
+jq -e '.paths.data_auth == "data/auth"' "$BACKUP_DIR/manifest.json" >/dev/null \
+    || fail "Manifest omitted the authentication registry path"
 [[ -f "$BACKUP_DIR/data/hermes/sessions/session.jsonl" ]] \
     || fail "Backup omitted data/hermes"
 [[ -f "$BACKUP_DIR/data/persona/SOUL.md" ]] \
@@ -120,6 +127,16 @@ pass "All expected files/dirs present after restore"
     || fail "persona SOUL.md content mismatch"
 
 pass "All file contents match after restore"
+cmp "$SRC/data/auth/magic-links.json" "$DST/data/auth/magic-links.json" \
+    || fail "Restore lost owner cards or revocation records"
+python3 - "$DST/data/auth/magic-links.json" <<'PY'
+import os
+import stat
+import sys
+
+assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o600, "Registry permissions widened"
+PY
+pass "Owner cards and revocation records survive backup and restore"
 
 # Exercise the older macOS rsync branch, where `--info=progress2` is absent and
 # the helper falls back to `--progress`. The fallback must keep the same
