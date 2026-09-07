@@ -553,8 +553,11 @@ async def _stream_hermes_sse(session_key: str, text: str, request: Request):
                 })
     finally:
         await cancel_pending()
-        if emit_done:
-            yield _sse_event("done", {})
+        await bridge_iter.aclose()
+    # Only a completed response can accept a terminal frame. Yielding from
+    # finally suppresses cancellation and makes aclose() raise GeneratorExit.
+    if emit_done:
+        yield _sse_event("done", {})
 
 
 @router.get("/api/talk/status")
