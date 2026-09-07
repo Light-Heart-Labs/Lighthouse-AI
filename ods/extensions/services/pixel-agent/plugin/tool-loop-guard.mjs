@@ -7789,10 +7789,22 @@ export function createToolLoopGuard({
   }
 
   function observeModelCall(event, context, agentId = "pixel") {
-    if (context?.agentId !== agentId) return;
+    if (context?.agentId !== undefined && context.agentId !== agentId) return;
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return;
-    stateFor(runId).operationsPromptRound += 1;
+    // OpenClaw 2026.6.33 model-call hooks omit agentId. Bind those events to
+    // a Pixel run already registered by observeRun, using its session identity.
+    // An unbound lifecycle event must not create a run or advance another agent.
+    const state = context?.agentId === agentId ? stateFor(runId) : runs.get(runId);
+    if (!state) return;
+    if (context?.agentId === undefined) {
+      const hasSessionId = typeof context?.sessionId === "string" && context.sessionId.length > 0;
+      const hasSessionKey = typeof context?.sessionKey === "string" && context.sessionKey.length > 0;
+      if ((!hasSessionId && !hasSessionKey) ||
+          (hasSessionId && context.sessionId !== state.currentSessionId) ||
+          (hasSessionKey && context.sessionKey !== state.currentSessionKey)) return;
+    }
+    state.operationsPromptRound += 1;
   }
 
   async function abortUserRun(user) {

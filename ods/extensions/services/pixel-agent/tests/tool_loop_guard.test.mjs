@@ -2925,6 +2925,49 @@ test("ODS projection correction belongs to a model round, not parallel sibling c
   assert.deepEqual(aborts, []);
 });
 
+test("SDK model-call contexts without agentId preserve parallel correction and later progress", () => {
+  for (const identity of [{ sessionId: "session-1" }, { sessionKey: "agent:pixel:main" }]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1", sessionKey: "agent:pixel:main" }, "pixel", { prompt: "What ODS model is active?" });
+    const sdkContext = Object.freeze({ runId: "run-1", ...identity, modelProviderId: "local", modelId: "test" });
+    guard.observeModelCall({ runId: "run-1", callId: "model-1", provider: "local", model: "test" }, sdkContext);
+    assert.match(call(guard, "tool_search").blockReason, /call pixel_ods_status exactly once/);
+    assert.match(call(guard, "tool_search").blockReason, /call pixel_ods_status exactly once/);
+    guard.observeModelCall({ runId: "run-1", callId: "model-2", provider: "local", model: "test" }, sdkContext);
+    assert.notEqual(call(guard, "pixel_ods_status")?.block, true);
+  }
+});
+
+test("SDK model-call contexts without agentId still stop a later ignored correction", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "What ODS model is active?" });
+  const sdkContext = { runId: "run-1", sessionId: "session-1" };
+  guard.observeModelCall({ runId: "run-1", callId: "model-1" }, sdkContext);
+  assert.match(call(guard, "tool_search").blockReason, /call pixel_ods_status exactly once/);
+  guard.observeModelCall({ runId: "run-1", callId: "model-2" }, sdkContext);
+  assert.equal(call(guard, "tool_search").blockReason, ODS_TOOL_ROUTING_ABORT_REASON);
+});
+
+test("unattributed SDK model calls require an existing matching Pixel session", () => {
+  for (const identity of [
+    {}, { sessionId: "other" }, { sessionKey: "agent:other:main" },
+    { sessionId: "other", sessionKey: "agent:pixel:main" },
+    { sessionId: "session-1", sessionKey: "agent:other:main" },
+    { agentId: "other", sessionId: "session-1" },
+  ]) {
+    const guard = createToolLoopGuard();
+    const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1", sessionKey: "agent:pixel:main" };
+    guard.observeRun(context, "pixel", { prompt: "What ODS model is active?" });
+    guard.observeModelCall({ runId: "run-1" }, context);
+    assert.match(call(guard, "tool_search").blockReason, /call pixel_ods_status exactly once/);
+    guard.observeModelCall({ runId: "run-1" }, { runId: "run-1", ...identity });
+    assert.match(call(guard, "tool_search").blockReason, /call pixel_ods_status exactly once/);
+    const count = guard.trackedRunCount();
+    guard.observeModelCall({ runId: "unknown" }, { runId: "unknown", sessionId: "session-1" });
+    assert.equal(guard.trackedRunCount(), count);
+  }
+});
+
 test("ODS routing terminal cause survives verification fallback and aborts early-return tools next round", () => {
   for (const [toolName, params] of [["tool_search", { query: "write" }], ["tool_call", { id: "reply_to_current", args: { text: "still working" } }], ["pixel_ods_status", {}]]) {
     const aborts = [];
