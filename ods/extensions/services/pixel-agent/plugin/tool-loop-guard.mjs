@@ -139,7 +139,7 @@ export const REQUESTED_PARSED_JSON_REQUIRED_REASON =
   "The owner explicitly required parsed JSON verification, so that raw-text comparison test was not written. Write the same test file with `json.loads(result.stdout)` and compare the resulting Python object and numeric values; do not compare JSON whitespace or a literal expression such as `10/3` inside a string.";
 
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
-  "Pixel blocked this recursive forced deletion because the owner's current request did not explicitly authorize deleting that workspace tree. Inspect the exact target and use focused file edits, or ask the owner for deletion approval. Do not substitute another destructive command.";
+  "Pixel stopped tool use for this turn because a recursive deletion was not authorized. The deletion was blocked, but earlier actions may have completed. Do not retry through another command, tool, or agent. Explain what was attempted and wait for a new owner instruction.";
 
 export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
   "Pixel could not establish the exact cancellation boundary for this command. Do not call another tool in this turn; explain that execution is temporarily unavailable.";
@@ -5675,6 +5675,8 @@ export function createToolLoopGuard({
         wrappedExecFailurePending: false,
         suppressStaleExecWarning: false,
         recursiveDeleteAuthorized: false,
+        recursiveDeleteDenied: false,
+        recursiveDeleteAbortAttempted: false,
         pendingExecSessions: new Map(),
         pendingExecBlocks: new Map(),
         execOriginalByWrapped: new Map(),
@@ -5758,6 +5760,29 @@ export function createToolLoopGuard({
     // policy and deterministic routing active from runId alone; operations
     // that truly need a session still fail closed on the optional sessionId.
     const state = runId ? stateFor(runId) : undefined;
+    // A refusal is terminal for this run, not an invitation to express the
+    // same destructive effect through another interpreter or tool. This must
+    // precede Tool Search, deferred dispatch and every parameter rewrite.
+    // It contains retries after this tripwire; it is not a shell sandbox or
+    // a guarantee against an unrecognized first destructive command.
+    if (state?.recursiveDeleteDenied) {
+      if (!state.recursiveDeleteAbortAttempted) {
+        state.recursiveDeleteAbortAttempted = true;
+        try {
+          execControl?.signal?.(runId);
+        } catch (error) {
+          warn(`Pixel deletion-refusal execution signal failed for run ${runId}: ${String(error)}`);
+        }
+        // Failure to signal an existing command must not skip model abort.
+        try {
+          const activeSession = sessionId ?? state.currentSessionId;
+          if (typeof activeSession === "string" && activeSession) abortRun?.(activeSession);
+        } catch (error) {
+          warn(`Pixel deletion-refusal abort failed for run ${runId}: ${String(error)}`);
+        }
+      }
+      return { block: true, blockReason: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
+    }
     // A model must see a correction before it can ignore it. Terminal-round
     // siblings stay blocked without aborting; the next model round is the
     // actual abort boundary, before Tool Search and every other early return.
@@ -7233,6 +7258,7 @@ export function createToolLoopGuard({
       requestsRecursiveForcedDelete(selectedParams) &&
       !state?.recursiveDeleteAuthorized
     ) {
+      if (state) state.recursiveDeleteDenied = true;
       return { block: true, blockReason: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
     }
 
@@ -8744,6 +8770,7 @@ export function createToolLoopGuard({
     const runId = context?.runId ?? event?.runId;
     if (typeof runId !== "string" || !runId) return undefined;
     const state = runs.get(runId);
+    if (state?.recursiveDeleteDenied) return undefined;
     const continuation =
       trustedOperationsContinuation(state, runId) ??
       trustedWorkspacePreviewContinuation(state);
@@ -8763,6 +8790,9 @@ export function createToolLoopGuard({
     if (typeof runId !== "string" || !runId) return { status: "none" };
     const state = runs.get(runId);
     if (!state) return { status: "none" };
+    if (state.recursiveDeleteDenied) {
+      return { status: "failed", text: RECURSIVE_DELETE_REQUIRES_OWNER_REASON };
+    }
     if (state.odsRoutingExhausted) {
       return { status: "failed", text: state.odsRoutingAborted
         ? ODS_TOOL_ROUTING_LOOP_ABORT_REASON : ODS_TOOL_ROUTING_ABORT_REASON };
