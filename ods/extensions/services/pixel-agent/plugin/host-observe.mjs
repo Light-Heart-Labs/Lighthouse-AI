@@ -309,7 +309,7 @@ export function createHostObserveTool({
   return {
     name: "pixel_ods_host_observe",
     description:
-      "Run one complete, read-only ODS host observation through the external Operations Broker and return its terminal receipt. Use only the requested host.* actions. host.network-peer may resolve and probe one owner-named private LAN or Tailscale peer with bounded ports. This tool cannot scan a range, authenticate, execute commands, mutate a host, or approve plans.",
+      "Read selected ODS host facts through the external Operations Broker and return their receipt. Choose the typed host.* actions useful for this task, respecting the owner's exclusions. You can gather more facts in later calls. If a read times out, check its existing job ID before retrying. host.network-peer may resolve and probe one owner-named private LAN or Tailscale peer with bounded ports. This tool cannot scan a range, authenticate, execute commands, mutate a host, or approve plans.",
     parameters: {
       type: "object",
       additionalProperties: false,

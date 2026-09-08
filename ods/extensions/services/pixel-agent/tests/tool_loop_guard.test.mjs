@@ -1064,7 +1064,7 @@ test("second unrequested Operations round leaves one final-response opportunity 
     });
     guard.observeModelCall({ runId: "run-1" }, context, "pixel");
     assert.equal(call(guard, "tool_call", { event: { params: {
-      id: "openclaw:pixel-ods:pixel_ods_host_observe", args: { actions: ["host.identity"] },
+      id: "openclaw:pixel-operations-broker:pixel_ops_run", args: { target: "ods-host", action: "raw-shell" },
     } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
     assert.deepEqual(aborts, [], "first refusal permits correction to authorized workspace work");
     guard.observeModelCall({ runId: "run-1" }, context, "pixel");
@@ -3135,10 +3135,10 @@ test("live mixed CSV and host health intent preserves both read-only host and wo
   assert.notEqual(call(guard, "tool_call", { event: { params: {
     id: "write", args: { path: "health-conversion-demo/file-0.csv", text: "item,count\nLamp,2\n" },
   } } })?.block, true, "sandbox write allowed alongside required Operations");
-  const host = call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: { actions: ["raw-shell"] } } } });
+  const host = call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: { actions: ["host.cpu", "host.memory"] } } } });
   assert.notEqual(host?.block, true);
-  assert.deepEqual(host.params.args.actions, requirements.actions);
-  assert.equal(host.params.args.includeOdsStatus, true);
+  assert.deepEqual(host.params.args.actions, ["host.cpu", "host.memory"]);
+  assert.equal(host.params.args.includeOdsStatus, undefined);
   assert.equal(call(guard, "pixel_ops_run", { event: { params: {
     target: "ods-host", action: "raw-shell", parameters: { command: "touch /tmp/not-authorized" },
   } } }).block, true, "read-only health cannot authorize host mutation");
@@ -3522,7 +3522,7 @@ test("binds one owner-named private peer to bounded read-only reachability evide
     event: {
       params: {
         id: "pixel_ods_host_observe",
-        args: { actions: ["host.identity"], peer: "other", ports: [1] },
+        args: { actions: ["host.tailscale", "host.network-peer"], peer: "Strixy", ports: networkPeer.ports },
       },
     },
   });
@@ -3717,7 +3717,7 @@ test("guards network-peer routing to exact owner target after punctuation strip"
 
   // The guard routes every host.network-peer call to the exact parsed peer "tower2"
   // (not "tower2." — the trailing period was stripped by the parser).
-  // It corrects any peer mismatch in the model's args to the owner-requested target.
+  // It preserves equivalent DNS spelling, and rejects a different destination.
   const routed = call(guard, "tool_call", {
     event: {
       params: {
@@ -3728,7 +3728,7 @@ test("guards network-peer routing to exact owner target after punctuation strip"
   });
   assert.equal(routed?.params?.args?.peer, "tower2", "routing corrects trailing period");
 
-  // A call naming a different peer is also corrected to the owner-requested target.
+  // A call naming a different peer is rejected, never silently retargeted.
   const other = call(guard, "tool_call", {
     event: {
       params: {
@@ -3737,7 +3737,7 @@ test("guards network-peer routing to exact owner target after punctuation strip"
       },
     },
   });
-  assert.equal(other?.params?.args?.peer, "tower2", "different peer corrected to owner target");
+  assert.equal(other?.block, true, "different peer is rejected");
 
   // The correct peer is accepted as-is.
   const correct = call(guard, "tool_call", {
@@ -4182,7 +4182,7 @@ test("host inspection and separate LAN discovery retain local inventory without 
   const guard = createToolLoopGuard();
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
   assert.deepEqual(call(guard, "tool_call", { event: { params: {
-    id: "pixel_ods_host_observe", args: { actions: ["host.identity"], peer: "invented-peer", ports: [22] },
+    id: "pixel_ods_host_observe", args: { actions: requirements.actions },
   } } }), { params: { id: "pixel_ods_host_observe", args: { actions: requirements.actions } } });
   for (const tool of ["pixel_ods_host_command_propose", "tool_call"]) {
     assert.equal(call(guard, tool, { event: { params: tool === "tool_call"
@@ -4391,10 +4391,7 @@ test("routes a capability inventory question to one read-only Operations project
       ),
     },
   });
-  assert.equal(
-    call(guard, "pixel_ods_status")?.blockReason,
-    OPERATIONS_INVENTORY_COMPLETE_REASON
-  );
+  assert.notEqual(call(guard, "pixel_ods_status")?.block, true, "local metadata remains available after inventory");
   const explanation = "A remote inspection needs a configured SSH target first.";
   const text = guard.replyPayloadSending({ runId: "run-1", kind: "final", payload: { text: explanation } })?.payload?.text;
   assert.ok(text.startsWith(explanation));
@@ -6039,10 +6036,7 @@ test("adds only sanitized ODS container and application projections after termin
     ),
     false
   );
-  assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  assert.notEqual(call(guard, "pixel_ods_apps_list")?.block, true, "app metadata is available before host evidence");
   afterCall(guard, "pixel_ops_run", {
     event: {
       params: { target: "ods-host", action: "host.identity" },
@@ -6481,7 +6475,7 @@ test("allows requested host observations within the live extension setup request
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
   assert.deepEqual(call(guard, "tool_call", {
     event: { params: { id: "pixel_ods_host_observe", args: { actions: ["host.kernel"] } } },
-  }), { params: { id: "pixel_ods_host_observe", args: { actions: ["host.services"], includeOdsStatus: true } } });
+  }), { params: { id: "pixel_ods_host_observe", args: { actions: ["host.kernel"] } } });
   assert.notEqual(guard.verificationForRun("run-1").status, "passed");
 });
 
@@ -6598,7 +6592,7 @@ test("uses one replay-safe synchronous host observation and revises an incomplet
       event: {
         params: {
           id: "pixel_ods_host_observe",
-          args: { actions: ["host.kernel"] },
+          args: { actions: ["host.identity"], includeOdsStatus: true },
         },
       },
     }),
@@ -6734,7 +6728,7 @@ test("accepts a structurally bound status projection from the synchronous host o
   const routed = call(guard, "tool_call", {
     event: {
       toolCallId: "host-status-call",
-      params: { id: "pixel_ods_host_observe", args: { actions: ["host.identity"] } },
+      params: { id: "pixel_ods_host_observe", args: { actions: ["host.identity"], includeOdsStatus: true } },
     },
     context: { toolCallId: "host-status-call" },
   });
@@ -7306,12 +7300,12 @@ test("Operations routing aborts after four blocked calls without model-call even
     { prompt: "Inspect this host's kernel and memory." }
   );
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    assert.deepEqual(call(guard, "pixel_ods_status"), {
+    assert.deepEqual(call(guard, "message"), {
       block: true,
       blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
     });
   }
-  assert.deepEqual(call(guard, "pixel_ods_status"), {
+  assert.deepEqual(call(guard, "message"), {
     block: true,
     blockReason: OPERATIONS_LOOP_ABORT_REASON,
   });
@@ -7338,12 +7332,9 @@ test("Operations routing permits only exact Tool Search Operations targets", () 
       },
     },
   }), undefined);
-  assert.deepEqual(call(guard, "tool_call", {
+  assert.notEqual(call(guard, "tool_call", {
     event: { params: { id: "pixel_ods_status", args: {} } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  })?.block, true, "local status projection is independent of host job sequencing");
   // sandbox exec is a WORKSPACE_CONTINUATION_TOOL; permitted
   // alongside required Operations (the model should still use the broker,
   // but the guard no longer independently blocks workspace tools).
@@ -13105,5 +13096,151 @@ test("zero broker submissions never authorize clean-context replay after tool ex
       // Even a missing result cannot establish that an attempted tool had no effect.
       assert.equal(guard.verificationForRun("run-1").code, undefined, `${prompt}: ${tool}`);
     }
+  }
+});
+
+
+test("optional typed host reads preserve the plan during extension diagnosis", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Diagnose why the ComfyUI extension cannot start. Inspect its declared requirements and compare them with this machine.",
+  });
+  for (const actions of [["host.gpu", "host.memory"], ["host.kernel"], ["host.services"]]) {
+    const params = { actions };
+    assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params } }), { params });
+    const wrapped = { id: "pixel_ods_host_observe", args: params };
+    assert.deepEqual(call(guard, "tool_call", { event: { params: wrapped } }), { params: wrapped });
+  }
+});
+
+test("optional local reads respect explicit constraints and never acquire a remote target", () => {
+  for (const prompt of [
+    "Diagnose the extension. Do not inspect the ODS host.",
+    "Diagnose the extension. No host inspection.",
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    assert.equal(call(guard, "pixel_ods_host_observe", { event: { params: { actions: ["host.gpu"] } } }).block, true);
+  }
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Diagnose the extension. Do not inspect network details. Do not report storage.",
+  });
+  assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params: { actions: ["host.gpu"] } } }), { params: { actions: ["host.gpu"] } });
+  for (const actions of [["host.storage"], ["host.network-addresses"], ["host.network-peer"], ["raw-shell"], [], ["host.cpu", "host.cpu"]]) {
+    assert.equal(call(guard, "pixel_ods_host_observe", { event: { params: { actions } } }).block, true);
+  }
+});
+
+test("separate host receipts accumulate only the selected evidence", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Report the ODS host hostname and kernel.",
+  });
+  const receipt = (action, jobId, stdout) => {
+    const params = { actions: [action] };
+    assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params } }), { params });
+    afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: {
+      jobId, status: "succeeded", waitTimedOut: false,
+      steps: [{ stepId: "observe-1", target: "ods-host", action, exitCode: 0, stdout, stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] }],
+    } } } });
+  };
+  receipt("host.identity", "ops-1234567890123-abcdef123456", "qualified-host\n");
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  receipt("host.kernel", "ops-1234567890124-abcdef123456", "6.8.0-test\n");
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+});
+
+test("an optional observation timeout retains its job for readback without resubmission", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Help me diagnose this extension." });
+  const params = { actions: ["host.memory"] };
+  const jobId = "ops-1234567890123-abcdef123456";
+  assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params } }), { params });
+  afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: { jobId, status: "running", waitTimedOut: true } } } });
+  assert.deepEqual(call(guard, "pixel_ops_job_wait", { event: { params: { jobId } } }), { params: { jobId } });
+  const unrelated = "ops-1234567890124-abcdef123456";
+  assert.notDeepEqual(call(guard, "pixel_ops_job_wait", { event: { params: { jobId: unrelated } } }), { params: { jobId: unrelated } });
+});
+
+
+test("split peer probes require all owner-requested ports and retain both receipts", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Probe Strixy on the local network ports 22 and 80.",
+  });
+  const report = (port, index) => {
+    const params = { actions: ["host.network-peer"], peer: "Strixy", ports: [port] };
+    assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params } }), { params });
+    afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: {
+      jobId: `ops-123456789012${index}-abcdef123456`, status: "succeeded", waitTimedOut: false,
+      steps: [{ stepId: "observe-1", target: "ods-host", action: "host.network-peer", exitCode: 0,
+        stdout: JSON.stringify({ schemaVersion: 1, kind: "ods-host-network-peer", target: "Strixy", ports: [port],
+          resolved: true, reachable: true, addresses: [{ address: "192.168.0.166", family: "ipv4", scope: "lan", icmpReachable: false, tcp: [{ port, open: true }] }],
+          tailscale: { available: false, found: false, online: null, addresses: [] } }),
+        stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] }],
+    } } } });
+  };
+  report(22, 3);
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  report(80, 4);
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.match(verification.text, /open TCP 22/);
+  assert.match(verification.text, /open TCP 80/);
+  for (const params of [
+    { actions: ["host.network-peer"], peer: "Tower1", ports: [22] },
+    { actions: ["host.network-peer"], peer: "Strixy", ports: [443] },
+    { actions: ["host.identity"], peer: "Strixy", ports: [22] },
+  ]) assert.equal(call(guard, "pixel_ods_host_observe", { event: { params } }).block, true);
+});
+
+test("an unrelated permitted read cannot satisfy required hostname evidence", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Report the ODS host hostname." });
+  const params = { actions: ["host.kernel"] };
+  assert.deepEqual(call(guard, "pixel_ods_host_observe", { event: { params } }), { params });
+  afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: {
+    jobId: "ops-1234567890123-abcdef123456", status: "succeeded", waitTimedOut: false,
+    steps: [{ stepId: "observe-1", target: "ods-host", action: "host.kernel", exitCode: 0, stdout: "6.8.0-test\n", stderr: "", outputTruncated: { stdout: false, stderr: false }, riskSignals: [] }],
+  } } } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  const recovery = guard.beforeAgentFinalize({ runId: "run-1", lastAssistantMessage: "Done." }, { agentId: "pixel", runId: "run-1" }, "pixel");
+  assert.equal(recovery.action, "revise");
+  assert.match(recovery.retry.instruction, /host.identity/);
+});
+
+test("an optional observation cannot smuggle an explicitly excluded ODS status read", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Check the extension requirements. Do not query ODS status." });
+  assert.equal(call(guard, "pixel_ods_host_observe", { event: { params: { actions: ["host.gpu"], includeOdsStatus: true } } }).block, true);
+});
+
+test("negated protocol mentions do not narrow the peer probe to that protocol", () => {
+  assert.deepEqual(userMessageNetworkPeerRequest([], "Probe Strixy on the local network. No SSH login.").ports, [22, 80, 443, 3389, 5985, 5986]);
+  assert.deepEqual(userMessageNetworkPeerRequest([], "Probe Strixy on the local network using SSH. But please no RDP.").ports, [22]);
+});
+
+
+test("extension diagnosis can read app metadata alongside incomplete host observations", () => {
+  const guard = createToolLoopGuard();
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "Check why ComfyUI is marked incompatible in this ODS installation. Inspect the extension and choose the local machine observations you need to diagnose it. Save your findings to comfyui-diagnosis.md and read it back. Do not install, enable, change settings, or contact other devices." });
+  for (let round = 0; round < 3; round++) {
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    for (const name of ["pixel_ods_apps_list", "pixel_ods_status"]) {
+      assert.notEqual(call(guard, name, { event: { params: {} } })?.block, true);
+      assert.notEqual(call(guard, "tool_call", { event: { params: { id: name, args: {} } } })?.block, true);
+    }
+  }
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed", "metadata does not complete required host evidence or the report");
+});
+
+test("mixed diagnostics retain explicit status and app-metadata exclusions", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Report the ODS host hostname. Do not query ODS status or app inventory." });
+  for (const name of ["pixel_ods_apps_list", "pixel_ods_status"]) {
+    assert.equal(call(guard, name, { event: { params: {} } }).block, true);
+    assert.equal(call(guard, "tool_call", { event: { params: { id: name, args: {} } } }).block, true);
   }
 });
