@@ -1122,7 +1122,7 @@ test("parallel siblings do not spend multiple unrequested Operations correction 
   assert.equal(call(guard, "pixel_ops_run", {
     event: { params: { target: "ods-host", action: "host.identity" } },
   }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
-  assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
+  assert.match(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: {} } } }).blockReason, /could not validate this host observation/);
   assert.deepEqual(aborts, []);
   guard.observeModelCall({ runId: "run-1" }, context, "pixel");
   assert.equal(call(guard, "pixel_ops_run", {
@@ -3545,6 +3545,40 @@ test("filesystem pronouns do not authorize network-peer probes", () => {
   assert.deepEqual(userMessageNetworkPeerRequest([], "Resolve Strixy on my local network."), {
     peer: "Strixy", ports: [22, 80, 443, 3389, 5985, 5986],
   });
+});
+
+test("binds attributive endpoint names to their attached private address without widening scope", () => {
+  for (const [prompt, peer] of [
+    ["Diagnose whether the known fleet machine lab-alpha at 192.168.4.23 is reachable over LAN. TCP port 22 only. Do not scan other addresses or ports, authenticate, install anything, or change settings.", "192.168.4.23"],
+    ["Check whether server archive at fd12:3456::2 is reachable over the local network on port 22.", "fd12:3456::2"],
+    ["Verify that device 'desk-node' at '10.20.3.4' is reachable on the network port 22.", "10.20.3.4"],
+  ]) {
+    assert.deepEqual(userMessageNetworkPeerRequest([], prompt), { peer, ports: [22] });
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    const args = { actions: ["host.network-peer"], peer, ports: [22] };
+    assert.deepEqual(call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args } } }),
+      { params: { id: "pixel_ods_host_observe", args } });
+    for (const invalid of [
+      { ...args, peer: { address: peer, ports: [22] } },
+      { ...args, ports: [443] },
+      { ...args, peer: "192.168.4.24" },
+    ]) {
+      const result = call(guard, "tool_call", { event: { params: { id: "pixel_ods_host_observe", args: invalid } } });
+      assert.equal(result.block, true);
+      assert.match(result.blockReason, /could not validate this host observation/);
+      assert.doesNotMatch(result.blockReason, /did not ask for host/);
+    }
+  }
+  for (const prompt of [
+    "Check whether machine lab-alpha at 8.8.8.8 is reachable over LAN port 22.",
+    "Check whether machine lab-alpha at 192.168.4.0/24 is reachable over LAN port 22.",
+    "Check whether machine lab-alpha at invalid-address is reachable over LAN port 22.",
+    "Check whether machine lab-alpha at 192.168.4.23 and server lab-beta at 192.168.4.24 are reachable over LAN port 22.",
+    "Check whether machine lab-alpha at 192.168.4.23 is reachable over LAN port 22. Do not contact lab-alpha.",
+    "Check whether machine lab-alpha at 192.168.4.23 is reachable over LAN port 22. Do not contact 192.168.4.23.",
+    "Do not inspect machine lab-alpha at 192.168.4.23 on the LAN port 22.",
+  ]) assert.equal(userMessageNetworkPeerRequest([], prompt), undefined, prompt);
 });
 
 test("binds one owner-named private peer to bounded read-only reachability evidence", () => {

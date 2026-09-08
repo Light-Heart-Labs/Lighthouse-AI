@@ -4493,6 +4493,10 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
   const patterns = [
     /^\s*[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?\s+is\s+(?:an?\s+)?(?:Windows|Linux|macOS|Mac)?\s*(?:computer|machine|host|device)\b/i,
     /\b(?:computer|machine|host|device|peer)\s+(?:named|called)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    // An attributive name and its attached address identify one endpoint too:
+    // "the server archive at 10.0.0.8". The common address validation below
+    // still binds the IP, retains the alias for exclusions, and rejects lists.
+    /\b(?:computer|machine|host|device|peer|server)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?(?=\s+at\s+[`"']?[A-Za-z0-9.:]+)/i,
     // A report such as "the initial Node probe used an old image" names no
     // peer. Treat these words as commands only in an owner directive.
     /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
@@ -7006,7 +7010,13 @@ export function createToolLoopGuard({
       const selected = toolName === "tool_call"
         ? wrappedToolParams?.args : normalizedParams ?? event?.params;
       const params = permittedHostObservationParams(selected, state?.hostObservationPolicy);
-      if (!params) return { block: true, blockReason: OPERATIONS_NOT_REQUESTED_REASON };
+      if (!params) return {
+        block: true,
+        blockReason: "Pixel could not validate this host observation against the current request. " +
+          "Check the tool argument schema and any explicit inspection exclusions. A network peer " +
+          "must match one unambiguous owner-requested endpoint and its permitted ports; " +
+          "if the endpoint is unclear, ask the owner rather than retrying the same call.",
+      };
       state.hostObservationUsed = true;
       return toolName === "tool_call"
         ? { params: { id: SYNCHRONOUS_HOST_OBSERVE_TOOL, args: params } }
