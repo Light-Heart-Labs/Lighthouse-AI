@@ -117,15 +117,12 @@ def _get_local_ip() -> str:
     interface it would use to reach the public internet, which is the same
     interface we want to announce on. Never actually sends a packet.
     """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 80))
-        ip: str = s.getsockname()[0]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
     except OSError:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
+        return "127.0.0.1"
 
 
 def _safe_port(env: dict[str, str], key: str, default: int) -> int:
