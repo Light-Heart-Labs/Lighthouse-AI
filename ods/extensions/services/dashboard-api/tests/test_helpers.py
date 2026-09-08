@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestStripDictKeyPrefixSafe:
+
+    def test_strips_key_prefixes(self):
+        from helpers import strip_dict_key_prefix_safe
+        raw = {"env_host": "localhost", "env_port": 8080, "name": "app"}
+        assert strip_dict_key_prefix_safe(raw, prefix="env_") == {"host": "localhost", "port": 8080, "name": "app"}
+
+    def test_handles_none_and_empty_prefix(self):
+        from helpers import strip_dict_key_prefix_safe
+        assert strip_dict_key_prefix_safe(None) == {}
+        assert strip_dict_key_prefix_safe({"a": 1}, prefix="") == {"a": 1}
+
