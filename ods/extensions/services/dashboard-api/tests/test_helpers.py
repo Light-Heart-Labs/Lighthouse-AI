@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestTruncateStringEllipsisSafe:
+
+    def test_truncates_with_ellipsis(self):
+        from helpers import truncate_string_ellipsis_safe
+        assert truncate_string_ellipsis_safe("Hello World", max_len=8) == "Hello..."
+        assert truncate_string_ellipsis_safe("Hi", max_len=10) == "Hi"
+
+    def test_handles_none_and_negative_max_len(self):
+        from helpers import truncate_string_ellipsis_safe
+        assert truncate_string_ellipsis_safe(None, max_len=5) == ""
+        assert truncate_string_ellipsis_safe("test", max_len=0) == "..."
+
