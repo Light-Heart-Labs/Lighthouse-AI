@@ -13244,3 +13244,38 @@ test("mixed diagnostics retain explicit status and app-metadata exclusions", () 
     assert.equal(call(guard, "tool_call", { event: { params: { id: name, args: {} } } }).block, true);
   }
 });
+
+
+test("read-only tool discovery has equivalent direct and wrapped admission during host work", () => {
+  const guard = createToolLoopGuard();
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "Report the ODS host kernel and memory." });
+  for (let round = 0; round < 3; round++) {
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    for (const tool of ["tool_search", "tool_describe"]) {
+      assert.notEqual(call(guard, tool, { event: { params: { query: "extension inspection" } } })?.block, true);
+      assert.notEqual(call(guard, "tool_call", { event: { params: { id: tool, args: { query: "extension inspection" } } } })?.block, true);
+    }
+  }
+  assert.equal(call(guard, "tool_call", { event: { params: { id: "message", args: {} } } }).block, true);
+});
+
+test("inspection of another object does not mandate a host inventory", () => {
+  for (const prompt of [
+    "Inspect the extension and choose the local machine observations you need to diagnose it.",
+    "Examine the application and gather useful facts about this computer as needed.",
+    "Inspect the extension. Also report the host kernel and OS signature.",
+  ]) {
+    const result = userMessageOperationsRequirements([], prompt);
+    if (prompt.includes("Also report")) {
+      assert.ok(result.actions.includes("host.kernel"));
+      assert.ok(result.actions.includes("host.os-release"));
+    } else assert.equal(result.actions.filter((action) => action.startsWith("host.")).length, 0, prompt);
+  }
+  for (const prompt of ["Inspect the real ODS host.", "Perform a comprehensive inspection of this host.", "Inspect CPU and memory on this host."]) {
+    const result = userMessageOperationsRequirements([], prompt);
+    assert.equal(result.required, true, prompt);
+    assert.ok(result.actions.includes("host.cpu"), prompt);
+    assert.ok(result.actions.includes("host.memory"), prompt);
+  }
+});
