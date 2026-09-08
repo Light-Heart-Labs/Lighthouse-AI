@@ -72,6 +72,8 @@ function tokenCanRevoke(token) {
 
 export default function Invites() {
   const [tokens, setTokens] = useState([])
+  const [query, setQuery] = useState('')
+  const [inventoryStatus, setInventoryStatus] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showOwnerCreate, setShowOwnerCreate] = useState(false)
@@ -140,8 +142,15 @@ export default function Invites() {
     )
   }
 
-  const ownerTokens = tokens.filter(isOwnerToken)
-  const guestTokens = tokens.filter(t => !isOwnerToken(t))
+  const filteredTokens = tokens.filter(token => {
+    const state = tokenStatus(token).label
+    if (inventoryStatus !== 'all' && !(inventoryStatus === 'used' ? state.startsWith('used') : state === inventoryStatus)) return false
+    const needle = query.trim().toLowerCase()
+    return !needle || [token.target_username, token.note, token.token_hash_prefix].some(value => String(value || '').toLowerCase().includes(needle))
+  })
+  const ownerTokens = filteredTokens.filter(isOwnerToken)
+  const guestTokens = filteredTokens.filter(t => !isOwnerToken(t))
+  const filtering = query.trim() || inventoryStatus !== 'all'
   const ownerCardUnavailable = ownerCardStatus?.ready === false
 
   return (
@@ -173,6 +182,15 @@ export default function Invites() {
 
       <VoiceReadiness />
 
+      <div className="mb-5 flex flex-wrap items-center gap-3 text-sm text-theme-text">
+        <input aria-label="Search access links" placeholder="Search username, note or ID" value={query} onChange={event => setQuery(event.target.value)} className="rounded-lg border border-theme-border bg-theme-card p-2" />
+        <select aria-label="Access link status" value={inventoryStatus} onChange={event => setInventoryStatus(event.target.value)} className="rounded-lg border border-theme-border bg-theme-card p-2">
+          <option value="all">All statuses</option><option value="active">Unused active</option><option value="used">Used / redeemed</option><option value="expired">Expired</option><option value="revoked">Revoked</option>
+        </select>
+        <span role="status">Showing {filteredTokens.length} of {tokens.length} access links</span>
+        {filtering && <button type="button" onClick={() => { setQuery(''); setInventoryStatus('all') }} className="text-theme-accent">Clear filters</button>}
+      </div>
+
       <section className="mb-8 bg-theme-card border border-theme-border rounded-xl p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
@@ -202,7 +220,7 @@ export default function Invites() {
           </div>
         )}
 
-        {ownerTokens.length === 0 ? (
+        {filtering && ownerTokens.length === 0 ? <p className="mt-5 text-sm text-theme-text-muted">No owner cards match these filters.</p> : ownerTokens.length === 0 ? (
           <EmptyOwnerState
             onCreate={() => setShowOwnerCreate(true)}
             disabled={ownerCardUnavailable}
@@ -236,7 +254,7 @@ export default function Invites() {
           </button>
         </div>
 
-        {guestTokens.length === 0 ? (
+        {filtering && guestTokens.length === 0 ? <p className="mt-5 text-sm text-theme-text-muted">No guest invites match these filters.</p> : guestTokens.length === 0 ? (
           <EmptyGuestState onCreate={() => setShowGuestCreate(true)} />
         ) : (
           <div className="mt-5 space-y-3">
