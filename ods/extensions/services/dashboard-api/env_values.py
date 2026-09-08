@@ -12,3 +12,24 @@ def strip_matching_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def parse_env_int_safe(
+    val: object, default: int = 0, min_val: int | None = None, max_val: int | None = None
+) -> int:
+    """Parse integer environment value with min/max bounds clamping safely.
+
+    Returns default value for invalid format, NaN/float inputs, or None without exception.
+    """
+    if val is None:
+        return default
+    try:
+        res = int(float(str(val).strip()))
+        if min_val is not None and res < min_val:
+            res = min_val
+        if max_val is not None and res > max_val:
+            res = max_val
+        return res
+    except (ValueError, TypeError, OverflowError):
+        return default
+
