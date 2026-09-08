@@ -1146,3 +1146,24 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def flatten_dict_values_list(data: object) -> list:
+    """Flatten list or tuple elements stored across dictionary values safely.
+
+    Handles scalar values, nested lists, None values, and non-dict inputs without exception.
+    """
+    if not isinstance(data, dict):
+        return []
+    res = []
+    for k, v in data.items():
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)):
+            for sub in v:
+                if sub is not None:
+                    res.append(sub)
+        else:
+            res.append(v)
+    return res
+
