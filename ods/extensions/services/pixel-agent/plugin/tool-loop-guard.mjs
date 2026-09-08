@@ -4501,8 +4501,11 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
     // still binds the IP, retains the alias for exclusions, and rejects lists.
     /\b(?:computer|machine|host|device|peer|server)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?(?=\s+at\s+[`"']?[A-Za-z0-9.:]+)/i,
     // A report such as "the initial Node probe used an old image" names no
-    // peer. Treat these words as commands only in an owner directive.
-    /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    // peer. Treat these words as commands only in an owner directive, and
+    // require the complete target to end before a clause boundary or network
+    // qualifier. A coordinated verb ("resolve and record") or a longer
+    // object phrase is not an endpoint named by its first word.
+    /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?(?=\s*(?:$|[.!?,;`"'()]|\s+(?:at|on|over|via|for|using|with|through|ports?|and|or|TCP|UDP|SSH|RDP|WinRM|HTTP|HTTPS)\b))/i,
     /\b(?:reachability|connectivity)\s+(?:of|to|for)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
     /\b(?:check|inspect|test|verify|probe)\s+(?:(?:a|the|specific|named|remote|LAN|network)\s+)*(?:target|peer)\s*:?\s*(?:(?:named|called|physical)\s+)*[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
   ];
