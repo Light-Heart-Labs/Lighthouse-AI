@@ -913,6 +913,133 @@ def test_workflows_with_matching_n8n(test_client, tmp_path, monkeypatch):
     assert wf["featured"] is True
 
 
+# ---------------------------------------------------------------------------
+# Bug #3: Efficient session management — reuse pooled connections
+# ---------------------------------------------------------------------------
+
+
+def test_get_n8n_workflows_uses_shared_session(test_client, monkeypatch):
+    """get_n8n_workflows should use _get_aio_session() for connection pooling."""
+    import routers.workflows as wf_mod
+
+    # Track that _get_aio_session was called (not creating new ClientSession)
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock()
+
+    resp_mock = AsyncMock()
+    resp_mock.status = 200
+    resp_mock.json = AsyncMock(return_value={"data": [{"id": "1", "name": "WF1"}]})
+
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session.get.return_value = ctx
+
+    get_aio_session_called = False
+
+    async def mock_get_aio_session():
+        nonlocal get_aio_session_called
+        get_aio_session_called = True
+        return mock_session
+
+    monkeypatch.setattr("routers.workflows._get_aio_session", mock_get_aio_session)
+
+    import asyncio
+    asyncio.run(wf_mod.get_n8n_workflows())
+
+    assert get_aio_session_called, "Expected _get_aio_session() to be called for connection pooling"
+
+
+def test_remove_workflow_uses_shared_session(test_client, tmp_path, monkeypatch):
+    """_remove_workflow should use _get_aio_session() for connection pooling."""
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "rm-wf", "name": "Remove Me", "description": "test",
+             "file": "rm.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    n8n_workflows = [{"id": "77", "name": "Remove Me", "active": True}]
+
+    mock_session = AsyncMock()
+    del_resp = AsyncMock()
+    del_resp.status = 204
+
+    del_ctx = AsyncMock()
+    del_ctx.__aenter__ = AsyncMock(return_value=del_resp)
+    del_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session.delete = MagicMock(return_value=del_ctx)
+
+    get_aio_session_called = False
+
+    async def mock_get_aio_session():
+        nonlocal get_aio_session_called
+        get_aio_session_called = True
+        return mock_session
+
+    monkeypatch.setattr("routers.workflows._get_aio_session", mock_get_aio_session)
+
+    with patch("routers.workflows.get_n8n_workflows", new_callable=AsyncMock, return_value=n8n_workflows):
+        import asyncio
+        asyncio.run(wf_mod._remove_workflow("rm-wf"))
+
+    assert get_aio_session_called, "Expected _get_aio_session() to be called for connection pooling"
+
+
+def test_workflow_executions_uses_shared_session(test_client, tmp_path, monkeypatch):
+    """workflow_executions should use _get_aio_session() for connection pooling."""
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "exec-wf", "name": "Exec Workflow", "description": "test",
+             "file": "exec.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    n8n_workflows = [{"id": "42", "name": "Exec Workflow", "active": True}]
+
+    mock_session = AsyncMock()
+    executions_data = {"data": [{"id": "100", "finished": True, "mode": "trigger"}]}
+
+    resp_mock = AsyncMock()
+    resp_mock.status = 200
+    resp_mock.json = AsyncMock(return_value=executions_data)
+
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp_mock)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session.get = MagicMock(return_value=ctx)
+
+    get_aio_session_called = False
+
+    async def mock_get_aio_session():
+        nonlocal get_aio_session_called
+        get_aio_session_called = True
+        return mock_session
+
+    monkeypatch.setattr("routers.workflows._get_aio_session", mock_get_aio_session)
+
+    with patch("routers.workflows.get_n8n_workflows", new_callable=AsyncMock, return_value=n8n_workflows):
+        import asyncio
+        asyncio.run(wf_mod.workflow_executions("exec-wf"))
+
+    assert get_aio_session_called, "Expected _get_aio_session() to be called for connection pooling"
+
+
 def test_workflow_enable_rejects_path_traversal_in_catalog_file(test_client, monkeypatch):
     """A catalog 'file' that escapes WORKFLOW_DIR via .. must be refused by
     the is_relative_to containment guard, not resolved and imported."""

@@ -51,14 +51,15 @@ def load_workflow_catalog() -> dict:
 async def get_n8n_workflows() -> list[dict]:
     """Get all workflows from n8n API."""
     try:
+        from helpers import _get_aio_session
         headers = {}
         if N8N_API_KEY:
             headers["X-N8N-API-KEY"] = N8N_API_KEY
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-            async with session.get(f"{N8N_URL}/api/v1/workflows", headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("data", [])
+        session = await _get_aio_session()
+        async with session.get(f"{N8N_URL}/api/v1/workflows", headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("data", [])
     except (aiohttp.ClientError, OSError, json.JSONDecodeError) as e:
         logger.warning(f"Failed to fetch workflows from n8n: {e}")
     return []
@@ -226,6 +227,8 @@ async def enable_workflow(workflow_id: str, api_key: str = Depends(verify_api_ke
 
 async def _remove_workflow(workflow_id: str):
     """Shared logic for disabling/removing a workflow from n8n."""
+    from helpers import _get_aio_session
+
     n8n_workflows = await get_n8n_workflows()
     catalog = load_workflow_catalog()
     wf_info = next((wf for wf in catalog.get("workflows", []) if wf["id"] == workflow_id), None)
@@ -245,13 +248,13 @@ async def _remove_workflow(workflow_id: str):
         headers = {}
         if N8N_API_KEY:
             headers["X-N8N-API-KEY"] = N8N_API_KEY
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-            async with session.delete(f"{N8N_URL}/api/v1/workflows/{n8n_wf['id']}", headers=headers) as resp:
-                if resp.status in (200, 204):
-                    return {"status": "success", "workflowId": workflow_id, "message": f"{wf_info['name']} has been removed"}
-                else:
-                    error_text = await resp.text()
-                    raise HTTPException(status_code=resp.status, detail=f"n8n API error: {error_text}")
+        session = await _get_aio_session()
+        async with session.delete(f"{N8N_URL}/api/v1/workflows/{n8n_wf['id']}", headers=headers) as resp:
+            if resp.status in (200, 204):
+                return {"status": "success", "workflowId": workflow_id, "message": f"{wf_info['name']} has been removed"}
+            else:
+                error_text = await resp.text()
+                raise HTTPException(status_code=resp.status, detail=f"n8n API error: {error_text}")
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="n8n workflow remove timed out")
     except aiohttp.ClientError as e:
@@ -275,6 +278,8 @@ async def disable_workflow(workflow_id: str, api_key: str = Depends(verify_api_k
 @router.get("/api/workflows/{workflow_id}/executions")
 async def workflow_executions(workflow_id: str, limit: int = 20, api_key: str = Depends(verify_api_key)):
     """Get recent executions for a workflow."""
+    from helpers import _get_aio_session
+
     _validate_workflow_id(workflow_id)
     n8n_workflows = await get_n8n_workflows()
     catalog = load_workflow_catalog()
@@ -295,13 +300,13 @@ async def workflow_executions(workflow_id: str, limit: int = 20, api_key: str = 
         headers = {}
         if N8N_API_KEY:
             headers["X-N8N-API-KEY"] = N8N_API_KEY
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-            async with session.get(f"{N8N_URL}/api/v1/executions", headers=headers, params={"workflowId": n8n_wf["id"], "limit": limit}) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return {"workflowId": workflow_id, "n8nId": n8n_wf["id"], "executions": data.get("data", [])}
-                else:
-                    return {"executions": [], "error": "Failed to fetch executions"}
+        session = await _get_aio_session()
+        async with session.get(f"{N8N_URL}/api/v1/executions", headers=headers, params={"workflowId": n8n_wf["id"], "limit": limit}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return {"workflowId": workflow_id, "n8nId": n8n_wf["id"], "executions": data.get("data", [])}
+            else:
+                return {"executions": [], "error": "Failed to fetch executions"}
     except (aiohttp.ClientError, OSError, json.JSONDecodeError):
         logger.exception("Failed to fetch workflow executions")
         return {"executions": [], "error": "Failed to fetch executions"}

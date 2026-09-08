@@ -187,8 +187,18 @@ select_backup() {
         return 1
     fi
 
+    if ! [[ -t 0 ]]; then
+        log_error "Interactive backup selection requires a terminal" >&2
+        return 1
+    fi
+
     echo "Select a backup to restore (enter number):" >&2
     read -r selection
+
+    if ! [[ "$selection" =~ ^[0-9]+$ ]]; then
+        log_error "Invalid selection: must be a number, got '$selection'" >&2
+        return 1
+    fi
 
     local backups=()
     while IFS= read -r -d '' backup; do
@@ -197,7 +207,7 @@ select_backup() {
 
     local index=$((selection - 1))
     if [[ $index -lt 0 || $index -ge ${#backups[@]} ]]; then
-        log_error "Invalid selection: $selection"
+        log_error "Invalid selection: number must be between 1 and ${#backups[@]}, got $selection" >&2
         return 1
     fi
 
