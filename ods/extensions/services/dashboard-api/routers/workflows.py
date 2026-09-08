@@ -48,6 +48,26 @@ def load_workflow_catalog() -> dict:
         return DEFAULT_WORKFLOW_CATALOG
 
 
+async def _read_workflow_pages(session, headers: dict) -> list[dict]:
+    workflows = []
+    params = {}
+    seen_cursors = set()
+    while True:
+        async with session.get(f"{N8N_URL}/api/v1/workflows", headers=headers, params=params) as resp:
+            if resp.status != 200:
+                logger.warning("Failed to fetch n8n workflow page: HTTP %s", resp.status)
+                return []
+            data = await resp.json()
+        workflows.extend(data.get("data", []))
+        cursor = data.get("nextCursor")
+        if not cursor:
+            return workflows
+        if not isinstance(cursor, str) or cursor in seen_cursors:
+            raise HTTPException(status_code=502, detail="n8n returned an invalid or repeated workflow cursor")
+        seen_cursors.add(cursor)
+        params = {"cursor": cursor}
+
+
 async def get_n8n_workflows() -> list[dict]:
     """Get all workflows from n8n API."""
     try:
@@ -55,11 +75,10 @@ async def get_n8n_workflows() -> list[dict]:
         if N8N_API_KEY:
             headers["X-N8N-API-KEY"] = N8N_API_KEY
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-            async with session.get(f"{N8N_URL}/api/v1/workflows", headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("data", [])
-    except (aiohttp.ClientError, OSError, json.JSONDecodeError) as e:
+            # Bound the complete traversal, not just each individual page.
+            async with asyncio.timeout(5):
+                return await _read_workflow_pages(session, headers)
+    except (aiohttp.ClientError, OSError, asyncio.TimeoutError, json.JSONDecodeError) as e:
         logger.warning(f"Failed to fetch workflows from n8n: {e}")
     return []
 
