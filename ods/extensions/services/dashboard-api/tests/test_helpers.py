@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestConvertStringToTitlecaseSafe:
+
+    def test_converts_to_title_case(self):
+        from helpers import convert_string_to_titlecase_safe
+        assert convert_string_to_titlecase_safe("hello_world_test") == "Hello World Test"
+        assert convert_string_to_titlecase_safe("user-first-name") == "User First Name"
+
+    def test_handles_none_and_empty_inputs(self):
+        from helpers import convert_string_to_titlecase_safe
+        assert convert_string_to_titlecase_safe(None) == ""
+        assert convert_string_to_titlecase_safe("  ") == ""
+
