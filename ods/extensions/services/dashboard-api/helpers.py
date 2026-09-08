@@ -1146,3 +1146,16 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def extract_list_head_tail_bounds(items: object, count: int = 1) -> dict:
+    """Extract head and tail elements from sequence of specified count safely.
+
+    Handles count larger than sequence length, None, negative count, or non-sequences.
+    """
+    if not isinstance(items, (list, tuple)):
+        return {"head": [], "tail": []}
+    n = max(0, int(count))
+    lst = list(items)
+    return {"head": lst[:n], "tail": lst[-n:] if n > 0 else []}
+
