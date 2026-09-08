@@ -28,8 +28,19 @@ export default function PixelAccessCard() {
     if (!status?.revision || changing || (mode === 'full-access' && !confirmed)) return
     setChanging(true); setError('')
     try {
+      // Runs can change the inspection revision while Settings remains open.
+      // The host still checks this revision atomically before changing access.
+      const current = await refresh()
+      if (!current?.available || !current?.revision) {
+        setError('Current access status could not be verified. No change was requested. Refresh the status before trying again.')
+        return
+      }
+      if (current.busy || (current.pending && mode === 'full-access')) {
+        setError('Pixel is working or recovering an access transition. No change was requested. Wait for it to finish, or restore safer mode when available.')
+        return
+      }
       const response = await fetch('/api/pixel/access-mode', {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({mode, revision: status.revision, confirmed: mode === 'full-access' && confirmed})})
+        body: JSON.stringify({mode, revision: current.revision, confirmed: mode === 'full-access' && confirmed})})
       if (!response.ok) throw new Error()
       setStatus(await response.json()); setConfirming(false); setConfirmed(false)
     } catch {
