@@ -5006,6 +5006,17 @@ function hasWorkspaceHtmlTarget(text) {
   return /\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/i.test(text);
 }
 
+function ownerForbidsWorkspacePreview(messages, prompt) {
+  const text = currentOwnerIntentText(messages, prompt)
+    .replace(/(?:\x60{3}|~{3})[\s\S]*?(?:\x60{3}|~{3})/g, " ")
+    .replace(/^\s*>[^\n]*/gm, " ")
+    .replace(/"[^"\n]*"|\x60[^\x60\n]*\x60/g, " ");
+  // Preserve explicit owner constraints without requiring a positive visual
+  // vocabulary to use the local snapshot tool. These are delivery actions,
+  // not filenames, quoted examples, or another clause's edit restriction.
+  return /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|avoid|skip|without)\s+(?:(?:create|build|edit|write|run|execute)\s*(?:,\s*|and\s+|or\s+))*(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?|republish(?:ing)?|display(?:ing)?)\b/i.test(text);
+}
+
 function withoutWorkspaceHtmlTargets(text) {
   return text.replace(/\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/gi, " ");
 }
@@ -5924,7 +5935,8 @@ export function createToolLoopGuard({
         workspacePythonUnittestRequested: false,
         workspaceParsedJsonVerificationRequested: false,
         workspaceVerificationRequested: false,
-        workspacePreviewRequested: false,
+        workspacePreviewRequired: false,
+        workspacePreviewForbidden: false,
         workspacePreviewAuthorshipRequired: false,
         workspacePreviewModelAuthored: false,
         workspaceVisualContinuationRequested: false,
@@ -6575,11 +6587,11 @@ export function createToolLoopGuard({
         ? pendingParams.id.split(":").at(-1)
         : toolName;
     if (state && pendingSelectedName === WORKSPACE_PREVIEW_TOOL) {
-      if (!state.workspacePreviewRequested) {
+      if (!state.ownerIntentObserved || state.workspacePreviewForbidden) {
         return {
           block: true,
           blockReason:
-            "Pixel blocked an unsolicited workspace publication. Publish a preview only when the owner's current request asks to build or display a website or browser-rendered visual.",
+            "Pixel blocked workspace publication because the current owner request is unavailable or explicitly prohibits displaying a preview.",
         };
       }
       const suppliedArgs =
@@ -6849,14 +6861,14 @@ export function createToolLoopGuard({
         return { block: true, blockReason: FOCUSED_EDIT_RETRY_EXHAUSTED_REASON };
       }
       if (
-        state.workspacePreviewRequested &&
+        state.workspacePreviewRequired &&
         selectedToolName === "exec" &&
         execLaunchesWorkspaceServer(selectedParams)
       ) {
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON };
       }
       const setupDirectory =
-        state.workspacePreviewRequested && selectedToolName === "exec"
+        state.workspacePreviewRequired && selectedToolName === "exec"
           ? workspacePreviewMkdirDirectory(selectedParams)
           : undefined;
       if (setupDirectory) {
@@ -7839,6 +7851,7 @@ export function createToolLoopGuard({
       }
       if (currentUserText(event?.messages, event?.prompt)) {
         state.ownerIntentObserved = true;
+        state.workspacePreviewForbidden = ownerForbidsWorkspacePreview(event?.messages, event?.prompt);
         const previousPreview = typeof sessionId === "string" && sessionId
           ? sessionPreviews.get(sessionId)
           : undefined;
@@ -7867,10 +7880,12 @@ export function createToolLoopGuard({
         // A prose-only continuation guess is not a workspace access boundary.
         // With no verified previous preview, ordinary tools must remain usable
         // to locate the requested files. Only a real preview binds its scope.
-        state.workspacePreviewRequested = Boolean(trustedSessionPreview) ||
-          ((!visualContinuationRequested || explicitDelivery) && previewRequested);
+        state.workspacePreviewRequired = !state.workspacePreviewForbidden && (
+          Boolean(trustedSessionPreview) ||
+          ((!visualContinuationRequested || explicitDelivery) && previewRequested)
+        );
         state.workspacePreviewAuthorshipRequired = Boolean(
-          state.workspacePreviewRequested &&
+          state.workspacePreviewRequired &&
           !trustedSessionPreview &&
           userMessageRequiresWorkspacePreviewAuthorship(
             event?.messages,
@@ -7883,10 +7898,10 @@ export function createToolLoopGuard({
             event?.prompt
           );
         state.workspaceTaskRequested =
-          state.workspacePreviewRequested ||
+          state.workspacePreviewRequired ||
           userMessageRequestsWorkspaceTools(event?.messages, event?.prompt);
         state.workspaceMutationRequested =
-          state.workspacePreviewRequested ||
+          state.workspacePreviewRequired ||
           userMessageRequestsWorkspaceMutation(event?.messages, event?.prompt);
         state.workspaceTaskPath = userMessageWorkspaceContinuationPath(
           event?.messages,
@@ -8275,7 +8290,7 @@ export function createToolLoopGuard({
         previewEvent?.params?.relativeDirectory
       );
       if (requestedDirectory) state.workspacePreviewDirectory = requestedDirectory;
-      const preview = workspacePreviewOutcome(
+      const preview = state.ownerIntentObserved && !state.workspacePreviewForbidden && workspacePreviewOutcome(
         previewEvent,
         state.workspacePreviewDirectory,
         state
@@ -8821,7 +8836,7 @@ export function createToolLoopGuard({
 
   function trustedWorkspacePreviewContinuation(state) {
     if (
-      !state?.workspacePreviewRequested ||
+      !state?.workspacePreviewRequired ||
       state.operationsRequired ||
       state.exactDownloadRequested
     ) {
@@ -9048,7 +9063,7 @@ export function createToolLoopGuard({
       return { status: "pending", text: VERIFICATION_PENDING_DELIVERY_PREFIX };
     }
     if (
-      state.workspacePreviewRequested &&
+      (state.workspacePreviewRequired || state.workspacePreviewAttempted) &&
       !state.operationsRequired &&
       !state.exactDownloadRequested
     ) {

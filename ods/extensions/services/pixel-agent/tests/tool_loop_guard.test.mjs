@@ -266,7 +266,7 @@ for (const [prompt, sessionId] of [
   ["Explain this command:\n" + "\x60\x60\x60\nPublish log-viewer-lab.\n\x60\x60\x60", "session-1"],
   ["Explain this quote:\n> Publish log-viewer-lab.", "session-1"],
 ]) {
-  test("does not derive named publication authority from unrelated context: " + prompt, () => {
+  test("prior preview alone cannot replace current target readback or owner constraints: " + prompt, () => {
     const guard = createToolLoopGuard();
     seedNamedPreview(guard);
     const context = { agentId: "pixel", runId: "run-unbound", sessionId };
@@ -275,9 +275,64 @@ for (const [prompt, sessionId] of [
       context, event: { runId: context.runId, params: { relativeDirectory: "log-viewer-lab" } },
     });
     assert.equal(blocked?.block, true);
-    assert.match(blocked.blockReason, /unsolicited/);
+    assert.match(blocked.blockReason, /Read log-viewer-lab\/index.html before publishing|explicitly prohibits/);
   });
 }
+
+for (const wrapped of [false, true]) {
+  test(`preview invocation uses exact workspace evidence without visual keywords: wrapped=${wrapped}`, () => {
+    const { write, params, details } = seedNamedPreview(createToolLoopGuard());
+    const guard = createToolLoopGuard();
+    const prompt = "Make a focused correction and republish for testing.";
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), false);
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "fresh-session" }, "pixel", { prompt });
+    assert.equal(guard.verificationForRun("run-1").status, "none");
+    const tool = wrapped ? "tool_call" : "pixel_ods_workspace_preview";
+    const invocation = wrapped ? { id: "openclaw:plugin:pixel-ods:pixel_ods_workspace_preview", args: params } : params;
+    assert.match(call(guard, tool, { event: { params: invocation } }).blockReason, /Read .*index.html before publishing/);
+    const read = { path: write.path };
+    afterCall(guard, "read", { event: { params: read, result: { content: [{ type: "text", text: write.content }] } } });
+    assert.notEqual(call(guard, tool, { event: { params: invocation } })?.block, true);
+    // An attempted publication must not become a claimed success on failure.
+    afterCall(guard, "pixel_ods_workspace_preview", { event: { params, result: { isError: true, details } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+    afterCall(guard, "pixel_ods_workspace_preview", { event: { params, result: { details: { ...details, relativeDirectory: "other" } } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+    afterCall(guard, "pixel_ods_workspace_preview", { event: { params, result: { details } } });
+    const verification = guard.verificationForRun("run-1");
+    assert.equal(verification.status, "passed");
+    assert.equal(verification.preview.relativeDirectory, params.relativeDirectory);
+    assert.equal(verification.preview.url, details.url);
+  });
+}
+
+for (const prompt of [
+  "Do not publish the current files.",
+  "Don't republish anything.",
+  "Don’t republish anything.",
+  "Never create and publish a website.",
+  "Read the files without showing a preview.",
+  "Do not edit, publish, run or delete anything.",
+]) {
+  test("exact index read cannot override the owner's publication constraint: " + prompt, () => {
+    const { write, params, details } = seedNamedPreview(createToolLoopGuard());
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt });
+    afterCall(guard, "read", { event: { params: { path: write.path }, result: { content: [{ type: "text", text: write.content }] } } });
+    assert.match(call(guard, "pixel_ods_workspace_preview", { event: { params } }).blockReason, /explicitly prohibits/);
+    assert.equal(guard.verificationForRun("run-1").status, "none");
+    afterCall(guard, "pixel_ods_workspace_preview", { event: { params, result: { details } } });
+    assert.equal(guard.verificationForRun("run-1").status, "failed");
+  });
+}
+
+test("optional workspace evidence does not require publishing a preview", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Explain the saved implementation." });
+  afterCall(guard, "read", { event: { params: { path: "saved/index.html" }, result: { content: [{ type: "text", text: "<!doctype html><p>saved</p>" }] } } });
+  assert.equal(guard.verificationForRun("run-1").status, "none");
+  assert.equal(guard.beforeAgentFinalize({}, { agentId: "pixel", runId: "run-1" }), undefined);
+});
 
 test("exec cancellation control creates exact owner-private markers and fails closed", () => {
   const temporary = mkdtempSync(path.join(tmpdir(), "pixel-exec-control-"));
