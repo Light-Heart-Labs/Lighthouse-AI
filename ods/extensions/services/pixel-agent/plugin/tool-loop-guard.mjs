@@ -5856,6 +5856,7 @@ export function createToolLoopGuard({
         total: 0,
         webExhausted: false,
         webTerminalBlocks: 0,
+        webTerminalRound: 0,
         codingExhausted: false,
         codingTerminalBlocks: 0,
         invalidEditCreateBlocks: 0,
@@ -7665,8 +7666,17 @@ export function createToolLoopGuard({
     // tool's ordinary policy, path, cancellation and coding-loop checks.
     // Non-web progress does not replenish ignored-web-call attempts.
     if (state.webExhausted && WEB_TOOLS.has(effectiveToolName)) {
+      // Sibling calls were already emitted before the model could receive the
+      // warning. Escalate only after another observed model decision, as the
+      // Operations guards do. Runtimes without model hooks retain the bounded
+      // call-count fallback rather than acquiring an unlimited retry allowance.
+      if (state.operationsPromptRound > 0 &&
+          state.operationsPromptRound === state.webTerminalRound) {
+        return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
+      }
       if (state.webTerminalBlocks === 0) {
         state.webTerminalBlocks = 1;
+        state.webTerminalRound = state.operationsPromptRound;
         return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
       }
       let aborted = false;
@@ -7808,6 +7818,7 @@ export function createToolLoopGuard({
     const kind = toolName === "web_search" ? "search" : "fetch";
     if (state[kind] >= effective[kind] || state.total >= effective.total) {
       state.webExhausted = true;
+      state.webTerminalRound = state.operationsPromptRound;
       return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
     }
 

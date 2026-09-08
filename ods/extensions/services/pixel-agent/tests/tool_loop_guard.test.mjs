@@ -7991,7 +7991,81 @@ test("does not require targeted extraction after an untruncated or failed fetch"
   }
 });
 
-test("aborts only the active run when the model ignores the terminal block", () => {
+test("web exhaustion lets a whole model batch finish before escalating", () => {
+  for (const wrapped of [false, true]) {
+    const aborts = [];
+    const guard = createToolLoopGuard({
+      limits: { search: 1, fetch: 1, total: 1 },
+      abortRun: (sessionId) => { aborts.push(sessionId); return true; },
+    });
+    const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+    const sdkContext = { runId: "run-1", sessionId: "session-1" };
+    const prompt = "Research the library and save the verified findings to report.md.";
+    guard.observeRun(context, "pixel", { prompt });
+    const nextRound = () => guard.observeModelCall({ runId: "run-1" }, sdkContext);
+    const invoke = (name, args) => {
+      if (wrapped) {
+        const outer = call(guard, "tool_call", { event: { params: { id: name, args } } });
+        if (outer?.block) return outer;
+      }
+      return call(guard, name, { event: { params: args } });
+    };
+    nextRound();
+    assert.equal(invoke("web_fetch", { url: "https://docs.example.org/first" }), undefined);
+    for (const suffix of ["second", "third", "fourth", "fifth"]) {
+      assert.equal(invoke("web_fetch", { url: `https://docs.example.org/${suffix}` }).blockReason,
+        WEB_BUDGET_EXHAUSTED_REASON);
+    }
+    assert.deepEqual(aborts, []);
+    // Prompt rebuild/compaction is not a new model decision or fresh budget.
+    guard.observeRun(context, "pixel", { prompt, messages: [{ role: "assistant", content: "Report remains pending." }] });
+    assert.equal(invoke("web_search", { query: "library documentation" }).blockReason,
+      WEB_BUDGET_EXHAUSTED_REASON);
+    assert.notEqual(invoke("write", { path: "report.md", content: "Verified findings." })?.block, true);
+    assert.deepEqual(aborts, []);
+    nextRound();
+    // One final warning also applies to all siblings in this next batch.
+    for (let i = 0; i < 3; i++) {
+      assert.equal(invoke("web_search", { query: `ignored warning ${i}` }).blockReason,
+        WEB_BUDGET_EXHAUSTED_REASON);
+    }
+    assert.notEqual(invoke("read", { path: "report.md" })?.block, true);
+    assert.deepEqual(aborts, []);
+    nextRound();
+    assert.equal(invoke("web_search", { query: "still ignoring warnings" }).blockReason,
+      WEB_LOOP_ABORT_REASON);
+    assert.deepEqual(aborts, ["session-1"]);
+    assert.equal(call(guard, "web_search", {
+      context: { agentId: "pixel", runId: "run-2", sessionId: "session-2" },
+    }), undefined);
+  }
+});
+
+test("foreign model hooks cannot advance a web-exhausted Pixel batch", () => {
+  const aborts = [];
+  const guard = createToolLoopGuard({
+    limits: { search: 1, fetch: 1, total: 1 },
+    abortRun: (id) => { aborts.push(id); return true; },
+  });
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1", sessionKey: "agent:pixel:test" };
+  guard.observeRun(context, "pixel", { prompt: "Research and save report.md." });
+  guard.observeModelCall({ runId: "run-1" }, context);
+  call(guard, "web_search");
+  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  for (const other of [
+    { runId: "run-1" },
+    { runId: "run-1", agentId: "other", sessionId: "session-1" },
+    { runId: "run-1", sessionId: "different" },
+    { runId: "run-1", sessionKey: "agent:pixel:different" },
+    { runId: "other", sessionId: "session-1" },
+  ]) {
+    guard.observeModelCall({ runId: other.runId }, other);
+    assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+  }
+  assert.deepEqual(aborts, []);
+});
+
+test("without model hooks the finite web-loop fallback aborts only the active run", () => {
   const aborts = [];
   const warnings = [];
   const guard = createToolLoopGuard({
