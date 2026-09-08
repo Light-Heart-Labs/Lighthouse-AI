@@ -4391,10 +4391,7 @@ test("routes a capability inventory question to one read-only Operations project
       ),
     },
   });
-  assert.equal(
-    call(guard, "pixel_ods_status")?.blockReason,
-    OPERATIONS_INVENTORY_COMPLETE_REASON
-  );
+  assert.notEqual(call(guard, "pixel_ods_status")?.block, true, "local metadata remains available after inventory");
   const explanation = "A remote inspection needs a configured SSH target first.";
   const text = guard.replyPayloadSending({ runId: "run-1", kind: "final", payload: { text: explanation } })?.payload?.text;
   assert.ok(text.startsWith(explanation));
@@ -6039,10 +6036,7 @@ test("adds only sanitized ODS container and application projections after termin
     ),
     false
   );
-  assert.deepEqual(call(guard, "pixel_ods_apps_list"), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  assert.notEqual(call(guard, "pixel_ods_apps_list")?.block, true, "app metadata is available before host evidence");
   afterCall(guard, "pixel_ops_run", {
     event: {
       params: { target: "ods-host", action: "host.identity" },
@@ -7306,12 +7300,12 @@ test("Operations routing aborts after four blocked calls without model-call even
     { prompt: "Inspect this host's kernel and memory." }
   );
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    assert.deepEqual(call(guard, "pixel_ods_status"), {
+    assert.deepEqual(call(guard, "message"), {
       block: true,
       blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
     });
   }
-  assert.deepEqual(call(guard, "pixel_ods_status"), {
+  assert.deepEqual(call(guard, "message"), {
     block: true,
     blockReason: OPERATIONS_LOOP_ABORT_REASON,
   });
@@ -7338,12 +7332,9 @@ test("Operations routing permits only exact Tool Search Operations targets", () 
       },
     },
   }), undefined);
-  assert.deepEqual(call(guard, "tool_call", {
+  assert.notEqual(call(guard, "tool_call", {
     event: { params: { id: "pixel_ods_status", args: {} } },
-  }), {
-    block: true,
-    blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
-  });
+  })?.block, true, "local status projection is independent of host job sequencing");
   // sandbox exec is a WORKSPACE_CONTINUATION_TOOL; permitted
   // alongside required Operations (the model should still use the broker,
   // but the guard no longer independently blocks workspace tools).
@@ -13228,4 +13219,28 @@ test("an optional observation cannot smuggle an explicitly excluded ODS status r
 test("negated protocol mentions do not narrow the peer probe to that protocol", () => {
   assert.deepEqual(userMessageNetworkPeerRequest([], "Probe Strixy on the local network. No SSH login.").ports, [22, 80, 443, 3389, 5985, 5986]);
   assert.deepEqual(userMessageNetworkPeerRequest([], "Probe Strixy on the local network using SSH. But please no RDP.").ports, [22]);
+});
+
+
+test("extension diagnosis can read app metadata alongside incomplete host observations", () => {
+  const guard = createToolLoopGuard();
+  const context = { agentId: "pixel", runId: "run-1", sessionId: "session-1" };
+  guard.observeRun(context, "pixel", { prompt: "Check why ComfyUI is marked incompatible in this ODS installation. Inspect the extension and choose the local machine observations you need to diagnose it. Save your findings to comfyui-diagnosis.md and read it back. Do not install, enable, change settings, or contact other devices." });
+  for (let round = 0; round < 3; round++) {
+    guard.observeModelCall({ runId: "run-1" }, context, "pixel");
+    for (const name of ["pixel_ods_apps_list", "pixel_ods_status"]) {
+      assert.notEqual(call(guard, name, { event: { params: {} } })?.block, true);
+      assert.notEqual(call(guard, "tool_call", { event: { params: { id: name, args: {} } } })?.block, true);
+    }
+  }
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed", "metadata does not complete required host evidence or the report");
+});
+
+test("mixed diagnostics retain explicit status and app-metadata exclusions", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", { prompt: "Report the ODS host hostname. Do not query ODS status or app inventory." });
+  for (const name of ["pixel_ods_apps_list", "pixel_ods_status"]) {
+    assert.equal(call(guard, name, { event: { params: {} } }).block, true);
+    assert.equal(call(guard, "tool_call", { event: { params: { id: name, args: {} } } }).block, true);
+  }
 });

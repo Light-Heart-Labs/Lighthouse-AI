@@ -4018,6 +4018,8 @@ function hostObservationPolicy(messages, prompt) {
       !(networkDenied && ["host.network-addresses", "host.network-routes", "host.listening-ports", "host.tailscale", "host.network-peer"].includes(action))
     ).map(([action]) => action)),
     peer: userMessageNetworkPeerRequest(messages, prompt),
+    allowOdsApps: !explicitlyRejectsOdsTool(text, "ODS\\s+apps?|app\\s+(?:status|inventory)|pixel_ods_apps_list") &&
+      !explicitlyExcludesHostObservation(text, "ODS\\s+apps?|app\\s+(?:status|inventory)"),
     allowOdsStatus: !explicitlyRejectsOdsTool(text, "ODS\\s+status|pixel_ods_status") &&
       !explicitlyExcludesHostObservation(text, "ODS\\s+status"),
   };
@@ -6850,6 +6852,16 @@ export function createToolLoopGuard({
       ? wrappedToolTarget.split(":").at(-1)
       : undefined;
     const effectiveToolName = wrappedToolName ?? toolName;
+    if (state?.ownerIntentObserved && state.operationsRequired &&
+        ["pixel_ods_status", "pixel_ods_apps_list"].includes(effectiveToolName)) {
+      const permitted = effectiveToolName === "pixel_ods_status"
+        ? state.hostObservationPolicy?.allowOdsStatus : state.hostObservationPolicy?.allowOdsApps;
+      if (!permitted) return { block: true, blockReason: OPERATIONS_NOT_REQUESTED_REASON };
+      // Local read-only projections can inform a plan before, between, or after
+      // broker jobs. Their receipts still prove only their own metadata.
+      return normalizedParams === undefined ? undefined : { params: normalizedParams };
+    }
+
     if (
       state?.workspaceTaskRequested &&
       !state.operationsRequired &&
@@ -7012,32 +7024,6 @@ export function createToolLoopGuard({
         state.operationsTerminalJobs.has(jobId)
       );
     if (
-      toolName === "tool_call" &&
-      operationsJobsAreTerminal &&
-      (
-        (effectiveToolName === "pixel_ods_status" &&
-          state.operationsRequiresOdsStatusProjection &&
-          !state.operationsOdsStatusProjectionAttempted &&
-          !state.operationsOdsStatusProjectionToolSearchPending) ||
-        (effectiveToolName === "pixel_ods_apps_list" &&
-          state.operationsRequiresOdsAppsProjection &&
-          !state.operationsOdsAppsProjectionAttempted &&
-          !state.operationsOdsAppsProjectionToolSearchPending)
-      )
-    ) {
-      // The nested projection call re-enters this guard and consumes the exact
-      // one-call allowance when the runtime exposes nested hooks. The outer
-      // result is also validated below because same-plugin Tool Search calls
-      // are intentionally not re-hooked by every OpenClaw runtime.
-      if (effectiveToolName === "pixel_ods_status") {
-        state.operationsOdsStatusProjectionToolSearchPending = true;
-      } else {
-        state.operationsOdsAppsProjectionToolSearchPending = true;
-      }
-      return undefined;
-    }
-
-    if (
       state?.ownerIntentObserved &&
       !state.operationsRequired &&
       !state.exactDownloadRequested &&
@@ -7198,32 +7184,10 @@ export function createToolLoopGuard({
       return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
     }
 
-    const operationsMayReadOdsApps =
-      state?.operationsRequired === true &&
-      state.operationsRequiresOdsAppsProjection === true &&
-      toolName === "pixel_ods_apps_list" &&
-      state.operationsOdsAppsProjectionAttempted === false &&
-      state.operationsSubmittedJobs.size > 0 &&
-      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
-        state.operationsTerminalJobs.has(jobId)
-      );
-    const operationsMayReadOdsStatus =
-      state?.operationsRequired === true &&
-      state.operationsRequiresOdsStatusProjection === true &&
-      toolName === "pixel_ods_status" &&
-      state.operationsOdsStatusProjectionAttempted === false &&
-      state.operationsSubmittedJobs.size > 0 &&
-      [...state.operationsSubmittedJobs.keys()].every((jobId) =>
-        state.operationsTerminalJobs.has(jobId)
-      );
     const operationsMayContinueInWorkspace =
       state?.operationsRequired === true &&
       WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName);
-    if (operationsMayReadOdsApps) {
-      state.operationsOdsAppsProjectionAttempted = true;
-    } else if (operationsMayReadOdsStatus) {
-      state.operationsOdsStatusProjectionAttempted = true;
-    } else if (
+    if (
       state?.operationsRequired &&
       !extensionDiscoveryActive(state) &&
       !OPERATIONS_TOOLS.has(toolName) &&
