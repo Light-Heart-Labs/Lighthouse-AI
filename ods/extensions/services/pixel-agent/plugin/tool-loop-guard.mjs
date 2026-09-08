@@ -4497,39 +4497,68 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
     // peer. Treat these words as commands only in an owner directive.
     /(?:^|[.!?;\n]|\b(?:and(?:\s+then)?|then)\s+)\s*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|I\s+(?:want|need)\s+you\s+to\s+)?(?:ping|probe|resolve)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
     /\b(?:reachability|connectivity)\s+(?:of|to|for)\s+[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
+    /\b(?:check|inspect|test|verify|probe)\s+(?:(?:a|the|specific|named|remote|LAN|network)\s+)*(?:target|peer)\s*:?\s*(?:(?:named|called|physical)\s+)*[`"']?([A-Za-z0-9][A-Za-z0-9.:-]{0,252})[`"']?/i,
   ];
-  const match = patterns.map((pattern) => text.match(pattern)).find((value) => value?.[1]);
-  let peer = match?.[1];
-  if (peer?.endsWith(".") && !peer.includes("..")) {
-    // A quoted terminal dot belongs to the DNS target; an unquoted single dot
-    // ends the sentence. Leave malformed repeated dots for validation below.
-    const start = match.index + match[0].lastIndexOf(peer);
-    const quote = text[start - 1];
-    const explicitlyQuoted = ["`", '"', "'"].includes(quote) &&
-      text[start + peer.length] === quote;
-    if (!explicitlyQuoted) peer = peer.slice(0, -1);
+  // Collect owner-named endpoints rather than silently choosing the first.
+  // A directly attached "alias at IP" describes one endpoint; other named
+  // endpoints require clarification. Addresses elsewhere in the prose do not
+  // override a target or authorize an additional connection.
+  const matches = patterns.flatMap((pattern) =>
+    [...text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))]);
+  const candidates = [];
+  for (const match of matches) {
+    const prefix = text.slice(0, match.index).split(/[!?;\n]|\.(?=\s|$)/).at(-1);
+    if (/^\s*(?:but\s+)?(?:please\s+)?(?:do\s+not|don['’]t|never|avoid|skip|omit|exclude|without)\b/i.test(prefix)) continue;
+    let peer = match[1];
+    const aliases = [peer];
+    let end = match.index + match[0].length;
+    const address = text.slice(end).match(/^\s+at\s+[`"']?([A-Za-z0-9.:]+)[`"']?/i);
+    if (address) {
+      const value = address[1].replace(/\.$/, "");
+      if (!isIP(value)) return undefined;
+      peer = value;
+      end += address[0].length;
+    }
+    // An endpoint list is not an authorization to choose whichever is easiest.
+    const extra = text.slice(end).match(/^\s*(?:,\s*|\s+(?:and|or)\s+)[`"']?([A-Za-z0-9][A-Za-z0-9.:-]*)[`"']?(?=\s*(?:,|[.!?;]?(?:$|\n))|\s+(?:on|over|using|ports?|and|or)\b)/i);
+    if (extra && !/^(?:TCP|UDP|SSH|RDP|WinRM|HTTP|HTTPS)$/i.test(extra[1])) {
+      return undefined;
+    }
+    if (peer?.endsWith(".") && !peer.includes("..")) {
+      // A quoted terminal dot belongs to the DNS target; an unquoted single dot
+      // ends the sentence. Leave malformed repeated dots for validation below.
+      const start = match.index + match[0].lastIndexOf(peer);
+      const quote = text[start - 1];
+      const explicitlyQuoted = ["`", '"', "'"].includes(quote) &&
+        text[start + peer.length] === quote;
+      if (!explicitlyQuoted) peer = peer.slice(0, -1);
+    }
+    if (
+      !peer ||
+      // Resolving "its log path" names no network peer. Pronouns and articles
+      // must not grant a probe or divert ordinary workspace tools into the broker.
+      /^(?:a|an|it|its|they|them|their|your|this|that|these|those|the|my|our|local|ODS|Pixel|computer|machine|host|system|network|Tailscale)$/i.test(peer) ||
+      peer.includes("..") ||
+      peer.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))
+    ) {
+      return undefined;
+    }
+    if ([peer, ...aliases].some((name) => {
+      const escapedPeer = name.replace(/\.$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(
+        `\\b(?:do\\s+not|don['’]t|never|must\\s+not|should\\s+not)\\b[^.!?;\\n]{0,64}` +
+          `\\b(?:contact|access|inspect|query|connect|ping|probe|resolve)?\\s*${escapedPeer}\\b`,
+        "i"
+      ).test(text);
+    })) {
+      return undefined;
+    }
+    if (isIP(peer) && !privatePeerAddressScope(peer)) return undefined;
+    candidates.push(peer);
   }
-  if (
-    !peer ||
-    // Resolving "its log path" names no network peer. Pronouns and articles
-    // must not grant a probe or divert ordinary workspace tools into the broker.
-    /^(?:a|an|it|its|they|them|their|your|this|that|these|those|the|my|our|local|ODS|Pixel|computer|machine|host|system|network|Tailscale)$/i.test(peer) ||
-    peer.includes("..") ||
-    peer.split(".").some((label) => label.startsWith("-") || label.endsWith("-"))
-  ) {
-    return undefined;
-  }
-  const escapedPeer = peer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (
-    new RegExp(
-      `\\b(?:do\\s+not|don't|never|must\\s+not|should\\s+not)\\b[^.!?;\\n]{0,64}` +
-        `\\b(?:contact|access|inspect|query|connect|ping|probe|resolve)?\\s*${escapedPeer}\\b`,
-      "i"
-    ).test(text)
-  ) {
-    return undefined;
-  }
-  if (isIP(peer) && !privatePeerAddressScope(peer)) return undefined;
+  const unique = new Map(candidates.map((peer) => [peer.toLowerCase().replace(/\.$/, ""), peer]));
+  if (unique.size !== 1) return undefined;
+  const peer = [...unique.values()][0];
   const ports = [];
   const explicit = text.match(
     /\bports?\s+((?:[0-9]{1,5}(?:\s*(?:,|and)\s*[0-9]{1,5}){0,7}))/i
@@ -4559,6 +4588,19 @@ function withoutFilesystemPaths(text) {
     .replace(/(?:^|\s)(?:[A-Za-z]:[\\/]|\\\\|\.{0,2}\/|~\/)[^\s`"']+/g, " ");
 }
 
+function localInspectionTextBesidePeer(text) {
+  // Remote identity and background route lookups cannot become compulsory
+  // observations of this computer. Keep independent positive local requests,
+  // including a later "Report CPU and RAM" refinement of a local inspection.
+  const localHost = /\b(?:this|my|our|local|current|ODS)\s+(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i;
+  const request = /\b(?:what|which|tell|show|report|check|verify|identify|inspect|give|get|read|return|measure|explore|inventory|survey|examine|describe)\b/i;
+  const clauses = text.split(/[!?;\n]+|\.(?=\s|$)|\b(?:and|then|separately)\s+(?=(?:check|inspect|report|verify|probe|resolve|ping|show|read|measure)\b)/i);
+  const positive = clauses.filter((clause) => request.test(clause) &&
+    !/^\s*(?:but\s+)?(?:please\s+)?(?:no|do\s+not|don't|never|avoid|skip|omit|exclude)\b/i.test(clause) &&
+    !/\b(?:remote|peer|target|SSH|reachability|connectivity|ping|probe|resolve)\b/i.test(clause));
+  return positive.some((clause) => localHost.test(clause)) ? positive.join(". ") : "";
+}
+
 export function userMessageOperationsRequirements(messages, prompt = undefined) {
   // Pixel Edge appends trusted delivery/routing guidance beside the owner
   // message for small local models. That guidance is not owner intent: words
@@ -4566,6 +4608,9 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   // network-route/listener work.
   const text = withoutFilesystemPaths(currentOwnerIntentText(messages, prompt));
   if (!text) return { required: false, actions: [] };
+  const hostCommand = userMessageRequestsHostCommand(messages, prompt);
+  const networkPeer = hostCommand ? undefined : userMessageNetworkPeerRequest(messages, prompt);
+  const hostText = networkPeer ? localInspectionTextBesidePeer(text) : text;
   const explicitOperations =
     /\b(?:use|using|via|through|with)\b.{0,48}\b(?:Pixel\s+)?Operations(?:\s+(?:Broker|capabilit(?:y|ies)|tools?))?\b/i.test(
       text
@@ -4574,7 +4619,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     messages,
     prompt
   );
-  const hostEvidenceClauses = text.split(
+  const hostEvidenceClauses = hostText.split(
     /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i
   );
   const hostEvidenceClauseNegation =
@@ -4593,10 +4638,10 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     hostEvidenceRequest.test(clause) &&
     hostEvidenceFacet.test(clause) &&
     (hostEvidenceLocalHost.test(clause) ||
-      /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i.test(text))
+      /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i.test(hostText))
   );
   const hostContextPattern = /\b(?:ODS\s+)?(?:host|machine|computer|system|laptop|notebook|desktop|pc)\b/i;
-  const hostContext = hostContextPattern.test(text);
+  const hostContext = hostContextPattern.test(hostText);
   const hostScopeFacetPatterns = [
     /\b(?:hostname|host identity|kernel|machine architecture|architecture|cpu architecture|host platform|operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro|uptime|load averages?|system load)\b/i,
     /\b(?:process|processes|process inventory)\b/i,
@@ -4611,7 +4656,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   // A second request to find network peers must not narrow an independent
   // request to inspect this computer. Evaluate facets in the same clause as
   // the host inspection, including coordinated discovery requests.
-  const hostIntentClauses = text.split(
+  const hostIntentClauses = hostText.split(
     /[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:and|then)\s+(?=(?:find|discover|locate|detect|identify|list|look\s+for|scan)\b)|\band\s+(?=(?:(?:briefly|then)\s+)?(?:explain|summari[sz]e|describe|report)\b)/i
   );
   const artifactOrExplanation = /\b(?:explain|tutorial|example|hypothetical|fictional|pretend|build|create|design|implement|write|preview)\b/i;
@@ -4657,10 +4702,10 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
       /\b(?:describe|summari[sz]e|profile)\b.{0,24}\b(?:this|the|my|our|ODS)\b/i.test(clause)
     ));
   const broadScopeIntent =
-    /\b(?:everything|anything)\b.{0,24}\b(?:about|here|on|regarding)\b/i.test(text) ||
-    /\ball\s+(?:the\s+)?(?:host\s+|machine\s+|computer\s+|system\s+)?(?:details|facts|information)\b/i.test(text) ||
+    /\b(?:everything|anything)\b.{0,24}\b(?:about|here|on|regarding)\b/i.test(hostText) ||
+    /\ball\s+(?:the\s+)?(?:host\s+|machine\s+|computer\s+|system\s+)?(?:details|facts|information)\b/i.test(hostText) ||
     /\b(?:full|complete|comprehensive|broad|thorough)\s+(?:host|machine|computer|system|inspection|inventory|survey|overview|profile)\b/i.test(
-      text
+      hostText
     );
   // Inspecting live health and then explaining the findings is not a how-to
   // request. Keep this bounded to read-only health facets, not a full inventory
@@ -4677,15 +4722,11 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   const extensionCatalog = userMessageRequestsExtensionCatalog(messages, prompt);
   const extensionInventory = userMessageRequestsExtensionInventory(messages, prompt);
   const extensionLifecycle = userMessageExtensionLifecycleIntent(messages, prompt);
-  const hostCommand = userMessageRequestsHostCommand(messages, prompt);
-  const networkPeer = hostCommand
-    ? undefined
-    : userMessageNetworkPeerRequest(messages, prompt);
   const networkDiscoveryRequested = !hostCommand && !networkPeer && hostIntentClauses.some((clause) =>
     networkDiscoveryClause(clause) &&
     !artifactOrExplanation.test(clause) &&
     !negatedObservationClause(clause)) &&
-    !explicitlyExcludesHostObservation(text, "LAN|local\\s+network|network");
+    !explicitlyExcludesHostObservation(hostText, "LAN|local\\s+network|network");
   const localNetworkOverview = !hostCommand && !networkPeer && hostIntentClauses.some((clause) =>
     /\b(?:LAN|local\s+network|(?:host|machine|computer|system|my|our|this)\s+network)\b/i.test(clause) &&
     /\b(?:inspect|explore|check|survey|examine|report|show)\b/i.test(clause) &&
@@ -4696,53 +4737,53 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("host.uptime", "host.services", "host.cpu", "host.memory", "host.storage");
   }
   if (
-    /\b(?:hostname|host identity)\b/i.test(text) ||
-    (hostContext && /\b(?:machine|system)?\s*identity\b/i.test(text))
+    /\b(?:hostname|host identity)\b/i.test(hostText) ||
+    (hostContext && /\b(?:machine|system)?\s*identity\b/i.test(hostText))
   ) {
     actions.push("host.identity");
   }
-  if (/\bkernel\b/i.test(text)) actions.push("host.kernel");
-  if (/\b(?:machine architecture|architecture|cpu architecture)\b/i.test(text)) {
+  if (/\bkernel\b/i.test(hostText)) actions.push("host.kernel");
+  if (/\b(?:machine architecture|architecture|cpu architecture)\b/i.test(hostText)) {
     actions.push("host.architecture");
   }
-  if (/\bhost platform\b/i.test(text)) actions.push("host.platform");
-  if (/\b(?:operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro)\b/i.test(text)) {
+  if (/\bhost platform\b/i.test(hostText)) actions.push("host.platform");
+  if (/\b(?:operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro)\b/i.test(hostText)) {
     actions.push("host.os-release");
   }
-  if (broadHostExploration || (hostContext && /\b(?:uptime|load averages?|system load)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:uptime|load averages?|system load)\b/i.test(hostText))) {
     actions.push("host.uptime");
   }
-  if (broadHostExploration || (hostContext && /\b(?:process|processes|process inventory)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:process|processes|process inventory)\b/i.test(hostText))) {
     actions.push("host.processes");
   }
-  if (broadHostExploration || (hostContext && /\b(?:systemd|(?:system\s+)?services?|service inventory)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:systemd|(?:system\s+)?services?|service inventory)\b/i.test(hostText))) {
     actions.push("host.services");
   }
-  if (broadHostExploration || (hostContext && /\b(?:cpu|processor|hardware)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:cpu|processor|hardware)\b/i.test(hostText))) {
     actions.push("host.cpu");
   }
-  if (broadHostExploration || (hostContext && /\b(?:gpu|graphics(?:\s+(?:card|processor))?|video\s+card)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:gpu|graphics(?:\s+(?:card|processor))?|video\s+card)\b/i.test(hostText))) {
     actions.push("host.gpu");
   }
-  if (broadHostExploration || (hostContext && /\b(?:memory|ram|swap)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:memory|ram|swap)\b/i.test(hostText))) {
     actions.push("host.memory");
   }
-  if (broadHostExploration || (hostContext && /\b(?:disk|filesystem|storage|mounts?)\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\b(?:disk|filesystem|storage|mounts?)\b/i.test(hostText))) {
     actions.push("host.storage");
   }
-  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:network interfaces?|interfaces?|addresses?|ip addresses?)\b/i.test(text))) {
+  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:network interfaces?|interfaces?|addresses?|ip addresses?)\b/i.test(hostText))) {
     actions.push("host.network-addresses");
   }
-  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:routes?|routing)\b/i.test(text))) {
+  if (broadHostExploration || networkDiscoveryRequested || localNetworkOverview || (hostContext && /\b(?:routes?|routing)\b/i.test(hostText))) {
     actions.push("host.network-routes");
   }
   if (
     broadHostExploration ||
-    (!networkPeer && hostContext && /\b(?:ports?|listeners?|listening endpoints?)\b/i.test(text))
+    (hostContext && /\b(?:ports?|listeners?|listening endpoints?)\b/i.test(hostText))
   ) {
     actions.push("host.listening-ports");
   }
-  if (broadHostExploration || (hostContext && /\btailscale\b/i.test(text))) {
+  if (broadHostExploration || (hostContext && /\btailscale\b/i.test(hostText))) {
     actions.push("host.tailscale");
   }
   if (networkPeer) actions.push("host.network-peer");

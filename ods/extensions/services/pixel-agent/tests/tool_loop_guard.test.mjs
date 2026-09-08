@@ -3533,7 +3533,7 @@ test("binds one owner-named private peer to bounded read-only reachability evide
   assert.deepEqual(userMessageNetworkPeerRequest([], prompt), networkPeer);
   assert.deepEqual(userMessageOperationsRequirements([], prompt), {
     required: true,
-    actions: ["host.tailscale", "host.network-peer"],
+    actions: ["host.network-peer"],
     networkPeer,
   });
   assert.deepEqual(

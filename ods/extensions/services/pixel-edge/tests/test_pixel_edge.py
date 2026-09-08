@@ -717,6 +717,32 @@ class TestModelAllowlist(BaseEdgeTest):
         self.assertNotIn("host.network-routes", content)
         self.assertNotIn("host.listening-ports", content)
 
+    async def test_remote_target_guidance_does_not_prescribe_local_identity(self):
+        for prompt in (
+            "Check LAN target: physical Tower2 at 192.168.0.175. "
+            "I obtained the address from a host route lookup. Verify remote hostname if authorized.",
+            "Check the local host CPU and memory. Separately check reachability of nas on the LAN.",
+        ):
+            async with self.client.post(
+                "http://localhost/v1/chat/completions", headers=self.auth(),
+                json={"model": "pixel/default", "messages": [{"role": "user", "content": prompt}]},
+            ) as resp:
+                self.assertEqual(resp.status, 200)
+            content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+            self.assertIn("host.network-peer", content)
+            self.assertIn("independently requested local observations", content)
+            self.assertNotIn('"actions":["host.identity"]', content)
+            self.assertNotIn("exactly once", content)
+
+    async def test_filesystem_resolution_is_not_a_remote_inspection_route(self):
+        async with self.client.post(
+            "http://localhost/v1/chat/completions", headers=self.auth(),
+            json={"model": "pixel/default", "messages": [{"role": "user", "content": "Resolve its path and check the module."}]},
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+        content = self.up_runner.app["chat_requests"][-1]["messages"][-1]["content"]
+        self.assertNotIn("ODS Pixel network inspection route", content)
+
     async def test_code_about_a_machine_does_not_get_host_execution_route(self):
         async with self.client.post(
             "http://localhost/v1/chat/completions",

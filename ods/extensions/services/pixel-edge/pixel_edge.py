@@ -377,7 +377,28 @@ def _with_interactive_delivery_contract(data: dict) -> dict:
     owner_text = _latest_user_text(data)
     contract = _INTERACTIVE_DELIVERY_CONTRACT
     host_clauses = _positive_host_inspection_clauses(owner_text)
-    if (
+    remote_inspection = re.search(
+        r"\b(?:reachability|connectivity|ping|probe|resolve|network[ -]peer|"
+        r"remote[ -](?:host|hostname|identity)|(?:LAN|network)\s+target)\b",
+        owner_text, re.IGNORECASE,
+    ) and re.search(r"\b(?:check|inspect|test|verify|ping|probe|resolve)\b", owner_text, re.IGNORECASE) and re.search(
+        r"\b(?:LAN|network|SSH|Tailscale|remote|reachability|connectivity)\b", owner_text, re.IGNORECASE,
+    )
+    if remote_inspection:
+        # Guidance is not endpoint authorization. The runtime binds the owner
+        # target and permissions. Do not prescribe a local identity receipt as
+        # a substitute for a remote operation or force one tool-call sequence.
+        contract += (
+            "\n[ODS Pixel network inspection route: Discover the available "
+            "Operations tools using tool_call. Use host.network-peer for bounded "
+            "reachability of the owner's explicit endpoint and requested ports. "
+            "Keep remote reachability, protocol banners and authenticated remote "
+            "identity distinct. A local host identity receipt does not establish "
+            "remote identity. Honor exclusions and resolve ambiguous targets "
+            "before contact. Complete independently requested local observations "
+            "and workspace files in the order the task needs.]"
+        )
+    elif (
         host_clauses
         and not (_ARTIFACT_DRAFT_PREFIX.search(owner_text) and _ARTIFACT_NOUN.search(owner_text))
     ):
@@ -397,7 +418,7 @@ def _with_interactive_delivery_contract(data: dict) -> dict:
         if actions:
             observe_args = json.dumps({"actions": actions}, separators=(",", ":"))
             route += (
-                "Call tool_call exactly once with id pixel_ods_host_observe "
+                "Use tool_call with id pixel_ods_host_observe "
                 f"and args {observe_args}. This one read-only tool returns the "
                 "terminal Operations receipt. "
             )
