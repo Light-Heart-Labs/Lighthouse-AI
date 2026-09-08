@@ -8041,6 +8041,66 @@ test("web exhaustion lets a whole model batch finish before escalating", () => {
   }
 });
 
+test("local byte-preserving exports do not acquire a remote-download prerequisite", () => {
+  for (const prompt of [
+    "Repair the report so its file download preserves exact bytes of existing intake/analysis.json. Publish the original file inside the document folder.",
+    "Save the raw bytes of the local attachment into the archive folder.",
+    "Create a download button for the file using exact bytes from /workspace/input/data.bin.",
+  ]) {
+    assert.equal(userMessageRequestsExactByteDownload([], prompt), false, prompt);
+  }
+  for (const prompt of [
+    "Download the file byte-for-byte into workspace/archive.bin.",
+    "Fetch exact bytes of the existing remote object into a local file.",
+    "Save the raw bytes from the server into the existing workspace folder.",
+    "Download https://example.com/a.bin as exact bytes, then compare against the local file.",
+    "Download http://example.com/a.bin as exact bytes.",
+  ]) {
+    assert.equal(userMessageRequestsExactByteDownload([], prompt), true, prompt);
+  }
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Read a local file and preserve exact bytes from /workspace/input/data.bin for its download button.",
+  });
+  assert.equal(call(guard, "read", { event: { params: { path: "input/data.bin" } } }), undefined);
+});
+
+test("model background and compound service nouns do not force ODS inventory before research", () => {
+  for (const prompt of [
+    "Check available OCR programs even though the current model route cannot inspect images.",
+    "Inspect the source files because the active model can report results later.",
+    "Use the current model to inspect this image and report its labels.",
+    "Fact-check this draft: A Service Worker is guaranteed to keep running continuously. Find authoritative sources and save the report.",
+    "Inspect whether a service worker keeps running after the page closes.",
+    "Report how service discovery handles running processes in this library.",
+  ]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), [], prompt);
+  }
+  for (const prompt of [
+    "Check which model is currently active.",
+    "Inspect the ODS host hostname and active model.",
+    "Although the image is unreadable, identify the current model.",
+    "Is the current model running?",
+    "Is it the current model running?",
+    "The current model, is it running?",
+    "The loaded model — what is its name?",
+  ]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), ["pixel_ods_status"], prompt);
+  }
+  for (const prompt of [
+    "Which services are running?", "List ODS services that are installed.",
+    "Tell me which services and extensions are actually installed, enabled, and healthy right now.",
+    "Services running",
+  ]) {
+    assert.deepEqual(userMessageOdsToolRequirements([], prompt), ["pixel_ods_apps_list"], prompt);
+  }
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Fact-check whether a Service Worker is continuously running. Find authoritative sources and save the report.",
+  });
+  assert.equal(call(guard, "tool_search", { event: { params: { query: "web search authoritative documentation" } } }), undefined);
+});
+
 test("foreign model hooks cannot advance a web-exhausted Pixel batch", () => {
   const aborts = [];
   const guard = createToolLoopGuard({

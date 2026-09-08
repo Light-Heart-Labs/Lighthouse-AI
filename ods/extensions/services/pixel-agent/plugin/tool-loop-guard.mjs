@@ -4194,17 +4194,19 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
   const asksLiveServiceState = /\bODS\b/i.test(text) &&
     /\bservices?\b[^.!?;\n]{0,80}\b(?:health|healthy|online|running|status)\b/i.test(text);
   const asksModelState = text
-    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)/i)
+    .split(/[.!?;\n]+|,\s*(?=(?:and\s+then|but|however|instead|then)\b)|\b(?:although|though|because|since|whereas|while|given\s+that)\b/i)
     .some((clause) => {
-      const modelState =
-        /\b(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model\b/i.test(clause) ||
-        /\b(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running)\b/i.test(
-          clause
-        );
-      const asks =
-        /\b(?:what|which|identify|name|report|tell|show|inspect|check|verify)\b/i.test(clause) ||
-        clause.trimEnd().endsWith("?");
-      return modelState && asks;
+      const modelState = clause.match(
+        /\b(?:(?:active|current|loaded|running)\s+(?:ODS\s+|Pixel\s+)?model|(?:ODS\s+|Pixel\s+)?model\s+(?:is\s+)?(?:currently\s+)?(?:active|current|loaded|running))\b/i
+      );
+      if (!modelState) return false;
+      // A query must address the model fact. Verbs describing what an already
+      // identified model can do must not become prerequisites for other work.
+      const beforeModel = clause.slice(0, modelState.index);
+      const afterModel = clause.slice(modelState.index + modelState[0].length);
+      return /\b(?:what|which|identify|name|report|tell|show|inspect|check|verify)\b/i.test(beforeModel) ||
+        /^\s*(?:is|was)\s+(?:(?:it|this|that)\s+)?(?:the\s+)?$/i.test(beforeModel) ||
+        /^\s*[,:\u2014-]\s*(?:is|was|what|which)\b/i.test(afterModel);
     });
   const asksStatus =
     !rejectsStatus &&
@@ -4251,9 +4253,13 @@ export function userMessageOdsToolRequirements(messages, prompt = undefined) {
       asksAvailability ||
       asksDockerStatus ||
       asksLiveServiceState);
+  // Match a service inventory subject, not a compound noun whose first word
+  // happens to be "service" in a document or technical research request.
+  const serviceSubject = String.raw`\b(?:ODS\s+services?\b|services?\b(?=\s*(?:[,;:]|$)|\s+(?:is|are|was|were|has|have|that|which|and|or|on|in|with|currently|actually|installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b))`;
+  const serviceState = String.raw`\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b`;
   const asksNamedServiceInventory =
-    /\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b[^.!?;\n]{0,120}\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text) ||
-    /\b(?:ODS\s+)?services?\b[^.!?;\n]{0,120}\b(?:installed|enabled|disabled|healthy|unhealthy|running|stopped|status)\b/i.test(text);
+    new RegExp(String.raw`\b(?:which|what|list|show|inspect|audit|inventory|report|tell\s+me)\b[^.!?;\n]{0,120}${serviceSubject}[^.!?;\n]{0,120}${serviceState}`, "i").test(text) ||
+    new RegExp(String.raw`${serviceSubject}\s+(?:(?:is|are|currently|actually)\s+){0,2}${serviceState}`, "i").test(text);
   // A saved app and ODS may be mentioned in separate instructions, such as
   // "Preserve existing apps. Publish through the ODS preview." Require an
   // actual inventory request in the same clause before forcing a projection.
@@ -5548,7 +5554,7 @@ export function privateBrowserAccessForAgent(config, agentId = "pixel") {
 }
 
 export function userMessageRequestsExactByteDownload(messages, prompt = undefined) {
-  const text = currentUserText(messages, prompt);
+  const text = currentOwnerIntentText(messages, prompt);
   if (!text) return false;
   const capabilityInquiryWithoutSource =
     !/https:\/\//i.test(text) &&
@@ -5565,7 +5571,18 @@ export function userMessageRequestsExactByteDownload(messages, prompt = undefine
     /\b(?:byte-for-byte|byte exact|byte-exact|exact[- ]bytes?|exact bytes?|raw bytes?|origin(?: server)? bytes?|remote(?: object)? bytes?)\b/i.test(
       text
     );
-  return asksDownload && asksExactBytes;
+  if (!asksDownload || !asksExactBytes) return false;
+  const remoteSource =
+    /\b(?:https?|ftps?|sftp|s3):\/\/|\bwww\./i.test(text) ||
+    /\b(?:remote|origin\s+server|internet|websites?|webpages?)\b/i.test(text) ||
+    /\b(?:from|at|on|via)\s+(?:(?:the|a)\s+)?(?:server|cloud|endpoint|bucket|(?:[a-z0-9-]+\.)+[a-z]{2,})\b/i.test(text);
+  if (remoteSource) return true;
+  // Source locality permits ordinary workspace preservation. A local
+  // destination alone does not exempt an ambiguous external download.
+  const localSource =
+    /\b(?:of|from)\s+(?:the\s+)?(?:existing|local|workspace)\b/i.test(text) ||
+    /\b(?:of|from)\s+[`"']?\/?workspace\//i.test(text);
+  return !localSource;
 }
 
 function exactDownloadWorkspacePath(text, sourceUrl) {
