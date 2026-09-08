@@ -168,6 +168,9 @@ test: ## Run unit and contract tests
 	@echo "=== CLI user-extension dependency resolution ==="
 	@bash tests/test-cli-user-extension-deps.sh
 	@echo ""
+	@echo "=== ods-test.sh completes the run and emits JSON ==="
+	@bash tests/test-ods-test-full-run.sh
+	@echo ""
 	@echo "=== session cleanup lifecycle ==="
 	@bash tests/test-session-cleanup.sh
 
