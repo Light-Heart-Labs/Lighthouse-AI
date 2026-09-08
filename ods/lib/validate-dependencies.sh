@@ -6,6 +6,18 @@
 # Expects: SERVICE_IDS, SERVICE_DEPENDS, SERVICE_COMPOSE (from service-registry.sh)
 # Provides: validate_service_dependencies()
 
+# Bash 4+ required for the associative array used to track enabled services.
+# macOS ships Bash 3.2 — users must install a modern shell (e.g. via Homebrew).
+# Without this guard the declaration below fails with "local: -A: invalid
+# option" and, under set -e, aborts the caller with no indication that the
+# shell version is at fault.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "ERROR: validate-dependencies.sh requires Bash 4.0+ (current: $BASH_VERSION)" >&2
+    echo "  macOS ships Bash 3.2 due to licensing. Install a modern version:" >&2
+    echo "    brew install bash" >&2
+    return 1 2>/dev/null || exit 1
+fi
+
 # Validate that all service dependencies are satisfied
 # Returns 0 if all dependencies are met, 1 if any are missing
 validate_service_dependencies() {
