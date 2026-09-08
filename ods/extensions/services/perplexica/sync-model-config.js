@@ -55,6 +55,7 @@ async function update() {
   if (!provider || !provider.id) {
     return;
   }
+  const providerBefore = JSON.stringify(provider);
   provider.chatModels = [{ key: model, name: model }];
   provider.config = { ...(provider.config || {}), baseURL, apiKey };
   const preferences = {
@@ -83,8 +84,15 @@ async function update() {
     process.stderr.write("[ods-perplexica] incomplete embedding selection; leaving embedding preferences unchanged\n");
   }
 
-  await request(configUrl, { key: "modelProviders", value: values.modelProviders });
-  await request(configUrl, { key: "preferences", value: preferences });
+  // The API includes built-in model entries in its read response. Persisting
+  // that hydrated catalog on every start can accumulate duplicate entries.
+  // Initializing embedding preferences does not require rewriting providers.
+  if (JSON.stringify(provider) !== providerBefore) {
+    await request(configUrl, { key: "modelProviders", value: values.modelProviders });
+  }
+  if (JSON.stringify(preferences) !== JSON.stringify(values.preferences || {})) {
+    await request(configUrl, { key: "preferences", value: preferences });
+  }
 
   const verified = (await request(configUrl)).values || {};
   const verifiedProvider = (verified.modelProviders || []).find(

@@ -19,7 +19,7 @@ FIELDS = ("defaultEmbeddingProvider", "defaultEmbeddingModel")
 
 
 @contextmanager
-def config_server(preferences, providers=None, corrupt=None):
+def config_server(preferences, providers=None, corrupt=None, writes=None):
     state = copy.deepcopy({"preferences": preferences, "modelProviders": providers or [CHAT, CPU]})
     wrote_preferences = False
 
@@ -33,6 +33,8 @@ def config_server(preferences, providers=None, corrupt=None):
         def do_POST(self):
             nonlocal wrote_preferences
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if writes is not None:
+                writes.append(copy.deepcopy(payload))
             state[payload["key"]] = payload["value"]
             wrote_preferences |= payload["key"] == "preferences"
             self.respond({})
@@ -107,6 +109,26 @@ def test_selects_provider_that_actually_advertises_the_model():
     with config_server({}, [CHAT, {**CPU, "id": "empty", "embeddingModels": []}, CPU]) as (state, url):
         assert run_sync(url).returncode == 0
         assert state["preferences"][FIELDS[0]] == "cpu"
+
+
+def test_embedding_setup_does_not_rewrite_hydrated_catalog_or_repeat_writes():
+    configured_chat = {**CHAT, "chatModels": [{"key": "ods/current", "name": "ods/current"}],
+                       "config": {"baseURL": "http://local/v1", "apiKey": "fixture-private-key"}}
+    advertised_cpu = {**CPU, "embeddingModels": CPU["embeddingModels"] * 3}
+    providers = [configured_chat, advertised_cpu]
+    preferences = {"defaultChatProvider": "chat", "defaultChatModel": "ods/current"}
+    writes = []
+    with config_server(preferences, providers, writes=writes) as (state, url):
+        result = run_sync(url)
+        assert result.returncode == 0, result.stderr
+        assert [item["key"] for item in writes] == ["preferences"]
+        assert state["modelProviders"] == providers
+        assert [state["preferences"][key] for key in FIELDS] == ["cpu", KEY]
+        writes.clear()
+        result = run_sync(url)
+        assert result.returncode == 0, result.stderr
+        assert writes == []
+        assert state["modelProviders"] == providers
 
 
 @pytest.mark.parametrize("preferences", [{}, dict(zip(FIELDS, ["owner", "chosen"]))])
