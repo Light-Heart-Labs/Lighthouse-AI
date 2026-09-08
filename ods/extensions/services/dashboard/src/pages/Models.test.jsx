@@ -1,5 +1,5 @@
 import { createElement } from 'react'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import Models from './Models'
 
@@ -1092,4 +1092,21 @@ test('filters models by search and category without changing catalog data', () =
 
   fireEvent.click(screen.getByRole('button', { name: /reset/i }))
   expect(screen.getByText('Qwen 3.5 9B')).toBeInTheDocument()
+})
+
+test('compares catalog models without starting a download or activation', () => {
+  const state = baseState({ models: [model(), model({ id: 'tiny', name: 'Tiny', vramRequired: 2, contextLength: null, tokensPerSec: null })] })
+  useModelsMock.mockReturnValue(state)
+  renderModels()
+  fireEvent.click(screen.getByText('Compare models'))
+  fireEvent.change(screen.getByLabelText('Comparison model 1'), { target: { value: 'qwen3.5-9b-q4' } })
+  fireEvent.change(screen.getByLabelText('Comparison model 2'), { target: { value: 'tiny' } })
+  const table = within(screen.getByRole('table', { name: 'Model comparison' }))
+  expect(table.getByText('7 GB')).toBeInTheDocument()
+  expect(table.getByText('2 GB')).toBeInTheDocument()
+  expect(table.getAllByText('Not reported')).toHaveLength(2)
+  expect(state.downloadModel).not.toHaveBeenCalled()
+  expect(state.loadModel).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'Clear comparison' }))
+  expect(screen.queryByRole('table', { name: 'Model comparison' })).not.toBeInTheDocument()
 })
