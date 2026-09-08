@@ -51,9 +51,11 @@ export default function PixelAccessCard() {
       <dt>Effective</dt><dd>{status.runtime_verified ? modeName(status.effective_mode) : 'Not verified'}</dd>
       <dt>Platform</dt><dd>{status.surface}</dd>
     </dl> : <p role="status">Inspecting Pixel access…</p>}
-    {!status?.available && status ? <p role="status">The required host adapter or admission gate is unavailable on this installation.</p> : null}
+    {!status?.available && status ? <p role="status">{status.pending
+      ? 'Checking Pixel while the access transition is unfinished. Controls return when the running gateway can be verified.'
+      : 'The required host adapter or admission gate is unavailable on this installation.'}</p> : null}
     {status?.busy ? <p role="status">Pixel is working. Access changes wait until its runs and tools finish.</p> : null}
-    {status?.pending ? <p role="alert">A transition needs recovery. New work is held while you restore safer mode.</p> : null}
+    {status?.pending ? <p role="alert">The access transition is unfinished and new work is held. Restore safer mode if recovery is required.</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     <div className="flex flex-wrap gap-3">
       <button type="button" disabled={disabled} onClick={() => { void change('sandboxed') }} className="rounded-lg border border-white/20 px-3 py-2 disabled:opacity-40">

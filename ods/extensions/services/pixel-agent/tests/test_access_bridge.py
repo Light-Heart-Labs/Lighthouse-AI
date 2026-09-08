@@ -72,7 +72,7 @@ class FakeBridge(bridge.SystemdAccessBridge):
         self.state.mkdir(mode=0o700, exist_ok=True)
         yield
 
-    def native(self, operation=None, token=None):
+    def native(self, operation=None, token=None, *, timeout=60):
         if operation:
             self.log.append("native-" + operation)
             if self.fail == operation: raise bridge.AccessError("injected-" + operation)
@@ -186,11 +186,61 @@ class BridgeTests(unittest.TestCase):
             self.runtime.change(self.request("sandboxed"))
         self.assertFalse(self.runtime.managed)
         self.assertEqual(self.runtime.pending()["phase"], "error")
+        self.assertEqual(self.runtime.pending()["error"], "injected-probe")
         self.runtime.fail = None
         restored = self.runtime.change(self.request("sandboxed"))
         self.assertTrue(restored["runtime_verified"])
         self.assertEqual(restored["effective_mode"], "sandboxed")
         self.assertNotIn("restart", self.runtime.log)
+
+    def test_slow_gateway_start_is_observed_without_restarting_again(self):
+        original = self.runtime.native
+        elapsed = [0.0]
+        reads = []
+        def native(operation=None, token=None, *, timeout=60):
+            if "restart" in self.runtime.log and operation is None:
+                reads.append(timeout)
+                if len(reads) <= 40:
+                    raise bridge.AccessError("native-idle-unconfirmed")
+            return original(operation, token, timeout=timeout)
+        def sleep(seconds): elapsed[0] += seconds
+        with patch.object(self.runtime, "native", side_effect=native), \
+                patch.object(bridge.time, "monotonic", side_effect=lambda: elapsed[0]), \
+                patch.object(bridge.time, "sleep", side_effect=sleep):
+            result = self.runtime.change(self.request())
+        self.assertTrue(result["runtime_verified"])
+        self.assertEqual(self.runtime.log.count("restart"), 1)
+        self.assertEqual(reads[:40], [3] * 40)
+
+    def test_gateway_readiness_deadline_retains_both_holds(self):
+        original = self.runtime.native
+        elapsed = [0.0]
+        def native(operation=None, token=None, *, timeout=60):
+            if "restart" in self.runtime.log and operation is None:
+                raise bridge.AccessError("native-idle-unconfirmed")
+            return original(operation, token, timeout=timeout)
+        def sleep(seconds): elapsed[0] += seconds
+        with patch.object(self.runtime, "native", side_effect=native), \
+                patch.object(bridge.time, "monotonic", side_effect=lambda: elapsed[0]), \
+                patch.object(bridge.time, "sleep", side_effect=sleep):
+            with self.assertRaises(bridge.AccessError):
+                self.runtime.change(self.request())
+        self.assertEqual(elapsed[0], 120)
+        self.assertEqual(self.runtime.log.count("restart"), 1)
+        self.assertEqual(self.runtime.pending()["phase"], "error")
+        self.assertEqual(self.runtime.native_phase, "held")
+        self.assertEqual(self.runtime.edge_phase, "held")
+
+    def test_unavailable_inspection_preserves_pending_transition_for_polling(self):
+        self.runtime.fail = "probe"
+        with self.assertRaises(bridge.AccessError):
+            self.runtime.change(self.request("sandboxed"))
+        with patch.object(self.runtime, "worker", side_effect=bridge.AccessError("controller-lock-busy")):
+            status = self.runtime.status()
+        self.assertTrue(status["pending"])
+        self.assertFalse(status["available"])
+        self.assertFalse(status["runtime_verified"])
+        self.assertIsNone(status["revision"])
 
     def test_release_failure_does_not_reopen_native_admission(self):
         self.runtime.fail = "edge-release"

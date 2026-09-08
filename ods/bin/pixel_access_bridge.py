@@ -150,16 +150,16 @@ class SystemdAccessBridge:
         except Exception:
             raise AccessError("runtime-unavailable-or-busy") from None
 
-    def native(self, operation=None, token=None):
+    def native(self, operation=None, token=None, *, timeout=60):
         payload = None
         if operation:
-            snapshot = self.native()
+            snapshot = self.native(timeout=timeout)
             if snapshot.get("stopped"):
                 if operation != "acquire": raise AccessError("gateway-restart-required")
                 return self.stopped_native(token)
             payload = dict(operation=operation, token=token, revision=snapshot["revision"])
         try:
-            return self.http(self.native_origin, "/pixel-ods/access-runtime", self.native_key, payload, timeout=60)
+            return self.http(self.native_origin, "/pixel-ods/access-runtime", self.native_key, payload, timeout=timeout)
         except AccessError:
             pending = self.pending()
             if operation is None and pending:
@@ -302,7 +302,10 @@ class SystemdAccessBridge:
         except Exception as error:
             return {"available": False, "surface": platform.system().lower(), "configured_mode": "unknown",
                     "effective_mode": "unknown", "runtime_verified": False, "revision": None, "busy": False,
-                    "pending": False, "reason": error.code if isinstance(error, AccessError) else "inspection-failed", "scope": "owner-host"}
+                    # A transient controller lock or gateway restart must not
+                    # erase the durable transition from the UI's polling state.
+                    "pending": os.path.lexists(self.state / "transition.json"),
+                    "reason": error.code if isinstance(error, AccessError) else "inspection-failed", "scope": "owner-host"}
 
     def dropin_for(self, enabled):
         # These two namespace restrictions create the filesystem sandbox.
@@ -384,13 +387,17 @@ class SystemdAccessBridge:
                     self.dropin_for(agents[0].get("sandbox", {}).get("mode") == "off" and agents[0].get("tools", {}).get("exec", {}).get("host") == "gateway")
                     old_pid = self.native()["pid"]
                     self.command(["systemctl", "restart", UNIT], timeout=60)
-                    for _ in range(30):
+                    # The pinned runtime can take over a minute to initialize
+                    # on a supported guest. Observe the same restarted process;
+                    # neither a failed poll nor slow readiness proves it idle.
+                    deadline = time.monotonic() + 120
+                    while time.monotonic() < deadline:
                         try:
-                            status = self.native()
+                            status = self.native(timeout=min(3, max(0.1, deadline - time.monotonic())))
                             if status.get("available") and status.get("pid") != old_pid and status.get("phase") == "held":
                                 # The same durable token must still own the restarted gateway.
-                                self.native("acquire", token)
-                                health = self.http(self.native_origin, "/health", self.native_key)
+                                self.native("acquire", token, timeout=3)
+                                health = self.http(self.native_origin, "/health", self.native_key, timeout=3)
                                 return health.get("ok") is True
                         except AccessError: pass
                         time.sleep(1)
@@ -437,6 +444,7 @@ class SystemdAccessBridge:
                 return self.status()
             except Exception as error:
                 pending["phase"] = "error"
+                pending["error"] = error.code if isinstance(error, AccessError) else "transition-failed"
                 atomic_json(self.state / "transition.json", pending)
                 if isinstance(error, AccessError): raise
                 raise AccessError("transition-failed") from None

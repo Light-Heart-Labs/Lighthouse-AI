@@ -802,9 +802,13 @@ def _restore_locked(config_path, sd, validate, restart, check_no_active_run):
     if receipt.get("config_path") != abs_path:
         raise AccessModeRejected("state-path-mismatch",
                                  "managed state belongs to a different config file")
-    if receipt.get("status") != STATUS_ENABLED:
+    if receipt.get("status") not in (STATUS_ENABLED, STATUS_PENDING):
         raise AccessModeRejected("not-managed",
                                  "managed state is not an applied full-access state")
+    # An interrupted enable can leave either the original or the atomically
+    # enabled fields on disk. Both must be recoverable through Restore. The
+    # same baseline/drift checks, live idle checks, validation and restart
+    # below still apply; a pending receipt never counts as runtime proof.
     baseline = receipt["baseline"]
     _require_idle(check_no_active_run)
 
@@ -853,6 +857,12 @@ def _restore_locked(config_path, sd, validate, restart, check_no_active_run):
             ok = False
         if not ok:
             _require_idle(check_no_active_run)
+            if receipt.get("status") == STATUS_PENDING:
+                # Recovery should never broaden access again just because the
+                # safer runtime failed to start. Keep the restored fields and
+                # original pending receipt so another Restore can verify it.
+                raise AccessModeRejected(
+                    "restart-failed", "safer configuration written but runtime verification failed; pending receipt retained")
             # Roll back to the enabled config and previous running state.
             if _sha256_bytes(_read_file(abs_path)) == _sha256_bytes(new_bytes):
                 _atomic_rollback_write(abs_path, enabled_bytes, cfg_mode)

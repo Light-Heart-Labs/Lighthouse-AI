@@ -26,7 +26,7 @@ describe('Pixel access confirmation and effective status', () => {
   it('blocks changes while work is active and displays a recovery path', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, json: async () => ({...safe, busy: true, pending: true})})))
     render(<PixelAccessCard />)
-    await screen.findByText(/transition needs recovery/i)
+    await screen.findByText(/transition is unfinished/i)
     expect(screen.getByRole('button', {name: 'Enable Full Access'})).toBeDisabled()
     expect(screen.getByRole('button', {name: 'Restore safer mode'})).toBeDisabled()
   })
