@@ -5379,6 +5379,21 @@ function workspacePreviewAuthoredSnapshot(state, expectedDirectory) {
   };
 }
 
+function workspacePreviewAuthorshipMatches(state, preview) {
+  if (!workspacePreviewRequiresAuthoredSnapshot(state, preview.relativeDirectory)) return false;
+  const authored = workspacePreviewAuthoredSnapshot(state, preview.relativeDirectory);
+  const entryPath = `${preview.relativeDirectory}/index.html`;
+  const entryContent = state.successfulWriteContentByPath.get(entryPath);
+  return Boolean(
+    authored &&
+    authored.paths.length === preview.files &&
+    authored.bytes === preview.bytes &&
+    authored.sha256 === preview.sha256 &&
+    typeof entryContent === "string" &&
+    createHash("sha256").update(entryContent, "utf8").digest("hex") === preview.entrySha256
+  );
+}
+
 function workspacePreviewOutcome(event, expectedDirectory, state) {
   const details = event?.result?.details;
   const exactDirectory = details?.relativeDirectory === expectedDirectory;
@@ -5418,22 +5433,9 @@ function workspacePreviewOutcome(event, expectedDirectory, state) {
     state?.workspaceVisualContinuationRequested &&
     details.sha256 === state.workspaceVisualContinuationOriginalSha256
   ) return undefined;
-  if (workspacePreviewRequiresAuthoredSnapshot(state, expectedDirectory)) {
-    const authored = workspacePreviewAuthoredSnapshot(state, expectedDirectory);
-    const entryPath = `${expectedDirectory}/${details.entryFile}`;
-    const entryContent = state.successfulWriteContentByPath.get(entryPath);
-    if (
-      !authored ||
-      authored.paths.length !== details.files ||
-      authored.bytes !== details.bytes ||
-      authored.sha256 !== details.sha256 ||
-      typeof entryContent !== "string" ||
-      createHash("sha256").update(entryContent, "utf8").digest("hex") !==
-        details.entrySha256
-    ) {
-      return undefined;
-    }
-  }
+  // The trusted host verifies the complete snapshot, including preserved
+  // files and assets produced by other tools or previous turns. Current-run
+  // write provenance determines authorship attribution, not publication.
   return {
     relativeDirectory: details.relativeDirectory,
     siteId: details.siteId,
@@ -8328,9 +8330,7 @@ export function createToolLoopGuard({
       );
       if (preview) {
         state.workspacePreviewDirectory = preview.relativeDirectory;
-        state.workspacePreviewModelAuthored = workspacePreviewRequiresAuthoredSnapshot(
-          state, preview.relativeDirectory
-        );
+        state.workspacePreviewModelAuthored = workspacePreviewAuthorshipMatches(state, preview);
         state.workspacePreview = preview;
         state.successfulWriteContentByPath.clear();
         rememberSessionPreview(state.currentSessionId, preview);

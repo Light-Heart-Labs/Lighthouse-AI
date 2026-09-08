@@ -10982,7 +10982,7 @@ test("preview receipt recovery rejects failed or wrong-tool inspection receipts"
   }
 });
 
-test("preview receipt recovery retains strict hashes for written files after readback", () => {
+test("preview receipt recovery retains strict authorship hashes after readback", () => {
   const guard = createToolLoopGuard();
   guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
     prompt: "Create a new website and publish its preview.",
@@ -11001,7 +11001,11 @@ test("preview receipt recovery retains strict hashes for written files after rea
     ...wrong, port: 9437, url: `http://${wrong.siteId}.localhost:9437/${wrong.siteId}/`,
     httpStatus: 200, readbackVerified: true, executable: false, overwritten: false,
   } } } });
-  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.match(verification.text, /Published from your workspace\./);
+  assert.doesNotMatch(verification.text, /Created by Pixel\./);
+  assert.equal(verification.preview.sha256, wrong.sha256);
 });
 
 test("permits an explicitly requested preview after inspecting an existing site", () => {
@@ -11332,7 +11336,7 @@ test("new artwork requests still reject read-only reuse of existing creative byt
   }
 });
 
-test("rejects publication evidence not bound to every current-run model write", () => {
+test("does not claim full authorship when a verified snapshot differs from current-run writes", () => {
   for (const mismatch of ["entry-digest", "file-count", "snapshot-digest", "byte-count"]) {
     const guard = createToolLoopGuard();
     guard.observeRun(
@@ -11379,14 +11383,64 @@ test("rejects publication evidence not bound to every current-run model write", 
     afterCall(guard, "pixel_ods_workspace_preview", {
       event: { params: previewParams, result: { details } },
     });
-    assert.deepEqual(guard.verificationForRun("run-1"), {
-      status: "failed",
-      text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
-    });
+    const verification = guard.verificationForRun("run-1");
+    assert.equal(verification.status, "passed");
+    assert.match(verification.text, /Published from your workspace\./);
+    assert.doesNotMatch(verification.text, /Created by Pixel\./);
+    assert.equal(verification.preview.sha256, details.sha256);
   }
 });
 
-test("accepts a novel multi-file visual only when every published file was written", () => {
+test("publishes new HTML beside preserved files through direct and Tool Search receipts", () => {
+  for (const wrapped of [false, true]) {
+    for (const invalid of [undefined, "readback", "directory", "error", "source"]) {
+      const guard = createToolLoopGuard();
+      guard.observeRun(
+        { agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+        { prompt: "Add an accessible index.html beside my saved CSV and Markdown guide. Preserve both files and publish the handout page." }
+      );
+      const write = { path: "handout/index.html", content: "<!doctype html><h1>Handout</h1><a href=data.csv download>CSV</a>" };
+      call(guard, "write", { event: { params: write } });
+      afterCall(guard, "write", { event: { params: write, result: { details: { status: "completed" } } } });
+      const snapshot = workspacePreviewSnapshot("handout", [write,
+        { path: "handout/data.csv", content: "label,count\nred,7\n" },
+        { path: "handout/guide.md", content: "# Original guide\nKeep these bytes.\n" },
+      ]);
+      const details = {
+        schemaVersion: 1, kind: "ods-pixel-workspace-preview", status: "succeeded",
+        relativeDirectory: "handout", ...snapshot, port: 9437,
+        url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+        httpStatus: 200, readbackVerified: true, executable: false, overwritten: false,
+      };
+      if (invalid === "readback") details.readbackVerified = false;
+      if (invalid === "directory") details.relativeDirectory = "another-handout";
+      const tool = wrapped ? "tool_call" : "pixel_ods_workspace_preview";
+      const params = wrapped ? { id: "pixel_ods_workspace_preview", args: { relativeDirectory: "handout" } }
+        : { relativeDirectory: "handout" };
+      const normalized = call(guard, tool, { event: { toolCallId: "publish", params }, context: { toolCallId: "publish" } });
+      assert.notEqual(normalized?.block, true);
+      const result = { details, ...(invalid === "error" ? { isError: true } : {}) };
+      afterCall(guard, tool, {
+        event: { toolCallId: "publish", params: normalized.params,
+          result: wrapped ? wrappedPluginResult(invalid === "source" ? "untrusted-plugin" : "pixel-ods", "pixel_ods_workspace_preview", result)
+            : invalid === "source" ? { content: [{ type: "text", text: JSON.stringify(details) }] } : result },
+        context: { toolCallId: "publish" },
+      });
+      const verification = guard.verificationForRun("run-1");
+      if (invalid) {
+        assert.notEqual(verification.status, "passed", `${wrapped}/${invalid}`);
+      } else {
+        assert.equal(verification.status, "passed");
+        assert.equal(verification.preview.files, 3);
+        assert.equal(verification.preview.sha256, snapshot.sha256);
+        assert.match(verification.text, /Published from your workspace\./);
+        assert.doesNotMatch(verification.text, /Created by Pixel\./);
+      }
+    }
+  }
+});
+
+test("attributes a complete multi-file visual when every published file matches current-run writes", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -11504,7 +11558,7 @@ test("binds a successful focused model edit to the final preview bytes", () => {
   assert.equal(guard.verificationForRun("run-1").status, "passed");
 });
 
-test("fails closed when a successful model edit cannot be replayed exactly", () => {
+test("publishes host-verified edits without claiming authorship when model replay is ambiguous", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -11557,10 +11611,11 @@ test("fails closed when a successful model edit cannot be replayed exactly", () 
       },
     },
   });
-  assert.deepEqual(guard.verificationForRun("run-1"), {
-    status: "failed",
-    text: WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
-  });
+  const verification = guard.verificationForRun("run-1");
+  assert.equal(verification.status, "passed");
+  assert.match(verification.text, /Published from your workspace\./);
+  assert.doesNotMatch(verification.text, /Created by Pixel\./);
+  assert.equal(verification.preview.sha256, snapshot.sha256);
 });
 
 test("tracks a model-authored preview above the repair-loop text threshold", () => {
