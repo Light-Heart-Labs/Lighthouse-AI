@@ -1607,3 +1607,16 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestExtractListHeadTailBounds:
+
+    def test_extracts_head_and_tail(self):
+        from helpers import extract_list_head_tail_bounds
+        assert extract_list_head_tail_bounds([1, 2, 3, 4, 5], count=2) == {"head": [1, 2], "tail": [4, 5]}
+
+    def test_handles_none_and_out_of_bounds_count(self):
+        from helpers import extract_list_head_tail_bounds
+        assert extract_list_head_tail_bounds(None) == {"head": [], "tail": []}
+        assert extract_list_head_tail_bounds([1, 2], count=10) == {"head": [1, 2], "tail": [1, 2]}
+
