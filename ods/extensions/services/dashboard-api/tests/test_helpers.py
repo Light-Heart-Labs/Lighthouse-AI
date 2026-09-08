@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestCapitalizeStringWordsSafe:
+
+    def test_capitalizes_words(self):
+        from helpers import capitalize_string_words_safe
+        assert capitalize_string_words_safe("hello world") == "Hello World"
+        assert capitalize_string_words_safe("  foo   bar  ") == "Foo Bar"
+
+    def test_handles_none_and_non_string_inputs(self):
+        from helpers import capitalize_string_words_safe
+        assert capitalize_string_words_safe(None) == ""
+        assert capitalize_string_words_safe(123) == "123"
+
