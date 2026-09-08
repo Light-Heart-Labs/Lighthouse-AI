@@ -1607,3 +1607,21 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestMaskSensitiveDictValues:
+
+    def test_masks_sensitive_keys(self):
+        from helpers import mask_sensitive_dict_values
+        raw = {"user": "alice", "api_key": "secret123", "nested": {"token": "xyz"}}
+        assert mask_sensitive_dict_values(raw) == {
+            "user": "alice",
+            "api_key": "[REDACTED]",
+            "nested": {"token": "[REDACTED]"},
+        }
+
+    def test_handles_none_and_non_dict_inputs(self):
+        from helpers import mask_sensitive_dict_values
+        assert mask_sensitive_dict_values(None) == {}
+        assert mask_sensitive_dict_values("not_dict") == {}
+

@@ -1146,3 +1146,26 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def mask_sensitive_dict_values(data: object, mask_keys: tuple = ("key", "secret", "token", "password")) -> dict:
+    """Mask sensitive value strings in dictionaries matching mask_keys substrings safely.
+
+    Replaces string values for matching keys with '[REDACTED]'. Handles nested dicts,
+    None, or non-dict inputs without raising AttributeError.
+    """
+    if not isinstance(data, dict):
+        return {}
+    res = {}
+    for k, v in data.items():
+        if k is None:
+            continue
+        key_str = str(k)
+        if isinstance(v, dict):
+            res[key_str] = mask_sensitive_dict_values(v, mask_keys)
+        elif any(mk.lower() in key_str.lower() for mk in mask_keys):
+            res[key_str] = "[REDACTED]"
+        else:
+            res[key_str] = v
+    return res
+
