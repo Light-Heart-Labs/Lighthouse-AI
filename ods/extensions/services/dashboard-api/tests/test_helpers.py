@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestPadStringAlignBounds:
+
+    def test_pads_string_alignment(self):
+        from helpers import pad_string_align_bounds
+        assert pad_string_align_bounds("test", width=8, align="left") == "test    "
+        assert pad_string_align_bounds("test", width=8, align="right", fillchar="*") == "****test"
+
+    def test_handles_none_and_negative_width(self):
+        from helpers import pad_string_align_bounds
+        assert pad_string_align_bounds(None, width=5) == "     "
+        assert pad_string_align_bounds("abc", width=-1) == "abc"
+
