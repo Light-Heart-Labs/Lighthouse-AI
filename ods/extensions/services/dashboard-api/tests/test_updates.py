@@ -242,6 +242,74 @@ def test_releases_manifest_with_mocked_github(test_client):
     assert data["releases"][0]["version"] == "1.5.0"
     assert data["releases"][1]["prerelease"] is True
     assert "checked_at" in data
+
+
+# ---------------------------------------------------------------------------
+# Bug #4: Safe version string parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_version_parts_valid_versions():
+    """_parse_version_parts handles valid semantic versions correctly."""
+    from routers.updates import _parse_version_parts
+
+    assert _parse_version_parts("2.6.0") == [2, 6, 0]
+    assert _parse_version_parts("1.0.0") == [1, 0, 0]
+    assert _parse_version_parts("10.20.30") == [10, 20, 30]
+
+
+def test_parse_version_parts_partial_versions():
+    """_parse_version_parts pads partial versions with zeros."""
+    from routers.updates import _parse_version_parts
+
+    assert _parse_version_parts("2.6") == [2, 6, 0]
+    assert _parse_version_parts("2") == [2, 0, 0]
+    assert _parse_version_parts("1.2.3.4") == [1, 2, 3]  # truncates to 3 parts
+
+
+def test_parse_version_parts_malformed_no_digits():
+    """_parse_version_parts returns [0, 0, 0] for versions with no digits."""
+    from routers.updates import _parse_version_parts
+
+    assert _parse_version_parts("vvv") == [0, 0, 0]
+    assert _parse_version_parts("abc") == [0, 0, 0]
+    assert _parse_version_parts("") == [0, 0, 0]
+
+
+def test_parse_version_parts_mixed_content():
+    """_parse_version_parts extracts digits from mixed alphanumeric versions."""
+    from routers.updates import _parse_version_parts
+
+    assert _parse_version_parts("v2.6.0") == [2, 6, 0]
+    assert _parse_version_parts("2.6.0-rc1") == [2, 6, 0]  # ignores suffix
+    assert _parse_version_parts("v2.x.0") == [2, 0, 0]  # 'x' filtered out
+
+
+def test_parse_version_parts_empty_and_whitespace():
+    """_parse_version_parts handles empty and whitespace-only strings safely."""
+    from routers.updates import _parse_version_parts
+
+    assert _parse_version_parts("") == [0, 0, 0]
+    assert _parse_version_parts("   ") == [0, 0, 0]
+
+
+def test_build_version_result_with_malformed_version():
+    """_build_version_result correctly compares malformed versions."""
+    from routers.updates import _build_version_result
+
+    # Malformed current, valid latest → update available
+    result = _build_version_result("vvv", {"latest": "2.0.0"})
+    assert result["current"] == "vvv"
+    assert result["latest"] == "2.0.0"
+    assert result["update_available"] is True  # [0,0,0] < [2,0,0]
+
+    # Both malformed → no update
+    result = _build_version_result("vvv", {"latest": "zzz"})
+    assert result["update_available"] is False  # [0,0,0] == [0,0,0]
+
+    # Valid current, malformed latest → no update
+    result = _build_version_result("2.0.0", {"latest": "vvv"})
+    assert result["update_available"] is False  # [2,0,0] > [0,0,0]
     datetime.fromisoformat(data["checked_at"])  # valid ISO-8601 (regression: no trailing "Z" after the offset)
 
 
