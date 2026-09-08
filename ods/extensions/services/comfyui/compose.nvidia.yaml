@@ -13,7 +13,7 @@ services:
       - ./data/comfyui/models:/models:z
       - ./data/comfyui/output:/output:z
       - ./data/comfyui/input:/input:z
-      - ./data/comfyui/workflows:/workflows:ro,z
+       - ./data/comfyui/workflows:/workflows:rw,z
     shm_size: '8g'
     deploy:
       resources:
