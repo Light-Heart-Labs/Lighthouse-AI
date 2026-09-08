@@ -3,7 +3,7 @@
 // OpenClaw's built-in identical-call detector blocks a repeated tool call, but
 // a model can keep asking for the blocked tool on later continuation passes.
 // Bound the web-research and coding-repair portions of a Pixel response. A
-// duplicate fetch gets one nonterminal pivot to targeted extraction, while
+// duplicate fetch stays a source-specific rejection within that budget, while
 // repeated foreground or background verification failures share a run-wide
 // budget. Terminal blocks get one result in which to produce a useful final
 // answer; if the model ignores one, abort only that active agent run through
@@ -5683,7 +5683,6 @@ export function createToolLoopGuard({
         privateNetworkPrompt: false,
         clientCancelled: false,
         fetchedUrls: new Set(),
-        fetchPivots: new Set(),
         githubCanonicalUrl: undefined,
         githubCanonicalSatisfied: false,
         odsRoutingInitialized: false,
@@ -7649,18 +7648,6 @@ export function createToolLoopGuard({
         : undefined;
     }
 
-    if (toolName === "web_fetch") {
-      const fetchUrl = canonicalFetchUrl(event);
-      if (fetchUrl && state.fetchedUrls.has(fetchUrl)) {
-        if (state.fetchPivots.has(fetchUrl)) {
-          state.webExhausted = true;
-          return { block: true, blockReason: WEB_BUDGET_EXHAUSTED_REASON };
-        }
-        state.fetchPivots.add(fetchUrl);
-        return { block: true, blockReason: WEB_FETCH_REPEAT_PIVOT_REASON };
-      }
-    }
-
     const kind = toolName === "web_search" ? "search" : "fetch";
     if (state[kind] >= effective[kind] || state.total >= effective.total) {
       state.webExhausted = true;
@@ -7671,6 +7658,12 @@ export function createToolLoopGuard({
     state.total += 1;
     if (toolName === "web_fetch") {
       const fetchUrl = canonicalFetchUrl(event);
+      // A repeated page consumes one bounded attempt, but does not revoke
+      // access to other sources or extraction. Retain this state through
+      // compaction so retries neither erase evidence nor reset the run budget.
+      if (fetchUrl && state.fetchedUrls.has(fetchUrl)) {
+        return { block: true, blockReason: WEB_FETCH_REPEAT_PIVOT_REASON };
+      }
       if (fetchUrl) state.fetchedUrls.add(fetchUrl);
     }
     return normalizedParams ? { params: normalizedParams } : undefined;

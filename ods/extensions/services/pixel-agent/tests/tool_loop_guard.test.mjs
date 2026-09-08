@@ -7607,28 +7607,47 @@ test("pivots one repeated canonical fetch to targeted extraction", () => {
   );
 });
 
-test("makes a second ignored same-page pivot terminal", () => {
-  const aborts = [];
-  const guard = createToolLoopGuard({
-    abortRun: (sessionId) => {
-      aborts.push(sessionId);
-      return true;
-    },
-  });
-  const event = { params: { url: "https://docs.python.org/3/library/pathlib.html" } };
-  assert.equal(call(guard, "web_fetch", { event }), undefined);
-  assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
-  assert.equal(call(guard, "web_fetch", { event }).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "read"), undefined);
-  assert.equal(call(guard, "web_search").blockReason, WEB_BUDGET_EXHAUSTED_REASON);
-  assert.equal(call(guard, "web_search").blockReason, WEB_LOOP_ABORT_REASON);
-  assert.deepEqual(aborts, ["session-1"]);
+test("repeated source after compaction preserves other research and the run budget", () => {
+  for (const wrapped of [false, true]) {
+    const guard = createToolLoopGuard({limits: {search: 2, fetch: 5, total: 6}});
+    const context = {agentId: "pixel", runId: "run-1", sessionId: "session-1"};
+    const prompt = "Check setup requirements, save a checklist, and read it back.";
+    guard.observeRun(context, "pixel", {prompt});
+    const invoke = (id, args) => {
+      if (wrapped) {
+        const selected = call(guard, "tool_call", {event: {params: {id, args}}});
+        if (selected?.block) return selected;
+      }
+      // The native runtime dispatches the selected tool through its own hook.
+      return call(guard, id, {event: {params: args}});
+    };
+    const page = {url: "https://docs.example.org/setup"};
+    assert.equal(invoke("web_fetch", page), undefined);
+    assert.equal(invoke("web_fetch", page).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
+    guard.observeRun(context, "pixel", {prompt, messages: [{role: "assistant", content: "Previous setup page was truncated; checklist still pending."}]});
+    assert.equal(invoke("web_fetch", page).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
+    assert.equal(invoke("pixel_ods_web_extract", {...page, query: "Requirements"}), undefined);
+    assert.equal(invoke("web_fetch", {url: "https://docs.example.org/manual"}), undefined);
+    assert.equal(invoke("web_search", {query: "official installation requirements"}), undefined);
+    // Compaction did not reset counters; six attempts consumed the exact cap.
+    assert.equal(invoke("web_fetch", {url: "https://docs.example.org/install"}).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
+    assert.notEqual(invoke("write", {path: "checklist.md", content: "Only verified requirements."})?.block, true);
+    assert.notEqual(invoke("read", {path: "checklist.md"})?.block, true);
+  }
+});
+
+test("repeated pages cannot create an unbounded retry allowance", () => {
+  const guard = createToolLoopGuard({limits: {fetch: 3, total: 3}});
+  const event = {params: {url: "https://docs.example.org/setup"}};
+  assert.equal(call(guard, "web_fetch", {event}), undefined);
+  for (let i = 0; i < 2; i++) assert.equal(call(guard, "web_fetch", {event}).blockReason, WEB_FETCH_REPEAT_PIVOT_REASON);
+  assert.equal(call(guard, "web_fetch", {event}).blockReason, WEB_BUDGET_EXHAUSTED_REASON);
 });
 
 test("web exhaustion preserves authorized local workspace repair", () => {
   for (const wrapped of [false, true]) {
     const aborts = [];
-    const guard = createToolLoopGuard({ abortRun: (id) => { aborts.push(id); return true; } });
+    const guard = createToolLoopGuard({ limits: {fetch: 2, total: 2}, abortRun: (id) => { aborts.push(id); return true; } });
     guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
       prompt: "Repair the error-clearing logic in /workspace/splitter-2b/index.html and publish the existing website.",
     });
@@ -7664,7 +7683,7 @@ test("research exhaustion preserves report delivery without inferred workspace i
     for (const wrapped of [false, true]) {
       const aborts = [];
       const guard = createToolLoopGuard({
-        limits: { search: 1, fetch: 4, total: exhaustion === "total" ? 1 : 5 },
+        limits: { search: 1, fetch: exhaustion === "repeat" ? 2 : 4, total: exhaustion === "total" ? 1 : 5 },
         abortRun: (id) => { aborts.push(id); return true; },
       });
       // No workspace-task inference: a research workflow may still save its
