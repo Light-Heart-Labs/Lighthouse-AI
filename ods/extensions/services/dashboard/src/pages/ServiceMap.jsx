@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, GitBranch, RefreshCw, X } from 'lucide-react'
 import { serviceUrl } from '../lib/serviceUrls'
+import ServiceImpact from '../components/ServiceImpact'
 
 const POLL_INTERVAL = 10000
 const NODE_W = 170
@@ -336,6 +337,7 @@ export default function ServiceMap() {
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-zinc-500" />Not deployed</span>
       </div>
 
+      <ServiceImpact nodes={nodes} edges={edges} />
       <div className="relative min-h-[70vh] overflow-auto rounded-xl border border-theme-border bg-theme-card">
         <svg width={svgWidth} height={svgHeight} viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="mx-auto block">
           <defs>
