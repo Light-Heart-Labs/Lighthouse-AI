@@ -30,14 +30,14 @@ def until(check,seconds=5):
     assert check()
 
 
-@pytest.mark.parametrize('loss',['eof','supervisor-sigkill','worker-exit','supervisor-success','supervisor-error'])
+@pytest.mark.parametrize('loss',['eof','eof-staggered-kill','supervisor-sigkill','worker-exit','supervisor-success','supervisor-error'])
 def test_parent_loss_reaps_installer_descendants_and_keeps_slot_until_exit(tmp_path,loss):
     import fcntl
     group_marker=tmp_path/'group'; descendant_marker=tmp_path/'descendant'
     wrapper=tmp_path/'worker.py'
     grandchild=f"import os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); Path({str(descendant_marker)!r}).write_text(str(os.getpid())); time.sleep(60)"
     wrapper.write_text(f'''
-import os,sys
+import os,sys,signal,time
 from pathlib import Path
 sys.path.insert(0,{str(BIN)!r})
 from pixel_provider import advice_setup_worker as worker
@@ -45,8 +45,18 @@ from pixel_provider.advice_runtime import install_command
 Path({str(group_marker)!r}).write_text(str(os.getpid()))
 worker.source_digest=lambda:'a'*64
 worker.select_candidate=lambda identity:{{'path':sys.executable}}
+if {loss!r}=='eof-staggered-kill':
+    original_killpg=os.killpg
+    def staggered_kill(group,signum):
+        # Force the observed kernel ordering: watched PIDs exit before the
+        # watchdog releases its inherited locks. This is fixture-only.
+        os.kill(group,signum)
+        os.kill(int(Path({str(descendant_marker)!r}).read_text()),signum)
+        time.sleep(.5)
+        original_killpg(group,signum)
+    os.killpg=staggered_kill
 def prepare(directory,**kwargs):
-    code="import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',"+repr({grandchild!r})+"],pass_fds="+repr(tuple(kwargs['lock_fds']))+"); time.sleep({60 if loss in ('eof','supervisor-sigkill') else .5})"
+    code="import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',"+repr({grandchild!r})+"],pass_fds="+repr(tuple(kwargs['lock_fds']))+"); time.sleep({60 if loss in ('eof','eof-staggered-kill','supervisor-sigkill') else .5})"
     install_command([sys.executable,'-I','-S','-c',code],timeout=30,cancelled=kwargs.get('cancelled',lambda:False),lock_fds=kwargs['lock_fds'],inherited_group=True)
     if {loss!r}=='supervisor-success': return {{'status':'ready'}}
     raise AssertionError('installer unexpectedly completed')
@@ -89,8 +99,15 @@ run_worker({command!r},{request!r},cancelled=lambda:False,deadline_seconds=40,lo
         process.wait(timeout=6)
         if loss=='supervisor-success': assert process.returncode==0
         elif loss=='supervisor-error': assert process.returncode!=0
-        until(lambda:not live(group) and not live(descendant),seconds=6)
-        fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        def cleanup_finished():
+            if live(group) or live(descendant): return False
+            # SIGKILL delivery is not simultaneous: the watchdog may retain
+            # its inherited lock after these two processes have exited. Slot
+            # acquisition, not their PIDs alone, proves cleanup completion.
+            try: fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError: return False
+            return True
+        until(cleanup_finished,seconds=6)
     finally:
         for fd in locks: os.close(fd)
         if group is None and group_marker.exists(): group=int(group_marker.read_text())
