@@ -1146,3 +1146,31 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def calculate_simple_moving_average_safe(data: object, window_size: int = 3) -> list:
+    """Calculate simple moving average over numeric sequence data safely.
+
+    Handles non-numeric values, window_size <= 0, None, or non-sequences without exception.
+    """
+    if not isinstance(data, (list, tuple)):
+        return []
+    w = max(1, int(window_size))
+    nums = []
+    for item in data:
+        if item is None:
+            continue
+        try:
+            val = float(item)
+            if not math.isnan(val) and not math.isinf(val):
+                nums.append(val)
+        except (ValueError, TypeError):
+            continue
+    if len(nums) < w:
+        return []
+    res = []
+    for i in range(len(nums) - w + 1):
+        window = nums[i:i + w]
+        res.append(round(sum(window) / w, 4))
+    return res
+
