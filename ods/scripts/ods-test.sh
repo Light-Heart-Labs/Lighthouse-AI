@@ -92,7 +92,13 @@ load_env() {
 }
 
 log() {
-    [[ "$VERBOSE" == "true" ]] && echo "$@" >&2
+    # Always returns 0. Callers use `cmd || log "..."` and `[[ c ]] && log "..."`
+    # purely as diagnostics; under `set -e` a non-zero status from the last
+    # command of either list would abort the whole suite mid-run.
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo "$@" >&2
+    fi
+    return 0
 }
 
 # Portable millisecond timestamp (macOS BSD date lacks %N)
@@ -108,6 +114,14 @@ print_header() {
         echo "  Mission M8: Critical Path Testing"
         echo "========================================"
         echo ""
+    fi
+}
+
+print_section() {
+    # Suppressed under --json: stdout there must be one parseable document.
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+        echo ""
+        echo "> $1"
     fi
 }
 
@@ -209,10 +223,16 @@ test_tcp() {
 #--------------------------------------------------------------------------
 # Service Test Suites
 #--------------------------------------------------------------------------
+# Every section below ends with an explicit `return 0`, and every probe call
+# is guarded. A section's exit status is NOT a signal: results are tallied by
+# record_result and the run's exit code comes from FAILED_TESTS. Under
+# `set -euo pipefail` an unguarded non-zero status from a probe would abort the
+# whole suite at the first failing check, so the summary would never print and
+# `--json` would emit no document at all.
+#--------------------------------------------------------------------------
 
 test_docker() {
-    echo ""
-    echo "> Docker Infrastructure"
+    print_section "Docker Infrastructure"
     
     if ! command -v docker &>/dev/null; then
         record_result "Docker Available" "fail" "docker not installed"
@@ -236,11 +256,12 @@ test_docker() {
     running_count=$(timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | wc -l)
     record_result "Running Containers" "pass" "$running_count containers"
     print_test "Running Containers" "pass" "$running_count containers"
+
+    return 0
 }
 
 test_gpu() {
-    echo ""
-    echo "> GPU Resources"
+    print_section "GPU Resources"
     
     if ! command -v nvidia-smi &>/dev/null; then
         record_result "NVIDIA GPU" "skip" "nvidia-smi not found"
@@ -273,14 +294,17 @@ test_gpu() {
         record_result "NVIDIA GPU" "fail" "no GPU detected"
         print_test "NVIDIA GPU" "fail" "not detected"
     fi
+
+    return 0
 }
 
 test_llm() {
-    echo ""
-    echo "> LLM Inference (llama-server)"
+    print_section "LLM Inference (llama-server)"
 
-    test_http "LLM Health" "$LLM_URL/health" "200" || return 1
-    test_http "LLM Models API" "$LLM_URL/v1/models" "200"
+    # A down LLM skips the checks that depend on it; the failure is already
+    # recorded, and the run must continue to the remaining sections.
+    test_http "LLM Health" "$LLM_URL/health" "200" || return 0
+    test_http "LLM Models API" "$LLM_URL/v1/models" "200" || log "LLM Models API check failed"
 
     if [[ "$QUICK_MODE" == "true" ]]; then
         record_result "LLM Inference" "skip" "quick mode"
@@ -289,7 +313,7 @@ test_llm() {
     fi
 
     local model_id
-    model_id=$(curl -s --max-time 10 "$LLM_URL/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    model_id=$(curl -s --max-time 10 "$LLM_URL/v1/models" 2>/dev/null | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
     model_id="${model_id:-local}"
 
     local payload="{\"model\": \"$model_id\", \"messages\": [{\"role\": \"user\", \"content\": \"Say hello\"}], \"max_tokens\": 10}"
@@ -298,23 +322,23 @@ test_llm() {
     response=$(curl -s --max-time 30 \
         -X POST "$LLM_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null)
+        -d "$payload" 2>/dev/null || echo "")
 
     if echo "$response" | grep -q '"content"'; then
         local tokens_used
-        tokens_used=$(echo "$response" | grep -o '"total_tokens":[0-9]*' | cut -d: -f2)
+        tokens_used=$(echo "$response" | grep -o '"total_tokens":[0-9]*' | cut -d: -f2 || echo "")
         record_result "LLM Inference" "pass" "${tokens_used} tokens"
         print_test "LLM Inference" "pass" "${tokens_used} tokens"
     else
         record_result "LLM Inference" "fail" "no content in response"
         print_test "LLM Inference" "fail"
-        return 1
     fi
+
+    return 0
 }
 
 test_tool_calling() {
-    echo ""
-    echo "> Tool Calling M8 Critical"
+    print_section "Tool Calling M8 Critical"
     
     if [[ "$QUICK_MODE" == "true" ]]; then
         record_result "Tool Calling" "skip" "quick mode"
@@ -329,7 +353,7 @@ test_tool_calling() {
     response=$(curl -s --max-time 30 \
         -X POST "$LLM_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null)
+        -d "$payload" 2>/dev/null || echo "")
     
     if echo "$response" | grep -q '"tool_calls"'; then
         record_result "Tool Calling" "pass" "function called"
@@ -338,13 +362,14 @@ test_tool_calling() {
         record_result "Tool Calling" "fail" "no tool_calls in response"
         print_test "Tool Calling" "fail" "no tool call"
     fi
+
+    return 0
 }
 
 test_whisper() {
-    echo ""
-    echo "> Whisper Speech-to-Text"
+    print_section "Whisper Speech-to-Text"
     
-    test_tcp "Whisper Port" "$WHISPER_HOST" "$WHISPER_PORT"
+    test_tcp "Whisper Port" "$WHISPER_HOST" "$WHISPER_PORT" || log "Whisper port check failed"
     
     local health_url="http://${WHISPER_HOST}:${WHISPER_PORT}/health"
     local response
@@ -363,13 +388,14 @@ test_whisper() {
         test_http "Whisper HTTP" "http://${WHISPER_HOST}:${WHISPER_PORT}/" "200" || whisper_http_exit=$?
         [[ $whisper_http_exit -ne 0 ]] && log "Whisper HTTP check failed (exit $whisper_http_exit)"
     fi
+
+    return 0
 }
 
 test_tts() {
-    echo ""
-    echo "> Kokoro TTS Text-to-Speech"
+    print_section "Kokoro TTS Text-to-Speech"
     
-    test_tcp "TTS Port" "$TTS_HOST" "$TTS_PORT"
+    test_tcp "TTS Port" "$TTS_HOST" "$TTS_PORT" || log "TTS port check failed"
     
     local voices_url="http://${TTS_HOST}:${TTS_PORT}/v1/audio/voices"
     local response
@@ -377,7 +403,7 @@ test_tts() {
     
     if echo "$response" | grep -q '"voices"'; then
         local voice_count
-        voice_count=$(echo "$response" | grep -o '"voice_id"' | wc -l)
+        voice_count=$(echo "$response" | grep -o '"voice_id"' | wc -l || echo 0)
         record_result "TTS Voices" "pass" "$voice_count voices"
         print_test "TTS Voices" "pass" "$voice_count voices"
     else
@@ -385,13 +411,14 @@ test_tts() {
         test_http "TTS API" "http://${TTS_HOST}:${TTS_PORT}/" "200" || tts_api_exit=$?
         [[ $tts_api_exit -ne 0 ]] && log "TTS API check failed (exit $tts_api_exit)"
     fi
+
+    return 0
 }
 
 test_embeddings() {
-    echo ""
-    echo "> Embeddings TEI"
+    print_section "Embeddings TEI"
     
-    test_tcp "Embeddings Port" "$EMBEDDING_HOST" "$EMBEDDING_PORT"
+    test_tcp "Embeddings Port" "$EMBEDDING_HOST" "$EMBEDDING_PORT" || log "Embeddings port check failed"
     
     local health_url="http://${EMBEDDING_HOST}:${EMBEDDING_PORT}/health"
     local response
@@ -406,11 +433,12 @@ test_embeddings() {
         test_http "Embeddings API" "http://${EMBEDDING_HOST}:${EMBEDDING_PORT}/embed" "200" "POST" "$payload" || embeddings_api_exit=$?
         [[ $embeddings_api_exit -ne 0 ]] && log "Embeddings API check failed (exit $embeddings_api_exit)"
     fi
+
+    return 0
 }
 
 test_voice_roundtrip() {
-    echo ""
-    echo "> Voice Round-Trip M8 Critical"
+    print_section "Voice Round-Trip M8 Critical"
     
     if [[ "$QUICK_MODE" == "true" ]]; then
         record_result "Voice Round-Trip" "skip" "quick mode"
@@ -456,12 +484,12 @@ test_voice_roundtrip() {
     llm_response=$(curl -s --max-time 15 \
         -X POST "$LLM_URL/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "$llm_payload" 2>/dev/null)
+        -d "$llm_payload" 2>/dev/null || echo "")
     
     if ! echo "$llm_response" | grep -q '"content"'; then
         record_result "Voice Round-Trip" "fail" "LLM step failed"
         print_test "Voice Round-Trip" "fail" "LLM failed"
-        return 1
+        return 0
     fi
     
     local tts_text="The weather today is sunny and 75 degrees."
@@ -470,7 +498,7 @@ test_voice_roundtrip() {
     tts_response=$(curl -s --max-time 15 \
         -X POST "http://${TTS_HOST}:${TTS_PORT}/v1/audio/speech" \
         -H "Content-Type: application/json" \
-        -d "$tts_payload" 2>/dev/null)
+        -d "$tts_payload" 2>/dev/null || echo "")
     
     end_time=$(_now_ms)
     duration_ms=$(( end_time - start_time ))
@@ -482,11 +510,12 @@ test_voice_roundtrip() {
         record_result "Voice Round-Trip" "fail" "TTS step failed"
         print_test "Voice Round-Trip" "fail" "TTS failed"
     fi
+
+    return 0
 }
 
 test_privacy_shield() {
-    echo ""
-    echo "> Privacy Shield M3"
+    print_section "Privacy Shield M3"
     
     local shield_url="http://localhost:${PRIVACY_SHIELD_PORT}"
     
@@ -512,16 +541,19 @@ test_privacy_shield() {
         record_result "Privacy Shield Proxy" "fail" "no response"
         print_test "Privacy Shield Proxy" "fail"
     fi
+
+    return 0
 }
 
 test_livekit() {
-    echo ""
-    echo "> LiveKit Voice Infrastructure"
+    print_section "LiveKit Voice Infrastructure"
     
-    test_tcp "LiveKit Port" "$LIVEKIT_HOST" "$LIVEKIT_PORT"
+    test_tcp "LiveKit Port" "$LIVEKIT_HOST" "$LIVEKIT_PORT" || log "LiveKit port check failed"
     livekit_health_exit=0
     test_http "LiveKit Health" "http://${LIVEKIT_HOST}:${LIVEKIT_PORT}/" "200" || livekit_health_exit=$?
     [[ $livekit_health_exit -ne 0 ]] && log "LiveKit health check failed (exit $livekit_health_exit)"
+
+    return 0
 }
 
 #--------------------------------------------------------------------------
