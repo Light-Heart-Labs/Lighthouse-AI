@@ -86,6 +86,56 @@ test("distinct, partial, multiple-block and malformed command output is never di
   }
 });
 
+test("JSON tool results enter prompt text once with source, trust and truncation metadata intact", () => {
+  const details = {
+    url: "https://example.test/guide.txt", status: 200,
+    externalContent: {untrusted: true, source: "web_fetch", wrapped: true},
+    text: "<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n" + "Source line: Café, 東京, 🌿\n".repeat(500),
+    truncated: true, rawLength: 50000, length: 12000,
+    warning: "Only the selected section was retrieved", continuation: {nextLine: 501},
+  };
+  const content = [{type: "text", text: JSON.stringify(details, null, 2), annotations: {audience: ["assistant"]}}];
+  const payload = {tool, result: {content, details, structuredContent: {receipt: "owned-read"}}};
+  const original = JSON.stringify(payload);
+  const result = execute(payload);
+  const visible = JSON.parse(result.content[0].text);
+  assert.equal(Object.hasOwn(visible.result, "details"), false);
+  assert.deepEqual(JSON.parse(visible.result.content[0].text), details);
+  assert.deepEqual(visible.result.content, content);
+  assert.deepEqual(visible.result.structuredContent, payload.result.structuredContent);
+  assert.equal(result.details, payload);
+  assert.equal(JSON.stringify(payload), original);
+  assert.ok(result.content[0].text.length < jsonResult(payload).content[0].text.length * 0.7);
+});
+
+test("only exact complete JSON duplicates are projected", () => {
+  const details = {status: 200, text: "source excerpt"};
+  const cases = [
+    {content: [{type: "text", text: JSON.stringify(details)}], details},
+    {content: [{type: "text", text: JSON.stringify(details, null, 2)}], details: {...details, warning: "additional evidence"}},
+    {content: [{type: "text", text: JSON.stringify(details, null, 2)}, {type: "text", text: "second block"}], details},
+    {content: [{type: "text", text: "not JSON"}], details},
+    {content: [{type: "text", text: "[]"}], details: []},
+  ];
+  for (const result of cases) {
+    const payload = {tool, result};
+    assert.deepEqual(execute(payload), jsonResult(payload));
+  }
+});
+
+test("JSON error evidence remains complete in the projected text and original framework payload", () => {
+  const details = {status: "failed", error: "Origin unavailable", retryAfter: 30};
+  const payload = {tool, isError: true, result: {
+    isError: true, content: [{type: "text", text: JSON.stringify(details, null, 2)}], details,
+  }};
+  const result = execute(payload);
+  const visible = JSON.parse(result.content[0].text);
+  assert.equal(visible.isError, true);
+  assert.equal(visible.result.isError, true);
+  assert.deepEqual(JSON.parse(visible.result.content[0].text), details);
+  assert.equal(result.details, payload);
+});
+
 test("mixed unsupported or malformed blocks are never silently discarded", () => {
   for (const part of [null, {type: "resource", resource: {uri: "owned:file"}}, {type: "text", text: 7}, {type: "image", data: ""}, {type: "image", data: "abc", mimeType: ""}, {type: "image", data: "abc", mimeType: "text/html"}]) {
     const payload = {tool, result: {content: [image, part]}};
