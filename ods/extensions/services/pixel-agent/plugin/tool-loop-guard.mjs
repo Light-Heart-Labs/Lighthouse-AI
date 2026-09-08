@@ -3466,16 +3466,27 @@ function extensionDiscoveryVerification(state) {
       ...(!state.toolExecutionAttempted ? { code: OPERATIONS_UNAVAILABLE_ZERO_SUBMISSIONS_CODE } : {}) };
   }
   const evidence = [];
+  const hostJobs = new Map();
   let successes = 0;
   for (const [jobId, submission] of state.operationsSubmittedJobs) {
     const outcome = state.operationsTerminalJobs.get(jobId);
-    if (!outcome || !submission.actions.every(({ action }) => EXTENSION_READ_ACTIONS.has(action))) {
+    const hostObservation = submission.actions.length > 0 && submission.actions.every(({ target, action }) =>
+      target === "ods-host" && (HOST_OBSERVATION_FACETS.has(action) || action === "host.network-peer"));
+    if (!outcome || (!hostObservation &&
+        !submission.actions.every(({ action }) => EXTENSION_READ_ACTIONS.has(action)))) {
       return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
     }
     if (outcome.status !== "succeeded") {
       const targets = submission.actions.map(({ target, action }) =>
         `${JSON.stringify(target)} / ${JSON.stringify(action)}`).join(", ");
       evidence.push(`- Broker job \`${jobId}\`: \`${outcome.status}\`; requested ${targets}. No successful result was accepted for this attempt.`);
+      continue;
+    }
+    // Extension diagnosis may legitimately collect local machine facts. Those
+    // separately validated observations do not turn completed extension jobs
+    // back into pending jobs, or substitute for an extension result.
+    if (hostObservation) {
+      hostJobs.set(jobId, outcome);
       continue;
     }
     // Match each result to its submitted parameters as well as target/action.
@@ -3498,6 +3509,15 @@ function extensionDiscoveryVerification(state) {
       evidence.push(text);
       successes += 1;
     }
+  }
+  if (hostJobs.size > 0) {
+    const actions = new Set([...hostJobs.values()].flatMap((outcome) =>
+      outcome.actions.map(({ action }) => action)));
+    const text = operationsHostEvidenceText(actions, hostJobs);
+    if (!text?.startsWith(OPERATIONS_HOST_EVIDENCE_PREFIX)) {
+      return { status: "failed", text: OPERATIONS_UNVERIFIED_DELIVERY_PREFIX };
+    }
+    evidence.push(text);
   }
   return { status: successes > 0 ? "passed" : "failed", text: evidence.join("\n\n") };
 }
