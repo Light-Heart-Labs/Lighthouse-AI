@@ -41,6 +41,7 @@ export default {
       return result;
     });
     api.on('agent_end', bridge.agentEnd);
+    api.on('before_agent_run', bridge.beforeAgentRun);
     api.registerTool({name: 'fixture_witness', description: 'Return a fixed qualification witness.',
       parameters: {type: 'object', properties: {}, additionalProperties: false},
       async execute() {

@@ -59,6 +59,46 @@ test('session mismatch cannot reuse or close another session lease', async () =>
   assert.equal((await f.beforeModelResolve({}, ctx)).modelOverride, selected.modelOverride);
 });
 
+test('run admission verifies the actual resolved provider/model and same live lease', async () => {
+  const f = fixture(), ctx = context();
+  const selected = await f.beforeModelResolve({}, ctx);
+  const ready = {...ctx, modelProviderId: selected.providerOverride, modelId: selected.modelOverride};
+  assert.equal(f.beforeAgentRun({}, ready).outcome, 'pass');
+  assert.equal(f.beforeAgentRun({}, {...ready, sessionId: randomUUID()}).outcome, 'block');
+  assert.equal(f.beforeAgentRun({}, ready).outcome, 'pass', 'foreign session cannot close the owner lease');
+  await f.agentEnd({}, ctx);
+  assert.equal(f.beforeAgentRun({}, ready).outcome, 'block');
+});
+
+for (const change of [{modelProviderId: 'legacy'}, {modelId: 'legacy-model'}, {modelId: undefined}]) {
+  test('run admission blocks a stale selection and releases its own lease: ' + JSON.stringify(change), async () => {
+    const f = fixture(), ctx = context(), selected = await f.beforeModelResolve({}, ctx);
+    assert.equal(f.beforeAgentRun({}, {...ctx, modelProviderId: selected.providerOverride,
+      modelId: selected.modelOverride, ...change}).outcome, 'block');
+    await f.agentEnd({}, ctx);
+    assert.equal(f.releases.length, 1);
+  });
+}
+
+test('run admission fails closed without selection but preserves disabled and other agents', () => {
+  const f = fixture();
+  assert.equal(f.beforeAgentRun({}, context()).outcome, 'block');
+  assert.equal(f.beforeAgentRun({}, undefined).outcome, 'block');
+  assert.equal(f.beforeAgentRun({}, {...context(), agentId: 'other'}), undefined);
+  assert.equal(fixture({enabled: false}).beforeAgentRun({}, context()), undefined);
+});
+
+test('admission blocked during acquisition cannot leak a later worker', async () => {
+  const gate = deferred(), f = fixture({acquireLease: () => gate.promise}), ctx = context();
+  const selection = f.beforeModelResolve({}, ctx);
+  assert.equal(f.beforeAgentRun({}, ctx).outcome, 'block');
+  assert.equal(f.releases.length, 0);
+  gate.resolve(lease());
+  assert.equal((await selection).modelOverride, 'unavailable');
+  await f.agentEnd({}, ctx);
+  assert.equal(f.releases.length, 1);
+});
+
 for (const change of [
   {baseUrl: 'https://example.com/v1'}, {baseUrl: 'http://localhost:1234/v1'},
   {baseUrl: 'http://127.0.0.1:65536/v1'}, {baseUrl: 'http://127.0.0.1:1234/v1?x=1'},

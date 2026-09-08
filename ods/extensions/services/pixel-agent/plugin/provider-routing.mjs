@@ -1,7 +1,9 @@
 // Dormant transport adapter for the pinned OpenClaw provider plugin API.
 // Not registered by index.js: activation must supply an owner-approved lease
 // adapter and set the agent's default to ods-policy/managed with no fallbacks.
-// Hook errors are swallowed by core, so legacy provider defaults are NOT safe.
+// Selection hook errors are swallowed by core. Default model changes alone
+// cannot prevent retained session overrides; activation also requires mandatory
+// startup registration and actual resolved-model admission below.
 import { randomUUID } from 'node:crypto';
 
 const PROVIDER = 'ods-policy';
@@ -87,6 +89,21 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     await release(entry);
     entry.lease = undefined;
   }
+  function beforeAgentRun(_event, ctx) {
+    if (enabled !== true || (ctx?.agentId && ctx.agentId !== agentId)) return undefined;
+    const entry = binding(ctx) ? runs.get(ctx.runId) : undefined;
+    if (entry?.sessionId === ctx?.sessionId && live(entry) &&
+        ctx.modelProviderId === PROVIDER && ctx.modelId === entry.modelId) return {outcome: 'pass'};
+    // The pinned runtime swallows model-selection hook failures, but enforces
+    // before_agent_run decisions before submitting inference. Inspect the actual
+    // resolved model, not a configured default that a session/cron can override.
+    if (entry && entry.sessionId === ctx.sessionId) {
+      entry.closed = true;
+      void Promise.resolve(entry.pending).then(() => release(entry));
+    }
+    return {outcome: 'block', reason: 'ods-provider-lease-unavailable',
+      message: 'The approved Pixel provider route is unavailable. Review routing Settings before retrying.'};
+  }
   const provider = {
     id: PROVIDER, label: 'ODS routing', auth: [],
     resolveSyntheticAuth: () => ({apiKey: 'ods-policy-placeholder', source: 'ods-policy', mode: 'api-key'}),
@@ -116,5 +133,5 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
       };
     },
   };
-  return {provider, beforeModelResolve, agentEnd};
+  return {provider, beforeModelResolve, beforeAgentRun, agentEnd};
 }
