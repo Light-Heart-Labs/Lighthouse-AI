@@ -2280,6 +2280,44 @@ function recordDiscovery(guard, params, jobId, status = "succeeded", steps) {
   });
 }
 
+for (const hostFirst of [true, false]) {
+  for (const hostState of ["succeeded", "pending", "wrong-target", "invalid-output"]) {
+    test(`extension diagnosis retains model-selected host evidence: ${hostFirst}/${hostState}`, () => {
+      const guard = createToolLoopGuard();
+      guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+        prompt: "Inspect the extension and choose the local machine observations useful for diagnosis. Do not change anything.",
+      });
+      const extension = () => {
+        const params = { target: "ods-host", action: "ods.extensions.inspect", parameters: { serviceId: "comfyui" } };
+        assert.notEqual(call(guard, "pixel_ops_run", { event: { params } })?.block, true);
+        recordDiscovery(guard, params, "ops-1234567890123-aaaaaaaaaaaa");
+      };
+      const host = () => {
+        const params = { actions: ["host.identity"] };
+        assert.notEqual(call(guard, "pixel_ods_host_observe", { event: { params } })?.block, true);
+        afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: {
+          jobId: "ops-1234567890123-bbbbbbbbbbbb",
+          status: hostState === "pending" ? "pending" : "succeeded",
+          waitTimedOut: hostState === "pending",
+          steps: [{ ...lifecycleStep("inspect"), action: "host.identity",
+            target: hostState === "wrong-target" ? "another-host" : "ods-host",
+            stdout: hostState === "invalid-output" ? "unverified\nextra\n" : "diagnostic-host\n",
+          }],
+        } } } });
+      };
+      if (hostFirst) { host(); extension(); } else { extension(); host(); }
+      const result = guard.deliveryVerificationForRun("run-1");
+      assert.equal(result.status, hostState === "succeeded" ? "passed" : "failed");
+      if (hostState === "succeeded") {
+        assert.equal(result.deliveryMode, "append");
+        assert.match(result.text, /comfyui/);
+        assert.match(result.text, /diagnostic-host/);
+        assert.match(result.text, /Runtime prerequisites and features have not been verified/);
+      }
+    });
+  }
+}
+
 for (const wrapped of [false, true]) {
   test(`native extension read verifies the selected query and target (${wrapped ? "wrapped" : "direct"})`, () => {
     const guard = createToolLoopGuard();
