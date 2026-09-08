@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestNormalizeNumericRangeBounds:
+
+    def test_normalizes_list_in_range(self):
+        from helpers import normalize_numeric_range_bounds
+        assert normalize_numeric_range_bounds([0, 50, 100]) == [0.0, 0.5, 1.0]
+
+    def test_handles_non_numeric_and_empty_inputs(self):
+        from helpers import normalize_numeric_range_bounds
+        assert normalize_numeric_range_bounds(None) == []
+        assert normalize_numeric_range_bounds(["abc", None]) == []
+        assert normalize_numeric_range_bounds([10, 10, 10]) == [0.0, 0.0, 0.0]
+
