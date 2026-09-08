@@ -1146,3 +1146,17 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def capitalize_string_words_safe(text: object) -> str:
+    """Capitalize each word in text string safely without AttributeError.
+
+    Returns empty string for None or empty inputs. Handles non-string inputs safely.
+    """
+    if text is None:
+        return ""
+    val = str(text).strip()
+    if not val:
+        return ""
+    return " ".join(word.capitalize() for word in val.split())
+
