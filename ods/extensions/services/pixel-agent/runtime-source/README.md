@@ -66,12 +66,35 @@ actual composed live hook registry, not individual partial registry setters.
 
 ## Runtime proof and remaining work
 
+Candidate patch SHA-256:
+`8a31c88d0fe566e14e3998b9ba742bac2dc77775aa0154bda893b2b36da9b726`.
+A fresh extraction of the exact upstream archive accepted this patch, and all
+ten patched source/test files matched the qualified build tree byte-for-byte.
+The final patch includes a test-only braces correction; production source did
+not change after the completed build and runtime checks.
+
+Disposable Linux qualification passed the full source build, production/test
+type checks, 32 required-policy tests, three actual core-tool admission tests,
+and lint for all ten changed files. Gateway regression files also passed across
+the repository's selected Vitest projects (440 executions, not 440 unique tests).
+
 The existing `tests/runtime_provider_activation.integration.mjs` retains its
 upstream characterization mode. Set `OPENCLAW_PACKAGE` to a disposable built
 candidate and `OPENCLAW_REQUIRED_PLUGIN_TESTS=1` to exercise mandatory startup,
 optional-plugin failure, retained-session overrides, rejected reload, and repaired
 restart. All inference in that fixture is synthetic loopback traffic; it is not
 installed ODS chat acceptance or proof of real cloud use.
+
+Both modes passed against the built candidate. With the contract enabled,
+absent, failed, or incomplete required registrations rejected startup with no
+legacy inference; an optional plugin failure did not disable the valid guard.
+A rejected required-plugin reload admitted no inference, and a verified restart
+restored service. The reload fixture deliberately permits one request before
+disabling the plugin and one after repair; these are expected admitted calls.
+The no-policy mode deliberately retains upstream's unsafe legacy cases for
+compatibility characterization. It does not prove managed protection without
+the launcher contract. Listener polling is supplemented by source ordering;
+polling alone cannot exclude a brief listener opening.
 
 Before installation: complete early-service/channel/cron and alternative-harness
 entrypoint qualification, protect launcher/source/build custody, wire the shared

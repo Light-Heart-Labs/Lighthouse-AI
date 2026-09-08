@@ -383,10 +383,10 @@ index 3df5dd95..379e0a47 100644
          Promise.all([
 diff --git a/src/plugins/required-plugins.test.ts b/src/plugins/required-plugins.test.ts
 new file mode 100644
-index 00000000..d3ada9de
+index 00000000..e3ab202e
 --- /dev/null
 +++ b/src/plugins/required-plugins.test.ts
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,188 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 +import type { OpenClawConfig } from "../config/types.openclaw.js";
 +import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
@@ -437,7 +437,9 @@ index 00000000..d3ada9de
 +      const mod = await import("./required-plugins.js");
 +      const older = mod.beginRequiredPluginLoad();
 +      const newer = mod.beginRequiredPluginLoad();
-+      if (completed) mod.completeRequiredPluginLoad(registry(), config, newer);
++      if (completed) {
++        mod.completeRequiredPluginLoad(registry(), config, newer);
++      }
 +      expect(() => mod.completeRequiredPluginLoad(registry(), config, older)).toThrow("Superseded");
 +      expect(() => mod.assertRequiredPluginRuntime(config)).toThrow("runtime is not ready");
 +      const repair = mod.beginRequiredPluginLoad();
