@@ -23,14 +23,17 @@ function seed() {
   after(g,'write','initial',{path,content:initial});
   return g;
 }
-function publish(g,content) {
+function publish(g,content,{authored=true}={}) {
   const name=Buffer.from('index.html'),bytes=Buffer.from(content),n=Buffer.alloc(4),b=Buffer.alloc(8);
   n.writeUInt32BE(name.length);b.writeBigUInt64BE(BigInt(bytes.length));
   const sha256=createHash('sha256').update(n).update(name).update(b).update(bytes).digest('hex');
   const siteId='site-'+sha256.slice(0,24),params={relativeDirectory:'callback-demo'};
   before(g,'pixel_ods_workspace_preview','preview',params);
   after(g,'pixel_ods_workspace_preview','preview',params,{details:{schemaVersion:1,kind:'ods-pixel-workspace-preview',status:'succeeded',relativeDirectory:'callback-demo',files:1,bytes:bytes.length,sha256,siteId,port:9437,url:`http://${siteId}.localhost:9437/${siteId}/`,entryFile:'index.html',entrySha256:createHash('sha256').update(bytes).digest('hex'),httpStatus:200,readbackVerified:true,executable:false,overwritten:false}});
-  return g.verificationForRun('run').status;
+  const verification=g.verificationForRun('run');
+  assert.match(verification.text,authored?/Created by Pixel\./:/Published from your workspace\./);
+  if(!authored)assert.doesNotMatch(verification.text,/Created by Pixel\./);
+  return verification.status;
 }
 function wrapped(g,parent,{inner=true,result=envelope('edit',success)}={}) {
   const requested={id:'edit',args:edit};
@@ -74,7 +77,7 @@ for(const variant of ['direct','wrong-run','wrong-params','wrong-child-id','ambi
   });
 }
 for(const malformed of [{isError:true,content:[{type:'text',text:'Wrapper failed'}]},envelope('write',success)]){
-  test('unverified outer result cannot prove the edited snapshot: '+JSON.stringify(malformed),()=>{
-    const g=seed();wrapped(g,'outer',{result:malformed});assert.equal(publish(g,changed(1)),'failed');
+  test('unverified outer result cannot prove authorship of a host-verified snapshot: '+JSON.stringify(malformed),()=>{
+    const g=seed();wrapped(g,'outer',{result:malformed});assert.equal(publish(g,changed(1),{authored:false}),'passed');
   });
 }
