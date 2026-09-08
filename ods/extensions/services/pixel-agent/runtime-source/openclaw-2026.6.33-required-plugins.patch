@@ -206,6 +206,314 @@ index 9e16dda1..48db88aa 100644
      const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
      const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
        currentCompareConfig,
+diff --git a/src/gateway/server-channels.required-plugins.test.ts b/src/gateway/server-channels.required-plugins.test.ts
+new file mode 100644
+index 00000000..15341df2
+--- /dev/null
++++ b/src/gateway/server-channels.required-plugins.test.ts
+@@ -0,0 +1,223 @@
++import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
++import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
++import type { OpenClawConfig } from "../config/types.openclaw.js";
++import type { SubsystemLogger } from "../logging/subsystem.js";
++import type { RuntimeEnv } from "../runtime.js";
++
++let channels: typeof import("./server-channels.js");
++let health: typeof import("./channel-health-monitor.js");
++let hooks: typeof import("../plugins/hook-runner-global.js");
++let runtime: typeof import("../plugins/runtime.js");
++let required: typeof import("../plugins/required-plugins.js");
++let empty: typeof import("../plugins/registry-empty.js");
++let records: typeof import("../plugins/status.test-helpers.js");
++let logging: typeof import("../logging/subsystem.js");
++const managers: Array<ReturnType<typeof channels.createChannelManager>> = [];
++const monitors: Array<ReturnType<typeof health.startChannelHealthMonitor>> = [];
++const config: OpenClawConfig = {
++  plugins: { entries: { guard: { enabled: true, hooks: { allowConversationAccess: true } } } },
++};
++
++beforeAll(async () => {
++  vi.resetModules();
++  vi.stubEnv(
++    "OPENCLAW_REQUIRED_PLUGINS",
++    JSON.stringify({
++      version: 1,
++      plugins: [{ id: "guard", hooks: ["before_agent_run"] }],
++    }),
++  );
++  [channels, health, hooks, runtime, required, empty, records, logging] = await Promise.all([
++    import("./server-channels.js"),
++    import("./channel-health-monitor.js"),
++    import("../plugins/hook-runner-global.js"),
++    import("../plugins/runtime.js"),
++    import("../plugins/required-plugins.js"),
++    import("../plugins/registry-empty.js"),
++    import("../plugins/status.test-helpers.js"),
++    import("../logging/subsystem.js"),
++  ]);
++});
++afterEach(async () => {
++  for (const monitor of monitors.splice(0)) {
++    monitor.stop();
++  }
++  const stops = managers.splice(0).map((manager) => manager.stopChannel("discord"));
++  await vi.advanceTimersByTimeAsync(6000);
++  await Promise.all(stops);
++  vi.clearAllTimers();
++  vi.useRealTimers();
++  hooks.resetGlobalHookRunner();
++  runtime.resetPluginRuntimeStateForTest();
++});
++afterAll(() => {
++  vi.unstubAllEnvs();
++  vi.resetModules();
++});
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  const promise = new Promise<T>((done) => {
++    resolve = done;
++  });
++  return { promise, resolve };
++}
++
++function fixture(
++  options: {
++    isConfigured?: () => Promise<boolean>;
++    deferStartupAccountStartsUntil?: Promise<void>;
++    startupTrace?: Parameters<typeof channels.createChannelManager>[0]["startupTrace"];
++  } = {},
++) {
++  vi.useFakeTimers();
++  const startAccount = vi.fn(
++    ({ abortSignal }: { abortSignal: AbortSignal }) =>
++      new Promise<void>((resolve) => {
++        abortSignal.addEventListener("abort", () => resolve(), { once: true });
++      }),
++  );
++  const plugin: ChannelPlugin = {
++    id: "discord",
++    meta: {
++      id: "discord",
++      label: "Fixture",
++      selectionLabel: "Fixture",
++      docsPath: "/fixture",
++      blurb: "fixture",
++    },
++    capabilities: { chatTypes: ["direct"] },
++    config: {
++      listAccountIds: () => ["default"],
++      resolveAccount: () => ({ enabled: true }),
++      isEnabled: () => true,
++      describeAccount: () => ({ accountId: "default", configured: true, enabled: true }),
++      ...(options.isConfigured ? { isConfigured: options.isConfigured } : {}),
++    },
++    gateway: { startAccount },
++  };
++  const registry = empty.createEmptyPluginRegistry();
++  registry.channels.push({ pluginId: "fixture-channel", source: "fixture", plugin });
++  registry.plugins.push(records.createPluginRecord({ id: "guard" }));
++  registry.typedHooks.push({
++    pluginId: "guard",
++    hookName: "before_agent_run",
++    handler: () => undefined,
++    source: "fixture",
++  });
++  runtime.setActivePluginRegistry(registry);
++  hooks.initializeGlobalHookRunner(registry);
++  const ready = () =>
++    required.completeRequiredPluginLoad(registry, config, required.beginRequiredPluginLoad());
++  ready();
++  const log = logging.createSubsystemLogger("gateway/required-channel-test");
++  const manager = channels.createChannelManager({
++    getRuntimeConfig: () => config,
++    channelLogs: { discord: log } as Record<ChannelId, SubsystemLogger>,
++    channelRuntimeEnvs: { discord: logging.runtimeForLogger(log) } as Record<ChannelId, RuntimeEnv>,
++    ...(options.startupTrace ? { startupTrace: options.startupTrace } : {}),
++    ...(options.deferStartupAccountStartsUntil
++      ? { deferStartupAccountStartsUntil: options.deferStartupAccountStartsUntil }
++      : {}),
++  });
++  managers.push(manager);
++  return { manager, startAccount, ready };
++}
++
++describe("required plugins gate channel account admission", () => {
++  it("holds an early health restart despite a configured account snapshot, then repairs", async () => {
++    const { manager, startAccount, ready } = fixture();
++    required.beginRequiredPluginLoad();
++    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
++      enabled: true,
++      configured: true,
++    });
++    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default.running).not.toBe(true);
++    monitors.push(
++      health.startChannelHealthMonitor({
++        channelManager: manager,
++        checkIntervalMs: 10,
++        startupGraceMs: 0,
++        cooldownCycles: 0,
++      }),
++    );
++    await vi.advanceTimersByTimeAsync(20);
++    expect(startAccount).not.toHaveBeenCalled();
++    ready();
++    await vi.advanceTimersByTimeAsync(20);
++    expect(startAccount).toHaveBeenCalledTimes(1);
++  });
++
++  it("rechecks after asynchronous account configuration before bootstrapping transport", async () => {
++    const configured = deferred<boolean>();
++    const reached = deferred<void>();
++    const { manager, startAccount } = fixture({
++      isConfigured: () => {
++        reached.resolve();
++        return configured.promise;
++      },
++    });
++    const starting = manager.startChannel("discord", "default");
++    await reached.promise;
++    required.beginRequiredPluginLoad();
++    configured.resolve(true);
++    await expect(starting).rejects.toThrow("Required plugin runtime is not ready");
++    expect(startAccount).not.toHaveBeenCalled();
++  });
++
++  it("rechecks account startup after the gateway handoff wait", async () => {
++    const handoff = deferred<void>();
++    const { manager, startAccount } = fixture({ deferStartupAccountStartsUntil: handoff.promise });
++    await manager.startChannels();
++    expect(startAccount).not.toHaveBeenCalled();
++    required.beginRequiredPluginLoad();
++    handoff.resolve();
++    await vi.advanceTimersByTimeAsync(1);
++    expect(startAccount).not.toHaveBeenCalled();
++    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default.lastError).toContain(
++      "Required plugin runtime is not ready",
++    );
++  });
++
++  it("reports a traced approval admission hold as failed startup before handoff", async () => {
++    const { manager, startAccount } = fixture({
++      startupTrace: {
++        measure: async (name, run) => {
++          if (name.endsWith(".approval-bootstrap")) {
++            required.beginRequiredPluginLoad();
++          }
++          return await run();
++        },
++      },
++    });
++    await expect(manager.startChannel("discord", "default")).rejects.toThrow(
++      "Required plugin runtime is not ready",
++    );
++    expect(startAccount).not.toHaveBeenCalled();
++    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
++      running: false,
++      restartPending: false,
++    });
++  });
++
++  it("permits explicit recovery without a health monitor and keeps a manual stop stopped", async () => {
++    const handoff = deferred<void>();
++    const { manager, startAccount, ready } = fixture({
++      deferStartupAccountStartsUntil: handoff.promise,
++    });
++    await manager.startChannels();
++    required.beginRequiredPluginLoad();
++    handoff.resolve();
++    await vi.advanceTimersByTimeAsync(6000);
++    expect(startAccount).not.toHaveBeenCalled();
++    ready();
++    await manager.startChannel("discord", "default");
++    await vi.advanceTimersByTimeAsync(0);
++    expect(startAccount).toHaveBeenCalledTimes(1);
++    const stopping = manager.stopChannel("discord", "default");
++    await vi.advanceTimersByTimeAsync(6000);
++    await stopping;
++    expect(manager.isManuallyStopped("discord", "default")).toBe(true);
++    expect(startAccount).toHaveBeenCalledTimes(1);
++  });
++});
+diff --git a/src/gateway/server-channels.ts b/src/gateway/server-channels.ts
+index 7ddcc98b..895d2001 100644
+--- a/src/gateway/server-channels.ts
++++ b/src/gateway/server-channels.ts
+@@ -16,6 +16,7 @@ import {
+ } from "../logging/subsystem.js";
+ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
+ import type { PluginRegistry } from "../plugins/registry.js";
++import { assertRequiredPluginRuntime } from "../plugins/required-plugins.js";
+ import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+ import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+ import {
+@@ -430,6 +431,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
+     }
+     const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
+     const cfg = getRuntimeConfig();
++    // Health/retry entrypoints can run before HTTP readiness. Configuration
++    // already exposes accounts then; an empty-runtime assumption is unsafe.
++    assertRequiredPluginRuntime(cfg);
+     resetDirectoryCache({ channel: channelId, accountId });
+     const store = getStore(channelId);
+     const accountIds = accountId
+@@ -572,6 +576,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
+             }),
+           );
+           channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
++          // Account/runtime preparation can yield across a rejected reload.
++          // Refuse new transport work, while keeping stop/cleanup ungated.
++          assertRequiredPluginRuntime(getRuntimeConfig());
+ 
+           if (!preserveRestartAttempts) {
+             restartAttempts.delete(rKey);
+@@ -579,16 +586,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
+           try {
+             stopApprovalBootstrap = await measureStartup(
+               `channels.${channelId}.approval-bootstrap`,
+-              () =>
+-                startChannelApprovalHandlerBootstrap({
++              () => {
++                assertRequiredPluginRuntime(getRuntimeConfig());
++                return startChannelApprovalHandlerBootstrap({
+                   plugin,
+                   cfg,
+                   accountId: id,
+                   channelRuntime: channelRuntimeForTask,
+                   logger: log,
+-                }),
++                  assertCanStart: () => assertRequiredPluginRuntime(getRuntimeConfig()),
++                });
++              },
+             );
+           } catch (error) {
++            // Optional approval failures stay optional, but a managed admission
++            // hold must reach the account-start cleanup instead of reporting ready.
++            assertRequiredPluginRuntime(getRuntimeConfig());
+             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
+           }
+           setRuntime(channelId, id, {
+@@ -615,8 +628,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
+               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+                 return;
+               }
+-              const runStartAccount = () =>
+-                startAccount({
++              const runStartAccount = () => {
++                // Startup handoff and tracing may defer this actual dispatch.
++                assertRequiredPluginRuntime(getRuntimeConfig());
++                return startAccount({
+                   cfg,
+                   accountId: id,
+                   account,
+@@ -627,6 +642,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
+                   setStatus: (next) => setRuntimeFromTaskStatus(channelId, id, next, abort.signal),
+                   ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                 });
++              };
+               const routeRegistry = getPluginHttpRouteRegistry?.();
+               startAccountTask = routeRegistry
+                 ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
 diff --git a/src/gateway/server-plugin-bootstrap.ts b/src/gateway/server-plugin-bootstrap.ts
 index 93f6d197..6ab4efd7 100644
 --- a/src/gateway/server-plugin-bootstrap.ts
@@ -381,6 +689,134 @@ index 3df5dd95..379e0a47 100644
      const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] =
        await startupTrace.measure("gateway.ws-imports", () =>
          Promise.all([
+diff --git a/src/infra/approval-handler-bootstrap.test.ts b/src/infra/approval-handler-bootstrap.test.ts
+index 8527e2f2..264a28c4 100644
+--- a/src/infra/approval-handler-bootstrap.test.ts
++++ b/src/infra/approval-handler-bootstrap.test.ts
+@@ -43,6 +43,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
+   const startTestBootstrap = (params: {
+     channelRuntime: ReturnType<typeof createRuntimeChannel>;
+     logger?: unknown;
++    assertCanStart?: () => void;
+   }) =>
+     startChannelApprovalHandlerBootstrap({
+       plugin: createApprovalPlugin(),
+@@ -50,6 +51,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
+       accountId: "default",
+       channelRuntime: params.channelRuntime,
+       logger: params.logger as never,
++      ...(params.assertCanStart ? { assertCanStart: params.assertCanStart } : {}),
+     });
+ 
+   const registerApprovalContext = (
+@@ -347,4 +349,76 @@ describe("startChannelApprovalHandlerBootstrap", () => {
+ 
+     await cleanup();
+   });
++
++  it("keeps deferred context registration held and retries only after admission repairs", async () => {
++    vi.useFakeTimers();
++    const channelRuntime = createRuntimeChannel();
++    const start = vi.fn().mockResolvedValue(undefined);
++    const stop = vi.fn().mockResolvedValue(undefined);
++    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
++    let held = false;
++    const cleanup = await startTestBootstrap({
++      channelRuntime,
++      assertCanStart: () => {
++        if (held) {
++          throw new Error("required runtime held");
++        }
++      },
++    });
++    held = true;
++    const lease = registerApprovalContext(channelRuntime);
++    try {
++      await vi.advanceTimersByTimeAsync(2000);
++      expect(createChannelApprovalHandlerFromCapability).not.toHaveBeenCalled();
++      expect(start).not.toHaveBeenCalled();
++      held = false;
++      await vi.advanceTimersByTimeAsync(1000);
++      expect(start).toHaveBeenCalledTimes(1);
++    } finally {
++      await cleanup();
++      lease.dispose();
++      vi.useRealTimers();
++    }
++    expect(stop).toHaveBeenCalledTimes(1);
++  });
++
++  it("rechecks admission after an asynchronous handler factory and cleans the rejected handler", async () => {
++    vi.useFakeTimers();
++    const channelRuntime = createRuntimeChannel();
++    const start = vi.fn().mockResolvedValue(undefined);
++    const stop = vi.fn().mockResolvedValue(undefined);
++    let resolveHandler!: (handler: { start: typeof start; stop: typeof stop }) => void;
++    createChannelApprovalHandlerFromCapability.mockReturnValue(
++      new Promise<{ start: typeof start; stop: typeof stop }>((resolve) => {
++        resolveHandler = resolve;
++      }),
++    );
++    let held = false;
++    const cleanup = await startTestBootstrap({
++      channelRuntime,
++      assertCanStart: () => {
++        if (held) {
++          throw new Error("required runtime held");
++        }
++      },
++    });
++    const lease = registerApprovalContext(channelRuntime);
++    try {
++      await vi.advanceTimersByTimeAsync(0);
++      expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
++      held = true;
++      resolveHandler({ start, stop });
++      await vi.advanceTimersByTimeAsync(0);
++      expect(start).not.toHaveBeenCalled();
++      expect(stop).toHaveBeenCalledTimes(1);
++      await cleanup();
++      held = false;
++      await vi.advanceTimersByTimeAsync(2000);
++      expect(start).not.toHaveBeenCalled();
++    } finally {
++      await cleanup();
++      lease.dispose();
++      vi.useRealTimers();
++    }
++  });
+ });
+diff --git a/src/infra/approval-handler-bootstrap.ts b/src/infra/approval-handler-bootstrap.ts
+index 09220007..0a4bfe29 100644
+--- a/src/infra/approval-handler-bootstrap.ts
++++ b/src/infra/approval-handler-bootstrap.ts
+@@ -47,6 +47,8 @@ export async function startChannelApprovalHandlerBootstrap(params: {
+   accountId: string;
+   channelRuntime?: ChannelRuntimeSurface;
+   logger?: ReturnType<typeof createSubsystemLogger>;
++  /** Recheck caller-owned admission for deferred contexts, factories and retries. */
++  assertCanStart?: () => void;
+ }): Promise<() => Promise<void>> {
+   const capability = resolveChannelApprovalCapability(params.plugin);
+   if (!capability?.nativeRuntime || !params.channelRuntime) {
+@@ -86,6 +88,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
+     if (generation !== activeGeneration) {
+       return;
+     }
++    params.assertCanStart?.();
+     const handler = await createChannelApprovalHandlerFromCapability({
+       capability,
+       label: `${params.plugin.id}/native-approvals`,
+@@ -106,6 +109,9 @@ export async function startChannelApprovalHandlerBootstrap(params: {
+     }
+     activeHandler = handler as ApprovalBootstrapHandler;
+     try {
++      // Factory resolution can outlive the caller's admission. Stop a rejected
++      // handler using the same cleanup as failed starts; never gate cleanup.
++      params.assertCanStart?.();
+       await handler.start();
+     } catch (error) {
+       if (activeHandler === handler) {
 diff --git a/src/plugins/required-plugins.test.ts b/src/plugins/required-plugins.test.ts
 new file mode 100644
 index 00000000..e3ab202e

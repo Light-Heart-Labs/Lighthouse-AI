@@ -26,7 +26,12 @@ OPENCLAW_VITEST_MAX_WORKERS=1 corepack pnpm test \
   src/agents/agent-tools.required-plugins.test.ts \
   src/gateway/server-plugins.test.ts \
   src/gateway/config-reload.test.ts \
-  src/gateway/server-startup-plugins.test.ts
+  src/gateway/server-startup-plugins.test.ts \
+  src/gateway/server-channels.required-plugins.test.ts \
+  src/gateway/server-channels.test.ts \
+  src/gateway/server-channels.approval-bootstrap.test.ts \
+  src/gateway/channel-health-monitor.test.ts \
+  src/infra/approval-handler-bootstrap.test.ts
 corepack pnpm tsgo:core
 corepack pnpm tsgo:core:test
 ```
@@ -64,19 +69,38 @@ an older load from reopening a newer rejected transition. Required checks also
 run at embedded-agent, Pi attempt/stream, and core tool-call boundaries using the
 actual composed live hook registry, not individual partial registry setters.
 
+Channel account starts recheck admission at health/retry entry, after asynchronous
+account preparation, and at actual deferred transport dispatch. Approval bootstrap
+receives a caller-owned admission callback: deferred context registration, retry,
+and asynchronous handler construction cannot bypass a later hold. Rejected handler
+starts still clean up. Optional approval errors remain nonfatal only while managed
+admission is valid. These checks do not interrupt already-dispatched transports.
+
+After repairing a failed required-plugin load, channel recovery uses the existing
+health monitor, applicable successful reload, or explicit channel/gateway restart.
+When monitoring is disabled or rate-limited, do not assume automatic recovery.
+Explicit start after verified repair and manual-stop preservation are tested.
+
 ## Runtime proof and remaining work
 
 Candidate patch SHA-256:
-`8a31c88d0fe566e14e3998b9ba742bac2dc77775aa0154bda893b2b36da9b726`.
+`68f327263b8590bc505eda60ad77b03044c07cc4ae1ed957b5a2fdfedc094e52`.
 A fresh extraction of the exact upstream archive accepted this patch, and all
-ten patched source/test files matched the qualified build tree byte-for-byte.
-The final patch includes a test-only braces correction; production source did
-not change after the completed build and runtime checks.
+fourteen patched source/test files matched the qualification tree byte-for-byte.
+This revision adds channel and approval-bootstrap admission to the preceding
+ten-file candidate; it is a production-source change, not only documentation.
 
 Disposable Linux qualification passed the full source build, production/test
 type checks, 32 required-policy tests, three actual core-tool admission tests,
-and lint for all ten changed files. Gateway regression files also passed across
-the repository's selected Vitest projects (440 executions, not 440 unique tests).
+and lint for the preceding ten-file candidate. Gateway regression files also
+passed across selected Vitest projects (440 executions, not 440 unique tests).
+The new revision passed channel/health/approval regressions, five required-channel
+tests, two new deferred-approval regressions, production/test typechecks, and
+four-file lint. Six new negative cases were reproduced before their respective
+fixes; explicit recovery is an additional positive case. Final full rebuild,
+all-fourteen-file lint, and managed/no-policy runtime fixture rechecks passed
+for this revision. The final channel/approval group has 92 unique cases across
+five files; the runner repeats some gateway cases in multiple projects.
 
 The existing `tests/runtime_provider_activation.integration.mjs` retains its
 upstream characterization mode. Set `OPENCLAW_PACKAGE` to a disposable built
@@ -85,8 +109,8 @@ optional-plugin failure, retained-session overrides, rejected reload, and repair
 restart. All inference in that fixture is synthetic loopback traffic; it is not
 installed ODS chat acceptance or proof of real cloud use.
 
-Both modes passed against the built candidate. With the contract enabled,
-absent, failed, or incomplete required registrations rejected startup with no
+Both modes passed against the final fourteen-file built candidate. With the
+contract enabled, absent, failed, or incomplete registrations rejected startup with no
 legacy inference; an optional plugin failure did not disable the valid guard.
 A rejected required-plugin reload admitted no inference, and a verified restart
 restored service. The reload fixture deliberately permits one request before
@@ -96,8 +120,8 @@ compatibility characterization. It does not prove managed protection without
 the launcher contract. Listener polling is supplemented by source ordering;
 polling alone cannot exclude a brief listener opening.
 
-Before installation: complete early-service/channel/cron and alternative-harness
-entrypoint qualification, protect launcher/source/build custody, wire the shared
+Before installation: complete remaining early-service/cron, direct-outbound and
+alternative-harness qualification, protect launcher/source/build custody, wire the shared
 native/Edge admission and activation transaction, prove exact rollback and upgrade
 behavior, and obtain required target-specific activation authority. The patch
 does not implement those installation/activation steps or complete Full Access.
