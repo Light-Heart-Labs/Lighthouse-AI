@@ -360,6 +360,92 @@ class TestRestore(Harness):
         self.assertEqual(cm.exception.code, "state-path-mismatch")
 
 
+class TestPendingRestore(Harness):
+    def pending(self, applied=True):
+        original = self.read_config()
+        enabled, baseline = pam._helper.enable(copy.deepcopy(original))
+        self.write_pending_receipt(baseline)
+        if applied:
+            self.write_config(enabled)
+        return original
+
+    def test_restore_after_interrupted_enable(self):
+        original = self.pending()
+        calls = []
+        self.restore(restart=lambda: calls.append("restart") or True)
+        self.assertEqual(self.read_config(), original)
+        self.assertEqual(calls, ["restart"])
+        self.assertFalse(self.status()["managed"])
+
+    def test_restore_before_config_replace_still_verifies_runtime(self):
+        original = self.pending(applied=False)
+        calls = []
+        result = self.restore(restart=lambda: calls.append("restart") or True)
+        self.assertTrue(result["already_restored"])
+        self.assertEqual(self.read_config(), original)
+        self.assertEqual(calls, ["restart"])
+        self.assertFalse(self.status()["managed"])
+
+    def test_restore_preserves_unrelated_changes(self):
+        self.pending()
+        cfg = self.read_config()
+        cfg["agents"]["defaults"]["model"] = "owner-selected-model"
+        self.write_config(cfg)
+        self.restore()
+        self.assertEqual(self.read_config()["agents"]["defaults"]["model"], "owner-selected-model")
+        self.assertEqual(self.pixel(self.read_config())["sandbox"]["mode"], "all")
+
+    def test_managed_field_drift_keeps_pending_receipt(self):
+        self.pending()
+        cfg = self.read_config()
+        self.pixel(cfg)["tools"]["exec"]["ask"] = "on-miss"
+        self.write_config(cfg)
+        before = Path(self.cfg_path).read_bytes()
+        with self.assertRaises(AccessModeRejected) as caught:
+            self.restore()
+        self.assertEqual(caught.exception.code, "managed-fields-changed")
+        self.assertEqual(Path(self.cfg_path).read_bytes(), before)
+        self.assertEqual(self.receipt()["status"], "pending")
+
+    def test_busy_or_failed_validation_preserves_pending_state(self):
+        self.pending()
+        before = Path(self.cfg_path).read_bytes()
+        for kwargs in ({"check_no_active_run": lambda: True}, {"validate_config": lambda _: False}):
+            with self.subTest(kwargs=tuple(kwargs)):
+                with self.assertRaises(AccessModeRejected):
+                    self.restore(**kwargs)
+                self.assertEqual(Path(self.cfg_path).read_bytes(), before)
+                self.assertEqual(self.receipt()["status"], "pending")
+
+    def test_failed_restart_preserves_recovery_state(self):
+        original = self.pending()
+        calls = []
+        def restart():
+            calls.append(True)
+            return len(calls) > 1
+        with self.assertRaises(AccessModeRejected) as caught:
+            self.restore(restart=restart)
+        self.assertEqual(caught.exception.code, "restart-failed")
+        self.assertEqual(self.read_config(), original)
+        self.assertEqual(self.receipt()["status"], "pending")
+        self.assertEqual(calls, [True])
+        self.assertTrue(self.restore()["already_restored"])
+        self.assertFalse(self.status()["managed"])
+
+    def test_change_during_restart_preserves_pending_receipt(self):
+        self.pending()
+        def restart():
+            cfg = self.read_config()
+            cfg["owner_note"] = "concurrent change"
+            self.write_config(cfg)
+            return True
+        with self.assertRaises(AccessModeRace) as caught:
+            self.restore(restart=restart)
+        self.assertEqual(caught.exception.code, "config-changed-during-apply")
+        self.assertEqual(self.read_config()["owner_note"], "concurrent change")
+        self.assertEqual(self.receipt()["status"], "pending")
+
+
 class TestStatus(Harness):
     def test_sandboxed_full_access_and_unknown(self):
         st = self.status()
