@@ -312,8 +312,9 @@ test("adds exact sanitized peer parameters for read-only private reachability", 
   const exact = operationsRequestContract([], prompt);
   assert.match(exact, /id pixel_ods_host_observe/);
   assert.ok(exact.includes(
-    'args {"actions":["host.tailscale","host.network-peer"],"peer":"Strixy","ports":[22,3389]}'
+    'args {"actions":["host.network-peer"],"peer":"Strixy","ports":[22,3389]}'
   ));
+  assert.doesNotMatch(exact, /"host\.tailscale"/);
   assert.match(exact, /read-only tool returns the terminal broker receipt/);
   assert.doesNotMatch(exact, /pixel_ods_host_command_propose/);
 });
