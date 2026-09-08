@@ -11,8 +11,12 @@ files=(
 )
 
 for file in "${files[@]}"; do
-  grep -A1 -F -- "- name: bing" "$file" | grep -Fq "disabled: false" || {
-    echo "Bing must remain enabled in every generated SearXNG configuration: $file" >&2
+  grep -A3 -F -- "- name: bing" "$file" | grep -Fq "disabled: true" || {
+    echo "Unqualified Bing engine must be disabled in factory SearXNG configuration: $file" >&2
+    exit 1
+  }
+  grep -A1 -F -- "- name: brave" "$file" | grep -Fq "disabled: false" || {
+    echo "Brave must remain available in factory SearXNG configuration: $file" >&2
     exit 1
   }
 done

@@ -458,7 +458,8 @@ test("adds a static visible-reply contract for the exact Pixel agent", () => {
   assert.match(result.appendSystemContext, /explicit public URL, use it as a primary source/);
   assert.match(result.appendSystemContext, /public GitHub repository as Owner\/Repo/);
   assert.match(result.appendSystemContext, /https:\/\/github\.com\/Owner\/Repo/);
-  assert.match(result.appendSystemContext, /Select web_search, web_fetch, or pixel_ods_web_extract/);
+  assert.match(result.appendSystemContext, /delegate a self-contained brief to Perplexica with pixel_ods_research/);
+  assert.match(result.appendSystemContext, /Assess its answer and cited sources/);
   assert.match(result.appendSystemContext, /never invent a web_browse tool/);
   assert.match(result.appendSystemContext, /pixel_ods_web_extract can read a detail/);
   assert.match(result.appendSystemContext, /not a sentence or search query/);

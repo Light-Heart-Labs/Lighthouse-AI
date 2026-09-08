@@ -11,7 +11,9 @@ search:
     - json
 engines:
   - name: bing
-    disabled: false
+    # Requalify before enabling: this pin returns first-word-only results.
+    # https://github.com/searxng/searxng/pull/6671
+    disabled: true
   - name: duckduckgo
     disabled: false
   - name: google

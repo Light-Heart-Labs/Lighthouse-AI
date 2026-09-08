@@ -34,6 +34,7 @@ import {
 } from "./tool-loop-guard.mjs";
 import { withPixelCronDeliveryDefault } from "./cron-delivery-default.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
+import { createPerplexicaResearchTool } from "./perplexica-research.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
 import {
   createExtensionReadTool,
@@ -407,6 +408,10 @@ export default definePluginEntry({
       }),
       { names: ["pixel_ods_web_extract"] }
     );
+
+    registerTool(api, createPerplexicaResearchTool({ port: api.pluginConfig?.perplexicaPort }), {
+      names: ["pixel_ods_research"],
+    });
 
     registerTool(api, createDownloadPromoteTool(), {
       names: ["pixel_ods_download_promote"],

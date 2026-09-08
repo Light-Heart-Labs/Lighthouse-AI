@@ -1212,6 +1212,10 @@ if (not isinstance(normalized_compaction, dict)
 normalized_agent_experimental["localModelLean"] = False
 normalized_pixel_config["modelContextWindow"] = normalized_context_window
 normalized_pixel_config["leanPrompt"] = normalized_lean_prompt
+research_port = candidate.get("plugins", {}).get("entries", {}).get("pixel-ods", {}).get("config", {}).get("perplexicaPort", 3004)
+if type(research_port) is not int or not 1 <= research_port <= 65535:
+    raise SystemExit("invalid Perplexica service port")
+normalized_pixel_config["perplexicaPort"] = research_port
 # Structured Tool Search keeps the catalog compact for every model. Exact ODS
 # routes are injected by the guard when required; otherwise models can search,
 # describe, and call the same complete authorized catalog without an allowlist.
@@ -1286,7 +1290,7 @@ normalized_agent_tools["deny"] = [
     if item not in {
         "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
         "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-        "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview",
+        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview",
         "pixel_web_extract"
     }
 ]
@@ -1296,7 +1300,7 @@ for extension_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
 ):
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
@@ -1304,7 +1308,7 @@ for permitted_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
 ):
     if permitted_tool not in normalized_sandbox_allow:
         normalized_sandbox_allow.append(permitted_tool)
@@ -1445,7 +1449,7 @@ _ods_pixel_refresh_plugin_registry() {
     registry="$(ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
         plugins registry --refresh --json 2>/dev/null)" || return 1
     jq -e --arg root "$plugin_root" '
-        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_web_extract", "pixel_ods_workspace_preview"] | sort) as $tools
+        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview"] | sort) as $tools
         | .refreshed == true
         and .registry.version == 1
         and .registry.refreshReason == "manual"
@@ -1465,7 +1469,7 @@ _ods_pixel_verify_plugin_loaded() {
     local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4"
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
         | jq -e --arg root "$plugin_root" '
-            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_web_extract", "pixel_ods_workspace_preview"] as $tools
+            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview"] as $tools
             | [
                 .plugins[]?
                 | select(
@@ -1552,10 +1556,13 @@ _ods_pixel_apply_runtime_budget() {
     # ODS-owned Pixel route.
     # macOS Bash 3.2 reparses this command-substitution heredoc; keep the
     # embedded Python body free of literal apostrophe characters.
-    staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" <<'PY'
+    staged="$(ods_pixel_run_as_owner "$owner" "$home" python3 - "$config" "${PERPLEXICA_PORT:-3004}" <<'PY'
 import copy, json, os, pathlib, re, stat, sys, tempfile
 
 path = pathlib.Path(sys.argv[1])
+if not sys.argv[2].isdigit() or not 1 <= int(sys.argv[2]) <= 65535:
+    raise SystemExit("invalid Perplexica service port")
+research_port = int(sys.argv[2])
 info = path.lstat()
 if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1
         or info.st_uid != os.getuid() or info.st_mode & 0o077
@@ -1725,6 +1732,7 @@ small_model = any(float(marker) <= 4 for marker in parameter_markers)
 lean_prompt = compact_context or small_model
 updated_pixel_config["modelContextWindow"] = context_window
 updated_pixel_config["leanPrompt"] = lean_prompt
+updated_pixel_config["perplexicaPort"] = research_port
 updated_agent["bootstrapMaxChars"] = 2000 if lean_prompt else 14000
 updated_agent["bootstrapTotalMaxChars"] = 6000 if lean_prompt else 36000
 updated_agent["contextInjection"] = "never" if lean_prompt else "continuation-skip"
@@ -1861,7 +1869,7 @@ updated_agent_tools["deny"] = [
     if item not in {
         "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
         "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-        "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview",
+        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview",
         "pixel_web_extract"
     }
 ]
@@ -1871,7 +1879,7 @@ for extension_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
 ):
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
@@ -1879,7 +1887,7 @@ for permitted_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"
 ):
     if permitted_tool not in updated_sandbox_allow:
         updated_sandbox_allow.append(permitted_tool)
@@ -3466,7 +3474,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],

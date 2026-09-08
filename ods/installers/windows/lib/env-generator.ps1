@@ -1221,7 +1221,8 @@ search:
     - json
 engines:
   - name: bing
-    disabled: false
+    # Requalify before enabling: https://github.com/searxng/searxng/pull/6671
+    disabled: true
   - name: duckduckgo
     disabled: false
   - name: google

@@ -319,7 +319,7 @@ export const OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX =
 export const OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX =
   "Pixel verified this ODS extension lifecycle result through structurally matched Operations Broker receipts:";
 
-const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract"]);
+const WEB_TOOLS = new Set(["web_search", "web_fetch", "pixel_ods_web_extract", "pixel_ods_research"]);
 const CODING_TOOLS = new Set(["exec", "write", "edit", "apply_patch"]);
 const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const FILE_PATH_TOOLS = new Set(["read", "write", "edit"]);

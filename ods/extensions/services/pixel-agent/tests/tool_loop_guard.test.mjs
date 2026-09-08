@@ -13771,7 +13771,7 @@ test("inspection of another object does not mandate a host inventory", () => {
 
 for (const transport of ["direct", "tool-search"]) {
   for (const phase of ["before", "pending", "succeeded"]) {
-    for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract"]) {
+    for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract", "pixel_ods_research"]) {
       test(`public research composes with host work: ${transport}/${phase}/${name}`, () => {
         const guard = createToolLoopGuard();
         guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
@@ -13813,7 +13813,7 @@ for (const transport of ["direct", "tool-search"]) {
       assert.equal(result.blockReason, WEB_FETCH_PUBLIC_ONLY_REASON);
     });
   }
-  for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract"]) {
+  for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract", "pixel_ods_research"]) {
     test(`web identity is required for every transport: ${transport}/${name}`, () => {
       const guard = createToolLoopGuard();
       const args = name === "web_search" ? { query: "Python documentation" }

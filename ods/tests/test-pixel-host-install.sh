@@ -368,13 +368,13 @@ fi
 plugin_list_bin="$TEST_ROOT/openclaw-plugin-list"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"loaded","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}]}'
 SH
 chmod 0755 "$plugin_list_bin"
 check _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree"
 cat > "$plugin_list_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}]}'
+printf '%s\n' '{"plugins":[{"id":"pixel-ods","status":"blocked","rootDir":"$plugin_tree","contracts":{"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}]}'
 SH
 if _ods_pixel_verify_plugin_loaded "$owner" "$home" "$plugin_list_bin" "$plugin_tree" >/dev/null 2>&1; then
     fail "blocked ODS Pixel plugin rejected"
@@ -422,7 +422,7 @@ fi
 plugin_registry_bin="$TEST_ROOT/openclaw-plugin-registry"
 cat > "$plugin_registry_bin" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_status","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}}]}}'
+printf '%s\n' '{"refreshed":true,"registry":{"version":1,"refreshReason":"manual","plugins":[{"pluginId":"pixel-ods","enabled":true,"rootDir":"$plugin_tree","contributions":{"contracts":{"tools":["pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_status","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}}}]}}'
 SH
 chmod 0755 "$plugin_registry_bin"
 check _ods_pixel_refresh_plugin_registry "$owner" "$home" "$plugin_registry_bin" "$plugin_tree"
@@ -959,7 +959,7 @@ assert v["modelMaxTokens"] == 8192
 assert v["modelReasoning"] is False
 assert v["frontierBudgetProfile"] == "starter"
 assert v["operationsPolicyFile"] == sys.argv[2]
-assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}]
+assert v["gatewayExtensions"] == [{"id":"pixel-ods","path":"/opt/ods/pixel-plugin","sha256":"a"*64,"tools":["pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"]}]
 assert v["operationsLimbEnabled"] is True
 assert all(v[name] is False for name in ("emailLimbEnabled","calendarLimbEnabled","socialLimbEnabled","webLimbEnabled","frontierLimbEnabled"))
 ' "$answers" "$operations_policy"
@@ -1146,13 +1146,15 @@ assert value["tools"]["toolSearch"] == {"enabled": True, "mode": "tools", "searc
 assert "cron" in value["tools"]["alsoAllow"]
 assert "cron" in value["tools"]["sandbox"]["tools"]["allow"]
 assert agent["tools"]["deny"] == []
-assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"}.issubset(value["tools"]["alsoAllow"])
-assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
+assert {"pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_research","pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"}.issubset(value["tools"]["alsoAllow"])
+assert {"web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_research","pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview"}.issubset(value["tools"]["sandbox"]["tools"]["allow"])
 assert value["plugins"]["entries"]["pixel-ods"]["hooks"]["allowConversationAccess"] is True
 assert value["plugins"]["entries"]["pixel-ods"]["config"] == {
     "modelContextWindow": model["contextWindow"],
     "leanPrompt": lean_prompt,
+    "perplexicaPort": value["plugins"]["entries"]["pixel-ods"]["config"]["perplexicaPort"],
 }
+assert 1 <= value["plugins"]["entries"]["pixel-ods"]["config"]["perplexicaPort"] <= 65535
 assert "pixel_web_extract" not in value["tools"]["alsoAllow"]
 assert "pixel_web_extract" not in value["tools"]["sandbox"]["tools"]["allow"]
 assert value["tools"]["web"]["fetch"] == {
@@ -1225,8 +1227,12 @@ cp "$runtime_config" "$runtime_recovery_candidate"
 chmod 0600 "$runtime_recovery_candidate"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 runtime_sha256="$(sha256sum "$runtime_config" | awk '{print $1}')"
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 32000 and d["bootstrapTotalMaxChars"] == 96000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":9831,"reserveTokensFloor":0,"keepRecentTokens":2048}; assert d["sandbox"]["docker"]["binds"] == [sys.argv[2] + "/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro"] and d["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == [] and a["experimental"] == {"localModelLean":False} and a["bootstrapMaxChars"] == 14000 and a["bootstrapTotalMaxChars"] == 36000 and a["contextInjection"] == "continuation-skip" and a["contextLimits"] == {"toolResultMaxChars":8192} and a["params"]["chat_template_kwargs"]["enable_thinking"] is False; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"}.issubset(v["tools"]["alsoAllow"]); assert v["tools"]["toolSearch"] == {"enabled":True,"mode":"tools","searchDefaultLimit":5,"maxSearchLimit":10}; assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["plugins"]["entries"]["pixel-ods"]["hooks"]["allowConversationAccess"] is True and v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":32768,"leanPrompt":False}; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config" "$runtime_home"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); d=v["agents"]["defaults"]; assert d["timeoutSeconds"] == 1800 and d["bootstrapMaxChars"] == 32000 and d["bootstrapTotalMaxChars"] == 96000 and d["contextInjection"] == "continuation-skip"; assert d["compaction"] == {"reserveTokens":9831,"reserveTokensFloor":0,"keepRecentTokens":2048}; assert d["sandbox"]["docker"]["binds"] == [sys.argv[2] + "/.openclaw/.ods-exec-control:/run/pixel-ods-control:ro"] and d["sandbox"]["docker"]["dangerouslyAllowExternalBindSources"] is True; a=v["agents"]["list"][0]; assert "thinkingDefault" not in a and a["tools"]["deny"] == [] and a["experimental"] == {"localModelLean":False} and a["bootstrapMaxChars"] == 14000 and a["bootstrapTotalMaxChars"] == 36000 and a["contextInjection"] == "continuation-skip" and a["contextLimits"] == {"toolResultMaxChars":8192} and a["params"]["chat_template_kwargs"]["enable_thinking"] is False; assert v["models"]["providers"]["ods-local"]["timeoutSeconds"] == 1800; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["reasoning"] is False and "compat" not in m; assert v["diagnostics"]["stuckSessionAbortMs"] == 1860000; assert v["session"]["writeLock"] == {"maxHoldMs":1920000,"staleMs":3600000}; assert {"pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"}.issubset(v["tools"]["alsoAllow"]); assert v["tools"]["toolSearch"] == {"enabled":True,"mode":"tools","searchDefaultLimit":5,"maxSearchLimit":10}; assert {"web_search","web_fetch","pixel_ods_status","pixel_ods_apps_list","pixel_ods_extensions", "pixel_ods_host_observe","pixel_ods_host_command_propose","pixel_ods_evidence_report","pixel_ods_evidence_readback","pixel_ods_research","pixel_ods_web_extract","pixel_ods_download_promote","pixel_ods_workspace_preview"}.issubset(v["tools"]["sandbox"]["tools"]["allow"]) and v["tools"]["loopDetection"]["globalCircuitBreakerThreshold"] == 6; assert v["plugins"]["entries"]["pixel-ods"]["hooks"]["allowConversationAccess"] is True and v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":32768,"leanPrompt":False,"perplexicaPort":3004}; assert v["tools"]["web"]["fetch"]["enabled"] is True and v["tools"]["web"]["fetch"]["maxChars"] == 12000 and v["tools"]["web"]["fetch"]["timeoutSeconds"] == 20 and v["tools"]["web"]["fetch"]["ssrfPolicy"] == {"allowRfc2544BenchmarkRange":False,"allowIpv6UniqueLocalRange":False}' "$runtime_config" "$runtime_home"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = unchanged
+check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
+check test "$(PERPLEXICA_PORT=43004 _ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
+check python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["plugins"]["entries"]["pixel-ods"]["config"]["perplexicaPort"] == 43004' "$runtime_config"
+check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_config" "$runtime_validator")" = changed
 check test "$(sha256sum "$runtime_config" | awk '{print $1}')" = "$runtime_sha256"
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_recovery_candidate" "$runtime_validator")" = changed
 check _ods_pixel_candidate_config_matches_live "$owner" "$runtime_home" "$runtime_recovery_candidate"
@@ -1246,7 +1252,7 @@ destination.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 destination.chmod(0o600)
 PY
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_compact_config" "$runtime_validator")" = changed
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; assert a["bootstrapMaxChars"] == 2000 and a["bootstrapTotalMaxChars"] == 6000 and a["contextInjection"] == "never" and a["contextLimits"] == {"toolResultMaxChars":4000}; assert {k:a["params"][k] for k in ("temperature","topP","frequencyPenalty","presencePenalty")} == {"temperature":0.7,"topP":0.8,"frequencyPenalty":0.6,"presencePenalty":0.2}; assert v["agents"]["defaults"]["compaction"] == {"reserveTokens":2458,"reserveTokensFloor":4096,"keepRecentTokens":512}; assert v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":8192,"leanPrompt":True}' "$runtime_compact_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; assert a["bootstrapMaxChars"] == 2000 and a["bootstrapTotalMaxChars"] == 6000 and a["contextInjection"] == "never" and a["contextLimits"] == {"toolResultMaxChars":4000}; assert {k:a["params"][k] for k in ("temperature","topP","frequencyPenalty","presencePenalty")} == {"temperature":0.7,"topP":0.8,"frequencyPenalty":0.6,"presencePenalty":0.2}; assert v["agents"]["defaults"]["compaction"] == {"reserveTokens":2458,"reserveTokensFloor":4096,"keepRecentTokens":512}; assert v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":8192,"leanPrompt":True,"perplexicaPort":3004}' "$runtime_compact_config"
 
 runtime_small_large_config="$runtime_home/.openclaw/small-model-large-context.json"
 python3 - "$runtime_config" "$runtime_small_large_config" <<'PY'
@@ -1266,7 +1272,7 @@ destination.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 destination.chmod(0o600)
 PY
 check test "$(_ods_pixel_apply_runtime_budget "$owner" "$runtime_home" "$runtime_small_large_config" "$runtime_validator")" = changed
-check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["contextWindow"] == 65536; assert a["bootstrapMaxChars"] == 2000 and a["bootstrapTotalMaxChars"] == 6000 and a["contextInjection"] == "never" and a["contextLimits"] == {"toolResultMaxChars":16000}; assert {k:a["params"][k] for k in ("temperature","topP","frequencyPenalty","presencePenalty")} == {"temperature":0.7,"topP":0.8,"frequencyPenalty":0.6,"presencePenalty":0.2}; assert v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":65536,"leanPrompt":True}' "$runtime_small_large_config"
+check python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); a=v["agents"]["list"][0]; m=v["models"]["providers"]["ods-local"]["models"][0]; assert m["contextWindow"] == 65536; assert a["bootstrapMaxChars"] == 2000 and a["bootstrapTotalMaxChars"] == 6000 and a["contextInjection"] == "never" and a["contextLimits"] == {"toolResultMaxChars":16000}; assert {k:a["params"][k] for k in ("temperature","topP","frequencyPenalty","presencePenalty")} == {"temperature":0.7,"topP":0.8,"frequencyPenalty":0.6,"presencePenalty":0.2}; assert v["plugins"]["entries"]["pixel-ods"]["config"] == {"modelContextWindow":65536,"leanPrompt":True,"perplexicaPort":3004}' "$runtime_small_large_config"
 runtime_full_candidate="$TEST_ROOT/runtime-full-candidate.json"
 runtime_transition_answers="$TEST_ROOT/runtime-transition-onboarding.json"
 cp "$runtime_config" "$runtime_full_candidate"
@@ -1853,7 +1859,7 @@ import json,sys
 p=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
 assert p["type"] == "module" and p["openclaw"]["extensions"] == ["./index.js"]
 assert "dependencies" not in p
-assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_download_promote","pixel_ods_evidence_readback","pixel_ods_evidence_report","pixel_ods_extensions", "pixel_ods_host_command_propose","pixel_ods_host_observe","pixel_ods_status","pixel_ods_web_extract","pixel_ods_workspace_preview"]
+assert sorted(m["contracts"]["tools"]) == ["pixel_ods_apps_list","pixel_ods_download_promote","pixel_ods_evidence_readback","pixel_ods_evidence_report","pixel_ods_extensions", "pixel_ods_host_command_propose","pixel_ods_host_observe","pixel_ods_research","pixel_ods_status","pixel_ods_web_extract","pixel_ods_workspace_preview"]
 import re
 reserved = re.compile(r"^pixel_(?:gmail|calendar|social|web|ops|frontier)_")
 assert all(name != "pixel_limb_status" and not reserved.match(name) for name in m["contracts"]["tools"])
