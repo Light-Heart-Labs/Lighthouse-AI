@@ -10723,6 +10723,92 @@ test("rejects ODS-authored creative bytes for every visual request", () => {
   }
 });
 
+test("preview receipt recovery uses existing-file evidence and canonical sandbox aliases", () => {
+  for (const [readPath, previewArgs] of [
+    ["./study-cards-2571/index.html", { directory: "./study-cards-2571" }],
+    ["/workspace/./study-cards-2571/index.html", { relativeDirectory: "study-cards-2571" }],
+    ["study-cards-2571/index.html", { relativeDirectory: "./study-cards-2571" }],
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "In existing study-cards-2571, make one focused improvement: add a visible Paste JSON import control. It must validate a pasted deck before replacing any current cards, show readable errors, and preserve the deck on malformed input. Preserve the existing accurate storage warning and previous source backup. Read narrow source sections, make the edit, verify the saved file, and publish the website through the workspace preview capability. Do not redesign the app or claim browser tests you have not performed.",
+    });
+    for (const file of [readPath, "./study-cards-2571-backup/index.html"]) {
+      const params = { id: "read", args: { path: file, offset: 200, limit: 50 } };
+      assert.notEqual(call(guard, "tool_call", { event: { params } })?.block, true);
+      afterCall(guard, "tool_call", { event: { params, result: wrappedCoreResult("read", {
+        content: [{ type: "text", text: "<button>Import</button>\n[400 more lines in file.]" }],
+      }) } });
+    }
+    const edit = { id: "edit", args: { path: readPath, edits: [{ oldText: "Import", newText: "Paste JSON" }] } };
+    assert.notEqual(call(guard, "tool_call", { event: { params: edit } })?.block, true);
+    afterCall(guard, "tool_call", { event: { params: edit, result: wrappedCoreResult("edit", {
+      content: [{ type: "text", text: `Successfully replaced 1 block(s) in ${readPath}.` }],
+    }) } });
+    const publish = call(guard, "tool_call", { event: { params: { id: "pixel_ods_workspace_preview", args: previewArgs } } });
+    assert.notEqual(publish?.block, true, JSON.stringify(previewArgs));
+    assert.deepEqual(publish.params.args, { relativeDirectory: "study-cards-2571" });
+    const snapshot = workspacePreviewSnapshot("study-cards-2571", [{
+      path: "study-cards-2571/index.html", content: "<!doctype html><button>Paste JSON</button>",
+    }]);
+    const details = { schemaVersion: 1, kind: "ods-pixel-workspace-preview", status: "succeeded",
+      relativeDirectory: "study-cards-2571", ...snapshot, port: 9437,
+      url: `http://${snapshot.siteId}.localhost:9437/${snapshot.siteId}/`,
+      httpStatus: 200, readbackVerified: true, executable: false, overwritten: false };
+    afterCall(guard, "tool_call", { event: { params: publish.params,
+      result: wrappedPluginResult("pixel-ods", "pixel_ods_workspace_preview", { details }),
+    } });
+    const verified = guard.verificationForRun("run-1");
+    assert.equal(verified.status, "passed");
+    assert.equal(verified.preview.relativeDirectory, "study-cards-2571");
+    assert.doesNotMatch(verified.text, /Created by Pixel\./, "an existing-file edit is not full-snapshot authorship");
+    for (const args of [
+      { directory: "missing" }, { directory: "../escape" },
+      { relativeDirectory: "study-cards-2571", directory: "study-cards-2571-backup" },
+    ]) assert.equal(call(guard, "tool_call", { event: { params: { id: "pixel_ods_workspace_preview", args } } })?.block, true);
+  }
+});
+
+test("preview receipt recovery rejects failed or wrong-tool inspection receipts", () => {
+  for (const result of [
+    wrappedCoreResult("read", { isError: true, content: [{ type: "text", text: "ENOENT" }] }),
+    wrappedCoreResult("exec", { content: [{ type: "text", text: "<html>unrelated</html>" }] }),
+  ]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Make a focused improvement in an existing project and publish the website preview.",
+    });
+    const params = { id: "read", args: { path: "./existing/index.html" } };
+    call(guard, "tool_call", { event: { params } });
+    afterCall(guard, "tool_call", { event: { params, result } });
+    assert.equal(call(guard, "pixel_ods_workspace_preview", {
+      event: { params: { relativeDirectory: "existing" } },
+    })?.block, true);
+  }
+});
+
+test("preview receipt recovery retains strict hashes for written files after readback", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+    prompt: "Create a new website and publish its preview.",
+  });
+  const params = { path: "./new-site/index.html", content: "<!doctype html><title>Authored</title>" };
+  call(guard, "write", { event: { params } });
+  afterCall(guard, "write", { event: { params, result: { details: { status: "completed" } } } });
+  const read = { path: "/workspace/new-site/index.html" };
+  call(guard, "read", { event: { params: read } });
+  afterCall(guard, "read", { event: { params: read, result: { content: [{ type: "text", text: params.content }] } } });
+  const publish = call(guard, "pixel_ods_workspace_preview", { event: { params: { relativeDirectory: "new-site" } } });
+  assert.notEqual(publish?.block, true);
+  const wrong = workspacePreviewSnapshot("new-site", [{ path: "new-site/index.html", content: "<!doctype html><title>Other bytes</title>" }]);
+  afterCall(guard, "pixel_ods_workspace_preview", { event: { params: publish.params, result: { details: {
+    schemaVersion: 1, kind: "ods-pixel-workspace-preview", status: "succeeded", relativeDirectory: "new-site",
+    ...wrong, port: 9437, url: `http://${wrong.siteId}.localhost:9437/${wrong.siteId}/`,
+    httpStatus: 200, readbackVerified: true, executable: false, overwritten: false,
+  } } } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed");
+});
+
 test("permits an explicitly requested preview after inspecting an existing site", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(

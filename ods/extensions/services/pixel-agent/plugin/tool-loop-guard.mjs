@@ -490,14 +490,17 @@ function normalizedLimits(limits = {}) {
 }
 
 function normalizeWorkspaceFilePath(value) {
+  if (typeof value !== "string") return value;
+  // These spellings name the same sandbox path. Do not resolve '..' or
+  // arbitrary absolute paths: scope validation must still reject them.
+  value = value.replace(/^(?:\.\/)+/, "");
   if (value === "/workspace" || value === "workspace") return ".";
-  if (typeof value === "string" && value.startsWith("/workspace/")) {
-    return value.slice("/workspace/".length);
+  if (value.startsWith("/workspace/")) {
+    value = value.slice("/workspace/".length);
+  } else if (value.startsWith("workspace/")) {
+    value = value.slice("workspace/".length);
   }
-  if (typeof value === "string" && value.startsWith("workspace/")) {
-    return value.slice("workspace/".length);
-  }
-  return value;
+  return value.replace(/^(?:\.\/)+/, "");
 }
 
 function stripTrailingToolEnvelopeLeak(value) {
@@ -5276,6 +5279,20 @@ function workspacePreviewDirectoryFromState(state) {
   return state?.workspacePreviewDirectory;
 }
 
+function workspacePreviewRequiresAuthoredSnapshot(state, directory) {
+  const entryPath = `${directory}/index.html`;
+  // An inspected entry and successful edit in the same directory establish
+  // an existing-file revision even when its wording sounded like creation.
+  // Keep strict byte provenance for files this run actually wrote; an edit
+  // is not a claim of authorship for every byte in a pre-existing snapshot.
+  const inspectedExisting = state?.successfulReadPaths.has(entryPath) &&
+    !state?.successfulWritePaths.has(entryPath);
+  const editedExisting = [...(state?.successfulEditPaths ?? [])].some(
+    (file) => file.startsWith(`${directory}/`)
+  );
+  return Boolean(state?.workspacePreviewAuthorshipRequired && !(inspectedExisting && editedExisting));
+}
+
 function workspacePreviewReadPaths(state) {
   const directory = state?.workspacePreview?.relativeDirectory;
   if (typeof directory !== "string" || !directory) return [];
@@ -5377,7 +5394,7 @@ function workspacePreviewOutcome(event, expectedDirectory, state) {
     state?.workspaceVisualContinuationRequested &&
     details.sha256 === state.workspaceVisualContinuationOriginalSha256
   ) return undefined;
-  if (state?.workspacePreviewAuthorshipRequired) {
+  if (workspacePreviewRequiresAuthoredSnapshot(state, expectedDirectory)) {
     const authored = workspacePreviewAuthoredSnapshot(state, expectedDirectory);
     const entryPath = `${expectedDirectory}/${details.entryFile}`;
     const entryContent = state.successfulWriteContentByPath.get(entryPath);
@@ -5830,6 +5847,7 @@ export function createToolLoopGuard({
         invalidEditCreateBlocks: 0,
         oversizedEditBlocks: 0,
         successfulWritePaths: new Set(),
+        successfulEditPaths: new Set(),
         successfulWriteContentByPath: new Map(),
         compareSwapRepairCounts: new Map(),
         successfulReadPaths: new Set(),
@@ -6574,21 +6592,26 @@ export function createToolLoopGuard({
         };
       }
       const args = suppliedArgs;
-      const providedDirectory = normalizeWorkspaceFilePath(args?.relativeDirectory);
+      const hasDirectory = Object.hasOwn(args ?? {}, "directory");
+      const hasRelativeDirectory = Object.hasOwn(args ?? {}, "relativeDirectory");
+      const providedDirectory = normalizeWorkspaceFilePath(
+        hasRelativeDirectory ? args.relativeDirectory : args?.directory
+      );
+      if (hasDirectory && hasRelativeDirectory &&
+          normalizeWorkspaceFilePath(args.directory) !== providedDirectory) {
+        return { block: true, blockReason: "Pixel blocked conflicting preview directories. Supply one exact relativeDirectory." };
+      }
       const observedDirectory = workspacePreviewDirectoryFromState(state);
       // An explicit target must not be silently replaced by a previous one.
       // A static subdirectory may be selected after the parent failed validation.
-      const directory = Object.hasOwn(args ?? {}, "relativeDirectory")
+      const directory = hasRelativeDirectory || hasDirectory
         ? providedDirectory
         : observedDirectory;
       const hasObservedIndex =
         typeof directory === "string" &&
-        (state.workspacePreviewAuthorshipRequired
-          ? state.successfulWritePaths.has(`${directory}/index.html`)
-          : (
-            state.successfulWritePaths.has(`${directory}/index.html`) ||
-            state.successfulReadPaths.has(`${directory}/index.html`)
-          ));
+        (state.successfulWritePaths.has(`${directory}/index.html`) ||
+          (!workspacePreviewRequiresAuthoredSnapshot(state, directory) &&
+            state.successfulReadPaths.has(`${directory}/index.html`)));
       if (!directory || !hasObservedIndex) {
         if (directory && !state.workspacePreviewAuthorshipRequired) {
           return {
@@ -8164,6 +8187,7 @@ export function createToolLoopGuard({
     const completedEditPairs = successfulMutation?.name === "edit"
       ? editReplacementPairs(successfulMutation.event?.params)
       : [];
+    if (completedEditPath) state.successfulEditPaths.add(completedEditPath);
     const completedVisualMutationPath = completedEditPath ?? completedWritePath;
     if (
       completedVisualMutationPath &&
@@ -8258,7 +8282,9 @@ export function createToolLoopGuard({
       );
       if (preview) {
         state.workspacePreviewDirectory = preview.relativeDirectory;
-        state.workspacePreviewModelAuthored = state.workspacePreviewAuthorshipRequired;
+        state.workspacePreviewModelAuthored = workspacePreviewRequiresAuthoredSnapshot(
+          state, preview.relativeDirectory
+        );
         state.workspacePreview = preview;
         state.successfulWriteContentByPath.clear();
         rememberSessionPreview(state.currentSessionId, preview);
