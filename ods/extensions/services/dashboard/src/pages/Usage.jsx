@@ -836,8 +836,8 @@ function UsageByModelTable({ rows }) {
       const left = a[field]
       const right = b[field]
       if (field === 'model') return String(left || '').localeCompare(String(right || '')) * (direction === 'asc' ? 1 : -1)
-      const leftKnown = typeof left === 'number' && Number.isFinite(left) && (field !== 'cost_usd' || a.cost_source !== 'untracked')
-      const rightKnown = typeof right === 'number' && Number.isFinite(right) && (field !== 'cost_usd' || b.cost_source !== 'untracked')
+      const leftKnown = typeof left === 'number' && Number.isFinite(left) && (field !== 'cost_usd' || (Object.hasOwn(SOURCE_META, a.cost_source) && a.cost_source !== 'untracked'))
+      const rightKnown = typeof right === 'number' && Number.isFinite(right) && (field !== 'cost_usd' || (Object.hasOwn(SOURCE_META, b.cost_source) && b.cost_source !== 'untracked'))
       if (leftKnown !== rightKnown) return leftKnown ? -1 : 1
       return leftKnown ? (left - right) * (direction === 'asc' ? 1 : -1) : 0
     })
