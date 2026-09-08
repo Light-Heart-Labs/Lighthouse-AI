@@ -5575,13 +5575,14 @@ export function userMessageRequestsExactByteDownload(messages, prompt = undefine
   const remoteSource =
     /\b(?:https?|ftps?|sftp|s3):\/\/|\bwww\./i.test(text) ||
     /\b(?:remote|origin\s+server|internet|websites?|webpages?)\b/i.test(text) ||
-    /\b(?:from|at|on|via)\s+(?:(?:the|a)\s+)?(?:server|cloud|endpoint|bucket|(?:[a-z0-9-]+\.)+[a-z]{2,})\b/i.test(text);
+    /\b(?:of|from|at|on|via)\s+(?:(?:the|a)\s+)?[`"']?(?:server|cloud|endpoint|bucket|localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:[a-z0-9-]+\.)+[a-z]{2,})\b/i.test(text);
   if (remoteSource) return true;
   // Source locality permits ordinary workspace preservation. A local
   // destination alone does not exempt an ambiguous external download.
   const localSource =
     /\b(?:of|from)\s+(?:the\s+)?(?:existing|local|workspace)\b/i.test(text) ||
-    /\b(?:of|from)\s+[`"']?\/?workspace\//i.test(text);
+    /\b(?:of|from)\s+[`"']?\/?workspace\//i.test(text) ||
+    /\b(?:of|from)\s+[`"']?(?:\.\/)?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)+\.[a-z0-9]{1,12}\b/i.test(text);
   return !localSource;
 }
 
@@ -6640,17 +6641,21 @@ export function createToolLoopGuard({
       const directory = hasRelativeDirectory || hasDirectory
         ? providedDirectory
         : observedDirectory;
-      const hasObservedIndex =
-        typeof directory === "string" &&
+      const validDirectory = typeof directory === "string" && directory.length > 0 &&
+        directory.split("/").every((part) => WORKSPACE_PATH_COMPONENT.test(part));
+      const requiresAuthoredSnapshot = workspacePreviewRequiresAuthoredSnapshot(state, directory);
+      const hasObservedIndex = validDirectory &&
         (state.successfulWritePaths.has(`${directory}/index.html`) ||
-          (!workspacePreviewRequiresAuthoredSnapshot(state, directory) &&
-            state.successfulReadPaths.has(`${directory}/index.html`)));
-      if (!directory || !hasObservedIndex) {
-        if (directory && !state.workspacePreviewAuthorshipRequired) {
-          return {
-            block: true,
-            blockReason: `Read ${directory}/index.html before publishing that exact directory. Preserve existing files; a different directory's readback cannot verify this target.`,
-          };
+          (!requiresAuthoredSnapshot && state.successfulReadPaths.has(`${directory}/index.html`)));
+      // The host reopens, validates and hashes an existing artifact at publish
+      // time. An extra model read is not a file-integrity check and can trap
+      // a successful repair in a read/publish retry loop. Keep authored-byte
+      // evidence for fresh creations and workspace evidence when no current
+      // preview request is bound. Host receipts remain required for both.
+      const requestedExistingPreview = state.workspacePreviewRequired && !requiresAuthoredSnapshot;
+      if (!validDirectory || (!hasObservedIndex && !requestedExistingPreview)) {
+        if (validDirectory && !state.workspacePreviewAuthorshipRequired) {
+          return { block: true, blockReason: `Read ${directory}/index.html before publishing that exact directory. Preserve existing files; a different directory's readback cannot verify this target.` };
         }
         return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_FILES_REASON };
       }

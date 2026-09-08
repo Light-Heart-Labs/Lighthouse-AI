@@ -210,7 +210,8 @@ test("preview intent treats HTML paths as targets rather than task instructions"
     const context = { agentId: "pixel", runId: "run-1", sessionId: "recovered-session" };
     guard.observeRun(context, "pixel", { prompt });
     const params = { relativeDirectory: directory };
-    assert.equal(call(guard, "pixel_ods_workspace_preview", { context, event: { params } })?.block, true);
+    assert.notEqual(call(guard, "pixel_ods_workspace_preview", { context, event: { params } })?.block, true,
+      "the host can validate the explicitly requested existing artifact without a model read");
     const read = { path: `${directory}/index.html` };
     afterCall(guard, "read", { context, event: {
       params: read, result: { content: [{ type: "text", text: "<!doctype html><p>Report</p>" }] },
@@ -8046,6 +8047,8 @@ test("local byte-preserving exports do not acquire a remote-download prerequisit
     "Repair the report so its file download preserves exact bytes of existing intake/analysis.json. Publish the original file inside the document folder.",
     "Save the raw bytes of the local attachment into the archive folder.",
     "Create a download button for the file using exact bytes from /workspace/input/data.bin.",
+    "Repair the earlier document-review-2627 evidence-manifest download without changing the sales report. Its downloaded JSON differs from attachment-intake-2604/analysis-manifest.json: the correctedCalls text fields contain literal backslash-n strings where the source contains real newlines. Publish the original manifest file inside document-review-2627 and make its download preserve those exact bytes, avoiding manually retyped JSON in JavaScript. Keep the visible report and source-location cards intact. Verify the file copy/hash and republish the document report.",
+    "Repair the artifact download using exact bytes from input.v1/original.bin.",
   ]) {
     assert.equal(userMessageRequestsExactByteDownload([], prompt), false, prompt);
   }
@@ -8055,6 +8058,11 @@ test("local byte-preserving exports do not acquire a remote-download prerequisit
     "Save the raw bytes from the server into the existing workspace folder.",
     "Download https://example.com/a.bin as exact bytes, then compare against the local file.",
     "Download http://example.com/a.bin as exact bytes.",
+    "Fetch exact bytes from example.com/archive.bin into workspace/archive.bin.",
+    "Fetch exact bytes from `example.com/archive.bin` into workspace/archive.bin.",
+    'Save the exact bytes of "storage.googleapis.com/bucket/data.bin" into workspace/data.bin.',
+    "Fetch exact bytes from '192.0.2.10/archive.bin' into workspace/archive.bin.",
+    "Fetch exact bytes from localhost/archive.bin into workspace/archive.bin.",
   ]) {
     assert.equal(userMessageRequestsExactByteDownload([], prompt), true, prompt);
   }
@@ -11124,14 +11132,15 @@ for (const wrapped of [false, true]) {
       } },
     });
     const unread = publish("report/static");
-    assert.equal(unread.block, true);
-    assert.match(unread.blockReason, /Read report\/static\/index\.html/);
-    assert.equal(unread.params, undefined, "do not retry the failed parent behind the model's back");
+    assert.notEqual(unread?.block, true, "the host validates the explicit existing target without an extra model read");
+    assert.deepEqual(wrapped ? unread.params.args : unread.params, { relativeDirectory: "report/static" },
+      "do not retry the failed parent behind the model's back");
     observe("report/static");
     const selected = publish("report/static");
     assert.equal(selected?.block, undefined);
     assert.deepEqual(wrapped ? selected.params.args : selected.params, { relativeDirectory: "report/static" });
-    for (const invalid of ["../outside", "missing", "", null]) {
+    assert.notEqual(publish("missing")?.block, true, "the host is authoritative for file existence");
+    for (const invalid of ["../outside", "", null]) {
       assert.equal(publish(invalid).block, true, `reject explicit unverified target ${invalid}`);
     }
     assert.equal(guard.verificationForRun("run-1").status, "failed", "no successful host receipt has been received");
@@ -11231,9 +11240,11 @@ test("shows named existing artwork without forcing replacement or claiming new a
       "pixel", { prompt }
     );
     const previewParams = { relativeDirectory: "clockwork-tide" };
-    assert.equal(call(guard, "pixel_ods_workspace_preview", {
+    assert.notEqual(call(guard, "pixel_ods_workspace_preview", {
       event: { params: previewParams },
-    }).block, true, "files must be inspected first");
+    })?.block, true, "the host validates an existing artifact requested by the owner");
+    assert.notEqual(guard.verificationForRun("run-1").status, "passed",
+      "permission to invoke the host is not a verified publication");
     const readParams = { path: "clockwork-tide/index.html" };
     call(guard, "read", { event: { params: readParams } });
     afterCall(guard, "read", {
