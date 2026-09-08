@@ -203,10 +203,28 @@ class SystemdAccessBridge:
 
     def worker(self, operation="status", *, confirmed=False, config_hash=None, busy=None, restart=None):
         script = Path(__file__).resolve().parent / "access_mode_worker.py"
+        # This launcher still runs as root. Never search the owner's validator
+        # PATH for it; that PATH is intended only for the unprivileged worker.
+        launcher = None
+        for candidate in (Path("/usr/sbin/runuser"), Path("/sbin/runuser")):
+            try:
+                resolved = candidate.resolve(strict=True)
+                for entry in (resolved, *resolved.parents):
+                    info = entry.lstat()
+                    if info.st_uid != 0 or info.st_mode & 0o022:
+                        raise AccessError("unsafe-owner-launcher")
+                if not resolved.is_file() or not os.access(resolved, os.X_OK):
+                    continue
+                launcher = str(resolved)
+                break
+            except FileNotFoundError:
+                continue
+        if launcher is None:
+            raise AccessError("owner-launcher-unavailable")
         env = {"HOME": str(self.home), "USER": self.owner.pw_name, "LOGNAME": self.owner.pw_name,
                "PATH": str(Path(self.binary).parent) + ":/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
         request = dict(operation=operation, openclaw=self.binary, config_sha256=config_hash, confirmed=confirmed)
-        process = subprocess.Popen(["runuser", "-u", self.owner.pw_name, "--", sys.executable, "-I", "-u", str(script)],
+        process = subprocess.Popen([launcher, "-u", self.owner.pw_name, "--", sys.executable, "-I", "-u", str(script)],
                                    cwd="/", env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, bufsize=1)
         try:
@@ -314,10 +332,13 @@ class SystemdAccessBridge:
 
     def provision_probe(self):
         base = Path("/var/lib/ods-pixel-access-probes")
-        base.mkdir(mode=0o755, exist_ok=True)
+        base.mkdir(mode=0o711, exist_ok=True)
         info = base.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise AccessError("unsafe-probe-directory")
+        # The coordinator's 0077 umask otherwise makes this root-only and
+        # prevents the gateway owner reaching its private child directory.
+        os.chmod(base, 0o711)
         target = base / str(self.owner.pw_uid)
         try:
             target.mkdir(mode=0o700)
@@ -388,8 +409,11 @@ class SystemdAccessBridge:
                 # a baseline or performing an unnecessary restore.
                 if not (request["mode"] == "sandboxed" and not config.get("managed") and config.get("configured_status") == "sandboxed"):
                     self.worker(request["mode"], confirmed=request["confirmed"], config_hash=config["config_sha256"], busy=busy, restart=restart)
-                elif self.dropin.exists() or snapshot["pending"]:
+                elif self.dropin.exists():
                     if not restart(): raise AccessError("restore-restart-failed")
+                # A pending journal alone does not mean this pristine config
+                # changed. Recheck the actual service boundary and core tools
+                # below; restarting again can perpetually interrupt recovery.
                 boundary = self.unit_boundary()
                 baseline = private_json(baseline_file, 0, 8192)["boundary"]
                 if request["mode"] == "sandboxed":

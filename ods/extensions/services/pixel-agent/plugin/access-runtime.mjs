@@ -37,7 +37,7 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
   const qualified = runtimeVersion === '2026.6.33' && hooksAllowed === true;
   const runs = new Set(), tools = new Set(), detached = new Set();
   const filename = path.join(directory, 'state.json');
-  let state, failed = false, probeRun = null, proof = null;
+  let state, failed = false, probeRun = null, proof = null, probeFailure = null;
   function privateEntry(target, directoryEntry = false) {
     const s = fs.lstatSync(target);
     if (s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077) ||
@@ -87,7 +87,7 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
   function status() {
     return {available: !failed && qualified, phase: failed ? 'unavailable' : state.phase,
       revision: failed ? null : state.revision, active: runs.size + tools.size + detached.size,
-      pid: process.pid, runtime_version: runtimeVersion, proof};
+      pid: process.pid, runtime_version: runtimeVersion, proof, probe_failure: probeFailure};
   }
   function admit(_event, context) {
     const id = context?.runId;
@@ -129,6 +129,7 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
   }
   async function probe(token) {
     if (!owns(token) || busy() || probeRun) throw new Error('runtime lease mismatch');
+    probeFailure = null;
     const cfg = config();
     const agent = cfg.agents.list.find(entry => entry.id === 'pixel');
     const workspace = agent.workspace ?? cfg.agents.defaults?.workspace;
@@ -144,13 +145,16 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
     // Root provisions this empty owner-private fixture outside home/workspace.
     // Its host path is fixed by UID; callers cannot supply a write destination.
     const outside = probeDirectory;
-    privateEntry(outside, true);
+    try { privateEntry(outside, true); }
+    catch (error) { probeFailure = 'probe-directory-unavailable'; throw error; }
     const sentinel = path.join(outside, `sentinel-${id}`);
     const nonce = revision();
     probeRun = runId;
+    let stage = 'sandbox-resolution';
     try {
       const sandbox = await resolveSandbox({config: cfg, sessionKey, workspaceDir: workspace});
       if ((executionHost === 'sandbox') !== Boolean(sandbox?.enabled)) throw new Error('sandbox runtime mismatch');
+      stage = 'core-tool-construction';
       const allTools = createTools({config: cfg, agentId: 'pixel', sessionKey, runId, sessionId: id,
         workspaceDir: workspace, cwd: workspace, sandbox, modelProvider, modelId, oneShotCliRun: true});
       const exec = allTools.find(tool => tool.name === 'exec');
@@ -159,10 +163,12 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
       // These calls use the installed core tool constructors and unchanged
       // loaded policy. They do not request a model or accept arbitrary commands.
       const control = execControl();
+      stage = 'core-exec';
       const command = control.prepare(runId, `printf '%s' '${nonce}'`);
       const result = await exec.execute(`proof-exec-${id}`, {command, timeout: 10});
       const text = result?.content?.filter(item => item.type === 'text').map(item => item.text).join('\n') ?? '';
       if (result?.isError || !text.includes(nonce) || result?.details?.status === 'running') throw new Error('core exec proof failed');
+      stage = 'core-cancellation';
       const cancelledCommand = control.prepare(runId, 'sleep 30');
       let signalFailed = false;
       const timer = setTimeout(() => { try { control.signal(runId); } catch { signalFailed = true; } }, 250);
@@ -170,6 +176,7 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
       try { cancelled = await exec.execute(`proof-cancel-${id}`, {command: cancelledCommand, timeout: 10, yieldMs: 10000}); }
       finally { clearTimeout(timer); }
       if (signalFailed || cancelled?.details?.exitCode !== 130) throw new Error('core cancellation proof failed');
+      stage = 'filesystem-boundary';
       let writeDenied = false;
       try {
         const written = await write.execute(`proof-write-${id}`, {path: sentinel, content: nonce});
@@ -180,6 +187,11 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
       proof = {mode: executionHost === 'gateway' ? 'full-access' : 'sandboxed', pid: process.pid,
         config_sha256: hash(JSON.stringify(cfg)), executed: true, at: new Date().toISOString()};
       return status();
+    } catch (error) {
+      // Fixed stage identifiers aid recovery without exposing commands,
+      // credentials, private paths, or arbitrary provider diagnostics.
+      probeFailure = stage;
+      throw error;
     } finally {
       execControl().clear(runId); probeRun = null;
       // Only the unique directory and sentinel created by this probe.
