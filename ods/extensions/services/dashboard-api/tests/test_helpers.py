@@ -1607,3 +1607,16 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestCountListItemFrequenciesSafe:
+
+    def test_counts_frequencies(self):
+        from helpers import count_list_item_frequencies_safe
+        assert count_list_item_frequencies_safe(["a", "b", "a", "c", "b", "a"]) == {"a": 3, "b": 2, "c": 1}
+
+    def test_handles_unhashable_and_none_items(self):
+        from helpers import count_list_item_frequencies_safe
+        assert count_list_item_frequencies_safe([1, None, [1, 2], 1]) == {1: 2}
+        assert count_list_item_frequencies_safe(None) == {}
+
