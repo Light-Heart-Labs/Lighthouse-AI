@@ -9,6 +9,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symli
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { computeSessionUser } from '../host/pixel_ingress.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const pkg = process.env.OPENCLAW_PACKAGE;
@@ -20,6 +22,8 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     const root = mkdtempSync(join(tmpdir(), 'ods-routing-gateway-'));
     const fixture = join(root, 'lease.json');
     const ownerMode = handoffMode && process.env.ODS_HANDOFF_OWNER_API === '1';
+    const ownerScope = ownerMode ? process.env.ODS_OWNER_SCOPE : undefined;
+    assert.ok(ownerScope === undefined || ['task','conversation','default'].includes(ownerScope));
     const browserMode = ownerMode && process.env.ODS_HANDOFF_BROWSER === '1';
     let ownerChild, ownerClosed, ownerUrl, ownerLog = '';
     const requests = [];
@@ -128,6 +132,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     if (ownerMode) Object.assign(env, {ODS_HANDOFF_OWNER_COMMAND: JSON.stringify([workerPython,'-I','-B',
       fileURLToPath(new URL('../../../../bin/pixel_provider/handoff_worker.py',import.meta.url))]),
       ODS_HANDOFF_BROWSER: browserMode ? '1' : '0'});
+    if (ownerScope) env.ODS_OWNER_SCOPE = ownerScope;
     const child = spawn(process.execPath, [join(pkg, 'openclaw.mjs'), 'gateway', 'run'],
       {env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true});
     let log = ''; child.stdout.on('data', b => { log += b; }); child.stderr.on('data', b => { log += b; });
@@ -154,7 +159,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       const chat = async (text, user = 'same-native-session') => {
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer fixture-gateway-key'},
-          body: JSON.stringify({model: 'openclaw:pixel', user, stream: false,
+          body: JSON.stringify({model: 'openclaw:pixel', user: ownerScope ? computeSessionUser({user}) : user, stream: false,
             messages: [{role: 'user', content: text}]}), signal: AbortSignal.timeout(browserMode ? 135000 : 30000)});
         return {status: res.status, text: await res.text()};
       };
@@ -182,7 +187,8 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
             assert.equal(preview.checkpoint.recipient.id, 'stronger');
             assert.equal(preview.checkpoint.recipient.model, 'stronger-model');
             assert.equal(preview.checkpoint.recipient.scope, 'run');
-            assert.equal(preview.checkpoint.returnAction, 'configured-leader-on-next-run');
+            assert.equal(preview.checkpoint.returnAction, ownerScope ? 'owner-scope-return-or-end' : 'configured-leader-on-next-run');
+            if (ownerScope) assert.equal(preview.checkpoint.recipient.selectionScope, ownerScope);
             assert.match(JSON.stringify(preview.checkpoint.messages), /witness-retained-42/);
             assert.equal(requests.length, approved ? 2 : 4, 'no inference before checkpoint decision');
             if (ownerMode) {
@@ -215,9 +221,25 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
         }
         assert.fail('owner checkpoint preview not delivered');
       };
+      let scopeState;
+      const scopeChange = async (action, extra = {}) => {
+        const body = action === 'status' ? {chatId: 'same-native-session'} : {
+          chatId: 'same-native-session', expectedRevision: scopeState.revision, taskId: scopeState.taskId, ...extra};
+        const response = await fetch(ownerUrl+'/api/pixel/provider-scopes/'+action, {method:'POST',
+          headers:{'Content-Type':'application/json',Authorization:'Bearer synthetic-handoff-owner-key'}, body:JSON.stringify(body)});
+        assert.ok(response.ok, await response.clone().text()); scopeState = await response.json(); return scopeState;
+      };
+      if (ownerScope) {
+        await scopeChange('status'); await scopeChange('begin', {taskId: randomUUID()});
+      }
       const first = await chat('Call fixture_witness once, then complete.');
       assert.match(first.text, /first-turn-complete/, log.slice(-8000) + first.text);
       saveLease(2);
+      if (ownerScope) {
+        await scopeChange('select', {scope: ownerScope, providerId:'stronger', providerRevision:1, allowCloud:false, acceptUnknownCost:false});
+        if (ownerScope === 'default') { await scopeChange('end'); await scopeChange('begin', {taskId:randomUUID()}); }
+        assert.equal((await scopeChange('status')).effectiveScope, ownerScope);
+      }
       const secondPending = chat('Continue from the previous witness without calling it again.').catch(error => ({error}));
       if (handoffMode) await ownerDecision(true);
       const second = await secondPending;
@@ -250,6 +272,11 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
         assert.equal(requests[3].auth, 'Bearer stronger-upstream-key');
         assert.ok(requests[3].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes('handoff-work-retained-73')));
         saveLease(4);
+        if (ownerScope) {
+          await scopeChange('return', {scope:ownerScope});
+          if (ownerScope === 'default') await scopeChange('end');
+          assert.equal((await scopeChange('status')).effectiveSelection, null);
+        }
         const returned = await chat('Return to the configured leader and retain our work.');
         assert.match(returned.text, /second-turn-complete/);
         assert.equal(requests.length, 5);
@@ -280,7 +307,8 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
           handoff: true, requests: 5, originalToolEffects: 1, handoffToolEffects: 1, checkpointApprovedOutOfBand: true,
           deniedCheckpointWithoutInference: true, originalLeaderRestored: true, historyPreserved: true,
           runtimeStateCredentialsAbsent: true, productionActivation: false, syntheticInference: true,
-          ownerApi: ownerMode, ownerBrowser: browserMode}));
+          ownerApi: ownerMode, ownerBrowser: browserMode, ...(ownerScope ? {ownerScope, explicitOwnerTask:true,
+            nativeIngressHashBound:true, scopeRetainedAcrossRuns:true, explicitScopeReturn:true} : {})}));
         console.log('Evidence:', root);
         return;
       }

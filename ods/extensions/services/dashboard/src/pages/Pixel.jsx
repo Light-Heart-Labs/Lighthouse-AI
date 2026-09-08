@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { Link } from 'react-router-dom'
 import PixelAdvice from '../components/PixelAdvice.jsx'
 import PixelHandoffApproval from '../components/PixelHandoffApproval.jsx'
+import PixelProviderScopes from '../components/PixelProviderScopes.jsx'
 import {
   AlertCircle,
   Bot,
@@ -916,6 +917,7 @@ export default function Pixel({ systemStatus = null }) {
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
           <PixelAdvice canInsert={!sending} onInsert={text => setInput(current => current ? `${current}\n\n${text}` : text)} />
           <PixelHandoffApproval />
+          <PixelProviderScopes chatId={chatIdRef.current} sending={sending} />
           {activeModel && (
             <div
               className="hidden min-w-0 items-center gap-2 rounded-lg border border-theme-border bg-theme-bg/40 px-2.5 py-1.5 font-mono text-[10px] text-theme-text-muted sm:flex"

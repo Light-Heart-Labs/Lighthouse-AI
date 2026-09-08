@@ -7,6 +7,37 @@ const context = () => ({agentId: 'pixel', runId: `chatcmpl_${randomUUID()}`, ses
 const lease = () => ({baseUrl: 'http://127.0.0.1:12345/v1', token: 'test-lease',
   contextTokens: 32768, maxOutputTokens: 4096, reasoning: false, supportsVision: false});
 const deferred = () => { let resolve; const promise = new Promise(r => {resolve = r;}); return {promise, resolve}; };
+
+test('owner scope binds the real canonical ingress session key separately from session ID', async () => {
+  const f = fixture({ownerScopes: true});
+  const ctx = {...context(), sessionKey: 'agent:pixel:openai-user:ods-'+'a'.repeat(64)};
+  const selected = await f.beforeModelResolve({}, ctx);
+  assert.notEqual(selected.modelOverride, 'unavailable');
+  assert.deepEqual(f.acquisitions[0], {runId: ctx.runId, sessionId: ctx.sessionId, sessionKey: ctx.sessionKey});
+  const changed = {...ctx, sessionKey: 'agent:pixel:openai-user:ods-'+'b'.repeat(64)};
+  assert.equal((await f.beforeModelResolve({}, changed)).modelOverride, 'unavailable');
+  assert.equal(f.acquisitions.length, 1);
+  assert.equal(f.beforeAgentRun({}, {...changed, modelProviderId: selected.providerOverride, modelId: selected.modelOverride}).outcome, 'block');
+});
+
+test('owner scopes reject missing or non-ingress identity before acquiring a lease', async () => {
+  const f = fixture({ownerScopes: true});
+  for (const sessionKey of [undefined, 'session', 'agent:pixel:openai-user:raw-chat', 'agent:pixel:cron:job']) {
+    assert.equal((await f.beforeModelResolve({}, {...context(), sessionKey})).modelOverride, 'unavailable');
+  }
+  assert.equal(f.acquisitions.length, 0);
+});
+
+test('persistent preference previews do not falsely promise automatic next-run return', async () => {
+  let preview;
+  const h = await handoffFixture({acquireLease: () => ({...lease(), handoff: {...handoff(), selectionScope: 'conversation'}}),
+    authorizeHandoff: value => {preview = value; return {approved: true, checkpointDigest: value.checkpointDigest};}});
+  assert.equal((await h.f.beforeAgentRun(checkpointEvent(), h.ready)).outcome, 'pass');
+  assert.equal(preview.checkpoint.returnAction, 'owner-scope-return-or-end');
+  assert.equal(preview.checkpoint.recipient.scope, 'run');
+  assert.equal(preview.checkpoint.recipient.selectionScope, 'conversation');
+  await h.f.agentEnd({}, h.ctx);
+});
 const handoff = () => ({id: 'stronger', previousProviderId: 'leader', kind: 'local', label: 'Stronger',
   model: 'model-stronger', baseUrl: 'http://127.0.0.1:12346/v1', revision: 1, scope: 'run'});
 const checkpointEvent = () => ({prompt: 'Continue without repeating the write', systemPrompt: 'Keep existing permissions',

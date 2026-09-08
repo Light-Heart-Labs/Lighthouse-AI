@@ -27,9 +27,9 @@ import host_agent_client
 host_agent_client.AGENT_URL='http://127.0.0.1:'+str(HostHTTP.server.server_address[1])
 host_agent_client.ODS_AGENT_KEY='synthetic-provider-test-key'
 from fastapi import FastAPI,Request
-from fastapi.responses import FileResponse,JSONResponse
+from fastapi.responses import FileResponse,JSONResponse,HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from routers import pixel_handoff
+from routers import pixel_handoff,pixel_scopes,pixel_providers
 import uvicorn
 
 app=FastAPI()
@@ -43,11 +43,13 @@ if args.dashboard:
 
     @app.get('/fixture-login')
     def fixture_login():
-        response=JSONResponse({'fixture':True,'productionSession':False})
-        response.set_cookie('ods-handoff-fixture-owner','fixture-approved-browser',httponly=True,samesite='strict')
+        response=HTMLResponse('<!doctype html><title>Disposable owner fixture</title><p>Synthetic owner session. No production authentication.</p><a href="/pixel">Open Pixel fixture</a>')
+        response.set_cookie('ods-handoff-fixture-owner','fixture-approved-browser',httponly=True,samesite='strict',max_age=600)
         return response
 
 app.include_router(pixel_handoff.router)
+app.include_router(pixel_scopes.router)
+app.include_router(pixel_providers.router)
 
 @app.get('/health')
 def health(): return {'status':'ready','fixture':True}

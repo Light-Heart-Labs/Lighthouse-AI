@@ -13,16 +13,18 @@ const ownerAdapter = process.env.ODS_HANDOFF_OWNER_COMMAND ? createHandoffOwnerA
   timeoutSeconds: process.env.ODS_HANDOFF_BROWSER === '1' ? 120 : 60,
 }) : null;
 const worker = process.env.ODS_LEASE_WORKER_COMMAND ? createLeaseWorkerAdapter({
+  ownerScopes: process.env.ODS_OWNER_SCOPE !== undefined,
   command: JSON.parse(process.env.ODS_LEASE_WORKER_COMMAND), directory: process.env.ODS_LEASE_DIRECTORY,
   request: ctx => {
     const state = JSON.parse(readFileSync(file, 'utf8'));
     record({kind: 'owner-request', ...ctx});
     return {expectedRevision: state.refuse && !state.handoff ? 0 : 1,
       confirmed: true, allowCloud: false, timeoutSeconds: process.env.ODS_HANDOFF_BROWSER === '1' ? 180 : 60,
-      ...(state.handoff ? {handoffProviderId: 'stronger'} : {})};
+      ...(state.handoff && !process.env.ODS_OWNER_SCOPE ? {handoffProviderId: 'stronger'} : {})};
   },
 }) : null;
 const bridge = createProviderRoutingBridge({
+  ownerScopes: process.env.ODS_OWNER_SCOPE !== undefined,
   enabled: true,
   durableReplayGuard: !!worker,
   approvalTimeoutMs: process.env.ODS_HANDOFF_BROWSER === '1' ? 120000 : 60000,

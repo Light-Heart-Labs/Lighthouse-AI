@@ -17,7 +17,9 @@ function freeze(value, depth = 0) {
 }
 
 export function handoffRecipient(value) {
-  if (!value || Object.keys(value).sort().join(',') !== 'baseUrl,id,kind,label,model,previousProviderId,revision,scope' ||
+  if (!value || !['baseUrl,id,kind,label,model,previousProviderId,revision,scope',
+      'baseUrl,id,kind,label,model,previousProviderId,revision,scope,selectionScope'].includes(Object.keys(value).sort().join(',')) ||
+      ('selectionScope' in value && !['task','conversation','default'].includes(value.selectionScope)) ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(value.id) ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(value.previousProviderId) || value.id === value.previousProviderId ||
       !['local', 'ods-peer', 'cloud'].includes(value.kind) || value.scope !== 'run' ||
@@ -48,7 +50,7 @@ export function handoffCheckpoint(event, ctx, recipient) {
   // This is a preview, not a rewritten inference prompt or trusted model text.
   const value = {schemaVersion: 1, runId: ctx.runId, sessionId: ctx.sessionId, agentId: ctx.agentId,
     workspaceDir: ctx.workspaceDir, recipient, dataScope: 'conversation-and-this-run-tool-results',
-    returnAction: 'configured-leader-on-next-run',
+    returnAction: recipient.selectionScope ? 'owner-scope-return-or-end' : 'configured-leader-on-next-run',
     prompt: event.prompt, systemPrompt: event.systemPrompt, messages: event.messages};
   const encoded = JSON.stringify(value);
   if (Buffer.byteLength(encoded, 'utf8') > 2 * 1024 * 1024) return fail();

@@ -24,7 +24,7 @@ from pixel_provider.store import StoreError
 
 def validate_request(value):
     required = {'schemaVersion','runId','sessionId','expectedRevision','allowCloud','timeoutSeconds','confirmed'}
-    if (not isinstance(value,dict) or set(value) not in (required,required|{'handoffProviderId'})
+    if (not isinstance(value,dict) or set(value) not in (required,required|{'handoffProviderId'},required|{'scopeSessionKey'})
             or type(value['schemaVersion']) is not int or value['schemaVersion']!=1
             or value['confirmed'] is not True or type(value['allowCloud']) is not bool
             or type(value['timeoutSeconds']) is not int or not 1<=value['timeoutSeconds']<=3600):
@@ -33,6 +33,18 @@ def validate_request(value):
             or not value['handoffProviderId'] or len(value['handoffProviderId'])>64):
         raise StoreError('invalid-provider-lease-request')
     return value
+
+
+def scoped_request(directory, value):
+    """Resolve owner state once; the resulting run contract is then frozen."""
+    if 'scopeSessionKey' not in value:
+        return value
+    from pixel_provider.scopes import ScopeStore
+    selection = ScopeStore(directory).resolve(value['scopeSessionKey'], value['expectedRevision'])
+    if selection is None:
+        return value
+    return dict(value, handoffProviderId=selection['providerId'], allowCloud=selection['allowCloud'],
+                handoffSelectionScope=selection['scope'])
 
 
 def main():
@@ -83,9 +95,10 @@ def main():
             raise StoreError('provider-parent-disconnected')
         duration[0]=value['timeoutSeconds']; armed.set()
         phase = 'snapshot'
+        value = scoped_request(sys.argv[2], value)
         session = ProviderSession(sys.argv[2],expected_revision=value['expectedRevision'],
             confirmed=value['confirmed'],allow_cloud=value['allowCloud'],
-            handoff_provider_id=value.get('handoffProviderId'))
+            handoff_provider_id=value.get('handoffProviderId'),handoff_selection_scope=value.get('handoffSelectionScope'))
         phase = 'claim'
         with claim:
             try:

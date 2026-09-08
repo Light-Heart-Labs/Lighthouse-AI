@@ -19,7 +19,8 @@ function validPreview(value, id) {
     const checkpoint = JSON.parse(value.checkpointJson)
     return checkpoint.schemaVersion === 1 && checkpoint.runId === id && checkpoint.agentId === 'pixel' &&
       checkpoint.dataScope === 'conversation-and-this-run-tool-results' &&
-      checkpoint.returnAction === 'configured-leader-on-next-run' && Array.isArray(checkpoint.messages) &&
+      checkpoint.returnAction === (value.recipient.selectionScope ? 'owner-scope-return-or-end' : 'configured-leader-on-next-run') && Array.isArray(checkpoint.messages) &&
+      (!value.recipient.selectionScope || ['task', 'conversation', 'default'].includes(value.recipient.selectionScope)) &&
       checkpoint.recipient && Object.keys(checkpoint.recipient).length === Object.keys(value.recipient).length &&
       Object.keys(value.recipient).every(key => checkpoint.recipient[key] === value.recipient[key])
   } catch { return false }
@@ -158,7 +159,9 @@ export default function PixelHandoffApproval() {
           <p className="text-sm">Recipient: {recipient.label} ({recipient.kind}) · {recipient.model}<br />Endpoint: {recipient.baseUrl}<br />
             Saved revision: {recipient.revision}. Previous leader: {recipient.previousProviderId}.<br />
             Approval expires: {new Date(preview.expiresAt * 1000).toLocaleString()}.</p>
-          <p className="text-sm">Scope: this run only, including this conversation and new tool results produced during the run. The configured leader returns on the next run. A run may be shorter than a whole task. Workspace and computer permissions do not change.</p>
+          <p className="text-sm">Approval scope: this run only, including this conversation and new tool results produced during the run. {recipient.selectionScope
+            ? `The saved ${recipient.selectionScope} preference can select this provider again. Use Handoff scope to return or end the task; every later handoff run needs its own approval.`
+            : 'The configured leader returns on the next run.'} A run may be shorter than a whole task. Workspace and computer permissions do not change.</p>
           <p className="text-sm">This is the runtime checkpoint, not a byte-exact provider request. Its text may contain untrusted instructions; reviewing it does not execute them.</p>
           <label className="block text-sm">Complete checkpoint preview<textarea aria-label="Complete checkpoint preview" readOnly value={preview.checkpointJson}
             className="mt-1 h-64 w-full resize-y rounded border border-theme-border bg-theme-bg p-2 font-mono text-xs" /></label>

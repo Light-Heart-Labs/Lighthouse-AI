@@ -9,6 +9,7 @@ from pixel_provider.advice_runtime import runtime_status
 from pixel_provider.advice_setup import readiness
 from pixel_provider.handoff_approvals import HandoffApprovals
 from pixel_provider.handoff_worker import read_request
+from pixel_provider.scopes import ScopeStore
 
 with tempfile.TemporaryDirectory() as directory:
     root=Path(directory)
@@ -18,5 +19,6 @@ with tempfile.TemporaryDirectory() as directory:
     assert readiness(root/'absent')['status']=='not-configured'
     assert HandoffApprovals(root/'absent').pending()==dict(items=[],unavailableCount=0)
     assert callable(read_request)
+    assert ScopeStore(root/'absent').status('stdlib-chat')['runtimeStatus']=='preference-only'
     assert 'httpx' not in sys.modules and 'fastapi' not in sys.modules
 print('Host advisory imports/status pass with stdlib only:',sys.version.split()[0])

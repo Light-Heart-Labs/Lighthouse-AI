@@ -28,7 +28,8 @@ function leaseSnapshot(value) {
 }
 
 export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, releaseLease, enabled = false,
-  durableReplayGuard = false, authorizeHandoff, approvalTimeoutMs = 60000} = {}) {
+  durableReplayGuard = false, authorizeHandoff, approvalTimeoutMs = 60000, ownerScopes = false} = {}) {
+  if (typeof ownerScopes !== 'boolean') unavailable();
   if (!Number.isSafeInteger(approvalTimeoutMs) || approvalTimeoutMs < 1 || approvalTimeoutMs > 120000) unavailable();
   const runs = new Map();
   const models = new Map();
@@ -37,7 +38,8 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   const MAX_RUNS = 256;
   const binding = ctx => ctx?.agentId === agentId && typeof ctx.runId === 'string' &&
     RUN.test(ctx.runId) && typeof ctx.sessionId === 'string' &&
-    ctx.sessionId.length > 0 && ctx.sessionId.length <= 256;
+    ctx.sessionId.length > 0 && ctx.sessionId.length <= 256 && (!ownerScopes ||
+      typeof ctx.sessionKey === 'string' && /^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(ctx.sessionKey));
   const live = entry => entry?.state === 'active' && !entry.closed;
   function release(entry) {
     if (!entry.releasePromise) entry.releasePromise = Promise.resolve()
@@ -52,7 +54,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     try {
       if (!binding(ctx) || typeof acquireLease !== 'function' || typeof releaseLease !== 'function') return UNAVAILABLE;
       let entry = runs.get(ctx.runId);
-      if (entry && entry.sessionId !== ctx.sessionId) return UNAVAILABLE;
+      if (entry && (entry.sessionId !== ctx.sessionId || ownerScopes && entry.sessionKey !== ctx.sessionKey)) return UNAVAILABLE;
       if (!entry) {
         if (durableReplayGuard === true && runs.size >= MAX_RUNS) {
           for (const [oldRun, oldEntry] of runs) {
@@ -64,11 +66,13 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
         }
         if (runs.size >= MAX_RUNS) return UNAVAILABLE;
         entry = {runId: ctx.runId, sessionId: ctx.sessionId, modelId: `turn-${randomUUID()}`,
+          ...(ownerScopes ? {sessionKey: ctx.sessionKey} : {}),
           state: 'pending', closed: false, stopApproval: new AbortController()};
         runs.set(ctx.runId, entry);
         models.set(entry.modelId, entry);
         entry.pending = Promise.resolve()
-          .then(() => acquireLease({runId: entry.runId, sessionId: entry.sessionId}))
+          .then(() => acquireLease({runId: entry.runId, sessionId: entry.sessionId,
+            ...(ownerScopes ? {sessionKey: entry.sessionKey} : {})}))
           .then(async value => {
             const snapshot = leaseSnapshot(value);
             if (entry.closed) { await release(entry); return; }
@@ -86,7 +90,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   async function agentEnd(_event, ctx) {
     if (enabled !== true || !binding(ctx)) return;
     const entry = runs.get(ctx.runId);
-    if (!entry || entry.sessionId !== ctx.sessionId) return;
+    if (!entry || entry.sessionId !== ctx.sessionId || ownerScopes && entry.sessionKey !== ctx.sessionKey) return;
     entry.closed = true;
     entry.stopApproval.abort();
     await entry.pending;
@@ -104,7 +108,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   function beforeAgentRun(event, ctx) {
     if (enabled !== true || (ctx?.agentId && ctx.agentId !== agentId)) return undefined;
     const entry = binding(ctx) ? runs.get(ctx.runId) : undefined;
-    if (entry?.sessionId === ctx?.sessionId && live(entry) &&
+    if (entry?.sessionId === ctx?.sessionId && (!ownerScopes || entry.sessionKey === ctx?.sessionKey) && live(entry) &&
         ctx.modelProviderId === PROVIDER && ctx.modelId === entry.modelId) {
       if (!entry.lease.handoff) return {outcome: 'pass'};
       try {

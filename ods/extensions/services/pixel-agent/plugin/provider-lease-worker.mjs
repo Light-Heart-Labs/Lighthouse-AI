@@ -5,10 +5,10 @@ import { isAbsolute } from 'node:path';
 
 const MAX_REPLY = 8192;
 const failure = () => new Error('ODS lease worker unavailable');
-export function createLeaseWorkerAdapter({command, directory, request}) {
+export function createLeaseWorkerAdapter({command, directory, request, ownerScopes = false}) {
   if (process.platform === 'win32' || !Array.isArray(command) || !command.length ||
       !isAbsolute(command[0]) || command.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
-      typeof directory !== 'string' || !isAbsolute(directory) || typeof request !== 'function') throw failure();
+      typeof directory !== 'string' || !isAbsolute(directory) || typeof request !== 'function' || typeof ownerScopes !== 'boolean') throw failure();
   const executable = [...command];
   const entries = new Map();
   function stop(entry) {
@@ -20,9 +20,10 @@ export function createLeaseWorkerAdapter({command, directory, request}) {
     }, 5000);
     return entry.closed;
   }
-  async function acquireLease({runId, sessionId}) {
+  async function acquireLease({runId, sessionId, sessionKey}) {
     if (typeof runId !== 'string' || runId.length > 64 || typeof sessionId !== 'string' ||
-        !sessionId || sessionId.length > 256 || entries.has(runId)) throw failure();
+        !sessionId || sessionId.length > 256 || entries.has(runId) || ownerScopes &&
+        (typeof sessionKey !== 'string' || !/^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(sessionKey))) throw failure();
     let policy;
     try { policy = request(Object.freeze({runId, sessionId})); } catch { throw failure(); }
     const keys = policy && Object.keys(policy).sort().join(',');
@@ -33,7 +34,9 @@ export function createLeaseWorkerAdapter({command, directory, request}) {
           !/^[a-z][a-z0-9_-]{0,63}$/.test(policy.handoffProviderId))) ||
         !Number.isSafeInteger(policy.expectedRevision) || policy.expectedRevision < 0 ||
         !Number.isSafeInteger(policy.timeoutSeconds) || policy.timeoutSeconds < 1 || policy.timeoutSeconds > 3600) throw failure();
-    const body = Buffer.from(JSON.stringify({schemaVersion: 1, runId, sessionId, ...policy}));
+    if (ownerScopes && 'handoffProviderId' in policy) throw failure();
+    const body = Buffer.from(JSON.stringify({schemaVersion: 1, runId, sessionId, ...policy,
+      ...(ownerScopes ? {scopeSessionKey: sessionKey} : {})}));
     const prefix = Buffer.alloc(4); prefix.writeUInt32BE(body.length);
     const child = spawn(executable[0], [...executable.slice(1), '--provider-directory', directory], {
       stdio: ['pipe', 'pipe', 'pipe'], cwd: '/', detached: true,

@@ -20,7 +20,9 @@ from .vault import CredentialStore
 
 
 class ProviderSession:
-    def __init__(self,directory,*,expected_revision,confirmed,allow_cloud=False,handoff_provider_id=None):
+    def __init__(self,directory,*,expected_revision,confirmed,allow_cloud=False,handoff_provider_id=None,handoff_selection_scope=None):
+        if handoff_selection_scope is not None and (handoff_selection_scope not in ('task','conversation','default') or handoff_provider_id is None):
+            raise StoreError('invalid-handoff-selection-scope')
         if os.name != 'posix':
             raise StoreError('unsupported-platform')
         if confirmed is not True or type(expected_revision) is not int:
@@ -51,6 +53,8 @@ class ProviderSession:
                 raise StoreError('cloud-not-authorized')
             self.handoff = {key:target[key] for key in ('id','label','kind','baseUrl','model')}
             self.handoff.update(revision=expected_revision,scope='run',previousProviderId=previous['id'])
+            if handoff_selection_scope is not None:
+                self.handoff['selectionScope'] = handoff_selection_scope
             # Do not broaden the checkpoint's recipients to normal backups.
             config = copy.deepcopy(config)
             config['roles'].update(leader=handoff_provider_id,backups=[])

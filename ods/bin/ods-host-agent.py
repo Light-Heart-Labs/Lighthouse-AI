@@ -6929,6 +6929,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_advice(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/handoff/list", "/v1/pixel/handoff/status", "/v1/pixel/handoff/decide"}:
             self._handle_pixel_handoff(self.path.rsplit('/', 1)[1])
+        elif self.path in {"/v1/pixel/provider-scopes/status", "/v1/pixel/provider-scopes/begin", "/v1/pixel/provider-scopes/end", "/v1/pixel/provider-scopes/select", "/v1/pixel/provider-scopes/return"}:
+            self._handle_pixel_scopes(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/advice-runtime/prepare", "/v1/pixel/advice-runtime/status", "/v1/pixel/advice-runtime/cancel"}:
             self._handle_pixel_advice_runtime(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke", "/v1/pixel/inference-sharing/start", "/v1/pixel/inference-sharing/stop"}:
@@ -7044,6 +7046,39 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, status, {'error': 'Advisory setup unavailable', 'code': exc.code}, no_store=True)
         except (OSError, ValueError, TypeError, KeyError):
             json_response(self, 503, {'error': 'Advisory setup unavailable'}, no_store=True)
+
+    def _handle_pixel_scopes(self, action):
+        """Owner preferences only; no public model/session/privilege activation."""
+        if not check_auth(self):
+            return
+        from pixel_provider.store import StoreError, decode_document
+        try:
+            from pixel_provider.scopes import handle
+            lengths = self.headers.get_all('Content-Length', [])
+            if (len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,9}', lengths[0])
+                    or self.headers.get('Transfer-Encoding') is not None):
+                raise StoreError('invalid-scope-request')
+            length = int(lengths[0])
+            if not 0 < length <= 4096:
+                json_response(self, 413 if length > 4096 else 400, {'error': 'Invalid scope request size'}, no_store=True)
+                return
+            previous = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(10)
+                raw = self.rfile.read(length)
+            finally:
+                self.connection.settimeout(previous)
+            if len(raw) != length:
+                raise StoreError('invalid-scope-request')
+            result = handle(DATA_DIR, action, decode_document(raw))
+            json_response(self, 200, result, no_store=True)
+        except StoreError as exc:
+            conflicts = {'stale-revision', 'stale-provider-revision', 'scope-task-mismatch',
+                         'scope-task-already-active', 'scope-task-replayed', 'write-durability-unknown'}
+            json_response(self, 409 if exc.code in conflicts else 400,
+                          {'error': 'Provider preference unavailable; reload before retrying', 'code': exc.code}, no_store=True)
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            json_response(self, 503, {'error': 'Provider preference unavailable'}, no_store=True)
 
     def _handle_pixel_handoff(self, action):
         """Owner-only decisions; checkpoint publication is a private worker pipe."""

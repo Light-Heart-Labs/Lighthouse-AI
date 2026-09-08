@@ -78,6 +78,7 @@ from routers import (
     pixel_providers,
     pixel_advice,
     pixel_handoff,
+    pixel_scopes,
     pixel_advice_runtime,
     pixel_sharing,
 )
@@ -1194,6 +1195,7 @@ app.include_router(pixel.router)
 app.include_router(pixel_providers.router)
 app.include_router(pixel_advice.router)
 app.include_router(pixel_handoff.router)
+app.include_router(pixel_scopes.router)
 app.include_router(pixel_advice_runtime.router)
 app.include_router(pixel_sharing.router)
 

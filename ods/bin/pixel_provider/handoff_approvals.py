@@ -46,7 +46,7 @@ def validate_checkpoint(raw,digest):
     if (type(value) is not dict or set(value)!=fields or type(value['schemaVersion']) is not int
             or value['schemaVersion']!=1 or value['agentId']!='pixel'
             or value['dataScope']!='conversation-and-this-run-tool-results'
-            or value['returnAction']!='configured-leader-on-next-run'
+            or value['returnAction']!=('owner-scope-return-or-end' if type(value['recipient']) is dict and 'selectionScope' in value['recipient'] else 'configured-leader-on-next-run')
             or type(value['messages']) is not list):
         raise StoreError('invalid-handoff-checkpoint')
     run_id(value['runId'])
@@ -76,8 +76,10 @@ def validate_checkpoint(raw,digest):
 
 
 def validate_recipient(recipient):
-    if (type(recipient) is not dict or set(recipient)!={'id','label','kind','baseUrl','model',
-            'revision','scope','previousProviderId'} or recipient['scope']!='run'
+    fields={'id','label','kind','baseUrl','model','revision','scope','previousProviderId'}
+    if (type(recipient) is not dict or set(recipient) not in (fields,fields|{'selectionScope'})
+            or 'selectionScope' in recipient and recipient['selectionScope'] not in ('task','conversation','default')
+            or recipient['scope']!='run'
             or recipient['kind'] not in ('local','ods-peer','cloud')
             or type(recipient['revision']) is not int or not 0<=recipient['revision']<2**53
             or recipient['id']==recipient['previousProviderId']):

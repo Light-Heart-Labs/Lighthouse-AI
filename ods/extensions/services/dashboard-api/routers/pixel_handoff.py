@@ -33,7 +33,9 @@ def normalize_status(value,*,checkpoint):
             or value['status'] not in STATUSES):
         raise ValueError('invalid-handoff-response')
     recipient=value['recipient']
-    if (type(recipient) is not dict or set(recipient)!={'id','label','kind','baseUrl','model','revision','scope','previousProviderId'}
+    fields={'id','label','kind','baseUrl','model','revision','scope','previousProviderId'}
+    if (type(recipient) is not dict or set(recipient) not in (fields,fields|{'selectionScope'})
+            or 'selectionScope' in recipient and recipient['selectionScope'] not in ('task','conversation','default')
             or recipient['scope']!='run' or recipient['kind'] not in ('local','ods-peer','cloud')
             or type(recipient['revision']) is not int or not 0<=recipient['revision']<2**53
             or any(type(recipient[k]) is not str or not ID.fullmatch(recipient[k]) for k in ('id','previousProviderId'))
@@ -52,7 +54,7 @@ def normalize_status(value,*,checkpoint):
                 or type(document['schemaVersion']) is not int or document['schemaVersion']!=1
                 or document['runId']!=value['runId'] or document['recipient']!=recipient
                 or document['agentId']!='pixel' or document['dataScope']!='conversation-and-this-run-tool-results'
-                or document['returnAction']!='configured-leader-on-next-run' or type(document['messages']) is not list
+                or document['returnAction']!=('owner-scope-return-or-end' if 'selectionScope' in recipient else 'configured-leader-on-next-run') or type(document['messages']) is not list
                 or any(type(document[k]) is not str for k in ('sessionId','workspaceDir','prompt','systemPrompt'))):
             raise ValueError('invalid-handoff-checkpoint')
     return copy.deepcopy(value)
