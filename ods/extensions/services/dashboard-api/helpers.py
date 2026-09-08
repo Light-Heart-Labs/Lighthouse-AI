@@ -1146,3 +1146,20 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def dict_deep_get_safe(data: object, *keys: object, default: object = None) -> object:
+    """Retrieve a nested dictionary value by key path safely.
+
+    Handles None, non-dict intermediaries, missing keys, or empty key path without exception.
+    """
+    if not isinstance(data, dict) or not keys:
+        return default
+    current = data
+    for k in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(k, default)
+        if current is default:
+            return default
+    return current
