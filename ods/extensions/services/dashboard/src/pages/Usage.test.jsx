@@ -120,6 +120,24 @@ const currentReport = {
   ],
 }
 
+test('CSV export preserves quotes, commas, newlines and literal backslashes', async () => {
+  const row = { ...currentReport.models[0], model: 'research "a",\nβ\\path' }
+  installFetchMock({ current: { ...currentReport, models: [row] } })
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:usage'), revokeObjectURL: vi.fn() })
+  vi.spyOn(window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  render(<Usage />)
+  await screen.findByRole('button', { name: /Export CSV/i })
+  fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }))
+  const blob = URL.createObjectURL.mock.calls[0][0]
+  const text = await new Promise((resolve, reject) => {
+    const reader = new window.FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(blob)
+  })
+  expect(text).toContain('"research ""a"",\nβ\\path","openai","Open WebUI",8200,2100,600,20,3.75,"priced_from_tokens"')
+})
+
 const previousReport = {
   ...currentReport,
   period: { start: '2026-04-01', end: '2026-04-30' },

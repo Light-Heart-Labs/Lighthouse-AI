@@ -839,11 +839,14 @@ function UsageByModelTable({ rows }) {
 
   const exportCsv = () => {
     const header = ['model', 'provider', 'service', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'requests', 'cost_usd', 'cost_source']
+    const csvCell = value => typeof value === 'number'
+      ? String(value)
+      : `"${String(value ?? '').replaceAll('"', '""')}"`
     const lines = [
       header.join(','),
-      ...filtered.map(row => header.map(key => JSON.stringify(row[key] ?? '')).join(',')),
+      ...filtered.map(row => header.map(key => csvCell(row[key])).join(',')),
     ]
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
