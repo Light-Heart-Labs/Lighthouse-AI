@@ -143,6 +143,25 @@ def _normalize_version(value: Optional[str]) -> str:
     return (value or "").strip().lstrip("v")
 
 
+def _parse_version_parts(version: str) -> list[int]:
+    """Parse version string into comparable integer parts [major, minor, patch].
+
+    Safely handles malformed versions by returning [0, 0, 0] for unparseable input.
+    This ensures explicit failures rather than silent defaulting to no-update.
+    """
+    if not version:
+        return [0, 0, 0]
+    try:
+        parts = [int(x) for x in version.split(".") if x.isdigit()]
+        if not parts:
+            logger.warning(f"Version string contains no digits: {version}")
+            return [0, 0, 0]
+        return (parts + [0, 0, 0])[:3]
+    except (ValueError, AttributeError, TypeError):
+        logger.warning(f"Failed to parse version string: {version}")
+        return [0, 0, 0]
+
+
 def _build_version_result(current: str, payload: Optional[dict]) -> dict:
     current = _normalize_version(current)
     result = {
@@ -163,10 +182,8 @@ def _build_version_result(current: str, payload: Optional[dict]) -> dict:
     result["changelog_url"] = payload.get("changelog_url")
     result["checked_at"] = payload.get("checked_at") or result["checked_at"]
 
-    current_parts = [int(x) for x in current.split(".") if x.isdigit()][:3]
-    latest_parts = [int(x) for x in latest.split(".") if x.isdigit()][:3]
-    current_parts += [0] * (3 - len(current_parts))
-    latest_parts += [0] * (3 - len(latest_parts))
+    current_parts = _parse_version_parts(current)
+    latest_parts = _parse_version_parts(latest)
     result["update_available"] = latest_parts > current_parts
     return result
 
@@ -302,9 +319,7 @@ async def get_update_dry_run():
         latest = _normalize_version(data.get("tag_name")) or None
         changelog_url = data.get("html_url") or None
         if latest:
-            def _parts(v: str) -> list[int]:
-                return ([int(x) for x in v.split(".") if x.isdigit()][:3] + [0, 0, 0])[:3]
-            update_available = _parts(latest) > _parts(current)
+            update_available = _parse_version_parts(latest) > _parse_version_parts(current)
     except (httpx.HTTPError, httpx.TimeoutException, OSError, json.JSONDecodeError, ValueError) as e:
         version_check_error = f"Could not reach GitHub: {e}"
 
