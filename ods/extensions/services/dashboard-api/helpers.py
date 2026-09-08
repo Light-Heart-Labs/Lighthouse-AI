@@ -1146,3 +1146,22 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def strip_dict_key_prefixes(data: object, prefix: str = "") -> dict:
+    """Strip prefix string from dictionary keys safely.
+
+    Handles non-string keys, None values, or non-dict inputs without exception.
+    """
+    if not isinstance(data, dict):
+        return {}
+    res = {}
+    for k, v in data.items():
+        if k is None:
+            continue
+        key_str = str(k)
+        if prefix and key_str.startswith(prefix):
+            key_str = key_str[len(prefix):]
+        res[key_str] = v
+    return res
+
