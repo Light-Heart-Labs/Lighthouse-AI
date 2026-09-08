@@ -1098,6 +1098,7 @@ describe('Pixel', () => {
     let reads = 0
     globalThis.fetch.mockImplementation(async (url, options) => {
       if (url === '/api/pixel/status') return response({ available: true })
+      if (url === '/api/pixel/chat/activity') return response({ state: 'unknown' })
       if (url !== '/api/pixel/chat/stream') throw new Error(`unexpected request: ${url}`)
       const pendingRead = new Promise(resolve => { releasePendingRead = resolve })
       options.signal.addEventListener('abort', () => releasePendingRead({ done: true }), { once: true })
@@ -1131,7 +1132,7 @@ describe('Pixel', () => {
     await act(async () => {})
     for (let reload = 0; reload < 2; reload += 1) {
       const restored = render(<Pixel />)
-      await screen.findByText('Available')
+      await screen.findByText('Activity unknown')
       expect(screen.getByText('Create a report, then verify it.')).toBeInTheDocument()
       expect(screen.getByText('Created report.md; checking its contents.')).toBeInTheDocument()
       expect(screen.getByText(/Completion was not confirmed/)).toBeInTheDocument()
@@ -1140,6 +1141,131 @@ describe('Pixel', () => {
       expect(globalThis.fetch.mock.calls.filter(([url]) => url === '/api/pixel/chat/stream')).toHaveLength(1)
       restored.unmount()
     }
+  })
+
+  function saveInterruptedChat() {
+    globalThis.localStorage.setItem('ods.pixel.chat.v1', JSON.stringify({
+      schema: 1, chatId: 'restored_opaque_chat', inFlight: true,
+      messages: [{ role: 'user', content: 'Inspect my project' }, { role: 'assistant', content: 'Saved partial result' }],
+    }))
+  }
+
+  it('restored activity tracks this chat from active to terminal without replay or stopped claims', async () => {
+    saveInterruptedChat()
+    let state = 'active'
+    globalThis.fetch.mockImplementation(async (url, options) => {
+      if (url === '/api/pixel/status') return response({ available: true })
+      expect(url).toBe('/api/pixel/chat/activity')
+      expect(JSON.parse(options.body)).toEqual({ chat_id: 'restored_opaque_chat' })
+      return response({ state })
+    })
+    render(<Pixel />)
+    await screen.findByText('Working in this chat')
+    expect(screen.getByTitle('Stop')).toBeEnabled()
+    expect(screen.getByPlaceholderText('Message Pixel...')).toBeDisabled()
+    expect(screen.getByTitle('Start a new chat')).toBeDisabled()
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    state = 'terminal'
+    await screen.findByText(/previous request is no longer active/, {}, { timeout: 3000 })
+    expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
+    expect(screen.queryByText('Response stopped')).not.toBeInTheDocument()
+    expect(screen.getByText(/final response was not recovered/)).toBeInTheDocument()
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    expect(globalThis.fetch.mock.calls.some(([url]) => url === '/api/pixel/chat/stream')).toBe(false)
+  })
+
+  it('restored activity recovers from unknown and only exact cancellation marks this chat stopped', async () => {
+    saveInterruptedChat()
+    let state = 'unknown'
+    let aborted = false
+    globalThis.fetch.mockImplementation(async (url, options) => {
+      if (url === '/api/pixel/status') return response({ available: false, switching: true })
+      expect(JSON.parse(options.body)).toEqual({ chat_id: 'restored_opaque_chat' })
+      if (url === '/api/pixel/chat/activity') return response({ state })
+      expect(url).toBe('/api/pixel/chat/cancel')
+      return response({ aborted })
+    })
+    render(<Pixel />)
+    await screen.findByText('Activity unknown')
+    expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
+    state = 'active'
+    fireEvent.click(screen.getByText('Check activity again'))
+    await screen.findByText('Working in this chat')
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    fireEvent.click(screen.getByTitle('Stop'))
+    await screen.findByRole('alert')
+    expect(screen.queryByText('Response stopped')).not.toBeInTheDocument()
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    aborted = true
+    fireEvent.click(screen.getByTitle('Stop'))
+    await screen.findByText('Response stopped')
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    expect(globalThis.fetch.mock.calls.some(([url]) => url === '/api/pixel/chat/stream')).toBe(false)
+  })
+
+  it('restored activity terminal observation wins a pending cancellation race', async () => {
+    saveInterruptedChat()
+    let state = 'active'
+    let finishCancel
+    globalThis.fetch.mockImplementation(async (url) => {
+      if (url === '/api/pixel/status') return response({ available: true })
+      if (url === '/api/pixel/chat/activity') return response({ state })
+      if (url === '/api/pixel/chat/cancel') return new Promise(resolve => { finishCancel = resolve })
+      throw new Error('unexpected replay')
+    })
+    render(<Pixel />)
+    await screen.findByTitle('Stop')
+    fireEvent.click(screen.getByTitle('Stop'))
+    state = 'terminal'
+    await screen.findByText(/previous request is no longer active/, {}, { timeout: 3000 })
+    await act(async () => { finishCancel(response({ aborted: true })) })
+    expect(screen.queryByText('Response stopped')).not.toBeInTheDocument()
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
+  })
+
+  it('restored activity rejects unrelated global activity and allows a failed lookup retry', async () => {
+    saveInterruptedChat()
+    let calls = 0
+    globalThis.fetch.mockImplementation(async (url) => {
+      if (url === '/api/pixel/status') return response({ available: true })
+      expect(url).toBe('/api/pixel/chat/activity')
+      calls += 1
+      if (calls === 1) throw new Error('offline')
+      if (calls === 2) return response({ active: true, streams: 1 })
+      return response({ state: 'active' })
+    })
+    render(<Pixel />)
+    await screen.findByText('Activity unknown')
+    fireEvent.click(screen.getByText('Check activity again'))
+    await screen.findByText('Activity unknown')
+    expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('Check activity again'))
+    await screen.findByText('Working in this chat')
+  })
+
+  it('restored unknown activity permits an explicit exact-chat stop attempt without replay or false stopped claims', async () => {
+    saveInterruptedChat()
+    let aborted = false
+    globalThis.fetch.mockImplementation(async (url, options) => {
+      if (url === '/api/pixel/status') return response({ available: true })
+      expect(JSON.parse(options.body)).toEqual({ chat_id: 'restored_opaque_chat' })
+      if (url === '/api/pixel/chat/activity') return response({ state: 'unknown' })
+      expect(url).toBe('/api/pixel/chat/cancel')
+      return response({ aborted })
+    })
+    render(<Pixel />)
+    await screen.findByText('Activity unknown')
+    expect(globalThis.fetch.mock.calls.some(([url]) => url === '/api/pixel/chat/cancel')).toBe(false)
+    fireEvent.click(screen.getByText('Try Stop previous work'))
+    await screen.findByRole('alert')
+    expect(screen.queryByText('Response stopped')).not.toBeInTheDocument()
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    aborted = true
+    fireEvent.click(screen.getByText('Try Stop previous work'))
+    await screen.findByText('Response stopped')
+    expect(screen.getByText('Saved partial result')).toBeInTheDocument()
+    expect(globalThis.fetch.mock.calls.some(([url]) => url === '/api/pixel/chat/stream')).toBe(false)
   })
 
   it('disables send while streaming', async () => {

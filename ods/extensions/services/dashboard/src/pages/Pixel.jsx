@@ -446,6 +446,8 @@ export default function Pixel({ systemStatus = null }) {
   const [interrupted, setInterrupted] = useState(() => initialChat?.interrupted || false)
   const [stopping, setStopping] = useState(false)
   const [stopError, setStopError] = useState('')
+  const [restoredActivity, setRestoredActivity] = useState(() => initialChat?.interrupted ? 'checking' : 'idle')
+  const [activityRefresh, setActivityRefresh] = useState(0)
   const [workingElapsedSeconds, setWorkingElapsedSeconds] = useState(0)
   const [agentRuntime, setAgentRuntime] = useState(null)
   const [modelSupport, setModelSupport] = useState(null)
@@ -453,6 +455,7 @@ export default function Pixel({ systemStatus = null }) {
   const [previewRefresh, setPreviewRefresh] = useState(0)
 
   const abortRef = useRef(null)
+  const restoredActivityRef = useRef(restoredActivity)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
   const contextStartRef = useRef(0)
   const inputRef = useRef(null)
@@ -463,6 +466,43 @@ export default function Pixel({ systemStatus = null }) {
     agentRuntime?.contextLength || systemStatus?.inference?.contextSize || systemStatus?.model?.contextLength
   )
   const previewAccess = resolvePreviewAccess(preview)
+  const restoredActive = interrupted && !sending && restoredActivity === 'active'
+  const restoredChecking = interrupted && !sending && restoredActivity === 'checking'
+  const updateRestoredActivity = useCallback((value) => {
+    restoredActivityRef.current = value
+    setRestoredActivity(value)
+  }, [])
+
+  useEffect(() => {
+    if (!interrupted || sending) return undefined
+    const chatId = chatIdRef.current
+    const controller = new AbortController()
+    let disposed = false
+    let timer = null
+    async function checkActivity() {
+      let state = 'unknown'
+      try {
+        const response = await fetch('/api/pixel/chat/activity', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId }), signal: controller.signal,
+        })
+        const data = await response.json()
+        if (response.ok && data && Object.keys(data).length === 1
+          && ['active', 'terminal', 'unknown'].includes(data.state)) state = data.state
+      } catch {
+        // A failed lookup or edge restart is not evidence that work finished.
+      }
+      if (disposed || chatIdRef.current !== chatId) return
+      updateRestoredActivity(state)
+      if (state !== 'terminal') timer = globalThis.setTimeout(checkActivity, 2000)
+    }
+    checkActivity()
+    return () => {
+      disposed = true
+      controller.abort()
+      if (timer !== null) globalThis.clearTimeout(timer)
+    }
+  }, [interrupted, sending, activityRefresh, updateRestoredActivity])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -591,7 +631,7 @@ export default function Pixel({ systemStatus = null }) {
 
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim()
-    if (!trimmed || sending || status !== 'available' || trimmed.length > MAX_INPUT_LEN) return
+    if (!trimmed || sending || restoredActive || restoredChecking || status !== 'available' || trimmed.length > MAX_INPUT_LEN) return
 
     const userMessage = { role: 'user', content: trimmed }
     const originalContextStart = contextStartRef.current
@@ -607,6 +647,7 @@ export default function Pixel({ systemStatus = null }) {
     setInput('')
     setSending(true)
     setInterrupted(false)
+    updateRestoredActivity('idle')
     setStopping(false)
     setStopError('')
 
@@ -820,11 +861,14 @@ export default function Pixel({ systemStatus = null }) {
       setStopError('')
       if (abortRef.current === controller) abortRef.current = null
     }
-  }, [input, messages, sending, status])
+  }, [input, messages, sending, status, restoredActive, restoredChecking, updateRestoredActivity])
 
   const stopStreaming = useCallback(async () => {
     const controller = abortRef.current
-    if (!controller || stopping) return
+    const chatId = chatIdRef.current
+    const restored = !controller && interrupted
+      && ['active', 'unknown'].includes(restoredActivityRef.current)
+    if ((!controller && !restored) || stopping) return
 
     setStopping(true)
     setStopError('')
@@ -832,7 +876,7 @@ export default function Pixel({ systemStatus = null }) {
       const response = await fetch('/api/pixel/chat/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatIdRef.current }),
+        body: JSON.stringify({ chat_id: chatId }),
       })
       let payload = null
       if (typeof response?.json === 'function') {
@@ -848,27 +892,33 @@ export default function Pixel({ systemStatus = null }) {
 
       // A normal terminal response may win the cancellation race. Do not
       // rewrite that completed answer as owner-stopped.
-      if (abortRef.current !== controller) return
-      controller.abort()
+      if (chatIdRef.current !== chatId || abortRef.current !== controller
+        || (restored && !['active', 'unknown'].includes(restoredActivityRef.current))) return
+      controller?.abort()
       abortRef.current = null
       setMessages(previous => replaceLastAssistant(previous, {
         content: stoppedContent(previous.at(-1)?.content),
         status: 'stopped',
       }))
       setSending(false)
+      setInterrupted(false)
+      updateRestoredActivity('terminal')
     } catch {
       // Keep the live stream attached and Stop retryable. Claiming success
       // without an exact acknowledgement could leave tools or inference active.
-      if (abortRef.current === controller) {
-        setStopError('Stop was not confirmed. Pixel is still connected; retry Stop.')
+      if (chatIdRef.current === chatId && abortRef.current === controller) {
+        setStopError(restored
+          ? 'Stop was not confirmed. This chat may still have work in progress; check its activity or retry the stop request.'
+          : 'Stop was not confirmed. Pixel is still connected; retry Stop.')
+        if (restored) setActivityRefresh(value => value + 1)
       }
     } finally {
       setStopping(false)
     }
-  }, [stopping])
+  }, [stopping, interrupted, updateRestoredActivity])
 
   const startNewChat = useCallback(() => {
-    if (sending) return
+    if (sending || restoredActive || restoredChecking || stopping) return
     chatIdRef.current = makeChatId()
     contextStartRef.current = 0
     setMessages([])
@@ -876,8 +926,9 @@ export default function Pixel({ systemStatus = null }) {
     setPreviewRefresh(0)
     setInput('')
     setInterrupted(false)
+    updateRestoredActivity('idle')
     inputRef.current?.focus?.()
-  }, [sending])
+  }, [sending, restoredActive, restoredChecking, stopping, updateRestoredActivity])
 
   const selectSuggestion = useCallback((prompt) => {
     setInput(prompt)
@@ -886,12 +937,18 @@ export default function Pixel({ systemStatus = null }) {
 
   const inputOver = input.length > MAX_INPUT_LEN
   const inputEmpty = !input.trim()
-  const isDisabled = sending || status !== 'available'
+  const isDisabled = sending || restoredActive || restoredChecking || stopping || status !== 'available'
   const workingElapsed = formatElapsed(workingElapsedSeconds)
   const statusLabel = stopping
     ? 'Stopping'
     : sending
       ? 'Working'
+    : restoredActive
+      ? 'Working in this chat'
+    : restoredChecking
+      ? 'Checking previous work'
+    : interrupted && restoredActivity === 'unknown'
+      ? 'Activity unknown'
     : status === 'available'
       ? 'Available'
       : status === 'switching'
@@ -931,7 +988,7 @@ export default function Pixel({ systemStatus = null }) {
             <button
               type="button"
               onClick={startNewChat}
-              disabled={sending}
+              disabled={sending || restoredActive || restoredChecking || stopping}
               className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-card px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary transition hover:border-theme-accent/40 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
               title="Start a new chat"
             >
@@ -968,7 +1025,23 @@ export default function Pixel({ systemStatus = null }) {
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
         {interrupted && !sending && (
           <div role="status" className="mx-auto w-full max-w-5xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-            Completion was not confirmed. Your request and partial response are saved. Work may have completed; check its results before continuing.
+            {restoredActivity === 'active'
+              ? 'The previous request is still active in this chat. Your saved conversation and preview are preserved. You can stop that work below; its live response cannot be reattached.'
+              : restoredActivity === 'terminal'
+                ? 'The previous request is no longer active. Its final response was not recovered; check the saved files and results before continuing.'
+                : restoredActivity === 'checking'
+                  ? 'Checking whether this chat’s previous request is still active. Your saved conversation and preview are preserved.'
+                  : 'Completion was not confirmed. This chat’s activity is unknown. Your request and partial response are saved; check its results before continuing. You can attempt to stop previous work in this chat without resending it.'}
+            {restoredActivity === 'unknown' && (
+              <>
+                <button type="button" className="ml-2 underline" disabled={stopping} onClick={() => {
+                  updateRestoredActivity('checking')
+                  setActivityRefresh(value => value + 1)
+                }}>Check activity again</button>
+                <button type="button" className="ml-2 underline" disabled={stopping}
+                  onClick={stopStreaming}>Try Stop previous work</button>
+              </>
+            )}
           </div>
         )}
         {status === 'loading' && messages.length === 0 && (
@@ -1106,7 +1179,7 @@ export default function Pixel({ systemStatus = null }) {
               inputOver ? 'border-red-400' : 'border-theme-border focus:border-theme-accent/60'
             }`}
           />
-          {sending ? (
+          {sending || restoredActive ? (
             <button
               onClick={stopStreaming}
               disabled={stopping}
@@ -1128,7 +1201,7 @@ export default function Pixel({ systemStatus = null }) {
           </div>
           {stopError && <p role="alert" className="mt-1.5 px-1 text-xs text-amber-300">{stopError}</p>}
           <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-theme-text-muted/70">
-            <span>{stopping ? 'Waiting for exact cancellation acknowledgement' : sending ? `Pixel is using the active ODS model and tools · ${workingElapsed} elapsed` : 'Enter to send • Shift+Enter for a new line'}</span>
+            <span>{stopping ? 'Waiting for exact cancellation acknowledgement' : restoredActive ? 'Earlier work is active in this chat; Stop targets only this chat.' : sending ? `Pixel is using the active ODS model and tools · ${workingElapsed} elapsed` : 'Enter to send • Shift+Enter for a new line'}</span>
             <span className={inputOver ? 'text-red-400' : ''}>{input.length.toLocaleString()} / {MAX_INPUT_LEN.toLocaleString()}</span>
           </div>
         </div>

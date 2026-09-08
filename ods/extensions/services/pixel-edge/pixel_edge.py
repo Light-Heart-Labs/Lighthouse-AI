@@ -184,6 +184,7 @@ _ADDRESS_BEARING_HOST_ACTIONS = {
     "host.listening-ports",
 }
 _CANCEL_EVENTS_KEY = web.AppKey("pixel_cancel_events", dict)
+_CHAT_ACTIVITY_KEY = web.AppKey("pixel_chat_activity", dict)
 _ACTIVE_REQUESTS_KEY = web.AppKey("pixel_active_requests", set)
 _TRANSITION_GATE_KEY = web.AppKey("pixel_transition_gate", TransitionGate)
 
@@ -632,6 +633,54 @@ async def handle_activity(request: web.Request):
     return web.json_response({"active": streams > 0, "streams": streams})
 
 
+async def handle_chat_activity(request: web.Request):
+    """Project only the requested opaque chat's witnessed lifecycle."""
+    fail = _check_auth(request)
+    if fail is not None:
+        return fail
+    if request.content_type != "application/json":
+        return web.json_response({"error": "Content-Type must be application/json"}, status=415)
+    if request.query_string or (request.content_length and request.content_length > _MAX_CANCEL_BODY):
+        return web.json_response({"error": "invalid activity request"}, status=400)
+    try:
+        raw = await request.read()
+        if len(raw) > _MAX_CANCEL_BODY:
+            raise ValueError("request too large")
+        data = strict_json(raw)
+        if (not isinstance(data, dict) or set(data) != {"user"}
+                or not isinstance(data["user"], str) or not _SAFE_CHAT_ID.fullmatch(data["user"])):
+            raise ValueError("invalid activity request")
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return web.json_response({"error": "invalid activity request"}, status=400)
+    chat_id = data["user"]
+    state = "active" if request.app[_CANCEL_EVENTS_KEY].get(chat_id) else request.app[_CHAT_ACTIVITY_KEY].get(chat_id, "unknown")
+    return web.json_response({"state": state}, headers={"Cache-Control": "no-store"})
+
+
+def _finish_chat_activity(app, chat_id, cancel_event, terminal):
+    active = app[_CANCEL_EVENTS_KEY].get(chat_id)
+    if active is None:
+        return
+    active.discard(cancel_event)
+    history = app[_CHAT_ACTIVITY_KEY]
+    # One uncertain sibling means this batch cannot be called terminal.
+    state = "unknown" if not terminal or history.get(chat_id) == "unknown" else "terminal"
+    if not active:
+        app[_CANCEL_EVENTS_KEY].pop(chat_id, None)
+    _remember_chat_activity(app, chat_id, state)
+
+
+def _remember_chat_activity(app, chat_id, state):
+    history = app[_CHAT_ACTIVITY_KEY]
+    history[chat_id] = state
+    # No chat content or request IDs persist; eviction/restart means unknown.
+    for previous in tuple(history):
+        if len(history) <= 1024:
+            break
+        if previous not in app[_CANCEL_EVENTS_KEY]:
+            history.pop(previous, None)
+
+
 async def handle_transition(request: web.Request):
     # Reuse the server-injected Dashboard credential, never the model/chat key.
     # This credential already authenticates the private preview relay and must
@@ -710,6 +759,7 @@ async def handle_chat_completions(request: web.Request):
     request_token = object()
     chat_id = data.get("user")
     cancel_event = None
+    activity = {"terminal": False}
     upstream_data["model"] = _UPSTREAM_REWRITE
 
     fwd_headers = _sanitize_headers(dict(request.headers))
@@ -722,6 +772,8 @@ async def handle_chat_completions(request: web.Request):
     try:
         if isinstance(chat_id, str) and _SAFE_CHAT_ID.fullmatch(chat_id):
             cancel_event = asyncio.Event()
+            if not request.app[_CANCEL_EVENTS_KEY].get(chat_id):
+                request.app[_CHAT_ACTIVITY_KEY].pop(chat_id, None)
             request.app[_CANCEL_EVENTS_KEY].setdefault(chat_id, set()).add(cancel_event)
         # The gateway knows the owner's enabled tools and their network policy.
         # A URL in chat is not an outbound fetch by this transport. Let an
@@ -742,7 +794,7 @@ async def handle_chat_completions(request: web.Request):
 
                 if "text/event-stream" in ctype:
                     return await _stream_upstream(
-                        request, resp, empty_reply_fallback, cancel_event
+                        request, resp, empty_reply_fallback, cancel_event, activity
                     )
 
                 if "application/json" not in ctype:
@@ -757,6 +809,7 @@ async def handle_chat_completions(request: web.Request):
                                                  status=502)
 
                 rewritten = _rewrite_json_response(bytes(resp_body), empty_reply_fallback)
+                activity["terminal"] = True
                 return web.Response(status=resp.status, body=rewritten,
                                     content_type="application/json")
     except (ConnectionError, OSError, asyncio.TimeoutError):
@@ -766,11 +819,8 @@ async def handle_chat_completions(request: web.Request):
     finally:
         await request.app[_TRANSITION_GATE_KEY].finish(request_token)
         if cancel_event is not None:
-            active = request.app[_CANCEL_EVENTS_KEY].get(chat_id)
-            if active is not None:
-                active.discard(cancel_event)
-                if not active:
-                    request.app[_CANCEL_EVENTS_KEY].pop(chat_id, None)
+            _finish_chat_activity(request.app, chat_id, cancel_event,
+                                  activity["terminal"] or cancel_event.is_set())
 
 
 async def handle_chat_cancel(request: web.Request):
@@ -827,6 +877,10 @@ async def handle_chat_cancel(request: web.Request):
                     active = request.app[_CANCEL_EVENTS_KEY].get(data["user"], ())
                     for event in tuple(active):
                         event.set()
+                    if not active:
+                        # A native run can outlive the disconnected edge stream.
+                        # Only its exact cancellation acknowledgement resolves it.
+                        _remember_chat_activity(request.app, data["user"], "terminal")
                 return web.json_response({"aborted": result["aborted"]})
     except (ConnectionError, OSError, asyncio.TimeoutError, json.JSONDecodeError, ValueError):
         return web.json_response({"error": "pixel cancellation failed"}, status=502)
@@ -839,6 +893,7 @@ async def _stream_upstream(
     resp,
     empty_reply_fallback: str,
     cancel_event: asyncio.Event | None = None,
+    activity: dict | None = None,
 ):
     """Stream bounded SSE while replacing only a reserved/empty final reply."""
     response = web.StreamResponse(
@@ -887,6 +942,10 @@ async def _stream_upstream(
                     return response
                 if len(line) > _MAX_SSE_LINE:
                     raise ValueError("SSE line exceeded limit")
+                # Only the real upstream terminator is lifecycle evidence;
+                # locally synthesized error/fallback frames do not prove it.
+                if line.rstrip(b"\r") == b"data: [DONE]" and activity is not None:
+                    activity["terminal"] = True
                 if line.startswith(b"data: ") and line != b"data: [DONE]":
                     line = b"data: " + _rewrite_json_model(line[6:])
                 if passthrough:
@@ -945,6 +1004,8 @@ async def _stream_upstream(
             if len(buffered) > _MAX_SSE_LINE:
                 raise ValueError("SSE line exceeded limit")
             line = bytes(buffered)
+            if line.rstrip(b"\r") == b"data: [DONE]" and activity is not None:
+                activity["terminal"] = True
             if line.startswith(b"data: ") and line != b"data: [DONE]":
                 line = b"data: " + _rewrite_json_model(line[6:])
             if passthrough:
@@ -1076,6 +1137,7 @@ async def handle_not_found(_request: web.Request):
 def create_app() -> web.Application:
     app = web.Application()
     app[_CANCEL_EVENTS_KEY] = {}
+    app[_CHAT_ACTIVITY_KEY] = {}
     app[_ACTIVE_REQUESTS_KEY] = set()
     gate = TransitionGate(
         os.environ.get("PIXEL_TRANSITION_STATE_DIR", ""), app[_ACTIVE_REQUESTS_KEY],
@@ -1099,6 +1161,7 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/transition/{operation:acquire|release|recover}", handle_transition)
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_post("/v1/chat/cancel", handle_chat_cancel)
+    app.router.add_post("/v1/chat/activity", handle_chat_activity)
     # Catch-all registered last: unmatched paths AND unmatched methods → 404.
     app.router.add_route("*", "/{tail:.*}", handle_not_found)
     return app

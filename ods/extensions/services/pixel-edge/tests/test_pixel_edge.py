@@ -35,6 +35,22 @@ async def _upstream_chat(request):
     if data.get("trigger_error"):
         return web.json_response({"error": "upstream-secret-path-/private/token"}, status=500)
 
+    if data.get("trigger_detached_native"):
+        stop = asyncio.Event()
+        task = asyncio.create_task(stop.wait())
+        request.app["native_runs"][data["user"]] = (stop, task)
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        try:
+            while not task.done():
+                await resp.write(b'data: {"choices":[{"delta":{"content":"Native work continues. "}}]}\n\n')
+                await asyncio.sleep(0.02)
+            await resp.write(b'data: [DONE]\n\n')
+        except ConnectionError:
+            # Native execution is independent of the response transport.
+            pass
+        return resp
+
     if stream:
         async def generate():
             if data.get("trigger_cancel_wait"):
@@ -94,6 +110,13 @@ async def _upstream_health(_request):
 async def _upstream_cancel(request):
     data = await request.json()
     request.app["cancel_users"].append(data.get("user"))
+    if request.app["native_runs"]:
+        native = request.app["native_runs"].get(data.get("user"))
+        if native is None or native[1].done():
+            return web.json_response({"aborted": False})
+        native[0].set()
+        await native[1]
+        return web.json_response({"aborted": True})
     if request.app["release_on_cancel"]:
         asyncio.get_running_loop().call_later(0.05, request.app["release_stream"].set)
     return web.json_response({"aborted": True})
@@ -124,6 +147,7 @@ async def _start_upstream():
     app = web.Application()
     app["chat_requests"] = []
     app["cancel_users"] = []
+    app["native_runs"] = {}
     app["stream_started"] = asyncio.Event()
     app["release_stream"] = asyncio.Event()
     app["release_on_cancel"] = False
@@ -141,6 +165,9 @@ async def _start_upstream():
 
 
 async def _stop_upstream(runner, path=None):
+    for stop, task in runner.app["native_runs"].values():
+        stop.set()
+        await task
     await runner.cleanup()
     if path:
         try:
@@ -1446,6 +1473,102 @@ class TestHostRequestIntent(BaseEdgeTest):
             content = await self.forwarded_content(prompt)
             self.assertIn('args {"actions":["host.kernel","host.memory"]}', content)
             self.assertNotIn("host.os-release", content)
+
+
+class TestChatActivity(BaseEdgeTest):
+    async def activity(self, user):
+        async with self.client.post("http://localhost/v1/chat/activity", headers=self.auth(), json={"user": user}) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+            return await resp.json()
+
+    async def test_exact_chat_activity_tracks_active_then_terminal_without_global_inference(self):
+        self.assertEqual(await self.activity("known-chat"), {"state": "unknown"})
+        async with self.client.post("http://localhost/v1/chat/completions", headers=self.auth(), json={
+            "model": "pixel/default", "messages": [{"role": "user", "content": "private content"}],
+            "stream": True, "user": "known-chat", "trigger_cancel_wait": True,
+        }) as stream:
+            await asyncio.wait_for(self.up_runner.app["stream_started"].wait(), 1)
+            self.assertEqual(await self.activity("known-chat"), {"state": "active"})
+            self.assertEqual(await self.activity("different-chat"), {"state": "unknown"})
+            self.up_runner.app["release_stream"].set()
+            await stream.text()
+        self.assertEqual(await self.activity("known-chat"), {"state": "terminal"})
+        self.assertEqual(await self.activity("different-chat"), {"state": "unknown"})
+
+    async def test_truncated_transport_is_unknown_and_exact_cancellation_is_terminal(self):
+        for cancelled in (False, True):
+            self.up_runner.app["stream_started"].clear()
+            self.up_runner.app["release_stream"].clear()
+            user = "cancelled-chat" if cancelled else "truncated-chat"
+            self.assertEqual(await self.activity(user), {"state": "unknown"})
+            async with self.client.post("http://localhost/v1/chat/completions", headers=self.auth(), json={
+                "model": "pixel/default", "messages": [], "stream": True, "user": user,
+                "trigger_cancel_wait": True, "trigger_cancel_eof": True,
+            }) as stream:
+                await asyncio.wait_for(self.up_runner.app["stream_started"].wait(), 1)
+                self.assertEqual(await self.activity(user), {"state": "active"})
+                if cancelled:
+                    async with self.client.post("http://localhost/v1/chat/cancel", headers=self.auth(), json={"user": user}) as resp:
+                        self.assertEqual(await resp.json(), {"aborted": True})
+                self.up_runner.app["release_stream"].set()
+                await stream.text()
+            self.assertEqual(await self.activity(user), {"state": "terminal" if cancelled else "unknown"})
+
+    async def test_activity_requires_exact_authenticated_bounded_request(self):
+        async with self.client.post("http://localhost/v1/chat/activity", json={"user": "safe"}) as resp:
+            self.assertEqual(resp.status, 401)
+        for raw in ('{}', '{"user":"safe","other":"secret"}', '{"user":"../escape"}',
+                    '{"user":true}', '{"user":"safe","user":"other"}', '{"user":"' + 'x' * 2048 + '"}'):
+            async with self.client.post("http://localhost/v1/chat/activity", headers={**self.auth(), "Content-Type": "application/json"}, data=raw) as resp:
+                self.assertEqual(resp.status, 400)
+        async with self.client.post("http://localhost/v1/chat/activity?user=other", headers=self.auth(), json={"user": "safe"}) as resp:
+            self.assertEqual(resp.status, 400)
+        self.assertEqual(self.up_runner.app["chat_requests"], [])
+
+    async def test_uncertain_sibling_and_bounded_history_never_invent_completion(self):
+        app = self.edge_app
+        first, second = asyncio.Event(), asyncio.Event()
+        app[self.pe._CANCEL_EVENTS_KEY]["same-chat"] = {first, second}
+        self.pe._finish_chat_activity(app, "same-chat", first, False)
+        self.assertEqual(await self.activity("same-chat"), {"state": "active"})
+        self.pe._finish_chat_activity(app, "same-chat", second, True)
+        self.assertEqual(await self.activity("same-chat"), {"state": "unknown"})
+        for index in range(1030):
+            event = asyncio.Event()
+            user = f"bounded-{index}"
+            app[self.pe._CANCEL_EVENTS_KEY][user] = {event}
+            self.pe._finish_chat_activity(app, user, event, True)
+        self.assertLessEqual(len(app[self.pe._CHAT_ACTIVITY_KEY]), 1024)
+        self.assertEqual(await self.activity("bounded-0"), {"state": "unknown"})
+
+    async def test_disconnected_edge_keeps_native_run_unknown_and_exact_cancel_recovers_control(self):
+        user = "detached-chat"
+        self.assertEqual(await self.activity(user), {"state": "unknown"})
+        stream = await self.client.post("http://localhost/v1/chat/completions", headers=self.auth(), json={
+            "model": "pixel/default", "messages": [], "stream": True,
+            "user": user, "trigger_detached_native": True,
+        })
+        await asyncio.wait_for(stream.content.readany(), 2)
+        self.assertEqual(await self.activity(user), {"state": "active"})
+        stream.close()
+        async with asyncio.timeout(2):
+            while self.edge_app[self.pe._CANCEL_EVENTS_KEY].get(user):
+                await asyncio.sleep(0.02)
+        native = self.up_runner.app["native_runs"][user][1]
+        self.assertFalse(native.done())
+        self.assertEqual(await self.activity(user), {"state": "unknown"})
+        async with self.client.post("http://localhost/v1/chat/cancel", headers=self.auth(), json={"user": "other-chat"}) as resp:
+            self.assertEqual(await resp.json(), {"aborted": False})
+        self.assertFalse(native.done())
+        async with self.client.post("http://localhost/v1/chat/cancel", headers=self.auth(), json={"user": user}) as resp:
+            self.assertEqual(await resp.json(), {"aborted": True})
+        self.assertTrue(native.done())
+        self.assertEqual(await self.activity(user), {"state": "terminal"})
+        self.assertEqual(len(self.up_runner.app["chat_requests"]), 1)
+        async with self.client.post("http://localhost/v1/chat/cancel", headers=self.auth(), json={"user": user}) as resp:
+            self.assertEqual(await resp.json(), {"aborted": False})
+        self.assertEqual(await self.activity(user), {"state": "terminal"})
 
 
 if __name__ == "__main__":

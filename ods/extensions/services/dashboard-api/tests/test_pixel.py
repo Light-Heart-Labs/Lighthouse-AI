@@ -197,6 +197,7 @@ def test_routes_require_dashboard_auth():
     assert client.get("/api/pixel/status").status_code in {401, 403}
     assert client.post("/api/pixel/chat/stream", json={}).status_code in {401, 403}
     assert client.post("/api/pixel/chat/cancel", json={"chat_id": "safe"}).status_code in {401, 403}
+    assert client.post("/api/pixel/chat/activity", json={"chat_id": "safe"}).status_code in {401, 403}
     assert client.get(
         "/api/pixel/ops/ops-1788127319657-f3262c99a419",
         params={"plan_hash": "e" * 64},
@@ -752,3 +753,35 @@ async def test_stream_handles_split_utf8_without_decoding_or_corruption():
         streamed = await stream_body(response)
     assert value in streamed
     assert streamed.count(b"data: [DONE]") == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["active", "terminal", "unknown"])
+async def test_chat_activity_forwards_exact_chat_and_projects_no_credentials(state):
+    capture = {}
+    response = FakeResponse(chunks=[json.dumps({"state": state}).encode()])
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(response, capture)) as client:
+        result = await pixel.pixel_chat_activity(pixel.ChatCancelRequest(chat_id="opaque_chat_1"))
+    assert result == {"state": state}
+    assert capture["method"] == "POST"
+    assert capture["url"] == "http://pixel-edge:9595/v1/chat/activity"
+    assert capture["json"] == {"user": "opaque_chat_1"}
+    assert capture["headers"]["Authorization"] == f"Bearer {EDGE_KEY}"
+    assert client.call_args.kwargs["trust_env"] is False
+    assert client.call_args.kwargs["follow_redirects"] is False
+    assert EDGE_KEY not in json.dumps(result)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [
+    FakeResponse(status=500), FakeResponse(content_type="text/plain"),
+    FakeResponse(chunks=[b'{"active":true,"streams":9}']),
+    FakeResponse(chunks=[b'{"state":"active","secret":"hidden"}']),
+    FakeResponse(chunks=[b'{"state":true}']), FakeResponse(chunks=[b'x' * 1025]),
+])
+async def test_chat_activity_ambiguity_is_unknown_not_global_activity(response):
+    with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(response)):
+        assert await pixel.pixel_chat_activity(pixel.ChatCancelRequest(chat_id="opaque_chat_1")) == {"state": "unknown"}
+
+@pytest.mark.asyncio
+async def test_chat_activity_transport_failure_is_sanitized():
+    with patch.object(pixel.httpx, "AsyncClient", side_effect=pixel.httpx.ConnectError("private credential")):
+        assert await pixel.pixel_chat_activity(pixel.ChatCancelRequest(chat_id="opaque_chat_1")) == {"state": "unknown"}

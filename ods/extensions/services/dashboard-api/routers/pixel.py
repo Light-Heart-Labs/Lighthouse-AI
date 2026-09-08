@@ -449,6 +449,31 @@ async def pixel_chat_cancel(body: ChatCancelRequest) -> dict[str, bool]:
     return {"aborted": await _cancel_edge_run(edge_url, key, body.chat_id)}
 
 
+@router.post("/chat/activity", dependencies=[Depends(verify_api_key)])
+async def pixel_chat_activity(body: ChatCancelRequest) -> dict[str, str]:
+    """One authenticated chat lookup; global activity never supplies its state."""
+    config = _pixel_config()
+    if config is None:
+        return {"state": "unknown"}
+    edge_url, key = config
+    try:
+        timeout = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+            async with client.stream("POST", f"{edge_url}/v1/chat/activity",
+                                     json={"user": body.chat_id},
+                                     headers=_edge_headers(key, accept="application/json")) as response:
+                if response.status_code != 200 or not response.headers.get("content-type", "").lower().startswith("application/json"):
+                    return {"state": "unknown"}
+                raw = await _bounded_response_bytes(response, 1024)
+        parsed = json.loads(raw)
+        if (isinstance(parsed, dict) and set(parsed) == {"state"}
+                and isinstance(parsed["state"], str) and parsed["state"] in {"active", "terminal", "unknown"}):
+            return {"state": parsed["state"]}
+    except (httpx.HTTPError, asyncio.TimeoutError, ValueError, TypeError):
+        pass
+    return {"state": "unknown"}
+
+
 class _ClientDisconnected(Exception):
     """The dashboard consumer left while Pixel was still producing a turn."""
 
