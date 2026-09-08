@@ -1699,6 +1699,7 @@ function operationsTerminalOutcome(event, submittedJobs) {
     approvalRequired: details.approvalRequired,
     actions: submission.actions,
     steps: details.steps,
+    ...(submission.requiredNetworkPeer ? { requiredNetworkPeer: submission.requiredNetworkPeer } : {}),
   };
 }
 
@@ -1712,11 +1713,10 @@ function requiredHostObservationActions(state) {
 
 function synchronousHostObservationOutcome(event, state) {
   if (toolCallFailed(event)) return undefined;
-  const expectedActions = requiredHostObservationActions(state);
+  const admitted = permittedHostObservationParams(event?.params, state?.hostObservationPolicy);
+  const expectedActions = admitted?.actions;
   const observedActions = event?.params?.actions;
-  const expectedPeer = expectedActions?.includes("host.network-peer")
-    ? state?.operationsNetworkPeer
-    : undefined;
+  const expectedPeer = expectedActions?.includes("host.network-peer") ? admitted : undefined;
   const details = event?.result?.details;
   if (
     !expectedActions ||
@@ -1739,6 +1739,7 @@ function synchronousHostObservationOutcome(event, state) {
   }
   const submission = {
     jobId: details.jobId,
+    ...(expectedPeer ? { requiredNetworkPeer: state.operationsNetworkPeer } : {}),
     actions: expectedActions.map((action) => ({
       target: "ods-host",
       action,
@@ -1751,7 +1752,7 @@ function synchronousHostObservationOutcome(event, state) {
     { params: { jobId: details.jobId }, result: event.result },
     new Map([[details.jobId, submission]])
   );
-  return outcome ? { submission, outcome } : undefined;
+  return { submission, outcome };
 }
 
 function synchronousExtensionObservation(event) {
@@ -2339,6 +2340,27 @@ function operationsHostEvidenceText(
       }
     }
   }
+  // A model can split a peer observation across calls. Completion still
+  // requires every requested port, with a valid receipt for the same peer.
+  const peerRequirement = [...terminalJobs.values()].find((outcome) =>
+    outcome.requiredNetworkPeer)?.requiredNetworkPeer;
+  const peerSteps = [];
+  if (requiredActions.has("host.network-peer") && peerRequirement) {
+    const coveredPorts = new Set();
+    for (const outcome of terminalJobs.values()) {
+      if (outcome.status !== "succeeded") continue;
+      for (const step of outcome.steps) {
+        if (step.target !== "ods-host" || step.action !== "host.network-peer") continue;
+        const parameters = outcome.actions.find((entry) =>
+          entry.target === step.target && entry.action === step.action)?.parameters;
+        const evidence = { ...step, parameters, jobId: outcome.jobId };
+        if (parameters?.peer !== peerRequirement.peer || !networkPeerEvidence(evidence)) continue;
+        peerSteps.push(evidence);
+        for (const port of parameters.ports.split(",").map(Number)) coveredPorts.add(port);
+      }
+    }
+    if (!peerRequirement.ports.every((port) => coveredPorts.has(port))) steps.delete("host.network-peer");
+  }
   // `host.cpu` is a structured lscpu observation whose validated payload
   // already contains Architecture. Treat that exact field as equivalent typed
   // evidence during a broad inventory instead of forcing a redundant
@@ -2433,9 +2455,12 @@ function operationsHostEvidenceText(
   for (const [action, label, renderer] of renderers) {
     const step = steps.get(action);
     if (!step) continue;
-    const value = renderer(step);
-    if (!value) return undefined;
-    lines.push(`- ${label}: ${value} (job \`${step.jobId}\`)`);
+    const observations = action === "host.network-peer" && peerSteps.length ? peerSteps : [step];
+    for (const observation of observations) {
+      const value = renderer(observation);
+      if (!value) return undefined;
+      lines.push(`- ${label}: ${value} (job \`${observation.jobId}\`)`);
+    }
   }
   if (odsAppsProjection) {
     const apps = odsAppsProjection.apps
@@ -3944,6 +3969,26 @@ function explicitlyRejectsOdsTool(text, toolPattern) {
     );
 }
 
+const HOST_OBSERVATION_FACETS = new Map([
+  ["host.identity", "hostname|host identity"],
+  ["host.kernel", "kernel"],
+  ["host.architecture", "machine architecture|architecture|cpu architecture"],
+  ["host.platform", "host platform"],
+  ["host.os-release", "operating[- ]system(?: signature)?|(?:host\\s+)?os(?:\\s+(?:signature|release))?|linux distribution|distro"],
+  ["host.uptime", "uptime|load averages?|system load"],
+  ["host.processes", "process|processes|process inventory"],
+  ["host.services", "systemd|system services?|service inventory"],
+  ["host.cpu", "cpu|processor|hardware"],
+  ["host.gpu", "gpu|graphics(?:\\s+(?:card|processor))?|video\\s+card"],
+  ["host.memory", "memory|ram|swap"],
+  ["host.storage", "disk|filesystem|storage|mounts?"],
+  ["host.network-addresses", "network interfaces?|interfaces?|addresses?|ip addresses?"],
+  ["host.network-routes", "routes?|routing"],
+  ["host.listening-ports", "ports?|listeners?"],
+  ["host.tailscale", "tailscale"],
+  ["host.network-peer", "LAN|local network|Tailscale|network|reachable|reachability|resolve|ping|probe|connectivity"],
+]);
+
 function explicitlyExcludesHostObservation(text, facetPattern) {
   const exclusion = new RegExp(
     `\\b(?:` +
@@ -3955,6 +4000,49 @@ function explicitlyExcludesHostObservation(text, facetPattern) {
     "i"
   );
   return exclusion.test(text);
+}
+
+// This is a capability boundary, separate from the completion checklist.
+// Local typed reads need no positive prompt classifier. Explicit exclusions
+// still apply, and contacting a peer remains bound to the owner's named target.
+function hostObservationPolicy(messages, prompt) {
+  const text = withoutFilesystemPaths(currentOwnerIntentText(messages, prompt));
+  const excluded = (pattern) => explicitlyExcludesHostObservation(text, pattern) ||
+    new RegExp(`\\bno\\s+(?:${pattern})(?:\\s+(?:inspection|observations?|checks?|access|probing))?\\b`, "i").test(text);
+  const hostDenied = excluded("(?:ODS\\s+)?host(?:\\s+health)?|host_observe|this\\s+(?:computer|machine)|system\\s+inspection");
+  const networkDenied = excluded("network(?:\\s+(?:location|details?))?|LAN|interfaces?|addresses?|ip addresses?");
+  return {
+    allowedActions: new Set([...HOST_OBSERVATION_FACETS].filter(([action, facet]) =>
+      Boolean(text) && !hostDenied &&
+      (action === "host.network-peer" || !excluded(facet)) &&
+      !(networkDenied && ["host.network-addresses", "host.network-routes", "host.listening-ports", "host.tailscale", "host.network-peer"].includes(action))
+    ).map(([action]) => action)),
+    peer: userMessageNetworkPeerRequest(messages, prompt),
+    allowOdsStatus: !explicitlyRejectsOdsTool(text, "ODS\\s+status|pixel_ods_status") &&
+      !explicitlyExcludesHostObservation(text, "ODS\\s+status"),
+  };
+}
+
+function permittedHostObservationParams(params, policy) {
+  if (!policy || !params || typeof params !== "object" || Array.isArray(params) ||
+      Object.keys(params).some((key) => !["actions", "peer", "ports", "includeOdsStatus"].includes(key)) ||
+      !Array.isArray(params.actions) || params.actions.length < 1 ||
+      new Set(params.actions).size !== params.actions.length ||
+      params.actions.some((action) => !policy.allowedActions.has(action)) ||
+      (params.includeOdsStatus !== undefined && typeof params.includeOdsStatus !== "boolean") ||
+      (params.includeOdsStatus === true && !policy.allowOdsStatus)) return undefined;
+  if (!params.actions.includes("host.network-peer")) {
+    // Do not silently discard a target attached to a local-only observation.
+    if (params.peer !== undefined || params.ports !== undefined) return undefined;
+    return { ...params, actions: [...params.actions] };
+  }
+  const peer = policy.peer;
+  const normalize = (value) => typeof value === "string" ? value.trim().replace(/\.$/, "").toLowerCase() : undefined;
+  const ports = params.ports ?? peer?.ports;
+  if (!peer || normalize(params.peer) !== normalize(peer.peer) ||
+      !Array.isArray(ports) || !ports.length || ports.length > 8 ||
+      new Set(ports).size !== ports.length || ports.some((port) => !peer.ports.includes(port))) return undefined;
+  return { ...params, actions: [...params.actions], peer: peer.peer, ports: [...ports] };
 }
 
 export function userMessageAuthorizesRecursiveDelete(messages, prompt = undefined) {
@@ -4428,9 +4516,11 @@ export function userMessageNetworkPeerRequest(messages, prompt = undefined) {
     if (port >= 1 && port <= 65535 && !ports.includes(port)) ports.push(port);
     if (ports.length === 8) break;
   }
-  if (/\bSSH\b/i.test(text) && !ports.includes(22)) ports.push(22);
-  if (/\b(?:RDP|Remote Desktop)\b/i.test(text) && !ports.includes(3389)) ports.push(3389);
-  if (/\bWinRM\b/i.test(text)) {
+  const protocolRequest = text.split(/[.!?;\n]+|,\s*(?=(?:but|however|instead)\b)/i)
+    .filter((clause) => !/^\s*(?:but\s+)?(?:please\s+)?(?:no|do\s+not|don't|never|avoid|skip)\b/i.test(clause)).join(" ");
+  if (/\bSSH\b/i.test(protocolRequest) && !ports.includes(22)) ports.push(22);
+  if (/\b(?:RDP|Remote Desktop)\b/i.test(protocolRequest) && !ports.includes(3389)) ports.push(3389);
+  if (/\bWinRM\b/i.test(protocolRequest)) {
     for (const port of [5985, 5986]) if (!ports.includes(port)) ports.push(port);
   }
   return {
@@ -4638,25 +4728,6 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push(`ods.extensions.${extensionLifecycle.action}`);
   }
   if (hostCommand) actions.push("raw-shell");
-  const hostFacetPatterns = new Map([
-    ["host.identity", "hostname|host identity"],
-    ["host.kernel", "kernel"],
-    ["host.architecture", "machine architecture|architecture|cpu architecture"],
-    ["host.platform", "host platform"],
-    ["host.os-release", "operating[- ]system(?: signature)?|(?:host\\s+)?os(?:\\s+(?:signature|release))?|linux distribution|distro"],
-    ["host.uptime", "uptime|load averages?|system load"],
-    ["host.processes", "process|processes|process inventory"],
-    ["host.services", "systemd|system services?|service inventory"],
-    ["host.cpu", "cpu|processor|hardware"],
-    ["host.gpu", "gpu|graphics(?:\\s+(?:card|processor))?|video\\s+card"],
-    ["host.memory", "memory|ram|swap"],
-    ["host.storage", "disk|filesystem|storage|mounts?"],
-    ["host.network-addresses", "network interfaces?|interfaces?|addresses?|ip addresses?"],
-    ["host.network-routes", "routes?|routing"],
-    ["host.listening-ports", "ports?|listeners?"],
-    ["host.tailscale", "tailscale"],
-    ["host.network-peer", "LAN|local network|Tailscale|network|reachable|reachability|resolve|ping|probe|connectivity"],
-  ]);
   const excludesNetworkLocation = explicitlyExcludesHostObservation(
     text,
     "network(?:\\s+(?:location|details?))?|interfaces?|addresses?|ip addresses?"
@@ -4676,7 +4747,7 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     // for another named host must not erase the requested peer observation.
     if (action === "host.network-peer") return Boolean(networkPeer);
     if (excludesNetworkLocation && addressBearingActions.has(action)) return false;
-    const facetPattern = hostFacetPatterns.get(action);
+    const facetPattern = HOST_OBSERVATION_FACETS.get(action);
     return !facetPattern || !explicitlyExcludesHostObservation(text, facetPattern);
   });
   return {
@@ -5704,6 +5775,8 @@ export function createToolLoopGuard({
         exactDownloadTerminalOutcome: undefined,
         exactDownloadTerminalBlocks: 0,
         operationsRequired: false,
+        hostObservationPolicy: undefined,
+        hostObservationUsed: false,
         extensionDiscoveryUsed: false,
         operationsRequiredActions: new Set(),
         operationsHostCommandRequested: false,
@@ -6838,32 +6911,18 @@ export function createToolLoopGuard({
       }
       wrappedToolParams = normalizedParams;
     }
-    if (
-      state?.operationsRequired &&
-      effectiveToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL
-    ) {
-      const actions = requiredHostObservationActions(state);
-      if (!actions || state.operationsSubmittedJobs.size > 0) {
-        return { block: true, blockReason: OPERATIONS_REQUIRES_BROKER_REASON };
-      }
-      const params = {
-        actions,
-        ...(actions.includes("host.network-peer") && state.operationsNetworkPeer
-          ? {
-            peer: state.operationsNetworkPeer.peer,
-            ports: state.operationsNetworkPeer.ports,
-          }
-          : {}),
-        ...(state.operationsRequiresOdsStatusProjection
-          ? { includeOdsStatus: true }
-          : {}),
-      };
+    if (effectiveToolName === SYNCHRONOUS_HOST_OBSERVE_TOOL) {
+      const selected = toolName === "tool_call"
+        ? wrappedToolParams?.args : normalizedParams ?? event?.params;
+      const params = permittedHostObservationParams(selected, state?.hostObservationPolicy);
+      if (!params) return { block: true, blockReason: OPERATIONS_NOT_REQUESTED_REASON };
+      state.hostObservationUsed = true;
       return toolName === "tool_call"
         ? { params: { id: SYNCHRONOUS_HOST_OBSERVE_TOOL, args: params } }
         : { params };
     }
     if (
-      state?.operationsRequired &&
+      (state?.operationsRequired || state?.hostObservationUsed) &&
       (effectiveToolName === "pixel_ops_job_get" || effectiveToolName === "pixel_ops_job_wait")
     ) {
       const requestedArgs = toolName === "tool_call"
@@ -6984,7 +7043,10 @@ export function createToolLoopGuard({
       !state.exactDownloadRequested &&
       OPERATIONS_TOOLS.has(effectiveToolName) &&
       // Capability metadata is read-only and grants no action authority.
-      effectiveToolName !== "pixel_ops_inventory"
+      effectiveToolName !== "pixel_ops_inventory" &&
+      !(["pixel_ops_job_get", "pixel_ops_job_wait"].includes(effectiveToolName) &&
+        state.operationsSubmittedJobs.has((toolName === "tool_call"
+          ? wrappedToolParams?.args : normalizedParams ?? event?.params)?.jobId))
     ) {
       // Count offending model rounds cumulatively, not parallel siblings or
       // unrelated authorized workspace calls. Without model-round telemetry,
@@ -7818,6 +7880,7 @@ export function createToolLoopGuard({
           ? userMessageExactHostCommand(event?.messages, event?.prompt)
           : undefined;
         state.operationsNetworkPeer = operations.networkPeer;
+        state.hostObservationPolicy = hostObservationPolicy(event?.messages, event?.prompt);
         state.operationsNetworkDiscoveryRequested = operations.networkDiscoveryRequested === true;
         state.operationsInventoryOnly =
           state.operationsRequired &&
@@ -8130,7 +8193,7 @@ export function createToolLoopGuard({
         rememberSessionPreview(state.currentSessionId, preview);
       }
     }
-    if (state.operationsRequired) {
+    if (state.operationsRequired || state.hostObservationUsed) {
       if (state.operationsInventoryOnly) {
         const wrappedInventory =
           toolName === "tool_call"
@@ -8194,10 +8257,12 @@ export function createToolLoopGuard({
           hostObservation.submission.jobId,
           hostObservation.submission
         );
-        state.operationsTerminalJobs.set(
-          hostObservation.outcome.jobId,
-          hostObservation.outcome
-        );
+        if (hostObservation.outcome) {
+          state.operationsTerminalJobs.set(
+            hostObservation.outcome.jobId,
+            hostObservation.outcome
+          );
+        }
         // A Tool Search call can persist both the selected plugin result and
         // its outer wrapper. Compact at most those two messages, and clear the
         // allowance as soon as any different tool starts.
@@ -8559,9 +8624,11 @@ export function createToolLoopGuard({
         };
       }
     }
-    const requiredHostActions = requiredHostObservationActions(state);
-    if (state.operationsSubmittedJobs.size === 0) {
-      if (!requiredHostActions) return undefined;
+    const requiredHostActions = (requiredHostObservationActions(state) ?? []).filter((action) =>
+      !operationsHostEvidenceText(new Set([action]), state.operationsTerminalJobs));
+    const hostObservationPending = [...state.operationsSubmittedJobs.keys()].some((jobId) =>
+      !state.operationsTerminalJobs.has(jobId));
+    if (requiredHostActions.length > 0 && !hostObservationPending) {
       return {
         stage: "host-observe",
         instruction:
