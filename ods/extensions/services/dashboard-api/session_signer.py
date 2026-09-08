@@ -169,3 +169,26 @@ def verify(cookie_value: str) -> Tuple[bool, str]:
         return False, "expired"
 
     return True, "ok"
+
+
+def validate_session_ttl_bounds(
+    ttl_seconds: object, min_ttl: int = 1, max_ttl: int = 2592000, default_ttl: int = 43200
+) -> int:
+    """Validate and constrain TTL seconds to valid integer boundaries [min_ttl, max_ttl].
+
+    Returns default_ttl if input is None, non-integer, or invalid type. Clamps values
+    exceeding max_ttl or below min_ttl safely.
+    """
+    if ttl_seconds is None:
+        return default_ttl
+    try:
+        val = int(ttl_seconds)
+    except (ValueError, TypeError):
+        return default_ttl
+
+    if val < min_ttl:
+        return min_ttl
+    if val > max_ttl:
+        return max_ttl
+    return val
+
