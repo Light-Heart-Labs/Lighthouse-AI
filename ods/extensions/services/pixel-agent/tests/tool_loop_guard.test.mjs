@@ -199,6 +199,34 @@ test("prior website feedback does not require a preview for new scheduled file w
   assert.equal(userMessageRequestsWorkspacePreview([], "The last task succeeded. Improve the website and publish it."), true);
 });
 
+test("preview intent treats HTML paths as targets rather than task instructions", () => {
+  assert.equal(userMessageRequestsWorkspacePreview([], "Repair the server page at visualization/index.html and publish"), true);
+  for (const directory of ["expense-review/static", "history-chart", "backend/service"]) {
+    const prompt = `Continue from the saved ${directory}/index.html. ` +
+      "Diagnose and repair the page, preserve a backup outside static, " +
+      "and publish the repaired static folder through ODS.";
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), true, directory);
+    const guard = createToolLoopGuard();
+    const context = { agentId: "pixel", runId: "run-1", sessionId: "recovered-session" };
+    guard.observeRun(context, "pixel", { prompt });
+    const params = { relativeDirectory: directory };
+    assert.equal(call(guard, "pixel_ods_workspace_preview", { context, event: { params } })?.block, true);
+    const read = { path: `${directory}/index.html` };
+    afterCall(guard, "read", { context, event: {
+      params: read, result: { content: [{ type: "text", text: "<!doctype html><p>Report</p>" }] },
+    } });
+    assert.notEqual(call(guard, "pixel_ods_workspace_preview", { context, event: { params } })?.block, true);
+  }
+  for (const prompt of [
+    "Explain why we should publish build/index.html.",
+    "Review the implementation in create/index.html; do not publish it.",
+    "Do not publish expense-review/static/index.html.",
+    "Explain the parser in backend/service/index.html.",
+  ]) {
+    assert.equal(userMessageRequestsWorkspacePreview([], prompt), false, prompt);
+  }
+});
+
 for (const prompt of [
   "Inspect the actual event handlers/state update ordering, repair synchronous export filtering and visible validation, and publish the existing log-viewer-lab. Do not repeat a claimed fix without verifying the relevant code path.",
   "Publish the existing log-viewer-lab unchanged.",

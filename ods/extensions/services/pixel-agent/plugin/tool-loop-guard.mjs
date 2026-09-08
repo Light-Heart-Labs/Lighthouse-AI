@@ -4999,6 +4999,10 @@ function hasWorkspaceHtmlTarget(text) {
   return /\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/i.test(text);
 }
 
+function withoutWorkspaceHtmlTargets(text) {
+  return text.replace(/\b[A-Za-z0-9_-][A-Za-z0-9._/-]{0,511}\.html?\b/gi, " ");
+}
+
 function hasExplicitWorkspacePreviewDirective(text) {
   // A requested delivery action can follow a diagnosis or code repair. Do not
   // mistake a subordinate "why we should publish" for that owner command.
@@ -5114,11 +5118,16 @@ export function userMessageRequestsWorkspacePreview(messages, prompt = undefined
     /\bwithout\s+(?:show(?:ing)?|preview(?:ing)?|view(?:ing)?|open(?:ing)?|serv(?:e|ing)|publish(?:ing)?)\b/i.test(text);
   const rejectsCreation =
     /\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not)\s+(?:build|create|develop|design|generate|implement|make|show|write)\b/i.test(text);
+  // A target named review/index.html or backend/status.html does not turn
+  // an owner's publication request into a review or backend-only task.
+  // Conversely, build/index.html cannot make an explanation a build request.
+  const proseText = withoutWorkspaceHtmlTargets(text);
+  const proseActionText = withoutWorkspaceHtmlTargets(actionText);
   const explanatoryOnly =
-    /\b(?:explain|history|review|tutorial|what\s+is|why)\b/i.test(text) &&
-    !/\b(?:build|create|develop|design|generate|implement|make)\b/i.test(text);
+    /\b(?:explain|history|review|tutorial|what\s+is|why)\b/i.test(proseText) &&
+    !/\b(?:build|create|develop|design|generate|implement|make)\b/i.test(proseText);
   const nonVisualImplementation =
-    /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(actionText) &&
+    /\b(?:backend|daemon|engine|file\s+format|library|parser|renderer|seriali[sz]er|server|service)\b/i.test(proseActionText) &&
     !/\b(?:browser|demo|interactive|visuali[sz]ation)\b/i.test(actionText);
   const explicitDelivery = hasExplicitWorkspacePreviewDirective(actionText);
   // An edit constraint does not veto an independently requested display.
