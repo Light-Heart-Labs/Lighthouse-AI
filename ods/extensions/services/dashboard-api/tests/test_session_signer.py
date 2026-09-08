@@ -184,3 +184,19 @@ class TestVerify:
         ok, reason = session_signer.verify(cookie)
         assert ok is False
         assert reason == "malformed"
+
+
+class TestValidateSessionTtlBounds:
+
+    def test_valid_integer_ttl(self):
+        from session_signer import validate_session_ttl_bounds
+        assert validate_session_ttl_bounds(3600) == 3600
+        assert validate_session_ttl_bounds("7200") == 7200
+
+    def test_clamping_and_fallback(self):
+        from session_signer import validate_session_ttl_bounds
+        assert validate_session_ttl_bounds(None) == 43200
+        assert validate_session_ttl_bounds("invalid") == 43200
+        assert validate_session_ttl_bounds(0, min_ttl=10) == 10
+        assert validate_session_ttl_bounds(9999999, max_ttl=86400) == 86400
+
