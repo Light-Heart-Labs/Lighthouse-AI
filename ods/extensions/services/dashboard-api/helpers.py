@@ -1146,3 +1146,23 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def count_list_element_frequencies(items: object) -> dict:
+    """Count item occurrences in sequence safely into item -> frequency dict.
+
+    Converts unhashable items or None values to string representations without TypeError.
+    """
+    if not isinstance(items, (list, tuple)):
+        return {}
+    res = {}
+    for item in items:
+        if item is None:
+            continue
+        try:
+            res[item] = res.get(item, 0) + 1
+        except TypeError:
+            key = str(item)
+            res[key] = res.get(key, 0) + 1
+    return res
+
