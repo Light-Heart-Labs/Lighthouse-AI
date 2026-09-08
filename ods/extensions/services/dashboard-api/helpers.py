@@ -1146,3 +1146,24 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def pad_string_align_bounds(
+    text: object, width: int = 0, align: str = "left", fillchar: str = " "
+) -> str:
+    """Pad string to target width with specified alignment (left/right/center) safely.
+
+    Handles None, non-string text, negative width, or invalid fillchar without exception.
+    """
+    if text is None:
+        val = ""
+    else:
+        val = str(text)
+    w = max(0, int(width))
+    fc = fillchar[0] if fillchar else " "
+    if align == "right":
+        return val.rjust(w, fc)
+    elif align == "center":
+        return val.center(w, fc)
+    return val.ljust(w, fc)
+
