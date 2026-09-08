@@ -3,7 +3,8 @@ function __ods_at
     set -l words (commandline -opc)
     test (count $words) -eq (math (count $argv) + 1); or return 1
     for index in (seq (count $argv))
-        test "$words[(math $index + 1)]" = "$argv[$index]"; or return 1
+        set -l word_index (math $index + 1)
+        test "$words[$word_index]" = "$argv[$index]"; or return 1
     end
 end
 
