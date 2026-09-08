@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   UserPlus, Copy, Check, Trash2, RefreshCw, QrCode, Share2, X,
   Loader2, AlertCircle, Clock, Users, KeyRound, ShieldCheck, Mic2,
@@ -79,8 +79,10 @@ export default function Invites() {
   const [generated, setGenerated] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [ownerCardStatus, setOwnerCardStatus] = useState(null)
+  const refreshGeneration = useRef(0)
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current
     setRefreshing(true)
     try {
       const [resp, ownerStatusResp] = await Promise.all([
@@ -89,8 +91,10 @@ export default function Invites() {
       ])
       if (!resp.ok) throw new Error(`list failed: ${resp.status}`)
       const data = await resp.json()
+      const ownerStatus = ownerStatusResp.ok ? await ownerStatusResp.json() : null
+      if (generation !== refreshGeneration.current) return
       if (ownerStatusResp.ok) {
-        setOwnerCardStatus(await ownerStatusResp.json())
+        setOwnerCardStatus(ownerStatus)
       } else {
         setOwnerCardStatus({
           ready: false,
@@ -100,18 +104,24 @@ export default function Invites() {
       setTokens(data.tokens || [])
       setError(null)
     } catch (err) {
+      if (generation !== refreshGeneration.current) return
       setOwnerCardStatus(current => current || {
         ready: false,
         reason: 'Owner-card status unavailable.',
       })
       setError(err.message)
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (generation === refreshGeneration.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    return () => { refreshGeneration.current += 1 }
+  }, [refresh])
 
   const handleRevoke = async (prefix) => {
     try {
