@@ -20,6 +20,7 @@ import { Link } from 'react-router-dom'
 import { useModels } from '../hooks/useModels'
 import { useDownloadProgress } from '../hooks/useDownloadProgress'
 import HuggingFaceModelBrowser from '../components/model-library/HuggingFaceModelBrowser'
+import ModelComparison from '../components/model-library/ModelComparison'
 
 const PAGE_SIZE = 10
 const DOWNLOAD_STATUS_TIMEOUT_MS = 15000
@@ -355,6 +356,7 @@ export default function Models() {
         recommendedCount={odsCatalogModels.length}
       />
 
+      <ModelComparison models={models} />
       {libraryScope === 'huggingface' ? (
         <section
           ref={libraryRef}
