@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestSplitStringIntoSafeChunks:
+
+    def test_splits_string_into_chunks(self):
+        from helpers import split_string_into_safe_chunks
+        assert split_string_into_safe_chunks("abcdef", chunk_size=2) == ["ab", "cd", "ef"]
+
+    def test_handles_none_and_bounds(self):
+        from helpers import split_string_into_safe_chunks
+        assert split_string_into_safe_chunks(None) == []
+        assert split_string_into_safe_chunks("abc", chunk_size=0) == ["a", "b", "c"]
+        assert split_string_into_safe_chunks(12345, chunk_size=2) == ["12", "34", "5"]
+

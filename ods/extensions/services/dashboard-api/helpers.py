@@ -1146,3 +1146,20 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def split_string_into_safe_chunks(text: object, chunk_size: int = 64) -> list:
+    """Split string content safely into uniform chunks of chunk_size.
+
+    Returns empty list for None or empty inputs. Enforces minimum chunk_size boundary of 1.
+    Handles non-string inputs safely.
+    """
+    if text is None:
+        return []
+    val = str(text)
+    if not val:
+        return []
+    if chunk_size <= 0:
+        chunk_size = 1
+    return [val[i : i + chunk_size] for i in range(0, len(val), chunk_size)]
+
