@@ -124,6 +124,31 @@ test('restricted proc rejects missing, ambiguous, malformed, or oversized invoca
   }
 });
 
+test('reused PID recovers with unreadable foreign environment but preserves a matching unknown owner', linux, async t => {
+  const {child} = await childProcess(t, `process.send({ready:true}); setInterval(() => {}, 1000);`);
+  const startTicks = identity(child.pid).startTicks;
+  for (const mismatch of [false, true]) {
+    for (const phase of ['idle', 'held', 'busy', 'interrupted']) {
+      const options = fixture();
+      const previous = {version: 3, pid: child.pid, invocationId: 'd'.repeat(32),
+        startTicks: mismatch ? String(BigInt(startTicks) + 1n) : startTicks};
+      seed(options, previous, phase);
+      withInvocations({[process.pid]: `INVOCATION_ID=${'e'.repeat(32)}\0`}, () => {
+        const runtime = createAccessRuntime(options);
+        assert.equal(runtime.status().available, mismatch);
+        if (!mismatch) {
+          assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.directory, 'process.json'))), previous);
+          assert.equal(runtime.admit({}, {runId:'native'}).outcome, 'block');
+        } else {
+          assert.equal(runtime.status().phase, phase === 'busy' ? 'interrupted' : phase);
+          assert.equal(runtime.admit({}, {runId:'native'}).outcome, phase === 'idle' ? 'pass' : 'block');
+          if (phase === 'held') assert.equal(runtime.owns(token), true);
+        }
+      });
+    }
+  }
+});
+
 test('incarnation changing during invocation read fails closed', linux, () => {
   const options = fixture();
   withInvocations({[process.pid]: `INVOCATION_ID=${'d'.repeat(32)}\0`}, () => {

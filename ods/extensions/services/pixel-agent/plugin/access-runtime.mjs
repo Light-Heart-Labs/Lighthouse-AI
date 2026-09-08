@@ -103,6 +103,11 @@ function previousProcessAlive(previous) {
   // Death is independently verifiable even if an older record used boot_id
   // and this gateway's namespace now hides it. A live unknown owner stays held.
   if (!processAlive(previous.pid)) return false;
+  // A reused PID may belong to an unrelated process whose environment is
+  // unreadable under proc restrictions. A different start time already proves
+  // that the recorded owner is gone; do not require that stranger's identity.
+  // Matching start times still require the full boot/invocation check below.
+  if (processStartTicks(previous.pid) !== previous.startTicks) return false;
   const current = linuxProcessIdentity(previous.pid, boot ? 'boot' : 'invocation');
   return current !== null && current.startTicks === previous.startTicks &&
     (boot ? current.bootId === previous.bootId : current.invocationId === previous.invocationId);
