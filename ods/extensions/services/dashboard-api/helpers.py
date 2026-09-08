@@ -1146,3 +1146,30 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def normalize_numeric_range_bounds(data: object, min_val: float = 0.0, max_val: float = 1.0) -> list:
+    """Normalize list of numeric values safely within range [min_val, max_val].
+
+    Filters non-numeric values, handles empty/None inputs, and scales values linearly.
+    Returns empty list if no valid numbers are provided.
+    """
+    if not isinstance(data, (list, tuple)) or not data:
+        return []
+    valid = []
+    for item in data:
+        try:
+            val = float(item)
+            if not math.isnan(val) and not math.isinf(val):
+                valid.append(val)
+        except (ValueError, TypeError):
+            continue
+    if not valid:
+        return []
+    low, high = min(valid), max(valid)
+    if math.isclose(low, high):
+        return [min_val for _ in valid]
+    span = high - low
+    target_span = max_val - min_val
+    return [round(min_val + ((x - low) / span) * target_span, 4) for x in valid]
+
