@@ -33,6 +33,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   if (!Number.isSafeInteger(approvalTimeoutMs) || approvalTimeoutMs < 1 || approvalTimeoutMs > 120000) unavailable();
   const runs = new Map();
   const models = new Map();
+  let stopped = false, shutdownPromise;
   // Only a host adapter with persistent exclusive claims may prune closed
   // entries. Late SDK retries then receive durable denial, never a fresh route.
   const MAX_RUNS = 256;
@@ -40,7 +41,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     RUN.test(ctx.runId) && typeof ctx.sessionId === 'string' &&
     ctx.sessionId.length > 0 && ctx.sessionId.length <= 256 && (!ownerScopes ||
       typeof ctx.sessionKey === 'string' && /^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(ctx.sessionKey));
-  const live = entry => entry?.state === 'active' && !entry.closed;
+  const live = entry => !stopped && entry?.state === 'active' && !entry.closed;
   function release(entry) {
     if (!entry.releasePromise) entry.releasePromise = Promise.resolve()
       .then(() => releaseLease({runId: entry.runId, sessionId: entry.sessionId}))
@@ -51,6 +52,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   async function beforeModelResolve(_event, ctx) {
     if (enabled !== true) return undefined;
     if (ctx?.agentId && ctx.agentId !== agentId) return undefined;
+    if (stopped) return UNAVAILABLE;
     try {
       if (!binding(ctx) || typeof acquireLease !== 'function' || typeof releaseLease !== 'function') return UNAVAILABLE;
       let entry = runs.get(ctx.runId);
@@ -96,6 +98,23 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     await entry.pending;
     await release(entry);
     entry.lease = undefined;
+    return entry.released === true;
+  }
+  function shutdown() {
+    if (shutdownPromise) return shutdownPromise;
+    // Revoke synchronously, before waiting for pending acquisitions or cleanup.
+    // A late acquisition is released by its existing closed-entry path.
+    stopped = true;
+    const entries = [...runs.values()];
+    for (const entry of entries) { entry.closed = true; entry.stopApproval.abort(); }
+    shutdownPromise = Promise.all(entries.map(async entry => {
+      await entry.pending;
+      await release(entry);
+      return entry.released === true;
+    })).then(released => {
+      if (released.some(value => !value)) throw new Error('ODS provider cleanup incomplete');
+    });
+    return shutdownPromise;
   }
   function deny(entry) {
     if (entry) {
@@ -161,6 +180,6 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
   // The runtime otherwise times modifying hooks out after 15 seconds, shorter
   // than an owner's advertised review window. This is a bounded registration
   // option, not an extension of the provider lease or agent-run deadline.
-  return {provider, beforeModelResolve, beforeAgentRun, agentEnd,
+  return {provider, beforeModelResolve, beforeAgentRun, agentEnd, shutdown,
     beforeAgentRunOptions: Object.freeze({timeoutMs: approvalTimeoutMs + 5000})};
 }

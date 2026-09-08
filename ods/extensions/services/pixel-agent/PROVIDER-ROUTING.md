@@ -121,9 +121,11 @@ Edge session boundary; it does not qualify that deployed boundary. Model traffic
 remains synthetic. The browser journey retains both tool results, executes each
 effect once, denies without inference and returns to the saved leader.
 
-Still required: owner handoff initiation, durable task/conversation/default-future-
-work scope and return state, protected worker source/runtime installation,
-reconciliation with shared admission, and actual installed user journeys.
+Owner handoff initiation, durable task/conversation/new-task-default preferences
+and explicit return state are now implemented; see `PROVIDER-SCOPES.md`.
+`PROVIDER-BOOTSTRAP.md` defines owner-custody composition and parent registration.
+Still required: protected worker source/runtime installation, reconciliation
+with shared admission, and actual installed user journeys.
 An agent run is not necessarily an entire user task; this run primitive does not
 complete the requested handoff feature. It remains unregistered in production.
 

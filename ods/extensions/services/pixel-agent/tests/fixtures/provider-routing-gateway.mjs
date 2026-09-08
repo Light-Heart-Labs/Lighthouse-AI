@@ -5,14 +5,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createProviderRoutingBridge } from '../../plugin/provider-routing.mjs';
 import { createLeaseWorkerAdapter } from '../../plugin/provider-lease-worker.mjs';
 import { createHandoffOwnerAdapter } from '../../plugin/handoff-owner-worker.mjs';
+import { createManagedProviderBootstrap } from '../../plugin/provider-bootstrap.mjs';
 
 const file = process.env.ODS_ROUTING_FIXTURE;
+const managed = process.env.ODS_MANAGED_BOOTSTRAP === '1';
 const record = (value) => appendFileSync(file + '.events', JSON.stringify(value) + '\n', {mode: 0o600});
-const ownerAdapter = process.env.ODS_HANDOFF_OWNER_COMMAND ? createHandoffOwnerAdapter({
+const ownerAdapter = !managed && process.env.ODS_HANDOFF_OWNER_COMMAND ? createHandoffOwnerAdapter({
   command: JSON.parse(process.env.ODS_HANDOFF_OWNER_COMMAND), directory: process.env.ODS_LEASE_DIRECTORY,
   timeoutSeconds: process.env.ODS_HANDOFF_BROWSER === '1' ? 120 : 60,
 }) : null;
-const worker = process.env.ODS_LEASE_WORKER_COMMAND ? createLeaseWorkerAdapter({
+const worker = !managed && process.env.ODS_LEASE_WORKER_COMMAND ? createLeaseWorkerAdapter({
   ownerScopes: process.env.ODS_OWNER_SCOPE !== undefined,
   command: JSON.parse(process.env.ODS_LEASE_WORKER_COMMAND), directory: process.env.ODS_LEASE_DIRECTORY,
   request: ctx => {
@@ -23,7 +25,33 @@ const worker = process.env.ODS_LEASE_WORKER_COMMAND ? createLeaseWorkerAdapter({
       ...(state.handoff && !process.env.ODS_OWNER_SCOPE ? {handoffProviderId: 'stronger'} : {})};
   },
 }) : null;
-const bridge = createProviderRoutingBridge({
+const bridge = managed ? createManagedProviderBootstrap({
+  deployment: JSON.parse(process.env.ODS_MANAGED_DEPLOYMENT),
+  readConfig: () => JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, 'utf8')),
+  createLease(options) {
+    const adapter = createLeaseWorkerAdapter(options);
+    return {...adapter,
+      async acquireLease(ctx) {
+        const state = JSON.parse(readFileSync(file, 'utf8'));
+        record({kind: 'acquire', ...ctx, revision: state.revision});
+        const lease = await adapter.acquireLease(ctx);
+        record({kind: 'worker-lease', runId: ctx.runId, baseUrl: lease.baseUrl,
+          tokenHash: createHash('sha256').update(lease.token).digest('hex')});
+        return lease;
+      },
+      async releaseLease(ctx) {await adapter.releaseLease(ctx); record({kind: 'release', ...ctx});},
+    };
+  },
+  createHandoff(options) {
+    const adapter = createHandoffOwnerAdapter(options);
+    return async value => {
+      const receipt = await adapter(value);
+      record({kind: 'handoff-owner-receipt', runId: value.checkpoint.runId, sessionId: value.checkpoint.sessionId,
+        approved: receipt?.approved === true, checkpointDigest: value.checkpointDigest});
+      return receipt;
+    };
+  },
+}) : createProviderRoutingBridge({
   ownerScopes: process.env.ODS_OWNER_SCOPE !== undefined,
   enabled: true,
   durableReplayGuard: !!worker,
@@ -68,7 +96,7 @@ const bridge = createProviderRoutingBridge({
 });
 
 export default {
-  id: 'ods-routing-fixture',
+  id: managed ? 'pixel-ods' : 'ods-routing-fixture',
   name: 'Disposable ODS routing qualification',
   register(api) {
     api.registerProvider(bridge.provider);
@@ -79,6 +107,7 @@ export default {
     });
     api.on('agent_end', bridge.agentEnd);
     api.on('before_agent_run', bridge.beforeAgentRun, bridge.beforeAgentRunOptions);
+    if (managed) api.registerService({id: 'fixture-managed-routing', start() {}, stop: () => bridge.shutdown()});
     api.registerTool({name: 'fixture_witness', description: 'Return a fixed qualification witness.',
       parameters: {type: 'object', properties: {}, additionalProperties: false},
       async execute() {

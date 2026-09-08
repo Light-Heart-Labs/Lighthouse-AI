@@ -52,6 +52,8 @@ agents, direct API users bypassing ODS ingress and native alternative channels
 are not qualified by this adapter. Do not enable it globally until shared
 admission and all applicable entry points are reviewed. Keep production default
 off; this source does not change `index.js`, installers or installed config.
+`PROVIDER-BOOTSTRAP.md` now defines the standalone composition factory and minimal
+parent registration contract; it remains dormant until parent-owned integration.
 
 Provider changes remain Pixel-only. Normal saved leader/backups and other ODS
 consumers are unchanged. Per-run approval previews carry `selectionScope` and

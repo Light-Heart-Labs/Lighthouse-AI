@@ -15,7 +15,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const pkg = process.env.OPENCLAW_PACKAGE;
 const workerPython = process.env.ODS_PROVIDER_WORKER_PYTHON;
-for (const [workerMode, handoffMode] of [[false, false], ...(workerPython ? [[true, false], [true, true]] : [])]) {
+const managedBootstrap = process.env.ODS_MANAGED_BOOTSTRAP === '1';
+const modes = managedBootstrap ? [[true, true]] : [[false, false], ...(workerPython ? [[true, false], [true, true]] : [])];
+for (const [workerMode, handoffMode] of modes) {
 test('pinned gateway session/routing contract; private worker=' + workerMode + '; handoff=' + handoffMode,
   {skip: !pkg, timeout: 300000}, async () => {
     assert.equal(JSON.parse(readFileSync(join(pkg, 'package.json'))).version, '2026.6.33');
@@ -24,6 +26,10 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     const ownerMode = handoffMode && process.env.ODS_HANDOFF_OWNER_API === '1';
     const ownerScope = ownerMode ? process.env.ODS_OWNER_SCOPE : undefined;
     assert.ok(ownerScope === undefined || ['task','conversation','default'].includes(ownerScope));
+    if (managedBootstrap) {
+      assert.ok(workerPython && ownerMode && ownerScope);
+      assert.equal(process.env.ODS_PREPARE_LEASE_RUNTIME, '1', 'bootstrap requires custody-checked prepared launcher');
+    }
     const browserMode = ownerMode && process.env.ODS_HANDOFF_BROWSER === '1';
     let ownerChild, ownerClosed, ownerUrl, ownerLog = '';
     const requests = [];
@@ -102,6 +108,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     copyFileSync(fileURLToPath(new URL('../plugin/handoff-approval.mjs', import.meta.url)), join(plugin, 'handoff-approval.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-lease-worker.mjs', import.meta.url)), join(plugin, 'provider-lease-worker.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/handoff-owner-worker.mjs', import.meta.url)), join(plugin, 'handoff-owner-worker.mjs'));
+    copyFileSync(fileURLToPath(new URL('../plugin/provider-bootstrap.mjs', import.meta.url)), join(plugin, 'provider-bootstrap.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-routing-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}));
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-routing-fixture',
@@ -122,6 +129,26 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       plugins: {allow: ['ods-routing-fixture'], load: {paths: [plugin]},
         entries: {'ods-routing-fixture': {enabled: true, hooks: {allowConversationAccess: true}}}},
     };
+    let deployment;
+    if (managedBootstrap) {
+      deployment = {binding: {schemaVersion: 1, activationId: randomUUID(), revision: 1, allowCloud: false},
+        sourceRoot: fileURLToPath(new URL('../../../..', import.meta.url)).replace(/\/$/, ''),
+        hostPython: '/usr/bin/python3', providerDirectory, ownerScopes: true,
+        leaseTimeoutSeconds: 180, approvalTimeoutSeconds: 60};
+      // Use the actual Python projection, not a second independently maintained
+      // imitation. This fixture explicitly grants only its disposable hooks.
+      config.plugins.allow = ['pixel-ods'];
+      config.plugins.entries = {'pixel-ods': {enabled: true, hooks: {allowConversationAccess: true}}};
+      delete config.models.providers['ods-policy'];
+      const projection = spawnSync(workerPython, ['-I', '-B', '-c',
+        'import json,sys;sys.path.insert(0,sys.argv[1]);from pixel_provider.activation_config import plan_activation;v=json.load(sys.stdin);b=v["binding"];print(json.dumps(plan_activation(v["config"],revision=b["revision"],allow_cloud=b["allowCloud"],activation_id=b["activationId"])["document"]))',
+        join(deployment.sourceRoot, 'bin')], {input: JSON.stringify({config, binding: deployment.binding}), encoding: 'utf8'});
+      assert.equal(projection.status, 0, projection.stderr);
+      Object.assign(config, JSON.parse(projection.stdout));
+      writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'pixel-ods', providers: ['ods-policy'],
+        contracts: {tools: ['fixture_witness', 'fixture_handoff_witness']}, activation: {onStartup: true},
+        configSchema: {type: 'object', properties: {managedProvider: {type: 'object'}}, additionalProperties: false}}));
+    }
     writeFileSync(join(root, 'openclaw.json'), JSON.stringify(config), {mode: 0o600});
     const env = {PATH: process.env.PATH, HOME: root, TMPDIR: root,
       OPENCLAW_STATE_DIR: join(root, 'state'), OPENCLAW_CONFIG_PATH: join(root, 'openclaw.json'),
@@ -133,6 +160,9 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       fileURLToPath(new URL('../../../../bin/pixel_provider/handoff_worker.py',import.meta.url))]),
       ODS_HANDOFF_BROWSER: browserMode ? '1' : '0'});
     if (ownerScope) env.ODS_OWNER_SCOPE = ownerScope;
+    if (managedBootstrap) Object.assign(env, {ODS_MANAGED_BOOTSTRAP: '1', ODS_MANAGED_DEPLOYMENT: JSON.stringify(deployment),
+      OPENCLAW_REQUIRED_PLUGINS: JSON.stringify({version: 1, plugins: [{id: 'pixel-ods',
+        hooks: ['before_model_resolve', 'before_agent_run', 'agent_end']}]})});
     const child = spawn(process.execPath, [join(pkg, 'openclaw.mjs'), 'gateway', 'run'],
       {env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true});
     let log = ''; child.stdout.on('data', b => { log += b; }); child.stderr.on('data', b => { log += b; });
@@ -294,6 +324,19 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
         assert.equal(finalEvents.filter(e => e.kind === 'handoff-tool').length, 1);
         assert.deepEqual(finalEvents.filter(e => e.kind === 'handoff-owner-receipt').map(e => e.approved), [true, false]);
         assert.equal(JSON.parse(readFileSync(join(providerDirectory, 'provider-config.json'))).roles.leader, 'fixture');
+        if (managedBootstrap) {
+          const originalConfig = readFileSync(join(root, 'openclaw.json'), 'utf8');
+          const changed = JSON.parse(originalConfig);
+          changed.plugins.entries['pixel-ods'].config.managedProvider.revision++;
+          writeFileSync(join(root, 'openclaw.json'), JSON.stringify(changed), {mode: 0o600});
+          const drifted = await chat('Do not admit a changed activation.');
+          assert.doesNotMatch(drifted.text, /second-turn-complete/);
+          assert.equal(requests.length, 5);
+          writeFileSync(join(root, 'openclaw.json'), originalConfig, {mode: 0o600});
+          const stale = await chat('Restoring bytes must not revive closed activation.');
+          assert.doesNotMatch(stale.text, /second-turn-complete/);
+          assert.equal(requests.length, 5);
+        }
         await stopGateway();
         for (const item of readdirSync(join(root, 'state'), {recursive: true, withFileTypes: true})) {
           if (item.isFile()) {
@@ -308,7 +351,9 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
           deniedCheckpointWithoutInference: true, originalLeaderRestored: true, historyPreserved: true,
           runtimeStateCredentialsAbsent: true, productionActivation: false, syntheticInference: true,
           ownerApi: ownerMode, ownerBrowser: browserMode, ...(ownerScope ? {ownerScope, explicitOwnerTask:true,
-            nativeIngressHashBound:true, scopeRetainedAcrossRuns:true, explicitScopeReturn:true} : {})}));
+            nativeIngressHashBound:true, scopeRetainedAcrossRuns:true, explicitScopeReturn:true} : {}),
+          ...(managedBootstrap ? {managedBootstrap: true, actualActivationProjection: true,
+            requiredPluginPolicy: true, configDriftDenied: true, restoredBytesDidNotRevive: true} : {})}));
         console.log('Evidence:', root);
         return;
       }

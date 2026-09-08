@@ -183,3 +183,30 @@ def test_native_worker_freezes_selection_without_granting_checkpoint_approval(st
     assert frozen['handoffProviderId'] == 'stronger'  # already acquired run is immutable
     assert 'handoffProviderId' not in scoped_request(store.directory, request)
     with pytest.raises(StoreError): validate_request(dict(request, handoffProviderId='stronger'))
+
+
+@pytest.mark.parametrize('activation,scope', [(False, False), (False, True), (True, False), (True, True)])
+def test_scope_cannot_widen_activation_cloud_permission(store, monkeypatch, activation, scope):
+    from pixel_provider.route_worker import scoped_request
+    monkeypatch.setattr(ScopeStore, 'resolve', lambda *_: dict(providerId='stronger', allowCloud=scope, scope='task'))
+    request = dict(schemaVersion=1, runId=str(uuid.uuid4()), sessionId=str(uuid.uuid4()),
+        expectedRevision=1, confirmed=True, allowCloud=activation, timeoutSeconds=60, scopeSessionKey=native_key('Chat_A'))
+    frozen = scoped_request(store.directory, request)
+    assert frozen['allowCloud'] is (activation and scope)
+    assert request['allowCloud'] is activation
+
+
+def test_real_saved_cloud_scope_respects_local_only_activation(store):
+    from pixel_provider.route_worker import scoped_request
+    config = ProviderStore(store.directory).load()
+    config['providers'][1].update(kind='cloud', baseUrl='https://api.example/v1', credentialRef='synthetic-test-ref')
+    config['policy']['allowCloud'] = True
+    ProviderStore(store.directory).save(config, expected_revision=1)
+    state = begin(store)
+    store.change('select', dict(chatId='Chat_A', taskId=state['taskId'], expectedRevision=state['revision'], scope='task',
+        providerId='stronger', providerRevision=2, allowCloud=True, acceptUnknownCost=True))
+    request = dict(schemaVersion=1, runId=str(uuid.uuid4()), sessionId=str(uuid.uuid4()), expectedRevision=2,
+        confirmed=True, allowCloud=False, timeoutSeconds=60, scopeSessionKey=native_key('Chat_A'))
+    frozen = scoped_request(store.directory, request)
+    assert frozen['handoffProviderId'] == 'stronger' and frozen['allowCloud'] is False
+    assert store.resolve(native_key('Chat_A'), 2)['allowCloud'] is True  # owner preference preserved

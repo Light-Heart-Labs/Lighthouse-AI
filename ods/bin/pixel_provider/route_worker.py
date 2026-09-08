@@ -43,7 +43,9 @@ def scoped_request(directory, value):
     selection = ScopeStore(directory).resolve(value['scopeSessionKey'], value['expectedRevision'])
     if selection is None:
         return value
-    return dict(value, handoffProviderId=selection['providerId'], allowCloud=selection['allowCloud'],
+    # A persisted preference cannot widen the activation's cloud boundary.
+    # Both owner authorities must allow transfer; checkpoint approval is separate.
+    return dict(value, handoffProviderId=selection['providerId'], allowCloud=value['allowCloud'] and selection['allowCloud'],
                 handoffSelectionScope=selection['scope'])
 
 
