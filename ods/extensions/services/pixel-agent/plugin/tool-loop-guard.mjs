@@ -4604,12 +4604,17 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
   // local-host facet scope; do not broaden every multi-sentence host request.
   const localHostFacetText = hostIntentClauses.filter((clause) =>
     !networkDiscoveryClause(clause) && !negatedObservationClause(clause)).join(" ");
-  const hostExplorationPattern =
-    /\b(?:explore|inspect(?:ion)?|inventory|survey|understand|examine|show\s+me\s+around)\b/i;
-  // Do not combine an artifact instruction such as "inspect every file" with
-  // a later preview phrase such as "the host can verify it". Host exploration
-  // authority requires the host scope and exploration intent in the same
-  // owner-authored clause.
+  const hostObjectModifiers = "(?:(?:the|this|that|my|your|our|local|actual|real|physical|current|complete|entire|whole|ODS)\\s+)*";
+  const hostObjects = [hostContextPattern, ...hostScopeFacetPatterns].map((pattern) => pattern.source).join("|");
+  const hostExplorationPattern = new RegExp(
+    "\\b(?:explore|inspect|inventory|survey|understand|examine|show\\s+me\\s+around)\\s+" +
+      hostObjectModifiers + `(?:${hostObjects})|` +
+      "\\b(?:inspection|inventory|survey)\\s+of\\s+" + hostObjectModifiers + hostContextPattern.source,
+    "i"
+  );
+  // Bind an inspection verb to the host or a host facet as its object.
+  // Inspecting another object cannot make a later mention of the machine
+  // a compulsory inventory. Optional observation permission is separate.
   const hostExplorationIntent = hostIntentClauses
     .some(
       (clause) =>
@@ -7191,8 +7196,8 @@ export function createToolLoopGuard({
       state?.operationsRequired &&
       !extensionDiscoveryActive(state) &&
       !OPERATIONS_TOOLS.has(toolName) &&
-      toolName !== "tool_search" &&
-      toolName !== "tool_describe" &&
+      effectiveToolName !== "tool_search" &&
+      effectiveToolName !== "tool_describe" &&
       !operationsMayContinueInWorkspace
     ) {
       // One model response may contain several parallel tool calls. Return the
