@@ -11,6 +11,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "bin"))
 import pixel_access_bridge as bridge
 
 
+class OwnerLauncherTests(unittest.TestCase):
+    @unittest.skipUnless(Path("/usr/sbin/runuser").exists(), "Linux runuser required")
+    def test_owner_path_cannot_select_privileged_launcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            attacker = root / "runuser"
+            attacker.write_text("#!/bin/sh\nexit 99\n")
+            attacker.chmod(0o755)
+            adapter = bridge.SystemdAccessBridge(root, "k" * 64)
+            adapter.home = root
+            adapter.owner = types.SimpleNamespace(pw_name="fixture")
+            adapter.binary = str(root / "openclaw")
+            with patch.object(bridge.subprocess, "Popen", side_effect=RuntimeError("captured")) as launch:
+                with self.assertRaisesRegex(RuntimeError, "captured"):
+                    adapter.worker()
+            args = launch.call_args.args[0]
+            self.assertTrue(Path(args[0]).is_absolute())
+            self.assertEqual(Path(args[0]), Path("/usr/sbin/runuser").resolve())
+            self.assertNotEqual(Path(args[0]), attacker)
+            self.assertEqual(launch.call_args.kwargs["env"]["PATH"].split(":")[0], str(root))
+
+    def test_writable_launcher_is_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unsafe = root / "runuser"
+            unsafe.write_text("#!/bin/sh\nexit 99\n")
+            unsafe.chmod(0o777)
+            adapter = bridge.SystemdAccessBridge(root, "k" * 64)
+            adapter.home = root
+            adapter.owner = types.SimpleNamespace(pw_name="fixture")
+            adapter.binary = str(root / "openclaw")
+            with patch.object(bridge.Path, "resolve", return_value=unsafe), patch.object(bridge.subprocess, "Popen") as launch:
+                with self.assertRaisesRegex(bridge.AccessError, "unsafe-owner-launcher"):
+                    adapter.worker()
+            launch.assert_not_called()
+
+
 class FakeBridge(bridge.SystemdAccessBridge):
     """Fake the installed services, retaining the real coordinator and journals."""
     def __init__(self, root):
@@ -142,6 +179,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.runtime.status()["effective_mode"], "unknown")
         self.runtime.fail = None
         self.assertEqual(self.runtime.change(self.request("sandboxed"))["effective_mode"], "sandboxed")
+
+    def test_pristine_safer_probe_recovery_does_not_restart_unchanged_gateway(self):
+        self.runtime.fail = "probe"
+        with self.assertRaises(bridge.AccessError):
+            self.runtime.change(self.request("sandboxed"))
+        self.assertFalse(self.runtime.managed)
+        self.assertEqual(self.runtime.pending()["phase"], "error")
+        self.runtime.fail = None
+        restored = self.runtime.change(self.request("sandboxed"))
+        self.assertTrue(restored["runtime_verified"])
+        self.assertEqual(restored["effective_mode"], "sandboxed")
+        self.assertNotIn("restart", self.runtime.log)
 
     def test_release_failure_does_not_reopen_native_admission(self):
         self.runtime.fail = "edge-release"

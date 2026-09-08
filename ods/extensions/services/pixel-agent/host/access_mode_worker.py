@@ -29,6 +29,13 @@ def emit(value):
 def main():
     request = json.loads(sys.stdin.readline(4096))
     path = os.path.join(os.environ["HOME"], ".openclaw", "openclaw.json")
+    # New integrated installations keep recovery state under the already
+    # private config directory. A user's general XDG state parent may validly
+    # be group-writable; do not chmod that shared directory or weaken custody.
+    # Retain an existing controller state directory and its recovery receipts.
+    legacy_state = controller._default_state_dir()
+    state_dir = legacy_state if os.path.lexists(legacy_state) else os.path.join(
+        os.path.dirname(path), ".ods-access-mode")
 
     def hook(name):
         emit({"hook": name})
@@ -49,7 +56,7 @@ def main():
 
     try:
         if request["operation"] != "status":
-            kwargs = dict(validate_config=validate, restart=lambda: hook("restart"),
+            kwargs = dict(state_dir=state_dir, validate_config=validate, restart=lambda: hook("restart"),
                           check_no_active_run=lambda: hook("busy"),
                           expected_config_sha256=request["config_sha256"])
             if request["operation"] == "full-access":
@@ -58,7 +65,7 @@ def main():
                 controller.restore_sandbox(path, **kwargs)
             else:
                 raise RuntimeError("unsupported operation")
-        emit({"result": controller.get_status(path)})
+        emit({"result": controller.get_status(path, state_dir=state_dir)})
     except controller.AccessModeError as error:
         emit({"error": error.code})
     except Exception:
