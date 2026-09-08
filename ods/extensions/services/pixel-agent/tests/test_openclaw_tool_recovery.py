@@ -82,6 +82,36 @@ def test_later_runtime_changes_are_not_overwritten_by_restore(installation):
     assert module.read_bytes() == b"independent package update"
 
 
+def test_exact_previous_patch_upgrades_and_restores_to_original(installation):
+    _, state, manifest_path, module, original, previous = installation
+    run(installation)
+    candidate = previous.replace(b"after();", b"latest();")
+    manifest = json.loads(manifest_path.read_text())
+    manifest["previousReplacements"] = {manifest["patchedSha256"]: manifest["replacements"]}
+    manifest["patchedSha256"] = hashlib.sha256(candidate).hexdigest()
+    manifest["replacements"] = [["before();", "latest();"]]
+    manifest_path.write_text(json.dumps(manifest))
+    assert run(installation)["status"] == "changed"
+    assert module.read_bytes() == candidate
+    assert next(state.glob("*.js")).read_bytes() == original
+    assert run(installation)["status"] == "unchanged"
+    assert run(installation, restore=True)["status"] == "changed"
+    assert module.read_bytes() == original
+
+
+def test_predecessor_recipe_must_reconstruct_exact_original_before_writing(installation):
+    _, _, manifest_path, module, _, previous = installation
+    run(installation)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["previousReplacements"] = {manifest["patchedSha256"]: [["wrong();", "after();"]]}
+    manifest["patchedSha256"] = hashlib.sha256(b"latest();\nunchanged();\n").hexdigest()
+    manifest["replacements"] = [["before();", "latest();"]]
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="baseline hash mismatch"):
+        run(installation)
+    assert module.read_bytes() == previous
+
+
 def test_normal_npm_group_mode_is_preserved(installation):
     module = installation[3]
     module.chmod(0o664)

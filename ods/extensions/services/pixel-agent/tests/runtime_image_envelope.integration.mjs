@@ -56,6 +56,36 @@ test("non-image and unfamiliar payloads retain the existing serializer", () => {
   }
 });
 
+test("identical exec output enters prompt text once while full provenance and process handles survive", () => {
+  const output = "Unique command output: Café, line 42\n".repeat(500);
+  const payload = {tool, result: {content: [{type: "text", text: output}], details: {
+    aggregated: output, status: "running", sessionId: "opaque-owned-process", cwd: "/workspace/project", exitCode: null
+  }}};
+  const result = execute(payload);
+  const visible = JSON.parse(result.content[0].text);
+  assert.equal(visible.result.content[0].text, output);
+  assert.equal(Object.hasOwn(visible.result.details, "aggregated"), false);
+  assert.equal(visible.result.details.sessionId, "opaque-owned-process");
+  assert.equal(visible.result.details.status, "running");
+  assert.equal(visible.result.details.exitCode, null);
+  assert.equal(result.details, payload);
+  assert.equal(payload.result.details.aggregated, output);
+  assert.ok(result.content[0].text.length < jsonResult(payload).content[0].text.length - output.length);
+});
+
+test("distinct, partial, multiple-block and malformed command output is never discarded", () => {
+  const cases = [
+    {content: [{type: "text", text: "partial"}], details: {aggregated: "complete output"}},
+    {content: [{type: "text", text: "first"}, {type: "text", text: "second"}], details: {aggregated: "first\nsecond"}},
+    {content: [{type: "text", text: "same"}], details: {aggregated: {value: "same"}}},
+    {content: [{type: "text", text: "same"}], details: "same"},
+  ];
+  for (const result of cases) {
+    const payload = {tool, result};
+    assert.deepEqual(execute(payload), jsonResult(payload));
+  }
+});
+
 test("mixed unsupported or malformed blocks are never silently discarded", () => {
   for (const part of [null, {type: "resource", resource: {uri: "owned:file"}}, {type: "text", text: 7}, {type: "image", data: ""}, {type: "image", data: "abc", mimeType: ""}, {type: "image", data: "abc", mimeType: "text/html"}]) {
     const payload = {tool, result: {content: [image, part]}};

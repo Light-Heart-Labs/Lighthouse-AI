@@ -96,11 +96,16 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
         before = manifest["sourceSha256"]
         after = manifest["patchedSha256"]
         current_hash = digest(current)
-        if current_hash not in {before, after}:
+        predecessors = manifest.get("previousReplacements", {})
+        reverse = (manifest["replacements"] if current_hash == after
+                   else predecessors.get(current_hash))
+        if current_hash != before and reverse is None:
             raise ValueError("OpenClaw recovery module differs from reviewed bytes")
         original = current.decode("utf-8")
-        if current_hash == after:
-            for old, new in reversed(manifest["replacements"]):
+        if current_hash != before:
+            # Only an exact source-bound predecessor may migrate. Reconstruct
+            # and hash the same original bytes before applying the new recipe.
+            for old, new in reversed(reverse):
                 if original.count(new) != 1:
                     raise ValueError("runtime repair cannot recover reviewed baseline")
                 original = original.replace(new, old)
@@ -130,7 +135,7 @@ def repair(runtime_root, state_dir, *, restore=False, manifest_path=MANIFEST,
             receipt["reviewedDependencies"] = dependencies
         receipt_path = state_dir / "receipt.json"
         # Record custody before changing executable bytes, including interrupted
-        # attempts. A rerun recovers only the two reviewed byte states.
+        # attempts. Reruns accept only exact reviewed source/patch byte states.
         atomic_write(receipt_path, json.dumps(receipt, sort_keys=True).encode())
         changed = current != target
         if changed:
