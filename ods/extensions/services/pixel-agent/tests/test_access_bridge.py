@@ -1,5 +1,4 @@
 import contextlib
-import json
 import os
 from pathlib import Path
 import sys
@@ -73,7 +72,9 @@ class FakeBridge(bridge.SystemdAccessBridge):
 
     def command(self, args, timeout=20):
         if "restart" in args:
-            self.log.append("restart"); self.pid += 1; self.proof = None
+            self.log.append("restart")
+            self.pid += 1
+            self.proof = None
             return ""
         return str(self.pid)
 
