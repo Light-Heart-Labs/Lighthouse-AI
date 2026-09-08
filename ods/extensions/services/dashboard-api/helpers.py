@@ -1146,3 +1146,25 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def filter_valid_kv_pairs(pairs: object) -> list:
+    """Filter list of key-value pairs safely, dropping None, empty keys, or invalid formats.
+
+    Returns list of clean (str_key, str_val) tuples. Handles non-sequence inputs safely.
+    """
+    if not isinstance(pairs, (list, tuple)):
+        return []
+    res = []
+    for item in pairs:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        k, v = item
+        if k is None or v is None:
+            continue
+        str_k = str(k).strip()
+        if not str_k:
+            continue
+        res.append((str_k, str(v)))
+    return res
+
