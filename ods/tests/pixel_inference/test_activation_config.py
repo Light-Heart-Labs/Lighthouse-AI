@@ -1,10 +1,13 @@
 """Managed config projection is reversible; it is not activation authority."""
 import copy
 import json
+from pathlib import Path
+import sys
 import uuid
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'bin'))
 from pixel_provider.activation_config import plan_activation, restore_activation
 from pixel_provider.store import StoreError
 
