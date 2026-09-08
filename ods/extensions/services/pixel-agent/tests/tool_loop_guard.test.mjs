@@ -7293,25 +7293,25 @@ test("fails closed when Operations work is not submitted or routing is ignored",
   })?.block, true, "sandbox exec allowed");
   assert.notEqual(call(guard, "read")?.block, true, "sandbox read allowed");
   assert.deepEqual(aborts, []);
-  // A non-workspace tool triggers the first Operations correction.
+  // An unrelated messaging tool still triggers the Operations correction.
   guard.observeModelCall(
     { runId: "run-1", callId: "call-2" },
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
   );
-  assert.deepEqual(call(guard, "web_search", {
-    event: { params: { query: "help" } },
+  assert.deepEqual(call(guard, "message", {
+    event: { params: { action: "send", message: "unrequested" } },
   }), {
     block: true,
     blockReason: OPERATIONS_REQUIRES_BROKER_REASON,
   });
   assert.deepEqual(aborts, []);
-  // Repeated non-workspace tool on a new model round triggers the abort.
+  // Repeating that unrelated tool on a new model round triggers the abort.
   guard.observeModelCall(
     { runId: "run-1", callId: "call-3" },
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" }
   );
-  assert.deepEqual(call(guard, "web_search", {
-    event: { params: { query: "help2" } },
+  assert.deepEqual(call(guard, "message", {
+    event: { params: { action: "send", message: "still unrequested" } },
   }), {
     block: true,
     blockReason: OPERATIONS_LOOP_ABORT_REASON,
@@ -13317,3 +13317,64 @@ test("inspection of another object does not mandate a host inventory", () => {
     assert.ok(result.actions.includes("host.memory"), prompt);
   }
 });
+
+
+for (const transport of ["direct", "tool-search"]) {
+  for (const phase of ["before", "pending", "succeeded"]) {
+    for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract"]) {
+      test(`public research composes with host work: ${transport}/${phase}/${name}`, () => {
+        const guard = createToolLoopGuard();
+        guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+          prompt: "Report the ODS host hostname, research official Python documentation, and save the findings to research-report.md.",
+        });
+        if (phase !== "before") {
+          const params = { actions: ["host.identity"] };
+          assert.notEqual(call(guard, "pixel_ods_host_observe", { event: { params } })?.block, true);
+          afterCall(guard, "pixel_ods_host_observe", { event: { params, result: { details: {
+            jobId: "ops-1234567890123-bbbbbbbbbbbb", status: phase,
+            waitTimedOut: phase === "pending",
+            ...(phase === "succeeded" ? { steps: [{ ...lifecycleStep("inspect"),
+              action: "host.identity", target: "ods-host", stdout: "research-host\n",
+            }] } : {}),
+          } } } });
+        }
+        const args = name === "web_search" ? { query: "Python official documentation" }
+          : { url: "https://docs.python.org/3/", query: "documentation" };
+        const tool = transport === "direct" ? name : "tool_call";
+        const params = transport === "direct" ? args : { id: name, args };
+        assert.notEqual(call(guard, tool, { event: { params } })?.block, true);
+        afterCall(guard, tool, { event: { params, result: { content: [{ type: "text", text: "Python documentation" }] } } });
+        if (phase !== "succeeded") {
+          assert.equal(guard.deliveryVerificationForRun("run-1").status, "failed",
+            "public research cannot replace missing or pending host evidence");
+        }
+      });
+    }
+  }
+  for (const name of ["web_fetch", "pixel_ods_web_extract"]) {
+    test(`mixed host research retains public destination boundary: ${transport}/${name}`, () => {
+      const guard = createToolLoopGuard();
+      guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+        prompt: "Report the ODS host hostname and research public Python documentation.",
+      });
+      const args = { url: "http://127.0.0.1/private", query: "documentation" };
+      const params = transport === "direct" ? args : { id: name, args };
+      const result = call(guard, transport === "direct" ? name : "tool_call", { event: { params } });
+      assert.equal(result.blockReason, WEB_FETCH_PUBLIC_ONLY_REASON);
+    });
+  }
+  for (const name of ["web_search", "web_fetch", "pixel_ods_web_extract"]) {
+    test(`web identity is required for every transport: ${transport}/${name}`, () => {
+      const guard = createToolLoopGuard();
+      const args = name === "web_search" ? { query: "Python documentation" }
+        : { url: "https://docs.python.org/3/", query: "documentation" };
+      const params = transport === "direct" ? args : { id: name, args };
+      const result = call(guard, transport === "direct" ? name : "tool_call", {
+        event: { params, runId: undefined },
+        context: { runId: undefined, sessionId: undefined },
+      });
+      assert.equal(result.block, true);
+      assert.match(result.blockReason, /bounded run identity/);
+    });
+  }
+}

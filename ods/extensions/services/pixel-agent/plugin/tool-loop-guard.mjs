@@ -7209,16 +7209,20 @@ export function createToolLoopGuard({
       return { block: true, blockReason: OPERATIONS_LOOP_ABORT_REASON };
     }
 
-    const operationsMayContinueInWorkspace =
+    // Required host evidence does not impose an order on independent workspace
+    // or public research work. Each tool still passes its own checks below;
+    // web observations never satisfy a required Operations receipt.
+    const operationsMayContinueWithIndependentTools =
       state?.operationsRequired === true &&
-      WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName);
+      (WORKSPACE_CONTINUATION_TOOLS.has(effectiveToolName) ||
+        WEB_TOOLS.has(effectiveToolName));
     if (
       state?.operationsRequired &&
       !extensionDiscoveryActive(state) &&
       !OPERATIONS_TOOLS.has(toolName) &&
       effectiveToolName !== "tool_search" &&
       effectiveToolName !== "tool_describe" &&
-      !operationsMayContinueInWorkspace
+      !operationsMayContinueWithIndependentTools
     ) {
       // One model response may contain several parallel tool calls. Return the
       // same correction to every disallowed call in that response instead of
@@ -7529,7 +7533,7 @@ export function createToolLoopGuard({
     // boundaries. Let the model select another page, search, or extraction;
     // the ordinary per-run budget and duplicate-call guard still apply.
 
-    if (WEB_TOOLS.has(toolName) && (!runId || !sessionId)) {
+    if (WEB_TOOLS.has(selectedToolName) && (!runId || !sessionId)) {
       return {
         block: true,
         blockReason:
