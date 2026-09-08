@@ -1,5 +1,7 @@
 services:
   comfyui:
+    volumes:
+      - ./data/comfyui/workflows:/workflows:rw,z
     deploy:
       resources:
         reservations:
