@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { isIP } from "node:net";
+import { isDeepStrictEqual } from "node:util";
 
 export const DEFAULT_WEB_TOOL_LIMITS = Object.freeze({
   search: 8,
@@ -5743,7 +5744,8 @@ export function createToolLoopGuard({
     runId,
     selectedToolName,
     selectedParams,
-    verificationFingerprint
+    verificationFingerprint,
+    transport
   ) {
     if (typeof toolCallId !== "string" || !toolCallId) return;
     if (pendingToolRuns.has(toolCallId)) pendingToolRuns.delete(toolCallId);
@@ -5755,6 +5757,7 @@ export function createToolLoopGuard({
       selectedToolName,
       selectedParams,
       verificationFingerprint,
+      transport,
     });
   }
 
@@ -6797,7 +6800,8 @@ export function createToolLoopGuard({
         selectedParams,
         selectedToolName === "exec"
           ? verificationExecFingerprint(selectedParams)
-          : undefined
+          : undefined,
+        toolName
       );
       if (
         selectedToolName !== SYNCHRONOUS_HOST_OBSERVE_TOOL &&
@@ -8050,8 +8054,22 @@ export function createToolLoopGuard({
         })[0]
       : undefined;
     const completedMutation = directMutation ?? wrappedMutation;
+    // Tool Search reports the inner execution before its outer tool_call.
+    // Apply a bound mutation through the outer receipt once; replaying an edit
+    // twice can invalidate correctly tracked bytes and hide a valid preview.
+    // The pinned runtime's child ID contains a sanitized parent ID and sequence.
+    const matchingParents = directMutation && typeof toolCallId === "string"
+      ? [...pendingToolRuns].filter(([parentId, pending]) => {
+          if (pending.transport !== "tool_call" || pending.runId !== runId ||
+              pending.selectedToolName !== directMutation.name ||
+              !isDeepStrictEqual(pending.selectedParams, event.params)) return false;
+          const parent = parentId.trim().replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 120) || "call";
+          const prefix = `tool_search_code:${parent}:${directMutation.name}:`;
+          return toolCallId.startsWith(prefix) && /^[1-9][0-9]*$/.test(toolCallId.slice(prefix.length));
+        })
+      : [];
     const successfulMutation =
-      completedMutation && !toolCallFailed(completedMutation.event)
+      completedMutation && matchingParents.length !== 1 && !toolCallFailed(completedMutation.event)
         ? completedMutation
         : undefined;
     if (successfulMutation) {
