@@ -1607,3 +1607,16 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestCalculateSimpleMovingAverageSafe:
+
+    def test_calculates_moving_average(self):
+        from helpers import calculate_simple_moving_average_safe
+        assert calculate_simple_moving_average_safe([10, 20, 30, 40, 50], window_size=3) == [20.0, 30.0, 40.0]
+
+    def test_handles_none_and_small_sequence(self):
+        from helpers import calculate_simple_moving_average_safe
+        assert calculate_simple_moving_average_safe(None) == []
+        assert calculate_simple_moving_average_safe([1, 2], window_size=3) == []
+
