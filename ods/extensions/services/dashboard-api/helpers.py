@@ -1146,3 +1146,17 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def has_dict_any_keys_safe(data: object, keys: object = ()) -> bool:
+    """Check if dictionary contains at least one non-None key specification safely.
+
+    Returns False if data is non-dict or keys sequence is empty/non-sequence.
+    """
+    if not isinstance(data, dict) or not isinstance(keys, (list, tuple, set)):
+        return False
+    for k in keys:
+        if k in data and data[k] is not None:
+            return True
+    return False
+
