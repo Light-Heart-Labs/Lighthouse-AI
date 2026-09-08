@@ -1146,3 +1146,22 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def count_list_item_frequencies_safe(items: object) -> dict:
+    """Count occurrence frequencies of hashable sequence items safely.
+
+    Filters unhashable or None items without exception. Returns empty dict for non-sequences.
+    """
+    if not isinstance(items, (list, tuple, set)):
+        return {}
+    res = {}
+    for item in items:
+        if item is None:
+            continue
+        try:
+            res[item] = res.get(item, 0) + 1
+        except TypeError:
+            continue
+    return res
+
