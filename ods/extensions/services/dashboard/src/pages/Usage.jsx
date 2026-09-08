@@ -816,26 +816,38 @@ function UsageByModelTable({ rows }) {
   const [provider, setProvider] = useState('all')
   const [service, setService] = useState('all')
   const [source, setSource] = useState('all')
+  const [sort, setSort] = useState('original')
   const [page, setPage] = useState(0)
   const providers = useMemo(() => ['all', ...new Set(rows.map(row => row.provider || 'unknown'))], [rows])
   const services = useMemo(() => ['all', ...new Set(rows.map(row => row.service || 'unknown'))], [rows])
   const sources = useMemo(() => ['all', ...new Set(rows.map(row => row.cost_source || 'untracked'))], [rows])
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return rows.filter(row => {
+    const matches = rows.filter(row => {
       if (provider !== 'all' && (row.provider || 'unknown') !== provider) return false
       if (service !== 'all' && (row.service || 'unknown') !== service) return false
       if (source !== 'all' && (row.cost_source || 'untracked') !== source) return false
       if (!q) return true
       return [row.model, row.provider, row.service, row.cost_source].some(value => String(value || '').toLowerCase().includes(q))
     })
-  }, [provider, query, rows, service, source])
+    if (sort === 'original') return matches
+    const [field, direction] = sort.split(':')
+    return matches.sort((a, b) => {
+      const left = a[field]
+      const right = b[field]
+      if (field === 'model') return String(left || '').localeCompare(String(right || '')) * (direction === 'asc' ? 1 : -1)
+      const leftKnown = typeof left === 'number' && Number.isFinite(left) && (field !== 'cost_usd' || (Object.hasOwn(SOURCE_META, a.cost_source) && a.cost_source !== 'untracked'))
+      const rightKnown = typeof right === 'number' && Number.isFinite(right) && (field !== 'cost_usd' || (Object.hasOwn(SOURCE_META, b.cost_source) && b.cost_source !== 'untracked'))
+      if (leftKnown !== rightKnown) return leftKnown ? -1 : 1
+      return leftKnown ? (left - right) * (direction === 'asc' ? 1 : -1) : 0
+    })
+  }, [provider, query, rows, service, source, sort])
   const pageSize = 10
   const pageCount = Math.max(Math.ceil(filtered.length / pageSize), 1)
   const safePage = Math.min(page, pageCount - 1)
   const visible = filtered.slice(safePage * pageSize, safePage * pageSize + pageSize)
 
-  useEffect(() => { setPage(0) }, [provider, query, service, source])
+  useEffect(() => { setPage(0) }, [provider, query, service, source, sort])
 
   const exportCsv = () => {
     const header = ['model', 'provider', 'service', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'requests', 'cost_usd', 'cost_source']
@@ -857,6 +869,12 @@ function UsageByModelTable({ rows }) {
       <div className="flex min-h-[330px] flex-col p-3.5">
         <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <h2 className="whitespace-nowrap text-lg font-semibold">Usage by Model</h2>
+          <select aria-label="Rank model usage" value={sort} onChange={event => setSort(event.target.value)} className="h-9 rounded-md border border-theme-border bg-theme-card px-2 text-xs">
+            <option value="original">Report order</option>
+            <option value="cost_usd:desc">Highest cost</option><option value="cost_usd:asc">Lowest cost</option>
+            <option value="requests:desc">Most requests</option><option value="input_tokens:desc">Most input tokens</option>
+            <option value="output_tokens:desc">Most output tokens</option><option value="model:asc">Model name A–Z</option>
+          </select>
           <div className="grid gap-2 lg:grid-cols-[minmax(160px,1fr)_136px_136px_136px_auto]">
             <SearchBox value={query} onChange={setQuery} />
             <Select value={provider} onChange={setProvider} options={providers} label="All Providers" />

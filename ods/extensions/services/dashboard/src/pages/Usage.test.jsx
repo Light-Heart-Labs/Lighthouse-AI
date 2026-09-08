@@ -381,3 +381,22 @@ describe('Usage page', () => {
     })
   })
 })
+
+test('ranks the complete filtered inventory before pagination and keeps unknown costs last', async () => {
+  const models = Array.from({ length: 12 }, (_, index) => ({ ...currentReport.models[0], model: `ranked-${index}`, requests: index, cost_usd: index }))
+  models[11] = { ...models[11], cost_source: 'untracked', cost_usd: 0 }
+  models[10] = { ...models[10], cost_source: undefined, cost_usd: 0 }
+  const originalOrder = models.map(row => row.model)
+  installFetchMock({ current: { ...currentReport, models } })
+  render(<Usage status={{}} />)
+  await screen.findByText('ranked-0')
+  expect(screen.queryByText('ranked-11')).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Rank model usage'), { target: { value: 'requests:desc' } })
+  expect(screen.getByText('ranked-11')).toBeInTheDocument()
+  expect(screen.queryByText('ranked-0')).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Rank model usage'), { target: { value: 'cost_usd:asc' } })
+  expect(screen.getByText('ranked-0')).toBeInTheDocument()
+  expect(screen.queryByText('ranked-11')).not.toBeInTheDocument()
+  expect(models.map(row => row.model)).toEqual(originalOrder)
+  expect(screen.queryByText('ranked-10')).not.toBeInTheDocument()
+})
