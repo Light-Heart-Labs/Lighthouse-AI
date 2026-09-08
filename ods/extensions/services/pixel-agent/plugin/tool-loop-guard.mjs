@@ -149,10 +149,10 @@ export const WORKSPACE_PREVIEW_REQUIRES_FILES_REASON =
   "Pixel cannot publish this website yet because this response has not created or inspected an index.html in the requested workspace directory. Create the static site files first, then call pixel_ods_workspace_preview with that one relative directory.";
 
 export const WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON =
-  "The workspace preview is already published and independently verified. The owner also asked to inspect every preview file, so use only read on the next unread file inside the verified preview directory. Do not curl the preview URL, start a server, run another check, or call an unrelated tool.";
+  "The host verified the published snapshot. The owner also requested file inspection; complete the remaining file reads alongside any other requested checks. Static publication does not prove functional behavior.";
 
 export const WORKSPACE_PREVIEW_COMPLETE_REASON =
-  "The workspace preview is already published and independently verified, and every owner-requested preview-file readback is complete. Do not call another tool or curl the preview URL; give the owner the concise final result now. ODS will attach the verified preview receipt and native side panel.";
+  "The host verified the published snapshot and requested file readbacks are complete. Complete any remaining owner-requested checks, then give the concise final result. Static publication does not prove functional behavior; workspace changes require a fresh publication.";
 
 export const WORKSPACE_VISUAL_CONTINUATION_REQUIRES_READ_REASON =
   "Pixel is updating the most recently verified visual artifact in this chat. Read the existing file inside that exact artifact directory before editing or replacing it; do not guess its contents or create a replacement project.";
@@ -5300,6 +5300,10 @@ function workspacePreviewDirectoryFromState(state) {
 }
 
 function workspacePreviewRequiresAuthoredSnapshot(state, directory) {
+  // After a verified snapshot, further checks/repairs operate on an existing
+  // artifact. Require a new host receipt without claiming all bytes were
+  // newly authored; the old model-content buffer was released at publication.
+  if (state?.workspacePreviewVerifiedDirectory === directory) return false;
   const entryPath = `${directory}/index.html`;
   // An inspected entry and successful edit in the same directory establish
   // an existing-file revision even when its wording sounded like creation.
@@ -5968,6 +5972,7 @@ export function createToolLoopGuard({
         workspacePreviewDirectory: undefined,
         workspacePreviewAttempted: false,
         workspacePreview: undefined,
+        workspacePreviewVerifiedDirectory: undefined,
         workspaceToolSearchRouted: false,
         workspaceToolSearchQueries: new Set(),
         workspaceInspectionRouted: false,
@@ -7205,33 +7210,9 @@ export function createToolLoopGuard({
       return { block: true, blockReason: EXACT_DOWNLOAD_COMPLETE_REASON };
     }
 
-    if (
-      state?.workspacePreview &&
-      !state.operationsRequired &&
-      !state.exactDownloadRequested
-    ) {
-      if (workspacePreviewReadbackComplete(state)) {
-        return { block: true, blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON };
-      }
-      const selectedReadPath = selectedToolName === "read"
-        ? normalizeWorkspaceFilePath(selectedParams?.path)
-        : undefined;
-      const previewPrefix = `${state.workspacePreview.relativeDirectory}/`;
-      const safeUnreadPreviewPath =
-        typeof selectedReadPath === "string" &&
-        selectedReadPath.startsWith(previewPrefix) &&
-        selectedReadPath
-          .slice(previewPrefix.length)
-          .split("/")
-          .every((part) => WORKSPACE_PATH_COMPONENT.test(part)) &&
-        !state.successfulReadPaths.has(selectedReadPath);
-      if (!safeUnreadPreviewPath) {
-        return {
-          block: true,
-          blockReason: WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
-        };
-      }
-    }
+    // Publication verifies a snapshot, not completion of the owner's task.
+    // Let verification and repairs reach normal tool/loop checks; a blanket
+    // early return here can itself repeat forever before those checks run.
 
     if (state?.exactDownloadRequested && !EXACT_DOWNLOAD_BROKER_TOOLS.has(effectiveToolName)) {
       if (state.exactDownloadTerminalBlocks === 0) {
@@ -8216,6 +8197,20 @@ export function createToolLoopGuard({
       state.successfulExec.clear();
       state.successfulExecBlocks.clear();
     }
+    const completedExecution = toolName === "exec"
+      ? event
+      : toolName === "tool_call"
+        ? toolSearchSelectedToolEvent(event, "exec", "core")
+        : undefined;
+    if (state.workspacePreview && (successfulMutation ||
+        (completedExecution?.result && !toolCallFailed(completedExecution)))) {
+      // Shell commands and patches need not declare all affected files.
+      // Preserve the immutable host snapshot, but require fresh publication
+      // before presenting the potentially changed workspace as current.
+      state.workspacePreviewVerifiedDirectory = state.workspacePreview.relativeDirectory;
+      state.workspacePreview = undefined;
+      sessionPreviews.delete(state.currentSessionId);
+    }
     const completedWritePath = successfulMutation?.name === "write"
       ? normalizeWorkspaceFilePath(successfulMutation.event?.params?.path)
       : undefined;
@@ -8885,8 +8880,8 @@ export function createToolLoopGuard({
       return {
         stage: `workspace-preview-read-${completed}`,
         instruction: nextPath
-          ? `Do not reply yet. The preview is already independently verified; call tool_call now with id read and args ${JSON.stringify({ path: nextPath })}. Do not curl the preview URL or call another tool.`
-          : `Do not reply yet. The preview is already independently verified. Read the next unread static file inside ${state.workspacePreview.relativeDirectory} using only read; do not curl the preview URL or call another tool.`,
+          ? `The published snapshot is verified. Complete the requested read of ${nextPath} and any remaining owner-requested checks before replying.`
+          : `The published snapshot is verified. Complete the requested unread static files inside ${state.workspacePreview.relativeDirectory} and any remaining owner-requested checks before replying.`,
       };
     }
     const directory = workspacePreviewDirectoryFromState(state);
@@ -8980,8 +8975,8 @@ export function createToolLoopGuard({
       return nextPath
         ? (
           "[ODS Pixel next step] The preview is already independently verified. " +
-          `Call tool_call next with id read and args ${JSON.stringify({ path: nextPath })}; ` +
-          "do not curl the preview URL or call another tool."
+          `The owner still requested reading ${nextPath}. ` +
+          "Complete that inspection alongside any remaining requested checks."
         )
         : `[ODS Pixel next step] ${WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON}`;
     })();

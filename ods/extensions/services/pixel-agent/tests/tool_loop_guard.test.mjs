@@ -91,8 +91,6 @@ import {
   WORKSPACE_TOOL_SEARCH_COMPLETE_REASON,
   WORKSPACE_UNREQUESTED_PROJECTION_REASON,
   WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
-  WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
-  WORKSPACE_PREVIEW_COMPLETE_REASON,
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
@@ -11641,7 +11639,7 @@ test("blocks every creative scaffold even when a visual was requested", () => {
 
 
 
-test("ends a verified preview cleanly instead of curling its localhost URL", () => {
+test("allows requested verification after publication and invalidates potentially changed workspace receipts", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -11698,22 +11696,41 @@ test("ends a verified preview cleanly instead of curling its localhost URL", () 
     "preview-call",
     previewMessage
   );
-  assert.match(persisted.message.content.at(-1).text, /give the owner.*final/i);
-  const redundantCurl = call(guard, "tool_call", {
+  assert.match(persisted.message.content.at(-1).text, /remaining owner-requested checks/i);
+  assert.doesNotMatch(persisted.message.content.at(-1).text, /do not call another tool/i);
+  const verificationParams = { command: "node --check signal-garden/index.html" };
+  const verification = call(guard, "tool_call", {
     event: {
       params: {
         id: "exec",
-        args: { cmd: `curl ${details.url}`, workdir: "." },
+        args: verificationParams,
       },
     },
   });
-  assert.deepEqual(redundantCurl, {
-    block: true,
-    blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON,
-  });
+  assert.notEqual(verification?.block, true);
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  afterCall(guard, "exec", { event: { params: verificationParams,
+    result: { details: { status: "completed", exitCode: 0 } } } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed",
+    "A shell tool may modify files; an earlier snapshot must not stand in for current publication");
+  // A fresh host receipt can verify the unchanged bytes after a read-only check.
+  assert.notEqual(call(guard, "pixel_ods_workspace_preview", { event: {
+    params: { relativeDirectory: "signal-garden" },
+  } })?.block, true);
+  afterCall(guard, "pixel_ods_workspace_preview", { event: {
+    params: { relativeDirectory: "signal-garden" }, result: { details },
+  } });
+  assert.equal(guard.verificationForRun("run-1").status, "passed");
+  const editParams = { path: writeParams.path,
+    oldText: "Model-authored Signal Garden", newText: "Repaired Signal Garden" };
+  assert.notEqual(call(guard, "edit", { event: { params: editParams } })?.block, true);
+  afterCall(guard, "edit", { event: { params: editParams,
+    result: { details: { status: "completed" } } } });
+  assert.notEqual(guard.verificationForRun("run-1").status, "passed",
+    "A successful edit requires a new verified snapshot");
 });
 
-test("allows only requested preview-file readback before ending the tool loop", () => {
+test("interleaves requested preview-file readback with other verification", () => {
   const prompt =
     "Build a polished website, inspect every file you create, and show it in the preview.";
   assert.equal(userMessageRequestsWorkspacePreviewInspection([], prompt), true);
@@ -11761,10 +11778,7 @@ test("allows only requested preview-file readback before ending the tool loop", 
   const unrelated = call(guard, "tool_call", {
     event: { params: { id: "exec", args: { cmd: "true" } } },
   });
-  assert.deepEqual(unrelated, {
-    block: true,
-    blockReason: WORKSPACE_PREVIEW_REQUIRES_READBACK_REASON,
-  });
+  assert.notEqual(unrelated?.block, true);
   const path = "signal-garden/index.html";
   assert.notEqual(
     call(guard, "read", { event: { params: { path } } })?.block,
@@ -11775,13 +11789,10 @@ test("allows only requested preview-file readback before ending the tool loop", 
   });
   const afterRead = call(guard, "tool_call", {
     event: {
-      params: { id: "exec", args: { cmd: `curl ${details.url}`, workdir: "." } },
+      params: { id: "exec", args: { command: "node --check signal-garden/index.html" } },
     },
   });
-  assert.deepEqual(afterRead, {
-    block: true,
-    blockReason: WORKSPACE_PREVIEW_COMPLETE_REASON,
-  });
+  assert.notEqual(afterRead?.block, true);
   assert.equal(
     guard.beforeAgentFinalize(
       { runId: "run-1" },
