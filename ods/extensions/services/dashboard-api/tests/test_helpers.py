@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestFilterValidKvPairs:
+
+    def test_filters_valid_pairs(self):
+        from helpers import filter_valid_kv_pairs
+        raw = [("k1", "v1"), ("k2", 123), ("  ", "v3"), ("k4", None), "invalid"]
+        assert filter_valid_kv_pairs(raw) == [("k1", "v1"), ("k2", "123")]
+
+    def test_handles_none_and_non_sequence_inputs(self):
+        from helpers import filter_valid_kv_pairs
+        assert filter_valid_kv_pairs(None) == []
+        assert filter_valid_kv_pairs("not_pairs") == []
+
