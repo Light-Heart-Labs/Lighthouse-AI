@@ -5,6 +5,7 @@
 // cannot prevent retained session overrides; activation also requires mandatory
 // startup registration and actual resolved-model admission below.
 import { randomUUID } from 'node:crypto';
+import { approveHandoff, handoffCheckpoint, handoffRecipient } from './handoff-approval.mjs';
 
 const PROVIDER = 'ods-policy';
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -22,11 +23,13 @@ function leaseSnapshot(value) {
       typeof value.supportsVision !== 'boolean') throw new Error('Invalid lease');
   return Object.freeze({baseUrl: value.baseUrl, token: value.token,
     contextTokens: value.contextTokens, maxOutputTokens: value.maxOutputTokens,
-    reasoning: value.reasoning, supportsVision: value.supportsVision});
+    reasoning: value.reasoning, supportsVision: value.supportsVision,
+    ...('handoff' in value ? {handoff: handoffRecipient(value.handoff)} : {})});
 }
 
 export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, releaseLease, enabled = false,
-  durableReplayGuard = false} = {}) {
+  durableReplayGuard = false, authorizeHandoff, approvalTimeoutMs = 60000} = {}) {
+  if (!Number.isSafeInteger(approvalTimeoutMs) || approvalTimeoutMs < 1 || approvalTimeoutMs > 120000) unavailable();
   const runs = new Map();
   const models = new Map();
   // Only a host adapter with persistent exclusive claims may prune closed
@@ -61,7 +64,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
         }
         if (runs.size >= MAX_RUNS) return UNAVAILABLE;
         entry = {runId: ctx.runId, sessionId: ctx.sessionId, modelId: `turn-${randomUUID()}`,
-          state: 'pending', closed: false};
+          state: 'pending', closed: false, stopApproval: new AbortController()};
         runs.set(ctx.runId, entry);
         models.set(entry.modelId, entry);
         entry.pending = Promise.resolve()
@@ -85,24 +88,41 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     const entry = runs.get(ctx.runId);
     if (!entry || entry.sessionId !== ctx.sessionId) return;
     entry.closed = true;
+    entry.stopApproval.abort();
     await entry.pending;
     await release(entry);
     entry.lease = undefined;
   }
-  function beforeAgentRun(_event, ctx) {
-    if (enabled !== true || (ctx?.agentId && ctx.agentId !== agentId)) return undefined;
-    const entry = binding(ctx) ? runs.get(ctx.runId) : undefined;
-    if (entry?.sessionId === ctx?.sessionId && live(entry) &&
-        ctx.modelProviderId === PROVIDER && ctx.modelId === entry.modelId) return {outcome: 'pass'};
-    // The pinned runtime swallows model-selection hook failures, but enforces
-    // before_agent_run decisions before submitting inference. Inspect the actual
-    // resolved model, not a configured default that a session/cron can override.
-    if (entry && entry.sessionId === ctx.sessionId) {
-      entry.closed = true;
+  function deny(entry) {
+    if (entry) {
+      entry.closed = true; entry.stopApproval.abort();
       void Promise.resolve(entry.pending).then(() => release(entry));
     }
     return {outcome: 'block', reason: 'ods-provider-lease-unavailable',
       message: 'The approved Pixel provider route is unavailable. Review routing Settings before retrying.'};
+  }
+  function beforeAgentRun(event, ctx) {
+    if (enabled !== true || (ctx?.agentId && ctx.agentId !== agentId)) return undefined;
+    const entry = binding(ctx) ? runs.get(ctx.runId) : undefined;
+    if (entry?.sessionId === ctx?.sessionId && live(entry) &&
+        ctx.modelProviderId === PROVIDER && ctx.modelId === entry.modelId) {
+      if (!entry.lease.handoff) return {outcome: 'pass'};
+      try {
+        const preview = handoffCheckpoint(event, ctx, entry.lease.handoff);
+        if (entry.checkpointDigest && entry.checkpointDigest !== preview.checkpointDigest) return deny(entry);
+        entry.checkpointDigest = preview.checkpointDigest;
+        entry.approval ??= approveHandoff(preview, authorizeHandoff, entry.stopApproval.signal, approvalTimeoutMs);
+        return entry.approval.then(approved => {
+          if (!approved || !live(entry)) return deny(entry);
+          entry.handoffApproved = true;
+          return {outcome: 'pass'};
+        });
+      } catch { return deny(entry); }
+    }
+    // The pinned runtime swallows model-selection hook failures, but enforces
+    // before_agent_run decisions before submitting inference. Inspect the actual
+    // resolved model, not a configured default that a session/cron can override.
+    return deny(entry?.sessionId === ctx?.sessionId ? entry : undefined);
   }
   const provider = {
     id: PROVIDER, label: 'ODS routing', auth: [],
@@ -127,6 +147,7 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
       return (model, context, options) => {
         const entry = models.get(ctx?.modelId);
         if (!live(entry) || typeof ctx?.streamFn !== 'function' || options?.signal?.aborted ||
+            (entry.lease.handoff && entry.handoffApproved !== true) ||
             model?.provider !== PROVIDER || model?.id !== ctx.modelId) return unavailable();
         return ctx.streamFn({...model, id: 'ods/pixel', baseUrl: entry.lease.baseUrl}, context,
           {...options, apiKey: entry.lease.token});

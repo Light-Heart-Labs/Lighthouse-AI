@@ -15,8 +15,13 @@ config['providers'] = [dict(id='fixture',label='Synthetic fixture',kind='local',
     model='fixture-model',contextTokens=32768,maxOutputTokens=4096,supportsTools=True,supportsVision=False,
     reasoning=False,credentialRef=None,enabled=True)]
 config['roles'].update(leader='fixture',backups=[])
+changes={'fixture':dict(action='set',value='fixture-upstream-key')}
+if '--handoff' in sys.argv[3:]:
+    config['providers'].append(dict(config['providers'][0],id='stronger',label='Stronger fixture',model='stronger-model'))
+    config['roles']['handoff']='stronger'
+    changes['stronger']=dict(action='set',value='stronger-upstream-key')
 CredentialStore(root).save_public(dict(document=public_config(config),expectedRevision=0,
-    credentialChanges={'fixture':dict(action='set',value='fixture-upstream-key')}))
+    credentialChanges=changes))
 if os.environ.get('ODS_PREPARE_LEASE_RUNTIME')=='1':
     from pixel_provider.advice_runtime import prepare_runtime
     prepare_runtime(root,python='/usr/bin/python3.12',expected_revision=0,confirmed=True)

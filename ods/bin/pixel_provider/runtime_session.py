@@ -20,7 +20,7 @@ from .vault import CredentialStore
 
 
 class ProviderSession:
-    def __init__(self,directory,*,expected_revision,confirmed,allow_cloud=False):
+    def __init__(self,directory,*,expected_revision,confirmed,allow_cloud=False,handoff_provider_id=None):
         if os.name != 'posix':
             raise StoreError('unsupported-platform')
         if confirmed is not True or type(expected_revision) is not int:
@@ -32,6 +32,28 @@ class ProviderSession:
         if not config['enabled']:
             raise StoreError('provider-routing-disabled')
         by_id = {p['id']:p for p in config['providers']}
+        self.handoff = None
+        if handoff_provider_id is not None:
+            # Internal owner-selected routing only. The conversational adapter
+            # must additionally approve the actual checkpoint before inference.
+            if (type(handoff_provider_id) is not str or not handoff_provider_id
+                    or handoff_provider_id != config['roles']['handoff']):
+                raise StoreError('handoff-recipient-not-configured')
+            target = by_id[handoff_provider_id]
+            previous = by_id[config['roles']['leader']]
+            if (not target['enabled'] or target['id'] == previous['id']
+                    or target['contextTokens'] < previous['contextTokens']
+                    or target['maxOutputTokens'] < previous['maxOutputTokens']
+                    or any(previous[key] and not target[key]
+                           for key in ('supportsTools','supportsVision','reasoning'))):
+                raise StoreError('handoff-recipient-incompatible')
+            if target['kind'] == 'cloud' and not config['policy']['allowCloud']:
+                raise StoreError('cloud-not-authorized')
+            self.handoff = {key:target[key] for key in ('id','label','kind','baseUrl','model')}
+            self.handoff.update(revision=expected_revision,scope='run',previousProviderId=previous['id'])
+            # Do not broaden the checkpoint's recipients to normal backups.
+            config = copy.deepcopy(config)
+            config['roles'].update(leader=handoff_provider_id,backups=[])
         selected = [config['roles']['leader'],*config['roles']['backups']]
         if any(by_id[pid]['kind'] == 'cloud' for pid in selected) and allow_cloud is not True:
             raise StoreError('cloud-transfer-confirmation-required')
@@ -71,9 +93,12 @@ class ProviderSession:
             if not server.started:
                 raise StoreError('provider-runtime-start-failed')
             self.status = 'active-for-turn'
-            yield dict(baseUrl=address,token=token,contextTokens=self.leader['contextTokens'],
+            lease = dict(baseUrl=address,token=token,contextTokens=self.leader['contextTokens'],
                 maxOutputTokens=self.leader['maxOutputTokens'],reasoning=self.leader['reasoning'],
                 supportsVision=self.leader['supportsVision'])
+            if self.handoff is not None:
+                lease['handoff'] = copy.deepcopy(self.handoff)
+            yield lease
         finally:
             if server is not None:
                 server.should_exit = True

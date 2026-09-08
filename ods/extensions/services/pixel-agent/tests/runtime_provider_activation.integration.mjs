@@ -104,6 +104,7 @@ test('pinned retained-session overrides require independent run admission', {ski
     mkdirSync(join(root, 'node_modules'), {mode: 0o700});
     symlinkSync(resolve(pkg), join(root, 'node_modules/openclaw'));
     copyFileSync(new URL('../plugin/provider-routing.mjs', import.meta.url), join(plugin, 'provider-routing.mjs'));
+    copyFileSync(new URL('../plugin/handoff-approval.mjs', import.meta.url), join(plugin, 'handoff-approval.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-activation-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}), {mode: 0o600});
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-activation-fixture',

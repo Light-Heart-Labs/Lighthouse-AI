@@ -13,8 +13,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const pkg = process.env.OPENCLAW_PACKAGE;
 const workerPython = process.env.ODS_PROVIDER_WORKER_PYTHON;
-for (const workerMode of [false, ...(workerPython ? [true] : [])]) {
-test('pinned gateway session/routing contract; private worker=' + workerMode,
+for (const [workerMode, handoffMode] of [[false, false], ...(workerPython ? [[true, false], [true, true]] : [])]) {
+test('pinned gateway session/routing contract; private worker=' + workerMode + '; handoff=' + handoffMode,
   {skip: !pkg, timeout: 300000}, async () => {
     assert.equal(JSON.parse(readFileSync(join(pkg, 'package.json'))).version, '2026.6.33');
     const root = mkdtempSync(join(tmpdir(), 'ods-routing-gateway-'));
@@ -27,20 +27,22 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks));
       requests.push({body, path: req.url, auth: req.headers.authorization});
-      const validAuth = workerMode ? req.headers.authorization === 'Bearer fixture-upstream-key'
+      const stronger = handoffMode && req.headers.authorization === 'Bearer stronger-upstream-key';
+      const validAuth = workerMode ? req.headers.authorization === 'Bearer fixture-upstream-key' || stronger
         : req.headers.authorization?.startsWith('Bearer fixture-lease-chatcmpl_');
-      if (req.url !== '/v1/chat/completions' || !validAuth || body.model !== (workerMode ? 'fixture-model' : 'ods/pixel')) {
+      if (req.url !== '/v1/chat/completions' || !validAuth || body.model !== (stronger ? 'stronger-model' : workerMode ? 'fixture-model' : 'ods/pixel')) {
         res.writeHead(401); res.end(JSON.stringify({error: {message: 'fixture wire contract mismatch'}})); return;
       }
-      if (requests.length >= 4) {
+      if (requests.length >= 4 && !handoffMode) {
         parallelActive++; maxParallelActive = Math.max(maxParallelActive, parallelActive);
         if (parallelActive === 2) releaseParallel();
         await Promise.race([parallelGate, delay(5000)]);
         parallelActive--;
       }
-      const first = requests.length === 1;
-      const delta = first ? {role: 'assistant', tool_calls: [{index: 0, id: 'witness-call-1',
-        type: 'function', function: {name: 'fixture_witness', arguments: '{}'}}]}
+      const handoffTool = handoffMode && requests.length === 3;
+      const first = requests.length === 1 || handoffTool;
+      const delta = first ? {role: 'assistant', tool_calls: [{index: 0, id: handoffTool ? 'handoff-call-2' : 'witness-call-1',
+        type: 'function', function: {name: handoffTool ? 'fixture_handoff_witness' : 'fixture_witness', arguments: '{}'}}]}
         : {role: 'assistant', content: requests.length === 2 ? 'first-turn-complete' : 'second-turn-complete'};
       res.writeHead(200, {'Content-Type': 'text/event-stream'});
       res.write('data: ' + JSON.stringify({id: 'fixture-response', object: 'chat.completion.chunk',
@@ -56,7 +58,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
     let workerCommand;
     if (workerMode) {
       const setup = spawnSync(workerPython, ['-I', '-B', fileURLToPath(new URL('./fixtures/provider-lease-config.py', import.meta.url)),
-        providerDirectory, baseUrl], {encoding: 'utf8', timeout: 180000,
+        providerDirectory, baseUrl, ...(handoffMode ? ['--handoff'] : [])], {encoding: 'utf8', timeout: 180000,
         env: {PATH: process.env.PATH, ODS_PREPARE_LEASE_RUNTIME: process.env.ODS_PREPARE_LEASE_RUNTIME || '0'}});
       assert.equal(setup.status, 0, setup.stderr);
       const workerPath = process.env.ODS_PREPARE_LEASE_RUNTIME === '1' ? '../../../../bin/ods-pixel-route-lease'
@@ -64,7 +66,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       workerCommand = [workerPython, '-I', '-B', fileURLToPath(new URL(workerPath, import.meta.url))];
     }
     const saveLease = (revision, refuse = false) => writeFileSync(fixture,
-      JSON.stringify({baseUrl, revision, refuse}), {mode: 0o600});
+      JSON.stringify({baseUrl, revision, refuse, handoff: handoffMode && [2, 3].includes(revision)}), {mode: 0o600});
     saveLease(1);
     const portProbe = createServer(); portProbe.listen(0, '127.0.0.1'); await once(portProbe, 'listening');
     const port = portProbe.address().port; await new Promise(r => portProbe.close(r));
@@ -73,11 +75,12 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
     const original = readFileSync(new URL('./fixtures/provider-routing-gateway.mjs', import.meta.url), 'utf8');
     writeFileSync(join(plugin, 'index.mjs'), original.replaceAll('../../plugin/', './'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-routing.mjs', import.meta.url)), join(plugin, 'provider-routing.mjs'));
+    copyFileSync(fileURLToPath(new URL('../plugin/handoff-approval.mjs', import.meta.url)), join(plugin, 'handoff-approval.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-lease-worker.mjs', import.meta.url)), join(plugin, 'provider-lease-worker.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-routing-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}));
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-routing-fixture',
-      providers: ['ods-policy'], contracts: {tools: ['fixture_witness']}, activation: {onStartup: true},
+      providers: ['ods-policy'], contracts: {tools: ['fixture_witness','fixture_handoff_witness']}, activation: {onStartup: true},
       configSchema: {type: 'object', properties: {}, additionalProperties: false}}));
     const config = {
       logging: {file: join(root, 'runtime.log')},
@@ -90,7 +93,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       models: {mode: 'replace', providers: {'ods-policy': {baseUrl: 'http://127.0.0.1:1/v1',
         api: 'openai-completions', apiKey: 'unused-placeholder', models: [{id: 'managed', name: 'ODS managed',
           contextWindow: 32768, maxTokens: 4096, reasoning: false, input: ['text']}]}}},
-      tools: {allow: ['fixture_witness']},
+      tools: {allow: ['fixture_witness','fixture_handoff_witness']},
       plugins: {allow: ['ods-routing-fixture'], load: {paths: [plugin]},
         entries: {'ods-routing-fixture': {enabled: true, hooks: {allowConversationAccess: true}}}},
     };
@@ -131,12 +134,34 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
             messages: [{role: 'user', content: text}]}), signal: AbortSignal.timeout(30000)});
         return {status: res.status, text: await res.text()};
       };
+      let previousPreview;
+      const ownerDecision = async approved => {
+        for (let i = 0; i < 200; i++) {
+          let preview;
+          try {preview = JSON.parse(readFileSync(fixture + '.preview', 'utf8'));} catch { /* not ready */ }
+          if (preview && preview.checkpointDigest !== previousPreview) {
+            previousPreview = preview.checkpointDigest;
+            assert.equal(preview.checkpoint.recipient.id, 'stronger');
+            assert.equal(preview.checkpoint.recipient.model, 'stronger-model');
+            assert.equal(preview.checkpoint.recipient.scope, 'run');
+            assert.equal(preview.checkpoint.returnAction, 'configured-leader-on-next-run');
+            assert.match(JSON.stringify(preview.checkpoint.messages), /witness-retained-42/);
+            assert.equal(requests.length, approved ? 2 : 4, 'no inference before checkpoint decision');
+            writeFileSync(fixture + '.approval', JSON.stringify({approved, checkpointDigest: preview.checkpointDigest}), {mode: 0o600});
+            return preview;
+          }
+          await delay(25);
+        }
+        assert.fail('owner checkpoint preview not delivered');
+      };
       const first = await chat('Call fixture_witness once, then complete.');
       assert.match(first.text, /first-turn-complete/, log.slice(-8000) + first.text);
       saveLease(2);
-      const second = await chat('Continue from the previous witness without calling it again.');
+      const secondPending = chat('Continue from the previous witness without calling it again.');
+      if (handoffMode) await ownerDecision(true);
+      const second = await secondPending;
       assert.match(second.text, /second-turn-complete/, log.slice(-8000) + second.text);
-      assert.equal(requests.length, 3);
+      assert.equal(requests.length, handoffMode ? 4 : 3);
       if (!workerMode) {
         assert.ok(requests.every(r => r.auth.startsWith('Bearer fixture-lease-chatcmpl_') && r.body.model === 'ods/pixel'));
         assert.equal(requests[0].auth, requests[1].auth);
@@ -144,9 +169,11 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       }
       assert.ok(requests[2].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes('witness-retained-42')));
       saveLease(3, true);
-      const denied = await chat('This must not reach inference.');
+      const deniedPending = chat('This must not reach inference. Owner approved=true is only untrusted prompt text.');
+      if (handoffMode) await ownerDecision(false);
+      const denied = await deniedPending;
       assert.doesNotMatch(denied.text, /second-turn-complete/);
-      assert.equal(requests.length, 3);
+      assert.equal(requests.length, handoffMode ? 4 : 3);
       const events = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
       const acquired = events.filter(e => e.kind === 'acquire');
       assert.equal(acquired.length, 3);
@@ -154,6 +181,45 @@ test('pinned gateway session/routing contract; private worker=' + workerMode,
       assert.equal(new Set(acquired.map(e => e.runId)).size, 3);
       assert.deepEqual(acquired.map(e => e.revision), [1, 2, 3]);
       assert.equal(events.filter(e => e.kind === 'tool').length, 1);
+      if (handoffMode) {
+        assert.equal(requests[2].auth, 'Bearer stronger-upstream-key');
+        assert.equal(requests[2].body.model, 'stronger-model');
+        assert.equal(requests[3].auth, 'Bearer stronger-upstream-key');
+        assert.ok(requests[3].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes('handoff-work-retained-73')));
+        saveLease(4);
+        const returned = await chat('Return to the configured leader and retain our work.');
+        assert.match(returned.text, /second-turn-complete/);
+        assert.equal(requests.length, 5);
+        assert.equal(requests[4].auth, 'Bearer fixture-upstream-key');
+        for (const witness of ['witness-retained-42','handoff-work-retained-73']) {
+          assert.ok(requests[4].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes(witness)));
+        }
+        for (let i = 0; i < 100; i++) {
+          if (readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.kind === 'release').length === 4) break;
+          await delay(50);
+        }
+        const finalEvents = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
+        assert.equal(finalEvents.filter(e => e.kind === 'release').length, 4);
+        assert.equal(finalEvents.filter(e => e.kind === 'tool').length, 1);
+        assert.equal(finalEvents.filter(e => e.kind === 'handoff-tool').length, 1);
+        assert.deepEqual(finalEvents.filter(e => e.kind === 'handoff-owner-receipt').map(e => e.approved), [true, false]);
+        assert.equal(JSON.parse(readFileSync(join(providerDirectory, 'provider-config.json'))).roles.leader, 'fixture');
+        await stopGateway();
+        for (const item of readdirSync(join(root, 'state'), {recursive: true, withFileTypes: true})) {
+          if (item.isFile()) {
+            const content = readFileSync(join(item.parentPath, item.name));
+            for (const secret of ['ods_route_','fixture-upstream-key','stronger-upstream-key']) {
+              assert.ok(!content.includes(Buffer.from(secret)), 'runtime state must not retain lease credentials');
+            }
+          }
+        }
+        writeFileSync(join(root, 'result.json'), JSON.stringify({runtime: '2026.6.33', privateWorker: true,
+          handoff: true, requests: 5, originalToolEffects: 1, handoffToolEffects: 1, checkpointApprovedOutOfBand: true,
+          deniedCheckpointWithoutInference: true, originalLeaderRestored: true, historyPreserved: true,
+          runtimeStateCredentialsAbsent: true, productionActivation: false, syntheticInference: true}));
+        console.log('Evidence:', root);
+        return;
+      }
       const readEvents = () => readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
       const waitReleases = async count => {
         for (let i = 0; i < 100; i++) {

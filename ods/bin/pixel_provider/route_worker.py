@@ -23,11 +23,14 @@ from pixel_provider.store import StoreError
 
 
 def validate_request(value):
-    if (not isinstance(value,dict) or set(value)!={'schemaVersion','runId','sessionId',
-            'expectedRevision','allowCloud','timeoutSeconds','confirmed'}
+    required = {'schemaVersion','runId','sessionId','expectedRevision','allowCloud','timeoutSeconds','confirmed'}
+    if (not isinstance(value,dict) or set(value) not in (required,required|{'handoffProviderId'})
             or type(value['schemaVersion']) is not int or value['schemaVersion']!=1
             or value['confirmed'] is not True or type(value['allowCloud']) is not bool
             or type(value['timeoutSeconds']) is not int or not 1<=value['timeoutSeconds']<=3600):
+        raise StoreError('invalid-provider-lease-request')
+    if 'handoffProviderId' in value and (type(value['handoffProviderId']) is not str
+            or not value['handoffProviderId'] or len(value['handoffProviderId'])>64):
         raise StoreError('invalid-provider-lease-request')
     return value
 
@@ -81,7 +84,8 @@ def main():
         duration[0]=value['timeoutSeconds']; armed.set()
         phase = 'snapshot'
         session = ProviderSession(sys.argv[2],expected_revision=value['expectedRevision'],
-            confirmed=value['confirmed'],allow_cloud=value['allowCloud'])
+            confirmed=value['confirmed'],allow_cloud=value['allowCloud'],
+            handoff_provider_id=value.get('handoffProviderId'))
         phase = 'claim'
         with claim:
             try:

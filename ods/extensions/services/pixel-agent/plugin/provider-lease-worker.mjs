@@ -24,9 +24,13 @@ export function createLeaseWorkerAdapter({command, directory, request}) {
     if (typeof runId !== 'string' || runId.length > 64 || typeof sessionId !== 'string' ||
         !sessionId || sessionId.length > 256 || entries.has(runId)) throw failure();
     let policy;
-    try { policy = request(); } catch { throw failure(); }
-    if (!policy || Object.keys(policy).sort().join(',') !== 'allowCloud,confirmed,expectedRevision,timeoutSeconds' ||
+    try { policy = request(Object.freeze({runId, sessionId})); } catch { throw failure(); }
+    const keys = policy && Object.keys(policy).sort().join(',');
+    if (!policy || !['allowCloud,confirmed,expectedRevision,timeoutSeconds',
+      'allowCloud,confirmed,expectedRevision,handoffProviderId,timeoutSeconds'].includes(keys) ||
         policy.confirmed !== true || typeof policy.allowCloud !== 'boolean' ||
+        ('handoffProviderId' in policy && (typeof policy.handoffProviderId !== 'string' ||
+          !/^[a-z][a-z0-9_-]{0,63}$/.test(policy.handoffProviderId))) ||
         !Number.isSafeInteger(policy.expectedRevision) || policy.expectedRevision < 0 ||
         !Number.isSafeInteger(policy.timeoutSeconds) || policy.timeoutSeconds < 1 || policy.timeoutSeconds > 3600) throw failure();
     const body = Buffer.from(JSON.stringify({schemaVersion: 1, runId, sessionId, ...policy}));

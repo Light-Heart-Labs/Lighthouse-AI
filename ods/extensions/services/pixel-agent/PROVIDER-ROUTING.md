@@ -46,6 +46,45 @@ automatic service restart is performed.
 
 ## Evidence and limits
 
+### Run-scoped handoff candidate
+
+The private lease request callback receives the exact `{runId, sessionId}`. An
+owner adapter may supply `handoffProviderId` for that run only. The Python worker
+requires that ID to match the configured handoff role, refuses capability
+downgrades/cycles and freezes only that recipient's credential. It does not save
+a new leader or include ordinary backups. A later request without the field uses
+the saved leader. This field is internal transport, not public authorization.
+
+Before inference, `before_agent_run` supplies the actual initial runtime prompt,
+system prompt and complete message history. `handoff-approval.mjs` checks paired
+tool receipts, builds an immutable preview containing run/session, workspace,
+recipient/revision, scope and return action, and binds the approval to its digest.
+The trusted `authorizeHandoff` callback must return an exact approval receipt;
+missing/foreign/denied/late receipts and changed initial checkpoints block the run.
+Cloud receipts additionally require explicit transfer and unknown-cost consent.
+No callback is exposed to the model. Pending approval cannot dispatch inference.
+
+The granted data scope includes conversation history and new tool results during
+this run. Subsequent tool-loop calls therefore retain their context and permission
+boundary without requesting approval for each tool result. This is a runtime
+checkpoint, not a byte-for-byte preview of the final provider-specific wire body.
+The approval wait is bounded (60 seconds by default, at most 120 seconds) and
+counts against the already-running worker lease deadline. A too-short remaining
+lease may fail closed; it is never extended implicitly while waiting for approval.
+
+With `ODS_PROVIDER_WORKER_PYTHON`, the real pinned-gateway integration test also
+performs leader work, waits for an independent test controller to inspect/approve
+the handoff checkpoint, executes new handoff tool work, declines a later handoff
+despite approval-looking prompt text, and returns to the saved leader. Both tool
+results survive and each effect occurs once. All inference is synthetic loopback.
+The controller is a test fixture, not a shipping owner approval endpoint or UI.
+
+Still required: authenticated owner preview/approval endpoints and UI, durable
+approval/audit custody, task/conversation/default-future-work scope and return
+state, reconciliation with shared admission, and actual installed user journeys.
+An agent run is not necessarily an entire user task; this run primitive does not
+complete the requested handoff feature. It remains unregistered in production.
+
 Unit tests cover binding, duplicate acquisition, invalid leases, pending-release
 races, frozen snapshots, cancellation before IO and closed-route refusal.
 The opt-in `runtime_provider_routing.integration.mjs` test starts a private

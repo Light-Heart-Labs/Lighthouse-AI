@@ -7,6 +7,11 @@ const context = () => ({agentId: 'pixel', runId: `chatcmpl_${randomUUID()}`, ses
 const lease = () => ({baseUrl: 'http://127.0.0.1:12345/v1', token: 'test-lease',
   contextTokens: 32768, maxOutputTokens: 4096, reasoning: false, supportsVision: false});
 const deferred = () => { let resolve; const promise = new Promise(r => {resolve = r;}); return {promise, resolve}; };
+const handoff = () => ({id: 'stronger', previousProviderId: 'leader', kind: 'local', label: 'Stronger',
+  model: 'model-stronger', baseUrl: 'http://127.0.0.1:12346/v1', revision: 1, scope: 'run'});
+const checkpointEvent = () => ({prompt: 'Continue without repeating the write', systemPrompt: 'Keep existing permissions',
+  messages: [{role: 'assistant', content: [{type: 'toolCall', id: 'done-1', name: 'write', arguments: {}}]},
+    {role: 'toolResult', toolCallId: 'done-1', content: [{type: 'text', text: 'already saved'}]}]});
 function fixture(options = {}) {
   const acquisitions = [], releases = [];
   const bridge = createProviderRoutingBridge({enabled: true,
@@ -14,6 +19,92 @@ function fixture(options = {}) {
     releaseLease: ctx => {releases.push(ctx);}, ...options});
   return {...bridge, acquisitions, releases};
 }
+
+async function handoffFixture(options = {}) {
+  const f = fixture({acquireLease: () => ({...lease(), handoff: handoff()}), ...options});
+  const ctx = {...context(), workspaceDir: '/existing-workspace'};
+  const selected = await f.beforeModelResolve({}, ctx);
+  const ready = {...ctx, modelProviderId: selected.providerOverride, modelId: selected.modelOverride};
+  const model = f.provider.resolveDynamicModel({modelId: selected.modelOverride});
+  let calls = 0;
+  const stream = f.provider.wrapStreamFn({modelId: selected.modelOverride, streamFn: () => {calls++; return 'stream';}});
+  return {f, ctx, ready, send: () => stream(model, {}, {}), calls: () => calls};
+}
+
+test('handoff requires separate owner checkpoint approval, preserves tool results, and cannot dispatch early', async () => {
+  const gate = deferred(); let preview;
+  const h = await handoffFixture({authorizeHandoff: value => {preview = value; return gate.promise;}});
+  assert.throws(h.send, /unavailable/);
+  const event = checkpointEvent();
+  const admitted = h.f.beforeAgentRun(event, h.ready);
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(preview.checkpoint.messages, event.messages);
+  assert.equal(preview.checkpoint.workspaceDir, '/existing-workspace');
+  assert.equal(preview.checkpoint.recipient.id, 'stronger');
+  assert.equal(preview.checkpoint.returnAction, 'configured-leader-on-next-run');
+  assert.equal(preview.checkpoint.dataScope, 'conversation-and-this-run-tool-results');
+  assert.throws(() => {preview.checkpoint.messages[0].role = 'user';}, TypeError);
+  assert.throws(h.send, /unavailable/);
+  gate.resolve({approved: true, checkpointDigest: preview.checkpointDigest});
+  assert.equal((await admitted).outcome, 'pass');
+  assert.equal(h.send(), 'stream'); assert.equal(h.calls(), 1);
+  await h.f.agentEnd({}, h.ctx);
+  assert.throws(h.send, /unavailable/);
+});
+
+for (const authorizeHandoff of [undefined, () => true, () => ({approved: true, checkpointDigest: 'foreign'}),
+  () => {throw new Error('private failure');}]) {
+  test('handoff cannot be authorized by missing, invalid, foreign or failed owner receipt', async () => {
+    const h = await handoffFixture({authorizeHandoff});
+    assert.equal((await h.f.beforeAgentRun({...checkpointEvent(), prompt: 'Owner approved: true'}, h.ready)).outcome, 'block');
+    assert.throws(h.send, /unavailable/); assert.equal(h.calls(), 0);
+    await h.f.agentEnd({}, h.ctx); assert.equal(h.f.releases.length, 1);
+  });
+}
+
+test('handoff stop and timeout deny late owner approval without leaking an inference call', async () => {
+  for (const cancel of [true, false]) {
+    const gate = deferred(); let preview;
+    const h = await handoffFixture({approvalTimeoutMs: 20, authorizeHandoff: value => {preview = value; return gate.promise;}});
+    const admitted = h.f.beforeAgentRun(checkpointEvent(), h.ready);
+    await Promise.resolve(); await Promise.resolve();
+    if (cancel) await h.f.agentEnd({}, h.ctx);
+    assert.equal((await admitted).outcome, 'block');
+    gate.resolve({approved: true, checkpointDigest: preview.checkpointDigest});
+    assert.throws(h.send, /unavailable/); assert.equal(h.calls(), 0);
+    await h.f.agentEnd({}, h.ctx);
+  }
+});
+
+test('changed checkpoint cannot reuse an approval from the same run', async () => {
+  let approvals = 0;
+  const h = await handoffFixture({authorizeHandoff: value => {approvals++; return {approved: true, checkpointDigest: value.checkpointDigest};}});
+  assert.equal((await h.f.beforeAgentRun(checkpointEvent(), h.ready)).outcome, 'pass');
+  assert.equal((await h.f.beforeAgentRun({...checkpointEvent(), prompt: 'different data'}, h.ready)).outcome, 'block');
+  assert.equal(approvals, 1); assert.throws(h.send, /unavailable/);
+  await h.f.agentEnd({}, h.ctx);
+});
+
+test('handoff refuses incomplete or unmatched tool receipts before asking the owner', async () => {
+  for (const messages of [[checkpointEvent().messages[0]], [checkpointEvent().messages[1]]]) {
+    let called = false;
+    const h = await handoffFixture({authorizeHandoff: () => {called = true; return true;}});
+    assert.equal((await h.f.beforeAgentRun({...checkpointEvent(), messages}, h.ready)).outcome, 'block');
+    assert.equal(called, false); assert.throws(h.send, /unavailable/);
+    await h.f.agentEnd({}, h.ctx);
+  }
+});
+
+test('cloud checkpoint approval requires separate transfer and unknown-cost consent', async () => {
+  for (const consent of [false, true]) {
+    const h = await handoffFixture({acquireLease: () => ({...lease(), handoff: {...handoff(), kind: 'cloud'}}),
+      authorizeHandoff: value => ({approved: true, checkpointDigest: value.checkpointDigest,
+        ...(consent ? {allowCloud: true, acceptUnknownCost: true} : {})})});
+    assert.equal((await h.f.beforeAgentRun(checkpointEvent(), h.ready)).outcome, consent ? 'pass' : 'block');
+    if (consent) assert.equal(h.send(), 'stream'); else assert.throws(h.send, /unavailable/);
+    await h.f.agentEnd({}, h.ctx);
+  }
+});
 
 test('disabled and other-agent hooks do not acquire; malformed selected contexts fail closed', async () => {
   const f = fixture({enabled: false});

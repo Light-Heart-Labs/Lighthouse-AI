@@ -49,6 +49,49 @@ def test_cloud_requires_separate_turn_authority(saved):
     assert ProviderSession(root,expected_revision=2,confirmed=True,allow_cloud=True)
 
 
+def test_handoff_selects_only_configured_recipient_and_preserves_saved_leader(saved):
+    root,config = saved
+    config['roles']['handoff'] = 'backup'
+    CredentialStore(root).save_public({'document':config,'expectedRevision':1,'credentialChanges':{}})
+    with pytest.raises(StoreError,match='handoff-recipient-not-configured'):
+        ProviderSession(root,expected_revision=2,confirmed=True,handoff_provider_id='primary')
+    session = ProviderSession(root,expected_revision=2,confirmed=True,handoff_provider_id='backup')
+    assert session.config['roles']['leader']=='backup'
+    assert session.config['roles']['backups']==[]
+    assert set(session.credentials)=={'backup'}
+    assert session.handoff['previousProviderId']=='primary'
+    with session.serve() as lease:
+        assert lease['handoff']['id']=='backup'
+        assert lease['handoff']['scope']=='run'
+    saved_again = CredentialStore(root).load()
+    assert saved_again['roles']['leader']=='primary'
+    assert saved_again['roles']['backups']==['backup']
+    assert ProviderSession(root,expected_revision=2,confirmed=True).leader['id']=='primary'
+
+
+@pytest.mark.parametrize('field,value',[('contextTokens',16384),('maxOutputTokens',2048),('supportsTools',False)])
+def test_handoff_rejects_capability_downgrades(saved,field,value):
+    root,config = saved
+    config['roles']['handoff']='backup'
+    config['providers'][1][field]=value
+    CredentialStore(root).save_public({'document':config,'expectedRevision':1,'credentialChanges':{}})
+    with pytest.raises(StoreError,match='handoff-recipient-incompatible'):
+        ProviderSession(root,expected_revision=2,confirmed=True,handoff_provider_id='backup')
+
+
+def test_handoff_cloud_needs_per_run_transfer_consent(saved):
+    root,config = saved
+    config['roles']['handoff']='backup'
+    config['providers'][1]['kind']='cloud'
+    config['policy']['allowCloud']=True
+    CredentialStore(root).save_public({'document':config,'expectedRevision':1,
+        'credentialChanges':{'backup':{'action':'set','value':'cloud-fixture-only'}}})
+    with pytest.raises(StoreError,match='cloud-transfer-confirmation-required'):
+        ProviderSession(root,expected_revision=2,confirmed=True,handoff_provider_id='backup')
+    session=ProviderSession(root,expected_revision=2,confirmed=True,handoff_provider_id='backup',allow_cloud=True)
+    assert session.handoff['kind']=='cloud'
+
+
 def test_run_overlay_preserves_tools_and_original_and_stops_listener(saved,tmp_path):
     root,_ = saved
     session = ProviderSession(root,expected_revision=1,confirmed=True)
