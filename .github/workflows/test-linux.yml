@@ -190,6 +190,9 @@ jobs:
       - name: Dependency Pin Contract Tests
         run: python3 tests/test-dependency-pins.py
 
+      - name: Portal Dependency Lock Contract Tests
+        run: python3 tests/test-portal-dependency-lock.py
+
       - name: Offline Model Validation Tests
         run: python3 tests/test-offline-model-validation.py
 

@@ -25,6 +25,7 @@ bash scripts/check-release-claims.sh
 "$PYTHON_CMD" scripts/validate-golden-paths.py
 "$PYTHON_CMD" scripts/validate-generated-configs.py
 "$PYTHON_CMD" scripts/check-dependency-pins.py
+"$PYTHON_CMD" scripts/check-portal-dependency-lock.py
 
 echo "[gate] contracts"
 bash tests/test-install-docs.sh
