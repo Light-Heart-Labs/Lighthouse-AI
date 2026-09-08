@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestFlattenDictListValuesSafe:
+
+    def test_flattens_dict_list_values(self):
+        from helpers import flatten_dict_list_values_safe
+        raw = {"k1": [1, 2], "k2": [3, 4], "k3": 5}
+        assert flatten_dict_list_values_safe(raw) == [1, 2, 3, 4, 5]
+
+    def test_handles_none_and_non_dict_inputs(self):
+        from helpers import flatten_dict_list_values_safe
+        assert flatten_dict_list_values_safe(None) == []
+        assert flatten_dict_list_values_safe("not_dict") == []
+
