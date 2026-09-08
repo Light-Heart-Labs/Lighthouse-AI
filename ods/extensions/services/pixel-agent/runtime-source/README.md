@@ -87,6 +87,8 @@ Candidate patch SHA-256:
 `68f327263b8590bc505eda60ad77b03044c07cc4ae1ed957b5a2fdfedc094e52`.
 A fresh extraction of the exact upstream archive accepted this patch, and all
 fourteen patched source/test files matched the qualification tree byte-for-byte.
+The scoped Git LF rule preserves the patch hash in Windows and Linux checkouts
+and archives; do not normalize it to CRLF before applying or verifying it.
 This revision adds channel and approval-bootstrap admission to the preceding
 ten-file candidate; it is a production-source change, not only documentation.
 
