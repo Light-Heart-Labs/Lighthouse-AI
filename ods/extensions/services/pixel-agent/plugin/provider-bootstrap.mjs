@@ -91,13 +91,14 @@ export function createManagedProviderBootstrap({deployment, readConfig,
       workspace: agent.workspace ?? null, defaultWorkspace: defaults.workspace ?? null});
   }
   const authority = currentAuthority();
-  const authorizations = new Set();
+  const authorizations = new Map();
   let stopped = false, closing, bridge;
   function shutdown() {
     stopped = true;
     if (!closing) {
-      try { closing = Promise.all([bridge.shutdown(), ...authorizations]).then(() => {}); }
-      catch (error) { closing = Promise.reject(error); }
+      try { closing = Promise.all([bridge.shutdown(), ...authorizations.keys()])
+        .then(() => {}, () => {throw new Error('ODS provider cleanup incomplete');}); }
+      catch { closing = Promise.reject(new Error('ODS provider cleanup incomplete')); }
       // Drift may first be observed from a synchronous stream hook. Retain the
       // rejecting promise for the parent to await without an unhandled rejection.
       void closing.catch(() => {});
@@ -134,9 +135,16 @@ export function createManagedProviderBootstrap({deployment, readConfig,
       // Approval denial may settle before the owner worker has reaped its
       // child. Track the transport itself so shutdown cannot claim cleanup early.
       const pending = Promise.resolve().then(() => valid() ? authorize(ctx) : null);
-      authorizations.add(pending);
-      return pending.then(receipt => valid() ? receipt : null)
-        .finally(() => authorizations.delete(pending));
+      authorizations.set(pending, {runId: ctx.checkpoint.runId, sessionId: ctx.checkpoint.sessionId});
+      return pending.then(receipt => {
+        authorizations.delete(pending); // resolved transport proves child exit
+        return valid() ? receipt : null;
+      }, () => {
+        // Retain failed transport evidence. Deleting it would let a later
+        // agentEnd report successful cleanup and incorrectly clear access.
+        void shutdown();
+        throw new Error('ODS provider cleanup incomplete');
+      });
     },
   });
   for (const method of ['shutdown', 'beforeModelResolve', 'beforeAgentRun', 'agentEnd']) {
@@ -181,6 +189,10 @@ export function createManagedProviderBootstrap({deployment, readConfig,
     // access-first admission rejects a selected run before provider admission.
     async agentEnd(event, ctx) {
       if (await bridge.agentEnd(event, ctx) === false) throw new Error('ODS provider cleanup incomplete');
+      const pending = [...authorizations].filter(([, owner]) => owner.runId === ctx?.runId && owner.sessionId === ctx?.sessionId)
+        .map(([promise]) => promise);
+      try { await Promise.all(pending); }
+      catch { throw new Error('ODS provider cleanup incomplete'); }
     },
   });
 }

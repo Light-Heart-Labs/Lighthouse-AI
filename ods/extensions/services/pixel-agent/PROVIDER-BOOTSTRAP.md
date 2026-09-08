@@ -41,7 +41,8 @@ serializable owner API inputs. Lease factories must expose `acquireLease`,
 `releaseLease`, `durableReplayGuard: true`; handoff factories return the existing
 authorization callback. Bridge factories must expose the existing provider/hooks,
 registration timeout and the new `shutdown()` lifecycle. `agentEnd` returns
-`false` for incomplete cleanup; the bootstrap promotes that to a generic error.
+`false` for incomplete cleanup or a mismatched identity on an existing run; the
+bootstrap promotes that to a generic error without clearing access accounting.
 Constructors must not
 start workers; work begins only from actual bound hooks.
 
@@ -70,7 +71,7 @@ api.on('before_agent_run', async (event, context) => {
     }
     const decision = await routing.beforeAgentRun(event, context);
     if (decision?.outcome === 'block') await finishManagedRun(event, context);
-    return decision;
+    return decision ?? access;
   } catch {
     try { await finishManagedRun(event, context); }
     catch { /* Retain busy/failed access state for operator reconciliation. */ }
@@ -120,6 +121,15 @@ waits for pending acquisitions, lease release and owner-transport exit. Repeated
 calls return the same promise. Incomplete lease cleanup rejects; never report
 rollback complete from that rejection. A transport that has already dispatched
 may have performed work; shutdown does not undo effects or charges.
+`agentEnd()` also waits for that run/session's owner transport after lease cleanup,
+not merely its faster aborted approval decision. It does not wait for another
+run's checkpoint worker. A rejected owner transport means cleanup is unknown:
+retain its failed record, close the bootstrap and keep subsequent matching cleanup
+and shutdown rejected. A resolved `null` is normal denial after known transport
+exit, not that failure. Dependency-injected transports must preserve this contract.
+Busy access accounting prevents mode transitions but
+does not by itself disable ordinary concurrent runs; do not describe it as a
+global admission hold. Parent owns explicit hold/recovery semantics.
 
 Before first activation, capture and verify the private presence-aware baseline
 from `plan_activation`; retain it independently of editable preferences. Never
@@ -137,6 +147,13 @@ Unit tests cover exact binding/defaults, malformed deployment, caller mutation,
 native identity, fixed private commands, drift between admission and dispatch,
 late acquisition, access-denial cleanup, idempotent shutdown, unknown cleanup
 and waiting for owner transport exit after approval has already been aborted.
+`provider-access-composition.test.mjs` uses the real access-runtime with the real
+bootstrap and recording worker seams. It proves access-first hold denial, provider
+denial with absent/duplicate end events, slow/unknown cleanup retaining activity,
+foreign identity rejection, per-run checkpoint exit, independent runs and detached
+tool accounting. Rejected transports before and during cleanup retain unknown
+activity and never become successful cleanup through deletion. Its executable parent sketch is test-only
+`tests/fixtures/managed-admission.mjs`; the parent's actual entrypoint is unchanged.
 
 The existing pinned gateway integration accepts `ODS_MANAGED_BOOTSTRAP=1` with
 `ODS_PREPARE_LEASE_RUNTIME=1`, `ODS_HANDOFF_OWNER_API=1`, `ODS_OWNER_SCOPE=task`
@@ -144,6 +161,11 @@ and the documented `OPENCLAW_PACKAGE`/`ODS_PROVIDER_WORKER_PYTHON`. It construct
 the actual Python activation projection, uses the real factory/private workers
 and required-plugin contract, and exercises approval, denial, tools/history,
 return, drift denial and refusal to revive after restoring configuration bytes.
+The managed fixture now composes the real access-runtime, acquires an authenticated
+transition hold between model turns, proves denial without inference and retention
+of the hold, explicitly releases it, then completes the handoff journey without
+leaking access activity. It does not exercise privileged mode switching or real
+host tools; those remain parent-owned installed acceptance.
 The disposable plugin is a fixture, not the parent's installed `index.js`.
 Model responses and owner authentication are synthetic. Real installed ODS chat,
 fresh install/upgrade/rollback, Full Access/admin/native qualification and the

@@ -6,6 +6,8 @@ import { createProviderRoutingBridge } from '../../plugin/provider-routing.mjs';
 import { createLeaseWorkerAdapter } from '../../plugin/provider-lease-worker.mjs';
 import { createHandoffOwnerAdapter } from '../../plugin/handoff-owner-worker.mjs';
 import { createManagedProviderBootstrap } from '../../plugin/provider-bootstrap.mjs';
+import { createAccessRuntime } from '../../plugin/access-runtime.mjs';
+import { composeManagedAdmission } from './managed-admission.mjs';
 
 const file = process.env.ODS_ROUTING_FIXTURE;
 const managed = process.env.ODS_MANAGED_BOOTSTRAP === '1';
@@ -94,6 +96,10 @@ const bridge = managed ? createManagedProviderBootstrap({
   },
   async releaseLease(ctx) { if (worker) await worker.releaseLease(ctx); record({kind: 'release', ...ctx}); },
 });
+const accessRuntime = managed ? createAccessRuntime({directory: process.env.ODS_ACCESS_FIXTURE_DIRECTORY,
+  config: () => JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, 'utf8')),
+  runtimeVersion: '2026.6.33', hooksAllowed: true}) : null;
+const admission = managed ? composeManagedAdmission(accessRuntime, bridge) : null;
 
 export default {
   id: managed ? 'pixel-ods' : 'ods-routing-fixture',
@@ -105,9 +111,25 @@ export default {
       record({kind: 'selection', runId: ctx.runId, sessionId: ctx.sessionId, ...result});
       return result;
     });
-    api.on('agent_end', bridge.agentEnd);
-    api.on('before_agent_run', bridge.beforeAgentRun, bridge.beforeAgentRunOptions);
-    if (managed) api.registerService({id: 'fixture-managed-routing', start() {}, stop: () => bridge.shutdown()});
+    api.on('agent_end', managed ? admission.finish : bridge.agentEnd);
+    api.on('before_agent_run', managed ? admission.admit : bridge.beforeAgentRun, bridge.beforeAgentRunOptions);
+    if (managed) {
+      api.registerService({id: 'fixture-managed-routing', start() {}, stop: () => bridge.shutdown()});
+      // Authenticated disposable test control only; not a product/owner endpoint.
+      api.registerHttpRoute({path: '/fixture-access', auth: 'gateway', match: 'exact', async handler(req, res) {
+        try {
+          if (req.method === 'POST') {
+            const chunks = []; let size = 0;
+            for await (const part of req) {size += part.length; if (size > 1024) throw new Error('oversized'); chunks.push(part);}
+            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (value.operation === 'acquire') accessRuntime.acquire(value.token, value.revision);
+            else if (value.operation === 'release') accessRuntime.release(value.token);
+            else throw new Error('unsupported');
+          } else if (req.method !== 'GET') throw new Error('unsupported');
+          res.writeHead(200, {'Content-Type': 'application/json'}); res.end(JSON.stringify(accessRuntime.status()));
+        } catch {res.writeHead(409); res.end('fixture-access-denied');}
+      }});
+    }
     api.registerTool({name: 'fixture_witness', description: 'Return a fixed qualification witness.',
       parameters: {type: 'object', properties: {}, additionalProperties: false},
       async execute() {

@@ -90,9 +90,10 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
     } catch { return UNAVAILABLE; }
   }
   async function agentEnd(_event, ctx) {
-    if (enabled !== true || !binding(ctx)) return;
-    const entry = runs.get(ctx.runId);
-    if (!entry || entry.sessionId !== ctx.sessionId || ownerScopes && entry.sessionKey !== ctx.sessionKey) return;
+    if (enabled !== true) return;
+    const entry = runs.get(ctx?.runId);
+    if (!entry) return;
+    if (!binding(ctx) || entry.sessionId !== ctx.sessionId || ownerScopes && entry.sessionKey !== ctx.sessionKey) return false;
     entry.closed = true;
     entry.stopApproval.abort();
     await entry.pending;

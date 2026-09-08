@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symli
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { computeSessionUser } from '../host/pixel_ingress.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -109,6 +109,8 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     copyFileSync(fileURLToPath(new URL('../plugin/provider-lease-worker.mjs', import.meta.url)), join(plugin, 'provider-lease-worker.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/handoff-owner-worker.mjs', import.meta.url)), join(plugin, 'handoff-owner-worker.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-bootstrap.mjs', import.meta.url)), join(plugin, 'provider-bootstrap.mjs'));
+    copyFileSync(fileURLToPath(new URL('../plugin/access-runtime.mjs', import.meta.url)), join(plugin, 'access-runtime.mjs'));
+    copyFileSync(fileURLToPath(new URL('./fixtures/managed-admission.mjs', import.meta.url)), join(plugin, 'managed-admission.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-routing-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}));
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-routing-fixture',
@@ -161,6 +163,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       ODS_HANDOFF_BROWSER: browserMode ? '1' : '0'});
     if (ownerScope) env.ODS_OWNER_SCOPE = ownerScope;
     if (managedBootstrap) Object.assign(env, {ODS_MANAGED_BOOTSTRAP: '1', ODS_MANAGED_DEPLOYMENT: JSON.stringify(deployment),
+      ODS_ACCESS_FIXTURE_DIRECTORY: join(root, 'access-runtime'),
       OPENCLAW_REQUIRED_PLUGINS: JSON.stringify({version: 1, plugins: [{id: 'pixel-ods',
         hooks: ['before_model_resolve', 'before_agent_run', 'agent_end']}]})});
     const child = spawn(process.execPath, [join(pkg, 'openclaw.mjs'), 'gateway', 'run'],
@@ -192,6 +195,13 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
           body: JSON.stringify({model: 'openclaw:pixel', user: ownerScope ? computeSessionUser({user}) : user, stream: false,
             messages: [{role: 'user', content: text}]}), signal: AbortSignal.timeout(browserMode ? 135000 : 30000)});
         return {status: res.status, text: await res.text()};
+      };
+      const accessRequest = async body => {
+        const response = await fetch(`http://127.0.0.1:${port}/fixture-access`, {
+          method: body ? 'POST' : 'GET', headers: {Authorization: 'Bearer fixture-gateway-key', 'Content-Type': 'application/json'},
+          ...(body ? {body: JSON.stringify(body)} : {}), signal: AbortSignal.timeout(5000)});
+        assert.equal(response.status, 200, await response.clone().text());
+        return await response.json();
       };
       let previousPreview;
       const ownerDecision = async approved => {
@@ -264,6 +274,21 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       }
       const first = await chat('Call fixture_witness once, then complete.');
       assert.match(first.text, /first-turn-complete/, log.slice(-8000) + first.text);
+      if (managedBootstrap) {
+        const unauthorized = await fetch(`http://127.0.0.1:${port}/fixture-access`);
+        assert.equal(unauthorized.status, 401);
+        let status = await accessRequest();
+        for (let i = 0; i < 100 && status.phase !== 'idle'; i++) {await delay(50); status = await accessRequest();}
+        assert.equal(status.available, true); assert.equal(status.active, 0); assert.equal(status.phase, 'idle');
+        const token = randomBytes(32).toString('hex');
+        assert.equal((await accessRequest({operation: 'acquire', token, revision: status.revision})).phase, 'held');
+        const blocked = await chat('A held access transition must deny this selected route.');
+        assert.doesNotMatch(blocked.text, /first-turn-complete|second-turn-complete/);
+        assert.equal(requests.length, 2, 'access-first hold admits no inference');
+        status = await accessRequest();
+        assert.equal(status.phase, 'held'); assert.equal(status.active, 0);
+        assert.equal((await accessRequest({operation: 'release', token})).phase, 'idle');
+      }
       saveLease(2);
       if (ownerScope) {
         await scopeChange('select', {scope: ownerScope, providerId:'stronger', providerRevision:1, allowCloud:false, acceptUnknownCost:false});
@@ -291,10 +316,10 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       assert.equal(requests.length, handoffMode ? 4 : 3);
       const events = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
       const acquired = events.filter(e => e.kind === 'acquire');
-      assert.equal(acquired.length, 3);
+      assert.equal(acquired.length, managedBootstrap ? 4 : 3);
       assert.equal(new Set(acquired.map(e => e.sessionId)).size, 1);
-      assert.equal(new Set(acquired.map(e => e.runId)).size, 3);
-      assert.deepEqual(acquired.map(e => e.revision), [1, 2, 3]);
+      assert.equal(new Set(acquired.map(e => e.runId)).size, managedBootstrap ? 4 : 3);
+      assert.deepEqual(acquired.map(e => e.revision), managedBootstrap ? [1, 1, 2, 3] : [1, 2, 3]);
       assert.equal(events.filter(e => e.kind === 'tool').length, 1);
       if (handoffMode) {
         assert.equal(requests[2].auth, 'Bearer stronger-upstream-key');
@@ -315,16 +340,18 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
           assert.ok(requests[4].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes(witness)));
         }
         for (let i = 0; i < 100; i++) {
-          if (readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.kind === 'release').length === 4) break;
+          if (readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.kind === 'release').length === (managedBootstrap ? 5 : 4)) break;
           await delay(50);
         }
         const finalEvents = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
-        assert.equal(finalEvents.filter(e => e.kind === 'release').length, 4);
+        assert.equal(finalEvents.filter(e => e.kind === 'release').length, managedBootstrap ? 5 : 4);
         assert.equal(finalEvents.filter(e => e.kind === 'tool').length, 1);
         assert.equal(finalEvents.filter(e => e.kind === 'handoff-tool').length, 1);
         assert.deepEqual(finalEvents.filter(e => e.kind === 'handoff-owner-receipt').map(e => e.approved), [true, false]);
         assert.equal(JSON.parse(readFileSync(join(providerDirectory, 'provider-config.json'))).roles.leader, 'fixture');
         if (managedBootstrap) {
+          const status = await accessRequest();
+          assert.equal(status.phase, 'idle'); assert.equal(status.active, 0);
           const originalConfig = readFileSync(join(root, 'openclaw.json'), 'utf8');
           const changed = JSON.parse(originalConfig);
           changed.plugins.entries['pixel-ods'].config.managedProvider.revision++;
@@ -353,7 +380,9 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
           ownerApi: ownerMode, ownerBrowser: browserMode, ...(ownerScope ? {ownerScope, explicitOwnerTask:true,
             nativeIngressHashBound:true, scopeRetainedAcrossRuns:true, explicitScopeReturn:true} : {}),
           ...(managedBootstrap ? {managedBootstrap: true, actualActivationProjection: true,
-            requiredPluginPolicy: true, configDriftDenied: true, restoredBytesDidNotRevive: true} : {})}));
+            requiredPluginPolicy: true, sharedAccessRuntime: true, accessHoldDeniedWithoutInference: true,
+            accessHoldPreservedUntilOwnerRelease: true, deniedRunsCleanedWithoutActivityLeak: true,
+            configDriftDenied: true, restoredBytesDidNotRevive: true} : {})}));
         console.log('Evidence:', root);
         return;
       }
