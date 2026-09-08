@@ -284,7 +284,12 @@ download_tier() {
     warn "Estimated download time: ${est_minutes}-$((est_minutes * 2)) minutes (depends on connection)"
     echo ""
     
-    read -p "Continue? [Y/n] " -n 1 -r
+    # Tolerate EOF on stdin (CI, a pipe, nohup, </dev/null): read fails and,
+    # under `set -e`, would abort the whole script here before any download —
+    # silently, with no message. A tier passed via --tier is explicit intent,
+    # so treat closed stdin the same as the prompt's own default ([Y/n]): the
+    # existing ^[Nn]$ check below still cancels on an explicit "n".
+    read -p "Continue? [Y/n] " -n 1 -r || REPLY=""
     echo
     if [[ $REPLY =~ ^[Nn]$ ]]; then
         echo "Cancelled."
