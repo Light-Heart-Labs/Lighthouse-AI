@@ -1146,3 +1146,23 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def safe_invert_dict_unique(data: object) -> dict:
+    """Invert dictionary keys and values safely into unique value -> key mapping.
+
+    Handles non-hashable values, None, or non-dict inputs without raising TypeError.
+    Converts keys/values to strings when necessary.
+    """
+    if not isinstance(data, dict):
+        return {}
+    res = {}
+    for k, v in data.items():
+        if k is None or v is None:
+            continue
+        try:
+            res[v] = k
+        except TypeError:
+            res[str(v)] = str(k)
+    return res
+
