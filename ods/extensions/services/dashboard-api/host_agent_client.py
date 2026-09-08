@@ -327,3 +327,26 @@ async def shutdown_clients() -> None:
         await asyncio.to_thread(sync_client.close)
     if async_client is not None and not async_client.is_closed:
         await async_client.aclose()
+
+
+def validate_host_agent_timeout(
+    timeout_sec: object, min_timeout: float = 1.0, max_timeout: float = 300.0, default_timeout: float = 10.0
+) -> float:
+    """Validate and constrain HTTP timeout seconds within bounds [min_timeout, max_timeout].
+
+    Returns default_timeout if input is None or non-numeric. Clamps values below min_timeout
+    or above max_timeout safely.
+    """
+    if timeout_sec is None:
+        return default_timeout
+    try:
+        val = float(timeout_sec)
+    except (ValueError, TypeError):
+        return default_timeout
+
+    if val < min_timeout:
+        return min_timeout
+    if val > max_timeout:
+        return max_timeout
+    return round(val, 2)
+

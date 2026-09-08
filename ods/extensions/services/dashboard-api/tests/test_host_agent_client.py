@@ -245,3 +245,19 @@ async def test_async_request_and_shutdown_close_both_pools(monkeypatch):
     assert sync_client.is_closed
     assert agent_client._async_client is None
     assert agent_client._sync_client is None
+
+
+class TestValidateHostAgentTimeout:
+
+    def test_valid_float_timeout(self):
+        from host_agent_client import validate_host_agent_timeout
+        assert validate_host_agent_timeout(15.5) == 15.5
+        assert validate_host_agent_timeout("30") == 30.0
+
+    def test_clamping_and_default_fallbacks(self):
+        from host_agent_client import validate_host_agent_timeout
+        assert validate_host_agent_timeout(None) == 10.0
+        assert validate_host_agent_timeout("invalid") == 10.0
+        assert validate_host_agent_timeout(0.5, min_timeout=2.0) == 2.0
+        assert validate_host_agent_timeout(999.0, max_timeout=120.0) == 120.0
+
