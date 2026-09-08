@@ -1607,3 +1607,17 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestDeduplicateListPreserveOrder:
+
+    def test_deduplicates_preserving_order(self):
+        from helpers import deduplicate_list_preserve_order
+        raw = ["a", "b", "a", "c", "b"]
+        assert deduplicate_list_preserve_order(raw) == ["a", "b", "c"]
+
+    def test_handles_none_and_non_hashables(self):
+        from helpers import deduplicate_list_preserve_order
+        assert deduplicate_list_preserve_order(None) == []
+        assert deduplicate_list_preserve_order([1, [2], 1, [2]]) == [1, [2]]
+
