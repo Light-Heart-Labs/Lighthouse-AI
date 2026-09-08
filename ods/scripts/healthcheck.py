@@ -226,7 +226,10 @@ def check_http(
             if allowed_status is not None and status in allowed_status:
                 with exc:
                     if body_regex is not None:
-                        body = exc.read(1024 * 1024)
+                        try:
+                            body = exc.read(1024 * 1024)
+                        except socket.timeout:
+                            return (False, f"http {m}: timeout", status)
                         if not body_regex.search(body.decode("utf-8", errors="replace")):
                             return (False, f"http {m}: body regex did not match", status)
                     return (True, f"http {m}: ok (error status allowed)", int(status) if status is not None else None)
