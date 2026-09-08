@@ -17,10 +17,25 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def display_path(path: Path) -> str:
+    """Short, repo-relative label for a version authority in error messages.
+
+    Not every authority lives under ROOT: ARCHITECTURE.md sits at the
+    repository root, one level above. Path.relative_to raises ValueError for
+    those, so try the repository root next and fall back to the absolute path.
+    """
+    for base in (ROOT, ROOT.parent):
+        try:
+            return str(path.relative_to(base))
+        except ValueError:
+            continue
+    return str(path)
+
+
 def first_match(path: Path, pattern: str, label: str) -> str:
     match = re.search(pattern, read_text(path), re.MULTILINE | re.DOTALL)
     if not match:
-        raise ValueError(f"{label}: could not find version in {path.relative_to(ROOT)}")
+        raise ValueError(f"{label}: could not find version in {display_path(path)}")
     return match.group(1)
 
 
