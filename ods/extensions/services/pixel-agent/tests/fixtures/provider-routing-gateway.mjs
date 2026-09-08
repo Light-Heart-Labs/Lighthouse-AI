@@ -4,23 +4,35 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createProviderRoutingBridge } from '../../plugin/provider-routing.mjs';
 import { createLeaseWorkerAdapter } from '../../plugin/provider-lease-worker.mjs';
+import { createHandoffOwnerAdapter } from '../../plugin/handoff-owner-worker.mjs';
 
 const file = process.env.ODS_ROUTING_FIXTURE;
 const record = (value) => appendFileSync(file + '.events', JSON.stringify(value) + '\n', {mode: 0o600});
+const ownerAdapter = process.env.ODS_HANDOFF_OWNER_COMMAND ? createHandoffOwnerAdapter({
+  command: JSON.parse(process.env.ODS_HANDOFF_OWNER_COMMAND), directory: process.env.ODS_LEASE_DIRECTORY,
+  timeoutSeconds: process.env.ODS_HANDOFF_BROWSER === '1' ? 120 : 60,
+}) : null;
 const worker = process.env.ODS_LEASE_WORKER_COMMAND ? createLeaseWorkerAdapter({
   command: JSON.parse(process.env.ODS_LEASE_WORKER_COMMAND), directory: process.env.ODS_LEASE_DIRECTORY,
   request: ctx => {
     const state = JSON.parse(readFileSync(file, 'utf8'));
     record({kind: 'owner-request', ...ctx});
     return {expectedRevision: state.refuse && !state.handoff ? 0 : 1,
-      confirmed: true, allowCloud: false, timeoutSeconds: 60,
+      confirmed: true, allowCloud: false, timeoutSeconds: process.env.ODS_HANDOFF_BROWSER === '1' ? 180 : 60,
       ...(state.handoff ? {handoffProviderId: 'stronger'} : {})};
   },
 }) : null;
 const bridge = createProviderRoutingBridge({
   enabled: true,
   durableReplayGuard: !!worker,
+  approvalTimeoutMs: process.env.ODS_HANDOFF_BROWSER === '1' ? 120000 : 60000,
   async authorizeHandoff({checkpoint, checkpointDigest, signal}) {
+    if (ownerAdapter) {
+      const receipt = await ownerAdapter({checkpoint, checkpointDigest, signal});
+      record({kind: 'handoff-owner-receipt', runId: checkpoint.runId, sessionId: checkpoint.sessionId,
+        approved: receipt?.approved === true, checkpointDigest});
+      return receipt;
+    }
     // Test-only owner controller: the independent driver reads the preview and
     // approves its digest out of band. Agent text cannot write this receipt.
     writeFileSync(file + '.preview', JSON.stringify({checkpoint, checkpointDigest}), {mode: 0o600});
@@ -64,7 +76,7 @@ export default {
       return result;
     });
     api.on('agent_end', bridge.agentEnd);
-    api.on('before_agent_run', bridge.beforeAgentRun);
+    api.on('before_agent_run', bridge.beforeAgentRun, bridge.beforeAgentRunOptions);
     api.registerTool({name: 'fixture_witness', description: 'Return a fixed qualification witness.',
       parameters: {type: 'object', properties: {}, additionalProperties: false},
       async execute() {

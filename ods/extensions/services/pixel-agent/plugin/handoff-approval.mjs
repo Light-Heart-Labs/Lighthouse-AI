@@ -4,8 +4,9 @@ import { createHash } from 'node:crypto';
 
 const fail = () => {throw new Error('ODS handoff approval unavailable');};
 function freeze(value, depth = 0) {
-  if (depth > 40) return fail();
   if (value && typeof value === 'object') {
+    // Match the private store/dashboard's bounded 32-container JSON parser.
+    if (depth >= 32) return fail();
     if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) return fail();
     for (const child of Object.values(value)) freeze(child, depth + 1);
     return Object.freeze(value);

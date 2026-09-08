@@ -6927,6 +6927,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_pixel_providers(save=True)
         elif self.path in {"/v1/pixel/advice/start", "/v1/pixel/advice/status", "/v1/pixel/advice/cancel"}:
             self._handle_pixel_advice(self.path.rsplit('/', 1)[1])
+        elif self.path in {"/v1/pixel/handoff/list", "/v1/pixel/handoff/status", "/v1/pixel/handoff/decide"}:
+            self._handle_pixel_handoff(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/advice-runtime/prepare", "/v1/pixel/advice-runtime/status", "/v1/pixel/advice-runtime/cancel"}:
             self._handle_pixel_advice_runtime(self.path.rsplit('/', 1)[1])
         elif self.path in {"/v1/pixel/inference-sharing/issue", "/v1/pixel/inference-sharing/enable", "/v1/pixel/inference-sharing/revoke", "/v1/pixel/inference-sharing/start", "/v1/pixel/inference-sharing/stop"}:
@@ -7042,6 +7044,48 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, status, {'error': 'Advisory setup unavailable', 'code': exc.code}, no_store=True)
         except (OSError, ValueError, TypeError, KeyError):
             json_response(self, 503, {'error': 'Advisory setup unavailable'}, no_store=True)
+
+    def _handle_pixel_handoff(self, action):
+        """Owner-only decisions; checkpoint publication is a private worker pipe."""
+        if not check_auth(self):
+            return
+        from pixel_provider.store import StoreError, decode_document
+        try:
+            from pixel_provider.handoff_approvals import get_manager
+            lengths = self.headers.get_all('Content-Length', [])
+            if (len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,9}', lengths[0])
+                    or self.headers.get('Transfer-Encoding') is not None):
+                raise StoreError('invalid-handoff-request')
+            length = int(lengths[0])
+            if not 0 < length <= 4096:
+                json_response(self, 413 if length > 4096 else 400, {'error': 'Invalid handoff request size'}, no_store=True)
+                return
+            previous = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(10)
+                raw = self.rfile.read(length)
+            finally:
+                self.connection.settimeout(previous)
+            if len(raw) != length:
+                raise StoreError('invalid-handoff-request')
+            body = decode_document(raw)
+            manager = get_manager(DATA_DIR)
+            if action == 'list':
+                if type(body) is not dict or body:
+                    raise StoreError('invalid-handoff-request')
+                result = manager.pending()
+            elif action == 'status':
+                if type(body) is not dict or set(body) != {'runId'}:
+                    raise StoreError('invalid-handoff-request')
+                result = manager.status(body['runId'], checkpoint=True)
+            else:
+                result = manager.decide(body)
+            json_response(self, 200, result, no_store=True)
+        except StoreError as exc:
+            status = 409 if exc.code in {'handoff-decision-conflict', 'handoff-no-longer-pending'} else 400
+            json_response(self, status, {'error': 'Handoff request failed', 'code': exc.code}, no_store=True)
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            json_response(self, 503, {'error': 'Handoff service unavailable'}, no_store=True)
 
     def _handle_pixel_advice(self, action):
         """Explicit owner-reviewed inference job, not an agent/tool endpoint."""

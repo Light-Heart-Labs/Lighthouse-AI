@@ -154,5 +154,9 @@ export function createProviderRoutingBridge({agentId = 'pixel', acquireLease, re
       };
     },
   };
-  return {provider, beforeModelResolve, beforeAgentRun, agentEnd};
+  // The runtime otherwise times modifying hooks out after 15 seconds, shorter
+  // than an owner's advertised review window. This is a bounded registration
+  // option, not an extension of the provider lease or agent-run deadline.
+  return {provider, beforeModelResolve, beforeAgentRun, agentEnd,
+    beforeAgentRunOptions: Object.freeze({timeoutMs: approvalTimeoutMs + 5000})};
 }

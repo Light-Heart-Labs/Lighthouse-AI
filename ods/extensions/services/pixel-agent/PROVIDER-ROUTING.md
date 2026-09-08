@@ -77,11 +77,53 @@ performs leader work, waits for an independent test controller to inspect/approv
 the handoff checkpoint, executes new handoff tool work, declines a later handoff
 despite approval-looking prompt text, and returns to the saved leader. Both tool
 results survive and each effect occurs once. All inference is synthetic loopback.
-The controller is a test fixture, not a shipping owner approval endpoint or UI.
+The initial file controller remains a test-only fixture. An owner API/UI and
+durable private approval store are now implemented, but production routing and
+handoff initiation remain dormant pending installed activation.
 
-Still required: authenticated owner preview/approval endpoints and UI, durable
-approval/audit custody, task/conversation/default-future-work scope and return
-state, reconciliation with shared admission, and actual installed user journeys.
+### Owner review and private publication
+
+The Pixel toolbar's **Review handoffs** panel reads pending requests and complete
+checkpoints through owner-authenticated `POST /api/pixel/handoff/list`, `/status`
+and `/decide` routes. A decision carries only the exact run ID, checkpoint SHA-256
+and explicit consent booleans. The host-agent revalidates custody, bytes, recipient,
+live worker ownership, expiry and immutable decision state. No public endpoint
+publishes a checkpoint or supplies an executable/credential to the runtime.
+
+`handoff-owner-worker.mjs` publishes over a bounded private pipe to the fixed
+stdlib-only `handoff_worker.py`. Owner API credentials never enter the gateway,
+worker argv/environment or agent tools. POSIX state is private (0700 directories,
+0600 files) under `pixel-providers/handoff-approvals`. Held process locks distinguish
+pending from abandoned runs; expiry, EOF, extra input and process death cannot
+replay an old approval. Terminal approval validates its matching immutable
+decision. Retained terminal polling reads metadata rather than all transcripts.
+The 4096 retained-claim cap fails closed; collection/recovery is not yet automated.
+
+The panel shows the recipient, revision, endpoint, deadline, scope and full initial
+runtime checkpoint as inert text. Cloud approval requires separate transfer and
+unknown-cost consent. Browser persistence holds only an opaque run ID; reload
+never approves automatically, and uncertain writes require a status reread.
+Closing the panel neither approves nor cancels the run. An `approved` status is
+permission, not evidence that inference completed or a delivery acknowledgement.
+
+**Registration requirement:** use
+`api.on('before_agent_run', bridge.beforeAgentRun, bridge.beforeAgentRunOptions)`.
+The pinned runtime's default modifying-hook timeout is 15 seconds. The bridge
+supplies a bounded approval-window-plus-five-seconds option, without extending
+the independent worker lease or agent deadline. A real delayed owner journey
+reproduced the old cancellation; the corrected path passes after 17-second waits.
+
+Set `ODS_HANDOFF_OWNER_API=1` for real dashboard-router/host-agent/private-worker
+integration. The optional `ODS_HANDOFF_BROWSER=1` and `ODS_HANDOFF_DASHBOARD` built
+dashboard directory let an operator review, reload, approve and decline in the
+actual UI. The fixture substitutes a synthetic owner cookie for the production
+Edge session boundary; it does not qualify that deployed boundary. Model traffic
+remains synthetic. The browser journey retains both tool results, executes each
+effect once, denies without inference and returns to the saved leader.
+
+Still required: owner handoff initiation, durable task/conversation/default-future-
+work scope and return state, protected worker source/runtime installation,
+reconciliation with shared admission, and actual installed user journeys.
 An agent run is not necessarily an entire user task; this run primitive does not
 complete the requested handoff feature. It remains unregistered in production.
 

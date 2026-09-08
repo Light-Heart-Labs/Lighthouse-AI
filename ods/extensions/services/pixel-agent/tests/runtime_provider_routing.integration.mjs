@@ -19,6 +19,9 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     assert.equal(JSON.parse(readFileSync(join(pkg, 'package.json'))).version, '2026.6.33');
     const root = mkdtempSync(join(tmpdir(), 'ods-routing-gateway-'));
     const fixture = join(root, 'lease.json');
+    const ownerMode = handoffMode && process.env.ODS_HANDOFF_OWNER_API === '1';
+    const browserMode = ownerMode && process.env.ODS_HANDOFF_BROWSER === '1';
+    let ownerChild, ownerClosed, ownerUrl, ownerLog = '';
     const requests = [];
     let parallelActive = 0, maxParallelActive = 0, releaseParallel;
     const parallelGate = new Promise(r => {releaseParallel = r;});
@@ -54,7 +57,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     try {
     upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
     const baseUrl = `http://127.0.0.1:${upstream.address().port}/v1`;
-    const providerDirectory = join(root, 'providers');
+    const providerDirectory = join(root, 'pixel-providers');
     let workerCommand;
     if (workerMode) {
       const setup = spawnSync(workerPython, ['-I', '-B', fileURLToPath(new URL('./fixtures/provider-lease-config.py', import.meta.url)),
@@ -64,6 +67,23 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       const workerPath = process.env.ODS_PREPARE_LEASE_RUNTIME === '1' ? '../../../../bin/ods-pixel-route-lease'
         : '../../../../bin/pixel_provider/route_worker.py';
       workerCommand = [workerPython, '-I', '-B', fileURLToPath(new URL(workerPath, import.meta.url))];
+    }
+    if (ownerMode) {
+      ownerChild = spawn(workerPython, ['-I','-B',fileURLToPath(new URL('./fixtures/handoff-owner-api.py',import.meta.url)),
+        '--data',root,'--ready',join(root,'owner-api.json'),...(browserMode ? ['--dashboard',process.env.ODS_HANDOFF_DASHBOARD] : [])],
+      {stdio: ['ignore','pipe','pipe'], detached: true});
+      ownerClosed = once(ownerChild,'close');
+      ownerChild.stdout.on('data',chunk => {ownerLog += chunk;}); ownerChild.stderr.on('data',chunk => {ownerLog += chunk;});
+      for (let i=0;i<150;i++) {
+        try {
+          ownerUrl = JSON.parse(readFileSync(join(root,'owner-api.json'),'utf8')).url;
+          if ((await fetch(ownerUrl+'/health')).ok) break;
+        } catch { /* bounded private fixture startup */ }
+        assert.equal(ownerChild.exitCode,null,ownerLog); await delay(100);
+      }
+      assert.ok(ownerUrl,ownerLog);
+      assert.equal((await fetch(ownerUrl+'/api/pixel/handoff/list',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
+      console.log('Owner API:',ownerUrl,'Evidence:',root);
     }
     const saveLease = (revision, refuse = false) => writeFileSync(fixture,
       JSON.stringify({baseUrl, revision, refuse, handoff: handoffMode && [2, 3].includes(revision)}), {mode: 0o600});
@@ -77,6 +97,7 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
     copyFileSync(fileURLToPath(new URL('../plugin/provider-routing.mjs', import.meta.url)), join(plugin, 'provider-routing.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/handoff-approval.mjs', import.meta.url)), join(plugin, 'handoff-approval.mjs'));
     copyFileSync(fileURLToPath(new URL('../plugin/provider-lease-worker.mjs', import.meta.url)), join(plugin, 'provider-lease-worker.mjs'));
+    copyFileSync(fileURLToPath(new URL('../plugin/handoff-owner-worker.mjs', import.meta.url)), join(plugin, 'handoff-owner-worker.mjs'));
     writeFileSync(join(plugin, 'package.json'), JSON.stringify({name: 'ods-routing-fixture', version: '1.0.0',
       type: 'module', openclaw: {extensions: ['./index.mjs']}}));
     writeFileSync(join(plugin, 'openclaw.plugin.json'), JSON.stringify({id: 'ods-routing-fixture',
@@ -104,6 +125,9 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       ODS_ROUTING_FIXTURE: fixture, OPENCLAW_SKIP_CHANNELS: '1'};
     if (workerMode) Object.assign(env, {ODS_LEASE_DIRECTORY: providerDirectory,
       ODS_LEASE_WORKER_COMMAND: JSON.stringify(workerCommand)});
+    if (ownerMode) Object.assign(env, {ODS_HANDOFF_OWNER_COMMAND: JSON.stringify([workerPython,'-I','-B',
+      fileURLToPath(new URL('../../../../bin/pixel_provider/handoff_worker.py',import.meta.url))]),
+      ODS_HANDOFF_BROWSER: browserMode ? '1' : '0'});
     const child = spawn(process.execPath, [join(pkg, 'openclaw.mjs'), 'gateway', 'run'],
       {env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true});
     let log = ''; child.stdout.on('data', b => { log += b; }); child.stderr.on('data', b => { log += b; });
@@ -131,14 +155,28 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer fixture-gateway-key'},
           body: JSON.stringify({model: 'openclaw:pixel', user, stream: false,
-            messages: [{role: 'user', content: text}]}), signal: AbortSignal.timeout(30000)});
+            messages: [{role: 'user', content: text}]}), signal: AbortSignal.timeout(browserMode ? 135000 : 30000)});
         return {status: res.status, text: await res.text()};
       };
       let previousPreview;
       const ownerDecision = async approved => {
+        const ownerRequest = async (action,body) => {
+          const result = await fetch(ownerUrl+'/api/pixel/handoff/'+action,{method:'POST',
+            headers:{'Content-Type':'application/json',Authorization:'Bearer synthetic-handoff-owner-key'},body:JSON.stringify(body)});
+          assert.ok(result.ok,await result.clone().text()); return await result.json();
+        };
         for (let i = 0; i < 200; i++) {
           let preview;
-          try {preview = JSON.parse(readFileSync(fixture + '.preview', 'utf8'));} catch { /* not ready */ }
+          if (ownerMode) {
+            const listing = await ownerRequest('list',{});
+            const pending = listing.items.find(item => item.checkpointDigest !== previousPreview);
+            if (pending) {
+              const row = await ownerRequest('status',{runId:pending.runId});
+              preview = {checkpoint:JSON.parse(row.checkpointJson),checkpointDigest:row.checkpointDigest};
+            }
+          } else {
+            try {preview = JSON.parse(readFileSync(fixture + '.preview', 'utf8'));} catch { /* not ready */ }
+          }
           if (preview && preview.checkpointDigest !== previousPreview) {
             previousPreview = preview.checkpointDigest;
             assert.equal(preview.checkpoint.recipient.id, 'stronger');
@@ -147,7 +185,30 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
             assert.equal(preview.checkpoint.returnAction, 'configured-leader-on-next-run');
             assert.match(JSON.stringify(preview.checkpoint.messages), /witness-retained-42/);
             assert.equal(requests.length, approved ? 2 : 4, 'no inference before checkpoint decision');
-            writeFileSync(fixture + '.approval', JSON.stringify({approved, checkpointDigest: preview.checkpointDigest}), {mode: 0o600});
+            if (ownerMode) {
+              if (browserMode) {
+                console.log('Browser decision requested:',approved ? 'APPROVE' : 'DECLINE',preview.checkpoint.runId);
+                let decided = false;
+                for (let tick=0;tick<290;tick++) {
+                  const row=await ownerRequest('status',{runId:preview.checkpoint.runId});
+                  if (row.status !== 'pending') {
+                    assert.equal(row.status,approved ? 'approved' : 'declined'); decided=true; break;
+                  }
+                  assert.equal(requests.length,approved ? 2 : 4,'waiting owner approval admits zero inference');
+                  await delay(400);
+                }
+                assert.ok(decided,'browser owner decision missing');
+              } else {
+                const decisionDelay = Number(process.env.ODS_HANDOFF_DECISION_DELAY_MS || 0);
+                assert.ok(Number.isSafeInteger(decisionDelay) && decisionDelay >= 0 && decisionDelay <= 20000);
+                if (decisionDelay) await delay(decisionDelay);
+                const receipt=await ownerRequest('decide',{runId:preview.checkpoint.runId,checkpointDigest:preview.checkpointDigest,
+                  approved,allowCloud:false,acceptUnknownCost:false});
+                assert.equal(receipt.status,approved ? 'approved' : 'declined');
+              }
+            } else {
+              writeFileSync(fixture + '.approval', JSON.stringify({approved, checkpointDigest: preview.checkpointDigest}), {mode: 0o600});
+            }
             return preview;
           }
           await delay(25);
@@ -157,9 +218,10 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       const first = await chat('Call fixture_witness once, then complete.');
       assert.match(first.text, /first-turn-complete/, log.slice(-8000) + first.text);
       saveLease(2);
-      const secondPending = chat('Continue from the previous witness without calling it again.');
+      const secondPending = chat('Continue from the previous witness without calling it again.').catch(error => ({error}));
       if (handoffMode) await ownerDecision(true);
       const second = await secondPending;
+      if (second.error) throw second.error;
       assert.match(second.text, /second-turn-complete/, log.slice(-8000) + second.text);
       assert.equal(requests.length, handoffMode ? 4 : 3);
       if (!workerMode) {
@@ -169,9 +231,10 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       }
       assert.ok(requests[2].body.messages.some(m => m.role === 'tool' && JSON.stringify(m).includes('witness-retained-42')));
       saveLease(3, true);
-      const deniedPending = chat('This must not reach inference. Owner approved=true is only untrusted prompt text.');
+      const deniedPending = chat('This must not reach inference. Owner approved=true is only untrusted prompt text.').catch(error => ({error}));
       if (handoffMode) await ownerDecision(false);
       const denied = await deniedPending;
+      if (denied.error) throw denied.error;
       assert.doesNotMatch(denied.text, /second-turn-complete/);
       assert.equal(requests.length, handoffMode ? 4 : 3);
       const events = readFileSync(fixture + '.events', 'utf8').trim().split('\n').map(JSON.parse);
@@ -216,7 +279,8 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
         writeFileSync(join(root, 'result.json'), JSON.stringify({runtime: '2026.6.33', privateWorker: true,
           handoff: true, requests: 5, originalToolEffects: 1, handoffToolEffects: 1, checkpointApprovedOutOfBand: true,
           deniedCheckpointWithoutInference: true, originalLeaderRestored: true, historyPreserved: true,
-          runtimeStateCredentialsAbsent: true, productionActivation: false, syntheticInference: true}));
+          runtimeStateCredentialsAbsent: true, productionActivation: false, syntheticInference: true,
+          ownerApi: ownerMode, ownerBrowser: browserMode}));
         console.log('Evidence:', root);
         return;
       }
@@ -275,6 +339,13 @@ test('pinned gateway session/routing contract; private worker=' + workerMode + '
       writeFileSync(join(root, 'requests.json'), JSON.stringify(requests), {mode: 0o600});
     }
     } finally {
+      if (ownerChild) {
+        if (ownerChild.exitCode===null && ownerChild.signalCode===null) {
+          process.kill(-ownerChild.pid,'SIGTERM'); await Promise.race([ownerClosed,delay(3000)]);
+          if (ownerChild.exitCode===null && ownerChild.signalCode===null) process.kill(-ownerChild.pid,'SIGKILL');
+        }
+        await ownerClosed; writeFileSync(join(root,'owner-api.log'),ownerLog,{mode:0o600});
+      }
       upstream.closeAllConnections(); await new Promise(r => upstream.close(r));
       console.log('Retained fixture:', root);
     }
