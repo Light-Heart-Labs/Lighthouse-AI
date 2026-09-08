@@ -5,12 +5,108 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const revision = () => crypto.randomBytes(32).toString('hex');
 const blocked = () => ({outcome: 'block', reason: 'ods-access-transition',
   message: 'Pixel access settings are changing. Retry when the transition completes.'});
+const bootId = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+}
+
+function processStartTicks(pid) {
+  let stat;
+  try { stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT' && !processAlive(pid)) return null;
+    throw error;
+  }
+  // comm can contain spaces and closing parentheses. Fields after its LAST
+  // closing parenthesis begin at field 3; starttime is field 22, not wall time.
+  const end = stat.lastIndexOf(')');
+  const startTicks = stat.slice(end + 2).trim().split(/\s+/)[19];
+  if (!stat.startsWith(`${pid} (`) || end < 0 || stat[end + 1] !== ' ' ||
+      !/^(0|[1-9][0-9]*)$/.test(startTicks ?? '')) {
+    throw new Error('process start identity unavailable');
+  }
+  return startTicks;
+}
+
+function processInvocation(pid) {
+  // ProcSubset=pid hides boot_id. Read only this exact bounded environment
+  // value; discard unrelated entries without retaining or reporting them.
+  const prefix = Buffer.from('INVOCATION_ID='), fd = fs.openSync(`/proc/${pid}/environ`, 'r');
+  const chunk = Buffer.alloc(4096);
+  let matched = 0, value = '', found = null, bytes = 0;
+  try {
+    let count;
+    while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+      bytes += count;
+      if (bytes > 1048576) throw new Error('process environment identity unavailable');
+      for (const byte of chunk.subarray(0, count)) {
+        if (byte === 0) {
+          if (matched === prefix.length) {
+            if (found !== null || !/^[a-f0-9]{32}$/.test(value)) throw new Error('process invocation identity unavailable');
+            found = value;
+          }
+          matched = 0; value = '';
+        } else if (matched === prefix.length) {
+          if (value.length >= 32) throw new Error('process invocation identity unavailable');
+          value += String.fromCharCode(byte);
+        } else if (matched >= 0) matched = byte === prefix[matched] ? matched + 1 : -1;
+      }
+    }
+    if (matched !== 0 || found === null) throw new Error('process invocation identity unavailable');
+    return found;
+  } finally { chunk.fill(0); fs.closeSync(fd); }
+}
+
+function linuxProcessIdentity(pid, format = 'auto') {
+  let boot;
+  if (format !== 'invocation') {
+    try { boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); }
+    catch (error) {
+      if (format !== 'auto' || !['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+    }
+    if (boot !== undefined && !bootId(boot)) throw new Error('process boot identity unavailable');
+  }
+  const startTicks = processStartTicks(pid);
+  if (startTicks === null) return null;
+  if (boot !== undefined) {
+    if (fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() !== boot) throw new Error('process boot identity changed');
+    return {version: 2, pid, bootId: boot, startTicks};
+  }
+  const invocationId = processInvocation(pid);
+  // Bind the environment read to one process incarnation, including exits
+  // and PID reuse during the read. Never compare only our own invocation ID.
+  if (processStartTicks(pid) !== startTicks) throw new Error('process invocation identity changed');
+  return {version: 3, pid, invocationId, startTicks};
+}
+
+function previousProcessAlive(previous) {
+  if (!previous || Array.isArray(previous) || !Number.isSafeInteger(previous.pid) || previous.pid < 1) {
+    throw new Error('invalid process lock');
+  }
+  const keys = Object.keys(previous).sort().join(',');
+  // A live legacy record has no reliable start identity: never infer it stale.
+  if (keys === 'pid') return processAlive(previous.pid);
+  const boot = previous.version === 2 && keys === 'bootId,pid,startTicks,version' && bootId(previous.bootId);
+  const invocation = previous.version === 3 && keys === 'invocationId,pid,startTicks,version' &&
+    typeof previous.invocationId === 'string' && /^[a-f0-9]{32}$/.test(previous.invocationId);
+  if ((!boot && !invocation) || typeof previous.startTicks !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/.test(previous.startTicks) || process.platform !== 'linux') throw new Error('unknown process lock identity');
+  // Death is independently verifiable even if an older record used boot_id
+  // and this gateway's namespace now hides it. A live unknown owner stays held.
+  if (!processAlive(previous.pid)) return false;
+  const current = linuxProcessIdentity(previous.pid, boot ? 'boot' : 'invocation');
+  return current !== null && current.startTicks === previous.startTicks &&
+    (boot ? current.bootId === previous.bootId : current.invocationId === previous.invocationId);
+}
 
 export function executionHostForAgent(config, id = 'pixel') {
   const agents = config?.agents?.list?.filter(agent => agent?.id === id) ?? [];
@@ -42,6 +138,7 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
     const s = fs.lstatSync(target);
     if (s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077) ||
         (directoryEntry ? !s.isDirectory() : !s.isFile() || s.nlink !== 1)) throw new Error('unsafe runtime state');
+    return s;
   }
   function save() {
     privateEntry(directory, true);
@@ -55,22 +152,48 @@ export function createAccessRuntime({directory = path.join(os.homedir(), '.openc
     } catch (error) { failed = true; throw error; }
     finally { if (fd !== undefined) fs.closeSync(fd); if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
+  function claimProcess() {
+    // Non-Linux POSIX surfaces retain the conservative legacy PID contract.
+    if (process.platform !== 'linux') return () => {};
+    // Linux requires util-linux /usr/bin/flock. The inherited descriptor shares
+    // the parent's open file description, so its lock survives helper exit and
+    // is released by close or gateway death, even during stale-record recovery.
+    const claim = path.join(directory, '.process-claim');
+    if (fs.existsSync(claim)) privateEntry(claim);
+    const fd = fs.openSync(claim, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
+    try {
+      const opened = fs.fstatSync(fd), current = privateEntry(claim);
+      if (opened.dev !== current.dev || opened.ino !== current.ino) throw new Error('process claim changed');
+      const result = spawnSync('/usr/bin/flock', ['--exclusive', '--nonblock', '3'],
+        {stdio: ['ignore', 'ignore', 'ignore', fd], timeout: 5000});
+      if (result.error || result.status !== 0) throw new Error('process claim unavailable');
+      return () => fs.closeSync(fd);
+    } catch (error) { fs.closeSync(fd); throw error; }
+  }
   try {
     if (!fs.existsSync(directory)) fs.mkdirSync(directory, {mode: 0o700});
     privateEntry(directory, true);
     const lock = path.join(directory, 'process.json');
-    if (fs.existsSync(lock)) {
-      privateEntry(lock);
-      const previous = JSON.parse(fs.readFileSync(lock, 'utf8'));
-      if (!Number.isSafeInteger(previous.pid) || previous.pid < 1) throw new Error('invalid process lock');
-      let alive = true;
-      try { process.kill(previous.pid, 0); } catch (error) { if (error.code === 'ESRCH') alive = false; }
-      if (alive) throw new Error('another runtime owns admission');
-      fs.unlinkSync(lock);
-    }
-    const lockFd = fs.openSync(lock, 'wx', 0o600);
-    try { fs.writeFileSync(lockFd, JSON.stringify({pid: process.pid})); fs.fsyncSync(lockFd); }
-    finally { fs.closeSync(lockFd); }
+    // Serialize inspection AND replacement, including the missing-lock case.
+    // An inode check alone cannot prevent two stale claimants unlinking a new
+    // live owner's record. Never unlink the reusable kernel-lock file.
+    const releaseClaim = claimProcess();
+    try {
+      const identity = process.platform === 'linux' ? linuxProcessIdentity(process.pid) : {pid: process.pid};
+      if (!identity) throw new Error('current process identity unavailable');
+      if (fs.existsSync(lock)) {
+        const entry = privateEntry(lock);
+        if (entry.size > 4096) throw new Error('oversized process lock');
+        const previous = JSON.parse(fs.readFileSync(lock, 'utf8'));
+        if (previousProcessAlive(previous)) throw new Error('another runtime owns admission');
+        const current = privateEntry(lock);
+        if (current.dev !== entry.dev || current.ino !== entry.ino) throw new Error('process lock changed');
+        fs.unlinkSync(lock);
+      }
+      const lockFd = fs.openSync(lock, 'wx', 0o600);
+      try { fs.writeFileSync(lockFd, JSON.stringify(identity)); fs.fsyncSync(lockFd); }
+      finally { fs.closeSync(lockFd); }
+    } finally { releaseClaim(); }
     if (fs.existsSync(filename)) {
       privateEntry(filename);
       if (fs.statSync(filename).size > 4096) throw new Error('oversized runtime state');
