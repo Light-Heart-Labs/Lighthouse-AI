@@ -1146,3 +1146,20 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def list_unique_sorted_safe(items: object, reverse: bool = False) -> list:
+    """Return unique items from sequence in sorted order safely.
+
+    Handles None, non-sequence, unhashable, or mixed-type inputs without exception.
+    """
+    if not isinstance(items, (list, tuple, set)):
+        return []
+    seen = []
+    for item in items:
+        if item is not None and item not in seen:
+            seen.append(item)
+    try:
+        return sorted(seen, reverse=bool(reverse))
+    except TypeError:
+        return seen
