@@ -1,5 +1,6 @@
 """Tests for workflows router endpoints."""
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -938,3 +939,175 @@ def test_workflow_enable_rejects_path_traversal_in_catalog_file(test_client, mon
     )
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Invalid workflow file path"
+
+
+# ---------------------------------------------------------------------------
+# Bug #5: Partial workflow creation — activation failure handling
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_enable_activation_fails_nonzero_status(test_client, tmp_path, monkeypatch):
+    """POST /api/workflows/{id}/enable: workflow created but activation (PATCH) returns error status.
+
+    When POST succeeds but PATCH fails with non-200 status, the workflow is orphaned in n8n.
+    The error response must include the n8n workflow ID for manual recovery.
+    """
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "activate-fail-wf", "name": "Activate Fail Workflow", "description": "test",
+             "file": "activate-fail.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    workflow_dir = tmp_path / "workflows"
+    workflow_dir.mkdir()
+    (workflow_dir / "activate-fail.json").write_text(json.dumps({"name": "Activate Fail Workflow", "nodes": []}))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_DIR", workflow_dir)
+
+    # Mock n8n POST (create) → 201 with id
+    create_resp = AsyncMock()
+    create_resp.status = 201
+    create_resp.json = AsyncMock(return_value={"data": {"id": "n8n-orphan-1"}})
+
+    # Mock n8n PATCH (activate) → 400 error
+    activate_resp = AsyncMock()
+    activate_resp.status = 400
+    activate_resp.text = AsyncMock(return_value="workflow already active or invalid")
+
+    create_ctx = AsyncMock()
+    create_ctx.__aenter__ = AsyncMock(return_value=create_resp)
+    create_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    activate_ctx = AsyncMock()
+    activate_ctx.__aenter__ = AsyncMock(return_value=activate_resp)
+    activate_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    session_mock = AsyncMock()
+    session_mock.post = MagicMock(return_value=create_ctx)
+    session_mock.patch = MagicMock(return_value=activate_ctx)
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.workflows.aiohttp.ClientSession", return_value=session_mock):
+        resp = test_client.post(
+            "/api/workflows/activate-fail-wf/enable",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 400
+    assert "n8n-orphan-1" in resp.json()["detail"]
+    assert "activation failed" in resp.json()["detail"]
+
+
+def test_workflow_enable_activation_timeout(test_client, tmp_path, monkeypatch):
+    """POST /api/workflows/{id}/enable: workflow created but activation (PATCH) times out.
+
+    When POST succeeds but PATCH times out, the workflow is orphaned in n8n.
+    The error response must include the n8n workflow ID for manual recovery.
+    """
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "timeout-wf", "name": "Timeout Workflow", "description": "test",
+             "file": "timeout.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    workflow_dir = tmp_path / "workflows"
+    workflow_dir.mkdir()
+    (workflow_dir / "timeout.json").write_text(json.dumps({"name": "Timeout Workflow", "nodes": []}))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_DIR", workflow_dir)
+
+    # Mock n8n POST (create) → 201 with id
+    create_resp = AsyncMock()
+    create_resp.status = 201
+    create_resp.json = AsyncMock(return_value={"data": {"id": "n8n-orphan-2"}})
+
+    create_ctx = AsyncMock()
+    create_ctx.__aenter__ = AsyncMock(return_value=create_resp)
+    create_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    # Simulate PATCH timeout by raising asyncio.TimeoutError
+    async def patch_timeout(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    session_mock = AsyncMock()
+    session_mock.post = MagicMock(return_value=create_ctx)
+    session_mock.patch = MagicMock(side_effect=patch_timeout)
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.workflows.aiohttp.ClientSession", return_value=session_mock):
+        resp = test_client.post(
+            "/api/workflows/timeout-wf/enable",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 504
+    assert "n8n-orphan-2" in resp.json()["detail"]
+    assert "timed out" in resp.json()["detail"]
+
+
+def test_workflow_enable_activation_connection_error(test_client, tmp_path, monkeypatch):
+    """POST /api/workflows/{id}/enable: workflow created but activation (PATCH) connection fails.
+
+    When POST succeeds but PATCH cannot connect to n8n, the workflow is orphaned in n8n.
+    The error response must include the n8n workflow ID for manual recovery.
+    """
+    import routers.workflows as wf_mod
+
+    catalog = {
+        "workflows": [
+            {"id": "conn-fail-wf", "name": "Conn Fail Workflow", "description": "test",
+             "file": "conn-fail.json", "dependencies": []}
+        ],
+        "categories": {}
+    }
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(catalog))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_CATALOG_FILE", catalog_file)
+
+    workflow_dir = tmp_path / "workflows"
+    workflow_dir.mkdir()
+    (workflow_dir / "conn-fail.json").write_text(json.dumps({"name": "Conn Fail Workflow", "nodes": []}))
+    monkeypatch.setattr(wf_mod, "WORKFLOW_DIR", workflow_dir)
+
+    # Mock n8n POST (create) → 201 with id
+    create_resp = AsyncMock()
+    create_resp.status = 201
+    create_resp.json = AsyncMock(return_value={"data": {"id": "n8n-orphan-3"}})
+
+    create_ctx = AsyncMock()
+    create_ctx.__aenter__ = AsyncMock(return_value=create_resp)
+    create_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    # Simulate PATCH connection error
+    async def patch_connection_error(*args, **kwargs):
+        raise aiohttp.ClientError("connection refused")
+
+    session_mock = AsyncMock()
+    session_mock.post = MagicMock(return_value=create_ctx)
+    session_mock.patch = MagicMock(side_effect=patch_connection_error)
+    session_mock.__aenter__ = AsyncMock(return_value=session_mock)
+    session_mock.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("routers.workflows.aiohttp.ClientSession", return_value=session_mock):
+        resp = test_client.post(
+            "/api/workflows/conn-fail-wf/enable",
+            headers=test_client.auth_headers,
+        )
+
+    assert resp.status_code == 503
+    assert "n8n-orphan-3" in resp.json()["detail"]
+    assert "activation failed" in resp.json()["detail"]
