@@ -1146,3 +1146,21 @@ def get_ram_metrics() -> dict:
     elif _system == "Darwin":
         return _get_ram_metrics_sysctl()
     return {"used_gb": 0, "total_gb": 0, "percent": 0}
+
+
+def numeric_clamp_range_safe(value: object, min_val: float = 0.0, max_val: float = 1.0) -> float:
+    """Clamp numeric value to [min_val, max_val] range safely.
+
+    Handles None, non-numeric, NaN, Inf inputs, or inverted min/max without exception.
+    """
+    if value is None:
+        return float(min_val)
+    try:
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return float(min_val)
+        lo = min(float(min_val), float(max_val))
+        hi = max(float(min_val), float(max_val))
+        return max(lo, min(hi, v))
+    except (ValueError, TypeError):
+        return float(min_val)
