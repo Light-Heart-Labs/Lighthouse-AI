@@ -627,17 +627,21 @@ cmd_backup() {
     log_ok "Backup created: ${backup_path}"
     log_info "Files backed up: ${files_backed_up}"
     
-    # Cleanup old backups
-    local backup_dirs
-    backup_dirs=$(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" | sort -r)
+    # Cleanup old backups.
+    # NUL-delimited because BACKUP_DIR is "$HOME/.ods/backups", and a $HOME
+    # containing a space is ordinary on WSL (/mnt/c/Users/First Last) and
+    # macOS. Word-splitting `$(find ...)` in a for-loop turns each path into
+    # fragments: retention then prunes nothing, and the trailing fragment is
+    # relative, so `rm -rf` resolves it against the caller's CWD. sort -z
+    # keeps the ordering NUL-safe too.
     local count=0
-    for dir in $backup_dirs; do
+    while IFS= read -r -d '' dir; do
         count=$((count + 1))
         if ((count > MAX_BACKUPS)); then
             log_info "Removing old backup: $(basename "$dir")"
             rm -rf "$dir"
         fi
-    done
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -type d -name "backup-*" -print0 | sort -zr)
 }
 
 #==============================================================================
