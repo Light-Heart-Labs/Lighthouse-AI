@@ -123,6 +123,8 @@ def test_schema_is_valid_json_and_tracks_the_lock() -> None:
     assert schema["properties"]["$schema"]["const"] == lock["$schema"]
     assert schema["properties"]["schemaVersion"]["const"] == lock["schemaVersion"]
     assert schema["$defs"]["portalCore"]["properties"]["runtimeActivated"]["const"] is False
+    assert schema["$defs"]["portalCore"]["properties"]["evidenceFiles"]["minItems"] == 5
+    assert schema["$defs"]["portalCore"]["properties"]["evidenceFiles"]["maxItems"] == 5
     assert schema["$defs"]["qualification"]["properties"]["releaseGreen"]["const"] is False
 
 

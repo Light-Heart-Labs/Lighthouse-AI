@@ -20,7 +20,7 @@ SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 EXPECTED_ODS_BASE = "21f4b3a64dd2a2fac1163f446806091c25b6b814"
-EXPECTED_PORTAL_CORE = "c9fd5d5740b4750119fd52088259d703b7e62ea2"
+EXPECTED_PORTAL_CORE = "bd0bbdf8faa3d7f56e930ec89e94e27efa9a0f53"
 EXPECTED_HERMES_COMMIT = "2237be355906fbe6065ce1815711eee52b2d646e"
 EXPECTED_HERMES_TAG_OBJECT = "9949d0d324a3a06ac238e01dd1c2103dbca09900"
 EXPECTED_HERMES_PUBLISHED_AT = "2026-09-07T22:17:01Z"
@@ -60,7 +60,10 @@ EXPECTED_EVIDENCE = {
         "1c54a2089b971ca32e262dcaff33056a13eedfdc47ff715da02a75599f2f8622"
     ),
     "configs/hermes-plugin-coverage-v1.json": (
-        "d73a18560ae810587a1e68eac0ad52dfd64b15e6a7d3fe669a82624c0379e94c"
+        "46aa1db4dedea9335a30ba8cbd9bf9a2d637b81c8e95330f96625bfa6866d648"
+    ),
+    "configs/portal-hermes-runtime-evidence-v1.json": (
+        "742d8b9ff2cb2b68d344829e5ac9b135eb29daa0b3ae0ff3b75cba6f9ea10ac7"
     ),
     "hermes-plugin/ods-portal/plugin.yaml": (
         "41277c909689b2b70620de56938be12d8609130851cc0d8299b7ed4eb752070e"
@@ -256,7 +259,7 @@ def validate(lock: dict[str, Any]) -> None:
     _equal(portal["coreComplete"], False, "Portal-core completeness")
 
     evidence: dict[str, str] = {}
-    for item in _list(portal["evidenceFiles"], 4, "Portal-core evidenceFiles"):
+    for item in _list(portal["evidenceFiles"], 5, "Portal-core evidenceFiles"):
         entry = _exact(item, {"path", "sha256"}, "Portal-core evidence file")
         path = entry["path"]
         if not isinstance(path, str) or path in evidence:

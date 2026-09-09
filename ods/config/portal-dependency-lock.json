@@ -1,7 +1,7 @@
 {
   "$schema": "./portal-dependency-lock-v1.schema.json",
   "schemaVersion": 1,
-  "observedAt": "2026-09-09T00:33:34Z",
+  "observedAt": "2026-09-09T02:48:17Z",
   "product": {
     "subsystem": "Portal",
     "genericPlaceholder": true,
@@ -35,7 +35,7 @@
   "portalCore": {
     "repository": "https://github.com/Osmantic/Pixel",
     "pullRequest": 239,
-    "sourceCommit": "c9fd5d5740b4750119fd52088259d703b7e62ea2",
+    "sourceCommit": "bd0bbdf8faa3d7f56e930ec89e94e27efa9a0f53",
     "sourceState": "reviewed-private-draft",
     "consumptionMode": "source-lock-only",
     "runtimeActivated": false,
@@ -51,7 +51,11 @@
       },
       {
         "path": "configs/hermes-plugin-coverage-v1.json",
-        "sha256": "d73a18560ae810587a1e68eac0ad52dfd64b15e6a7d3fe669a82624c0379e94c"
+        "sha256": "46aa1db4dedea9335a30ba8cbd9bf9a2d637b81c8e95330f96625bfa6866d648"
+      },
+      {
+        "path": "configs/portal-hermes-runtime-evidence-v1.json",
+        "sha256": "742d8b9ff2cb2b68d344829e5ac9b135eb29daa0b3ae0ff3b75cba6f9ea10ac7"
       },
       {
         "path": "hermes-plugin/ods-portal/plugin.yaml",
