@@ -1607,3 +1607,16 @@ class TestDirSizeGb:
         # Verify older items were evicted
         first_path = tmp_path / "test_dir_0"
         assert _dir_size_cache.get(first_path) is None
+
+
+class TestFormatBytesHumanSafe:
+
+    def test_formats_bytes_correctly(self):
+        from helpers import format_bytes_human_safe
+        assert format_bytes_human_safe(1024) == "1.00 KB"
+        assert format_bytes_human_safe(1048576) == "1.00 MB"
+
+    def test_handles_none_and_negative(self):
+        from helpers import format_bytes_human_safe
+        assert format_bytes_human_safe(None) == "0 B"
+        assert format_bytes_human_safe(-500) == "0 B"
