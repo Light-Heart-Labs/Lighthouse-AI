@@ -1,7 +1,7 @@
 {
   "$schema": "./portal-dependency-lock-v1.schema.json",
   "schemaVersion": 1,
-  "observedAt": "2026-09-08T20:43:00Z",
+  "observedAt": "2026-09-09T00:33:34Z",
   "product": {
     "subsystem": "Portal",
     "genericPlaceholder": true,
@@ -35,7 +35,7 @@
   "portalCore": {
     "repository": "https://github.com/Osmantic/Pixel",
     "pullRequest": 239,
-    "sourceCommit": "52b7cd2d6efc4ab19cdd16b2be33caa35e88bc34",
+    "sourceCommit": "c9fd5d5740b4750119fd52088259d703b7e62ea2",
     "sourceState": "reviewed-private-draft",
     "consumptionMode": "source-lock-only",
     "runtimeActivated": false,
